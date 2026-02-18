@@ -4,7 +4,7 @@ use crate::axon_cli::crates::core::logging::{log_done, log_info, log_warn};
 use crate::axon_cli::crates::extract::remote_extract::run_remote_extract;
 use crate::axon_cli::crates::jobs::common::{
     claim_next_pending, claim_pending_by_id, enqueue_job, make_pool, mark_job_failed,
-    open_amqp_channel,
+    open_amqp_channel, JobTable,
 };
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
@@ -18,7 +18,7 @@ use std::error::Error;
 use std::time::Duration;
 use uuid::Uuid;
 
-const TABLE: &str = "axon_extract_jobs";
+const TABLE: JobTable = JobTable::Extract;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ExtractJobConfig {

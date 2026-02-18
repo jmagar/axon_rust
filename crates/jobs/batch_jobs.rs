@@ -5,7 +5,7 @@ use crate::axon_cli::crates::core::http::{build_client, fetch_html};
 use crate::axon_cli::crates::core::logging::{log_done, log_info, log_warn};
 use crate::axon_cli::crates::jobs::common::{
     claim_next_pending, claim_pending_by_id, enqueue_job, make_pool, mark_job_failed,
-    open_amqp_channel,
+    open_amqp_channel, JobTable,
 };
 use crate::axon_cli::crates::vector::ops::embed_path_native;
 use chrono::{DateTime, Utc};
@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use uuid::Uuid;
 
-const TABLE: &str = "axon_batch_jobs";
+const TABLE: JobTable = JobTable::Batch;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BatchJobConfig {

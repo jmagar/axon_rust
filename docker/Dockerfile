@@ -1,4 +1,4 @@
-FROM rust:1.85-bookworm AS builder
+FROM rust:1.93-bookworm AS builder
 
 WORKDIR /src
 
@@ -38,8 +38,8 @@ RUN set -eux; \
     cd /tmp && sha256sum -c "s6-overlay-${s6_arch}.tar.xz.sha256"; \
     tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz; \
     tar -C / -Jxpf "/tmp/s6-overlay-${s6_arch}.tar.xz"; \
-    rm -f /tmp/s6-overlay-noarch.tar.xz "/tmp/s6-overlay-${s6_arch}.tar.xz" \
-          /tmp/s6-overlay-noarch.tar.xz.sha256 "/tmp/s6-overlay-${s6_arch}.tar.xz.sha256"
+    rm -f "/tmp/s6-overlay-noarch.tar.xz" "/tmp/s6-overlay-noarch.tar.xz.sha256" \
+          "/tmp/s6-overlay-${s6_arch}.tar.xz" "/tmp/s6-overlay-${s6_arch}.tar.xz.sha256"
 
 WORKDIR /app
 

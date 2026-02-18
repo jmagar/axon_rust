@@ -11,15 +11,16 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use std::time::Duration;
 use uuid::Uuid;
 
-static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .expect("failed to build reqwest client")
-});
+static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> =
+    LazyLock::new(|| build_client(30).map_err(|e| e.to_string()));
+
+fn http_client() -> Result<&'static reqwest::Client, Box<dyn Error>> {
+    HTTP_CLIENT
+        .as_ref()
+        .map_err(|err| format!("failed to initialize HTTP client: {err}").into())
+}
 
 fn qdrant_base(cfg: &Config) -> String {
     cfg.qdrant_url.trim_end_matches('/').to_string()
@@ -29,7 +30,7 @@ async fn tei_embed(cfg: &Config, inputs: &[String]) -> Result<Vec<Vec<f32>>, Box
     if inputs.is_empty() {
         return Ok(Vec::new());
     }
-    let client = &*HTTP_CLIENT;
+    let client = http_client()?;
     let mut vectors = Vec::new();
 
     // Respect TEI max client batch size when provided, but cap default to avoid huge request bodies.
@@ -65,7 +66,7 @@ async fn tei_embed(cfg: &Config, inputs: &[String]) -> Result<Vec<Vec<f32>>, Box
 }
 
 async fn ensure_collection(cfg: &Config, dim: usize) -> Result<(), Box<dyn Error>> {
-    let client = &*HTTP_CLIENT;
+    let client = http_client()?;
     let url = format!("{}/collections/{}", qdrant_base(cfg), cfg.collection);
     let create = serde_json::json!({
         "vectors": {"size": dim, "distance": "Cosine"}
@@ -78,7 +79,7 @@ async fn qdrant_upsert(cfg: &Config, points: &[serde_json::Value]) -> Result<(),
     if points.is_empty() {
         return Ok(());
     }
-    let client = &*HTTP_CLIENT;
+    let client = http_client()?;
     let url = format!(
         "{}/collections/{}/points?wait=true",
         qdrant_base(cfg),
@@ -102,7 +103,7 @@ async fn qdrant_scroll_pages(
     cfg: &Config,
     mut process_page: impl FnMut(&[serde_json::Value]),
 ) -> Result<(), Box<dyn Error>> {
-    let client = &*HTTP_CLIENT;
+    let client = http_client()?;
     let mut offset: Option<serde_json::Value> = None;
 
     loop {
@@ -152,7 +153,7 @@ async fn qdrant_search(
     vector: &[f32],
     limit: usize,
 ) -> Result<Vec<serde_json::Value>, Box<dyn Error>> {
-    let client = &*HTTP_CLIENT;
+    let client = http_client()?;
     let url = format!(
         "{}/collections/{}/points/search",
         qdrant_base(cfg),
@@ -178,7 +179,7 @@ async fn qdrant_retrieve_by_url(
     cfg: &Config,
     url_match: &str,
 ) -> Result<Vec<serde_json::Value>, Box<dyn Error>> {
-    let client = &*HTTP_CLIENT;
+    let client = http_client()?;
     let mut out = Vec::new();
     let mut offset: Option<serde_json::Value> = None;
 
@@ -535,7 +536,7 @@ pub async fn run_domains_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 pub async fn run_stats_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let client = &*HTTP_CLIENT;
+    let client = http_client()?;
     let info = client
         .get(format!(
             "{}/collections/{}",
@@ -630,7 +631,7 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         return Err("OPENAI_BASE_URL and OPENAI_MODEL required for ask".into());
     }
 
-    let client = &*HTTP_CLIENT;
+    let client = http_client()?;
     let mut req = client
         .post(format!(
             "{}/chat/completions",

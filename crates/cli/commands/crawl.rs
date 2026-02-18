@@ -281,7 +281,7 @@ pub async fn run_crawl(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Erro
 
     let spinner = Spinner::new("running crawl");
     let (summary, seen_urls) =
-        run_crawl_once(cfg, start_url, initial_mode, &cfg.output_dir).await?;
+        run_crawl_once(cfg, start_url, initial_mode, &cfg.output_dir, None).await?;
     spinner.finish(&format!(
         "crawl phase complete (pages={}, markdown={})",
         summary.pages_seen, summary.markdown_files

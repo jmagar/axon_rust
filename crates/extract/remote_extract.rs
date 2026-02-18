@@ -1,15 +1,17 @@
+use crate::axon_cli::crates::core::http::build_client;
 use spider::tokio;
 use spider::website::Website;
 use std::error::Error;
 use std::sync::LazyLock;
-use std::time::Duration;
 
-static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .expect("failed to build reqwest client")
-});
+static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> =
+    LazyLock::new(|| build_client(30).map_err(|e| e.to_string()));
+
+fn http_client() -> Result<&'static reqwest::Client, Box<dyn Error>> {
+    HTTP_CLIENT
+        .as_ref()
+        .map_err(|err| format!("failed to initialize HTTP client: {err}").into())
+}
 
 #[derive(Debug, Clone)]
 pub struct ExtractRun {
@@ -104,9 +106,9 @@ pub async fn run_remote_extract(
 
     let mut rx = website.subscribe(16).ok_or("subscribe failed")?;
     let api_url_clone = api_url.clone();
+    let client = http_client()?.clone();
 
     let collect = tokio::spawn(async move {
-        let client = HTTP_CLIENT.clone();
         let mut all_results: Vec<serde_json::Value> = vec![];
         let mut pages_with_data = 0usize;
 

@@ -83,6 +83,7 @@ pub struct Config {
     pub max_pages: u32,
     pub max_depth: usize,
     pub include_subdomains: bool,
+    pub exclude_path_prefix: Vec<String>,
     pub output_dir: PathBuf,
     pub output_path: Option<PathBuf>,
     pub render_mode: RenderMode,
@@ -230,6 +231,9 @@ struct GlobalArgs {
 
     #[arg(global = true, long, action = ArgAction::Set, default_value_t = true)]
     include_subdomains: bool,
+
+    #[arg(global = true, long = "exclude-path-prefix", value_delimiter = ',')]
+    exclude_path_prefix: Vec<String>,
 
     #[arg(global = true, long, default_value = ".cache/axon-rust/output")]
     output_dir: PathBuf,
@@ -387,6 +391,36 @@ fn normalize_local_service_url(url: String) -> String {
         }
     }
     url
+}
+
+fn default_exclude_prefixes() -> Vec<String> {
+    vec![
+        "/fr", "/de", "/es", "/ja", "/zh", "/zh-cn", "/zh-tw", "/ko", "/pt", "/pt-br", "/it",
+        "/nl", "/pl", "/ru", "/tr", "/ar", "/id", "/vi", "/th", "/cs", "/da", "/fi", "/no", "/sv",
+        "/he", "/uk", "/ro", "/hu", "/el",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn normalize_exclude_prefixes(input: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in input {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed == "/" {
+            continue;
+        }
+        let normalized = if trimmed.starts_with('/') {
+            trimmed.to_string()
+        } else {
+            format!("/{trimmed}")
+        };
+        out.push(normalized);
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn positional_from_job(job: JobSubcommand) -> Vec<String> {
@@ -554,6 +588,7 @@ fn into_config(cli: Cli) -> Config {
         max_pages: global.max_pages,
         max_depth: global.max_depth,
         include_subdomains: global.include_subdomains,
+        exclude_path_prefix: normalize_exclude_prefixes(global.exclude_path_prefix),
         output_dir: global.output_dir,
         output_path: global.output,
         render_mode: global.render_mode,
@@ -619,6 +654,10 @@ fn into_config(cli: Cli) -> Config {
             .unwrap_or_default(),
         json_output: global.json,
     };
+
+    if cfg.exclude_path_prefix.is_empty() {
+        cfg.exclude_path_prefix = default_exclude_prefixes();
+    }
 
     let (
         crawl_default,

@@ -2,11 +2,11 @@ use crate::axon_cli::crates::core::config::{Config, RenderMode};
 use crate::axon_cli::crates::core::health::redis_healthy;
 use crate::axon_cli::crates::core::logging::{log_done, log_info, log_warn};
 use crate::axon_cli::crates::crawl::engine::{
-    append_sitemap_backfill, run_crawl_once, SitemapBackfillStats,
+    append_sitemap_backfill, run_crawl_once, CrawlSummary, SitemapBackfillStats,
 };
 use crate::axon_cli::crates::jobs::common::{
     claim_next_pending, claim_pending_by_id, enqueue_job, make_pool, mark_job_failed,
-    open_amqp_channel,
+    open_amqp_channel, JobTable,
 };
 use crate::axon_cli::crates::jobs::embed_jobs::start_embed_job;
 use chrono::{DateTime, Utc};
@@ -22,13 +22,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 use uuid::Uuid;
 
-const TABLE: &str = "axon_crawl_jobs";
+const TABLE: JobTable = JobTable::Crawl;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CrawlJobConfig {
     max_pages: u32,
     max_depth: usize,
     include_subdomains: bool,
+    exclude_path_prefix: Vec<String>,
     respect_robots: bool,
     min_markdown_chars: usize,
     drop_thin_markdown: bool,
@@ -66,6 +67,7 @@ fn to_job_config(cfg: &Config) -> CrawlJobConfig {
         max_pages: cfg.max_pages,
         max_depth: cfg.max_depth,
         include_subdomains: cfg.include_subdomains,
+        exclude_path_prefix: cfg.exclude_path_prefix.clone(),
         respect_robots: cfg.respect_robots,
         min_markdown_chars: cfg.min_markdown_chars,
         drop_thin_markdown: cfg.drop_thin_markdown,
@@ -277,6 +279,7 @@ async fn process_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), Box<dy
     job_cfg.max_pages = parsed.max_pages;
     job_cfg.max_depth = parsed.max_depth;
     job_cfg.include_subdomains = parsed.include_subdomains;
+    job_cfg.exclude_path_prefix = parsed.exclude_path_prefix;
     job_cfg.respect_robots = parsed.respect_robots;
     job_cfg.min_markdown_chars = parsed.min_markdown_chars;
     job_cfg.drop_thin_markdown = parsed.drop_thin_markdown;
@@ -297,13 +300,46 @@ async fn process_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), Box<dy
         .join("jobs")
         .join(id.to_string());
 
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<CrawlSummary>();
+    let progress_pool = pool.clone();
+    let progress_job_id = id;
+    let progress_task = tokio::spawn(async move {
+        while let Some(progress) = progress_rx.recv().await {
+            let pages_discovered = progress.pages_seen as u64;
+            let filtered_urls = pages_discovered.saturating_sub(progress.markdown_files as u64);
+            let pages_crawled = progress.pages_seen as u64;
+            let progress_json = serde_json::json!({
+                "phase": "crawling",
+                "md_created": progress.markdown_files,
+                "thin_md": progress.thin_pages,
+                "filtered_urls": filtered_urls,
+                "pages_crawled": pages_crawled,
+                "pages_discovered": pages_discovered,
+                "crawl_stream_pages": progress.pages_seen,
+            });
+            let _ = sqlx::query(
+                "UPDATE axon_crawl_jobs SET updated_at=NOW(), result_json=$2 WHERE id=$1 AND status='running'",
+            )
+            .bind(progress_job_id)
+            .bind(progress_json)
+            .execute(&progress_pool)
+            .await;
+        }
+    });
+
     let result = async {
         let initial_mode = match job_cfg.render_mode {
             RenderMode::AutoSwitch => RenderMode::Http,
             m => m,
         };
-        let (summary, seen_urls) =
-            run_crawl_once(&job_cfg, &url, initial_mode, &job_cfg.output_dir).await?;
+        let (summary, seen_urls) = run_crawl_once(
+            &job_cfg,
+            &url,
+            initial_mode,
+            &job_cfg.output_dir,
+            Some(progress_tx),
+        )
+        .await?;
         let mut final_summary = summary.clone();
         let mut backfill_stats = SitemapBackfillStats::default();
 
@@ -331,9 +367,10 @@ async fn process_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), Box<dy
         let sitemap_discovered = backfill_stats.sitemap_candidates as u64;
         let pages_discovered = crawl_discovered.saturating_add(sitemap_discovered);
         let filtered_urls = pages_discovered.saturating_sub(final_summary.markdown_files as u64);
-        let pages_crawled = pages_discovered.saturating_sub(filtered_urls);
+        let pages_crawled = summary.pages_seen as u64;
 
         Ok::<serde_json::Value, Box<dyn Error>>(serde_json::json!({
+            "phase": "completed",
             "md_created": final_summary.markdown_files,
             "thin_md": final_summary.thin_pages,
             "filtered_urls": filtered_urls,
@@ -352,6 +389,8 @@ async fn process_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), Box<dy
         }))
     }
     .await;
+
+    let _ = progress_task.await;
 
     match result {
         Ok(result_json) => {

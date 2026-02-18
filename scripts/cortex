@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="/home/jmagar/workspace/axon_rust"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 CLI_ENV="$REPO/.env"
 
 if [[ -f "$CLI_ENV" ]]; then

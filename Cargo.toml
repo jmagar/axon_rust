@@ -12,7 +12,7 @@ path = "main.rs"
 
 [[bin]]
 name = "axon"
-path = "main.rs"
+path = "axon_main.rs"
 
 [dependencies]
 anyhow = "1"

@@ -12,6 +12,25 @@ use tokio_executor_trait::Tokio as TokioExecutor;
 use tokio_reactor_trait::Tokio as TokioReactor;
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Copy)]
+pub enum JobTable {
+    Crawl,
+    Batch,
+    Extract,
+    Embed,
+}
+
+impl JobTable {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Crawl => "axon_crawl_jobs",
+            Self::Batch => "axon_batch_jobs",
+            Self::Extract => "axon_extract_jobs",
+            Self::Embed => "axon_embed_jobs",
+        }
+    }
+}
+
 /// Create a shared PgPool with a 5-second connection timeout and up to 5 connections.
 /// Call once at startup and pass the pool to all functions.
 pub async fn make_pool(cfg: &Config) -> Result<PgPool> {
@@ -47,19 +66,26 @@ pub async fn open_amqp_channel(cfg: &Config, queue_name: &str) -> Result<Channel
         )
     })?
     .context("amqp connect failed")?;
-    let ch = conn.create_channel().await?;
-    ch.queue_declare(
-        queue_name,
-        QueueDeclareOptions::default(),
-        FieldTable::default(),
-    )
-    .await?;
+    let ch = tokio::time::timeout(Duration::from_secs(5), async {
+        let ch = conn.create_channel().await?;
+        ch.queue_declare(
+            queue_name,
+            QueueDeclareOptions::default(),
+            FieldTable::default(),
+        )
+        .await?;
+        Ok::<Channel, lapin::Error>(ch)
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("amqp channel/queue declare timeout for queue={queue_name}"))?
+    .context("amqp create channel/declare queue failed")?;
     Ok(ch)
 }
 
 /// Atomically claim the next pending job from the given table.
 /// Uses `FOR UPDATE SKIP LOCKED` for safe concurrent worker access.
-pub async fn claim_next_pending(pool: &PgPool, table: &str) -> Result<Option<Uuid>> {
+pub async fn claim_next_pending(pool: &PgPool, table: JobTable) -> Result<Option<Uuid>> {
+    let table = table.as_str();
     let query = format!(
         r#"WITH n AS (
             SELECT id FROM {table} WHERE status='pending' ORDER BY created_at ASC FOR UPDATE SKIP LOCKED LIMIT 1
@@ -74,7 +100,8 @@ pub async fn claim_next_pending(pool: &PgPool, table: &str) -> Result<Option<Uui
 }
 
 /// Claim a specific pending job by ID.
-pub async fn claim_pending_by_id(pool: &PgPool, table: &str, id: Uuid) -> Result<bool> {
+pub async fn claim_pending_by_id(pool: &PgPool, table: JobTable, id: Uuid) -> Result<bool> {
+    let table = table.as_str();
     let query = format!(
         "UPDATE {table} SET status='running', updated_at=NOW(), started_at=COALESCE(started_at, NOW()), error_text=NULL WHERE id=$1 AND status='pending'"
     );
@@ -87,7 +114,8 @@ pub async fn claim_pending_by_id(pool: &PgPool, table: &str, id: Uuid) -> Result
 }
 
 /// Mark a running job as failed with an error message.
-pub async fn mark_job_failed(pool: &PgPool, table: &str, id: Uuid, error_text: &str) {
+pub async fn mark_job_failed(pool: &PgPool, table: JobTable, id: Uuid, error_text: &str) {
+    let table = table.as_str();
     let query = format!(
         "UPDATE {table} SET status='failed', updated_at=NOW(), finished_at=NOW(), error_text=$2 WHERE id=$1 AND status='running'"
     );

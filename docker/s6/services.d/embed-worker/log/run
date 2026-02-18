@@ -1,2 +1,3 @@
 #!/command/with-contenv sh
+# shellcheck shell=sh
 exec s6-log n20 s1000000 T /var/log/axon/embed-worker

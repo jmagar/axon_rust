@@ -15,6 +15,7 @@ use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Default, Clone)]
 pub struct CrawlSummary {
@@ -33,6 +34,54 @@ pub struct SitemapBackfillStats {
     pub written: usize,
     pub failed: usize,
     pub filtered: usize,
+}
+
+fn is_excluded_url_path(url: &str, excludes: &[String]) -> bool {
+    if excludes.is_empty() {
+        return false;
+    }
+    let path = Url::parse(url)
+        .ok()
+        .map(|u| u.path().to_string())
+        .unwrap_or_else(|| "/".to_string());
+    excludes.iter().any(|prefix| path.starts_with(prefix))
+}
+
+fn regex_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 8);
+    for ch in value.chars() {
+        match ch {
+            '.' | '+' | '*' | '?' | '^' | '$' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn build_exclude_blacklist_patterns(start_url: &str, excludes: &[String]) -> Vec<String> {
+    let host_pattern = Url::parse(start_url)
+        .ok()
+        .and_then(|u| u.host_str().map(regex_escape))
+        .unwrap_or_else(|| "[^/]+".to_string());
+
+    excludes
+        .iter()
+        .map(|prefix| {
+            let normalized = if prefix.starts_with('/') {
+                prefix.clone()
+            } else {
+                format!("/{prefix}")
+            };
+            format!(
+                "^https?://{}{}(?:/|$|\\?|#)",
+                host_pattern,
+                regex_escape(&normalized)
+            )
+        })
+        .collect()
 }
 
 fn configure_website(
@@ -61,6 +110,17 @@ fn configure_website(
     }
     if cfg.shared_queue {
         website.with_shared_queue(true);
+    }
+    if !cfg.exclude_path_prefix.is_empty() {
+        let blacklist_patterns: Vec<spider::compact_str::CompactString> =
+            build_exclude_blacklist_patterns(start_url, &cfg.exclude_path_prefix)
+                .into_iter()
+                .map(Into::into)
+                .collect();
+        website.with_blacklist_url(Some(blacklist_patterns));
+    }
+    if let Some(timeout_ms) = cfg.request_timeout_ms {
+        website.with_request_timeout(Some(Duration::from_millis(timeout_ms)));
     }
 
     if matches!(mode, RenderMode::Chrome) {
@@ -135,6 +195,7 @@ pub async fn crawl_and_collect_map(
     let start = Instant::now();
 
     let transform_cfg = build_transform_config();
+    let exclude_path_prefix = cfg.exclude_path_prefix.clone();
     let join = tokio::spawn(async move {
         let mut summary = CrawlSummary::default();
         let mut urls = Vec::new();
@@ -149,6 +210,9 @@ pub async fn crawl_and_collect_map(
 
             summary.pages_seen += 1;
             let page_url = page.get_url().to_string();
+            if is_excluded_url_path(&page_url, &exclude_path_prefix) {
+                continue;
+            }
             if seen.insert(page_url.clone()) {
                 urls.push(page_url);
             }
@@ -259,6 +323,9 @@ pub async fn crawl_sitemap_urls(
                 if !in_scope {
                     continue;
                 }
+                if is_excluded_url_path(&loc, &cfg.exclude_path_prefix) {
+                    continue;
+                }
                 if !scoped_to_root {
                     let p = u.path();
                     let exact = p == start_path;
@@ -298,6 +365,7 @@ pub async fn run_crawl_once(
     start_url: &str,
     mode: RenderMode,
     output_dir: &Path,
+    progress_tx: Option<UnboundedSender<CrawlSummary>>,
 ) -> Result<(CrawlSummary, HashSet<String>), Box<dyn Error>> {
     if output_dir.exists() {
         if std::env::var("AXON_NO_WIPE").is_ok() {
@@ -333,6 +401,7 @@ pub async fn run_crawl_once(
 
     let min_chars = cfg.min_markdown_chars;
     let drop_thin = cfg.drop_thin_markdown;
+    let exclude_path_prefix = cfg.exclude_path_prefix.clone();
     let crawl_start = Instant::now();
     let transform_cfg = build_transform_config();
 
@@ -352,6 +421,9 @@ pub async fn run_crawl_once(
             };
             summary.pages_seen += 1;
             let url = page.get_url().to_string();
+            if is_excluded_url_path(&url, &exclude_path_prefix) {
+                continue;
+            }
             urls.insert(url.clone());
 
             let input = TransformInput {
@@ -369,10 +441,20 @@ pub async fn run_crawl_once(
             if chars < min_chars {
                 summary.thin_pages += 1;
                 if drop_thin {
+                    if summary.pages_seen.is_multiple_of(25) {
+                        if let Some(tx) = progress_tx.as_ref() {
+                            let _ = tx.send(summary.clone());
+                        }
+                    }
                     continue;
                 }
             }
             if trimmed.is_empty() {
+                if summary.pages_seen.is_multiple_of(25) {
+                    if let Some(tx) = progress_tx.as_ref() {
+                        let _ = tx.send(summary.clone());
+                    }
+                }
                 continue;
             }
 
@@ -389,12 +471,21 @@ pub async fn run_crawl_once(
                 .write_all(line.as_bytes())
                 .await
                 .map_err(|e| format!("manifest failed: {e}"))?;
+
+            if summary.pages_seen.is_multiple_of(25) {
+                if let Some(tx) = progress_tx.as_ref() {
+                    let _ = tx.send(summary.clone());
+                }
+            }
         }
 
         manifest
             .flush()
             .await
             .map_err(|e| format!("manifest flush failed: {e}"))?;
+        if let Some(tx) = progress_tx.as_ref() {
+            let _ = tx.send(summary.clone());
+        }
         Ok::<(CrawlSummary, HashSet<String>), String>((summary, urls))
     });
 
@@ -486,7 +577,9 @@ pub async fn append_sitemap_backfill(
     let mut pending = tokio::task::JoinSet::new();
     let candidates_vec: Vec<String> = sitemap_urls
         .into_iter()
-        .filter(|url| !seen_urls.contains(url))
+        .filter(|url| {
+            !seen_urls.contains(url) && !is_excluded_url_path(url, &cfg.exclude_path_prefix)
+        })
         .collect();
     let sitemap_candidates = candidates_vec.len();
     let mut candidates = candidates_vec.into_iter();
