@@ -11,11 +11,10 @@ use spider::website::Website;
 use spider_transformations::transformation::content::{transform_content_input, TransformInput};
 use std::collections::{HashSet, VecDeque};
 use std::error::Error;
-use std::fs::{self, File};
-use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Default, Clone)]
 pub struct CrawlSummary {
@@ -304,15 +303,25 @@ pub async fn run_crawl_once(
     output_dir: &Path,
 ) -> Result<(CrawlSummary, HashSet<String>), Box<dyn Error>> {
     if output_dir.exists() {
-        fs::remove_dir_all(output_dir)?;
+        if std::env::var("AXON_NO_WIPE").is_ok() {
+            log_info(&format!(
+                "AXON_NO_WIPE set — keeping existing output dir: {}",
+                output_dir.display()
+            ));
+        } else {
+            log_warn(&format!(
+                "Clearing output directory before crawl: {}",
+                output_dir.display()
+            ));
+            tokio::fs::remove_dir_all(output_dir).await?;
+        }
     }
-    fs::create_dir_all(output_dir.join("markdown"))?;
+    tokio::fs::create_dir_all(output_dir.join("markdown")).await?;
 
     let mut website = configure_website(cfg, start_url, mode)?;
     let mut rx = website.subscribe(4096).ok_or("subscribe failed")?;
     let markdown_dir = output_dir.join("markdown");
     let manifest_path = output_dir.join("manifest.jsonl");
-    let mut manifest = BufWriter::new(File::create(&manifest_path)?);
 
     let min_chars = cfg.min_markdown_chars;
     let drop_thin = cfg.drop_thin_markdown;
@@ -320,6 +329,10 @@ pub async fn run_crawl_once(
     let transform_cfg = build_transform_config();
 
     let join = tokio::spawn(async move {
+        let manifest_file = tokio::fs::File::create(&manifest_path)
+            .await
+            .map_err(|e| format!("manifest create failed: {e}"))?;
+        let mut manifest = tokio::io::BufWriter::new(manifest_file);
         let mut summary = CrawlSummary::default();
         let mut urls = HashSet::new();
 
@@ -360,11 +373,14 @@ pub async fn run_crawl_once(
             let path = markdown_dir.join(filename);
             tokio::fs::write(&path, trimmed).await.map_err(|e| format!("write failed: {e}"))?;
             let rec = serde_json::json!({"url": url, "file_path": path.to_string_lossy(), "markdown_chars": chars});
-            writeln!(manifest, "{rec}").map_err(|e| format!("manifest failed: {e}"))?;
+            let mut line = rec.to_string();
+            line.push('\n');
+            manifest.write_all(line.as_bytes()).await.map_err(|e| format!("manifest failed: {e}"))?;
         }
 
         manifest
             .flush()
+            .await
             .map_err(|e| format!("manifest flush failed: {e}"))?;
         Ok::<(CrawlSummary, HashSet<String>), String>((summary, urls))
     });
@@ -439,12 +455,12 @@ pub async fn append_sitemap_backfill(
     ));
     let markdown_dir = output_dir.join("markdown");
     let manifest_path = output_dir.join("manifest.jsonl");
-    let mut manifest = BufWriter::new(
-        File::options()
-            .append(true)
-            .create(true)
-            .open(&manifest_path)?,
-    );
+    let manifest_file = tokio::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&manifest_path)
+        .await?;
+    let mut manifest = tokio::io::BufWriter::new(manifest_file);
 
     let timeout = Duration::from_millis(cfg.request_timeout_ms.unwrap_or(30_000));
     let client = reqwest::Client::builder().timeout(timeout).build()?;
@@ -512,7 +528,9 @@ pub async fn append_sitemap_backfill(
                         "markdown_chars": chars,
                         "source": "sitemap_backfill"
                     });
-                    writeln!(manifest, "{rec}")?;
+                    let mut line = rec.to_string();
+                    line.push('\n');
+                    manifest.write_all(line.as_bytes()).await?;
                     summary.markdown_files += 1;
                     written += 1;
                 }
@@ -546,7 +564,7 @@ pub async fn append_sitemap_backfill(
         }
     }
 
-    manifest.flush()?;
+    manifest.flush().await?;
     log_info(&format!(
         "command=crawl sitemap_backfill_complete processed={} fetched_ok={} written={} failed={}",
         processed, fetched_ok, written, failed_fetches
@@ -560,4 +578,73 @@ pub async fn append_sitemap_backfill(
         failed: failed_fetches,
         filtered: processed.saturating_sub(written),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn summary(pages_seen: u32, thin: u32, markdown_files: u32) -> CrawlSummary {
+        CrawlSummary {
+            pages_seen,
+            thin_pages: thin,
+            markdown_files,
+            elapsed_ms: 0,
+        }
+    }
+
+    #[test]
+    fn test_fallback_when_no_markdown_files() {
+        // markdown_files == 0 → always fallback (early return)
+        assert!(should_fallback_to_chrome(&summary(100, 0, 0), 200));
+    }
+
+    #[test]
+    fn test_fallback_thin_ratio_above_threshold() {
+        // 61/100 thin → ratio 0.61 > 0.60 → should fallback
+        assert!(should_fallback_to_chrome(&summary(100, 61, 50), 200));
+    }
+
+    #[test]
+    fn test_no_fallback_at_threshold() {
+        // exactly 60/100 thin → ratio 0.60 NOT > 0.60 → no fallback
+        // markdown_files=50 >= max(200/10, 10) = 20 → coverage OK
+        assert!(!should_fallback_to_chrome(&summary(100, 60, 50), 200));
+    }
+
+    #[test]
+    fn test_fallback_low_coverage() {
+        // thin_ratio = 10/100 = 0.10 (OK)
+        // but markdown_files = 5 < max(200/10, 10) = 20 → low coverage → fallback
+        assert!(should_fallback_to_chrome(&summary(100, 10, 5), 200));
+    }
+
+    #[test]
+    fn test_no_divide_by_zero() {
+        // pages_seen = 0 → thin_ratio defaults to 1.0 → should fallback
+        // But markdown_files = 0 triggers the early return first
+        assert!(should_fallback_to_chrome(&summary(0, 0, 0), 200));
+    }
+
+    #[test]
+    fn test_no_fallback_healthy_crawl() {
+        // 10/200 thin → ratio 0.05 (OK)
+        // markdown_files = 150 >= max(200/10, 10) = 20 (OK)
+        assert!(!should_fallback_to_chrome(&summary(200, 10, 150), 200));
+    }
+
+    #[test]
+    fn test_fallback_low_max_pages() {
+        // With max_pages=50: threshold = max(50/10, 10) = 10
+        // markdown_files = 8 < 10 → low coverage → fallback
+        assert!(should_fallback_to_chrome(&summary(50, 5, 8), 50));
+    }
+
+    #[test]
+    fn test_no_fallback_small_crawl_sufficient_coverage() {
+        // max_pages=50: threshold = max(50/10, 10) = 10
+        // markdown_files = 15 >= 10 → coverage OK
+        // thin_ratio = 5/50 = 0.10 → OK
+        assert!(!should_fallback_to_chrome(&summary(50, 5, 15), 50));
+    }
 }

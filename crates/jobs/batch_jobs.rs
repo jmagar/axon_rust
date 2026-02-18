@@ -1,26 +1,27 @@
 use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::{redact_url, to_markdown, url_to_filename};
+use crate::axon_cli::crates::core::content::{to_markdown, url_to_filename};
 use crate::axon_cli::crates::core::health::redis_healthy;
 use crate::axon_cli::crates::core::http::{build_client, fetch_html};
 use crate::axon_cli::crates::core::logging::{log_done, log_info, log_warn};
+use crate::axon_cli::crates::jobs::common::{
+    claim_next_pending, claim_pending_by_id, enqueue_job, make_pool, mark_job_failed,
+    open_amqp_channel,
+};
 use crate::axon_cli::crates::vector::ops::embed_path_native;
 use chrono::{DateTime, Utc};
-use lapin::options::{
-    BasicAckOptions, BasicConsumeOptions, BasicPublishOptions, QueueDeclareOptions,
-};
+use futures_util::StreamExt;
+use lapin::options::{BasicAckOptions, BasicConsumeOptions};
 use lapin::types::FieldTable;
-use lapin::{BasicProperties, Channel, Connection, ConnectionProperties};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use spider::tokio;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool};
 use std::error::Error;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio_executor_trait::Tokio as TokioExecutor;
-use tokio_reactor_trait::Tokio as TokioReactor;
 use uuid::Uuid;
+
+const TABLE: &str = "axon_batch_jobs";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BatchJobConfig {
@@ -40,16 +41,6 @@ pub struct BatchJob {
     pub error_text: Option<String>,
     pub urls_json: serde_json::Value,
     pub result_json: Option<serde_json::Value>,
-}
-
-async fn pool(cfg: &Config) -> Result<PgPool, Box<dyn Error>> {
-    let p = tokio::time::timeout(
-        Duration::from_secs(5),
-        PgPoolOptions::new().max_connections(5).connect(&cfg.pg_url),
-    )
-    .await
-    .map_err(|_| format!("postgres connect timeout: {}", redact_url(&cfg.pg_url)))??;
-    Ok(p)
 }
 
 async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
@@ -74,37 +65,8 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn open_channel(cfg: &Config) -> Result<Channel, Box<dyn Error>> {
-    let props = ConnectionProperties::default()
-        .with_executor(TokioExecutor::current())
-        .with_reactor(TokioReactor);
-    let conn = Connection::connect(&cfg.amqp_url, props).await?;
-    let ch = conn.create_channel().await?;
-    ch.queue_declare(
-        &cfg.batch_queue,
-        QueueDeclareOptions::default(),
-        FieldTable::default(),
-    )
-    .await?;
-    Ok(ch)
-}
-
-async fn enqueue(cfg: &Config, job_id: Uuid) -> Result<(), Box<dyn Error>> {
-    let ch = open_channel(cfg).await?;
-    ch.basic_publish(
-        "",
-        &cfg.batch_queue,
-        BasicPublishOptions::default(),
-        job_id.to_string().as_bytes(),
-        BasicProperties::default(),
-    )
-    .await?
-    .await?;
-    Ok(())
-}
-
 pub async fn start_batch_job(cfg: &Config, urls: &[String]) -> Result<Uuid, Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
 
     let id = Uuid::new_v4();
@@ -123,7 +85,7 @@ pub async fn start_batch_job(cfg: &Config, urls: &[String]) -> Result<Uuid, Box<
     .execute(&pool)
     .await?;
 
-    if let Err(err) = enqueue(cfg, id).await {
+    if let Err(err) = enqueue_job(cfg, &cfg.batch_queue, id).await {
         log_warn(&format!(
             "batch enqueue failed for {id}; polling fallback will pick up: {err}"
         ));
@@ -133,7 +95,7 @@ pub async fn start_batch_job(cfg: &Config, urls: &[String]) -> Result<Uuid, Box<
 }
 
 pub async fn get_batch_job(cfg: &Config, id: Uuid) -> Result<Option<BatchJob>, Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
     Ok(sqlx::query_as::<_, BatchJob>(
         r#"SELECT id,status,created_at,updated_at,started_at,finished_at,error_text,urls_json,result_json FROM axon_batch_jobs WHERE id=$1"#,
@@ -144,7 +106,7 @@ pub async fn get_batch_job(cfg: &Config, id: Uuid) -> Result<Option<BatchJob>, B
 }
 
 pub async fn list_batch_jobs(cfg: &Config, limit: i64) -> Result<Vec<BatchJob>, Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
     Ok(sqlx::query_as::<_, BatchJob>(
         r#"SELECT id,status,created_at,updated_at,started_at,finished_at,error_text,urls_json,result_json FROM axon_batch_jobs ORDER BY created_at DESC LIMIT $1"#,
@@ -155,7 +117,7 @@ pub async fn list_batch_jobs(cfg: &Config, limit: i64) -> Result<Vec<BatchJob>, 
 }
 
 pub async fn cancel_batch_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
     let rows = sqlx::query("UPDATE axon_batch_jobs SET status='canceled',updated_at=NOW(),finished_at=NOW() WHERE id=$1 AND status IN ('pending','running')")
         .bind(id)
@@ -171,7 +133,7 @@ pub async fn cancel_batch_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Er
 }
 
 pub async fn cleanup_batch_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
     Ok(
         sqlx::query("DELETE FROM axon_batch_jobs WHERE status IN ('failed','canceled')")
@@ -182,13 +144,13 @@ pub async fn cleanup_batch_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
 }
 
 pub async fn clear_batch_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
     let rows = sqlx::query("DELETE FROM axon_batch_jobs")
         .execute(&pool)
         .await?
         .rows_affected();
-    if let Ok(ch) = open_channel(cfg).await {
+    if let Ok(ch) = open_amqp_channel(cfg, &cfg.batch_queue).await {
         let _ = ch
             .queue_purge(
                 &cfg.batch_queue,
@@ -197,40 +159,6 @@ pub async fn clear_batch_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
             .await;
     }
     Ok(rows)
-}
-
-async fn claim_next_pending(pool: &PgPool) -> Result<Option<Uuid>, Box<dyn Error>> {
-    let row = sqlx::query_as::<_, (Uuid,)>(
-        r#"WITH n AS (
-            SELECT id FROM axon_batch_jobs WHERE status='pending' ORDER BY created_at ASC FOR UPDATE SKIP LOCKED LIMIT 1
-        )
-        UPDATE axon_batch_jobs j SET status='running',updated_at=NOW(),started_at=COALESCE(started_at,NOW())
-        FROM n WHERE j.id=n.id RETURNING j.id"#,
-    )
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|(id,)| id))
-}
-
-async fn claim_pending_by_id(pool: &PgPool, id: Uuid) -> Result<bool, Box<dyn Error>> {
-    let updated = sqlx::query(
-        "UPDATE axon_batch_jobs SET status='running',updated_at=NOW(),started_at=COALESCE(started_at,NOW()),error_text=NULL WHERE id=$1 AND status='pending'",
-    )
-    .bind(id)
-    .execute(pool)
-    .await?
-    .rows_affected();
-    Ok(updated > 0)
-}
-
-async fn mark_batch_job_failed(pool: &PgPool, id: Uuid, error_text: &str) {
-    let _ = sqlx::query(
-        "UPDATE axon_batch_jobs SET status='failed',updated_at=NOW(),finished_at=NOW(),error_text=$2 WHERE id=$1 AND status='running'",
-    )
-    .bind(id)
-    .bind(error_text)
-    .execute(pool)
-    .await;
 }
 
 async fn process_batch_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), Box<dyn Error>> {
@@ -305,10 +233,10 @@ async fn process_batch_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
 }
 
 pub async fn run_batch_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
 
-    if let Ok(ch) = open_channel(cfg).await {
+    if let Ok(ch) = open_amqp_channel(cfg, &cfg.batch_queue).await {
         let mut consumer = ch
             .basic_consume(
                 &cfg.batch_queue,
@@ -321,7 +249,6 @@ pub async fn run_batch_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
             "batch worker listening on queue={}",
             cfg.batch_queue
         ));
-        use futures_util::StreamExt;
         while let Some(msg) = consumer.next().await {
             let delivery = match msg {
                 Ok(d) => d,
@@ -331,10 +258,10 @@ pub async fn run_batch_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
                 .ok()
                 .and_then(|s| Uuid::parse_str(s.trim()).ok());
             if let Some(job_id) = parsed {
-                if claim_pending_by_id(&pool, job_id).await.unwrap_or(false) {
+                if claim_pending_by_id(&pool, TABLE, job_id).await.unwrap_or(false) {
                     if let Err(err) = process_batch_job(cfg, &pool, job_id).await {
                         let error_text = err.to_string();
-                        mark_batch_job_failed(&pool, job_id, &error_text).await;
+                        mark_job_failed(&pool, TABLE, job_id, &error_text).await;
                         log_warn(&format!("worker failed batch job {job_id}: {error_text}"));
                     }
                 }
@@ -346,10 +273,10 @@ pub async fn run_batch_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
     log_warn("amqp unavailable; running batch worker in postgres polling mode");
     loop {
-        if let Some(id) = claim_next_pending(&pool).await? {
+        if let Some(id) = claim_next_pending(&pool, TABLE).await? {
             if let Err(err) = process_batch_job(cfg, &pool, id).await {
                 let error_text = err.to_string();
-                mark_batch_job_failed(&pool, id, &error_text).await;
+                mark_job_failed(&pool, TABLE, id, &error_text).await;
                 log_warn(&format!("worker failed batch job {id}: {error_text}"));
             }
         } else {
@@ -359,8 +286,8 @@ pub async fn run_batch_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 pub async fn batch_doctor(cfg: &Config) -> Result<serde_json::Value, Box<dyn Error>> {
-    let pg_ok = pool(cfg).await.is_ok();
-    let amqp_ok = open_channel(cfg).await.is_ok();
+    let pg_ok = make_pool(cfg).await.is_ok();
+    let amqp_ok = open_amqp_channel(cfg, &cfg.batch_queue).await.is_ok();
     let redis_ok = redis_healthy(&cfg.redis_url).await;
     Ok(serde_json::json!({
         "postgres_ok": pg_ok,

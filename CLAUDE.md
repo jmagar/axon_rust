@@ -52,21 +52,87 @@ cortex crawl clear
 cortex crawl worker   # run a worker inline
 ```
 
-### Key Global Flags
+### Global Flags Reference
 
-```
---wait <bool>            Run synchronously and block (default: false — enqueue async)
---collection <name>      Qdrant collection name (default: spider_rust)
---embed <bool>           Auto-embed scraped content (default: true)
---max-pages <n>          Page cap for crawl (default: 200; 0 = uncapped)
---max-depth <n>          Crawl depth (default: 5)
---render-mode <mode>     http | chrome | auto-switch (default: auto-switch)
---format <fmt>           markdown | html | rawHtml | json (default: markdown)
---performance-profile    high-stable | extreme | balanced | max (default: high-stable)
---output-dir <dir>       Output directory (default: .cache/axon-rust/output)
---json                   Machine-readable JSON output on stdout
---yes                    Skip confirmation prompts
-```
+All flags are `--global` (usable with any subcommand).
+
+#### Core Behavior
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--wait <bool>` | bool | `false` | Run synchronously and block until completion. Without this, async commands enqueue and return immediately. |
+| `--yes` | flag | `false` | Skip confirmation prompts (non-interactive mode). |
+| `--json` | flag | `false` | Machine-readable JSON output on stdout. |
+
+#### Crawl & Scrape
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--max-pages <n>` | u32 | `200` | Page cap for crawl (0 = uncapped). |
+| `--max-depth <n>` | usize | `5` | Maximum crawl depth from start URL. |
+| `--render-mode <mode>` | enum | `auto-switch` | `http`, `chrome`, or `auto-switch`. Auto-switch tries HTTP first, falls back to Chrome if >60% thin pages. |
+| `--format <fmt>` | enum | `markdown` | Output format: `markdown`, `html`, `rawHtml`, `json`. |
+| `--include-subdomains <bool>` | bool | `true` | Include subdomains during crawl. **Note:** defaults `true` — may crawl more than expected. |
+| `--respect-robots <bool>` | bool | `false` | Respect `robots.txt` directives. **Note:** defaults `false` — legal/ethical implications. |
+| `--discover-sitemaps <bool>` | bool | `true` | Discover and backfill URLs from sitemap.xml after crawl. |
+| `--max-sitemaps <n>` | usize | `512` | Maximum sitemap URLs to backfill per crawl. |
+| `--min-markdown-chars <n>` | usize | `200` | Minimum markdown character count; pages below this are flagged as "thin". |
+| `--drop-thin-markdown <bool>` | bool | `true` | Skip thin pages — do not save or embed them. |
+| `--delay-ms <ms>` | u64 | `0` | Delay between requests in milliseconds. Useful for polite crawling. |
+
+#### Output
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--output-dir <dir>` | path | `.cache/axon-rust/output` | Directory for saved markdown/HTML output files. |
+| `--output <path>` | path | — | Explicit output file path (overrides `--output-dir` for single-file commands). |
+
+#### Vector & Embedding
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--collection <name>` | string | `spider_rust` | Qdrant collection name. Also settable via `AXON_COLLECTION` env var. |
+| `--embed <bool>` | bool | `true` | Auto-embed scraped content into Qdrant. |
+| `--limit <n>` | usize | `10` | Result limit for search/query commands. |
+| `--query <text>` | string | — | Query text (alternative to positional argument for some commands). |
+| `--urls <csv>` | string | — | Comma-separated URL list (alternative to positional arguments). |
+
+#### Performance Tuning
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--performance-profile <p>` | enum | `high-stable` | `high-stable`, `extreme`, `balanced`, `max`. Sets defaults for concurrency, timeouts, retries. |
+| `--batch-concurrency <n>` | usize | `16` | Concurrent connections for batch operations (clamped 1–512). |
+| `--concurrency-limit <n>` | usize | — | Override all three concurrency limits (crawl, sitemap, backfill) at once. |
+| `--crawl-concurrency-limit <n>` | usize | *profile* | Override crawl concurrency (profile default: CPUs x multiplier). |
+| `--sitemap-concurrency-limit <n>` | usize | *profile* | Override sitemap backfill concurrency. |
+| `--backfill-concurrency-limit <n>` | usize | *profile* | Override backfill concurrency. |
+| `--request-timeout-ms <ms>` | u64 | *profile* | Per-request timeout in milliseconds. |
+| `--fetch-retries <n>` | usize | *profile* | Number of retries on failed fetches. |
+| `--retry-backoff-ms <ms>` | u64 | *profile* | Backoff between retries in milliseconds. |
+
+#### Service URLs (override env vars)
+
+| Flag | Type | Env Var | Fallback |
+|------|------|---------|----------|
+| `--pg-url <url>` | string | `AXON_PG_URL` / `NUQ_DATABASE_URL` | `postgresql://axon:postgres@127.0.0.1:53432/axon` |
+| `--redis-url <url>` | string | `AXON_REDIS_URL` / `REDIS_URL` | `redis://127.0.0.1:53379` |
+| `--amqp-url <url>` | string | `AXON_AMQP_URL` / `NUQ_RABBITMQ_URL` | `amqp://guest:guest@127.0.0.1:45535/%2f` |
+| `--qdrant-url <url>` | string | `QDRANT_URL` | `http://127.0.0.1:53333` |
+| `--tei-url <url>` | string | `TEI_URL` | *(empty)* |
+| `--openai-base-url <url>` | string | `OPENAI_BASE_URL` | *(empty)* |
+| `--openai-api-key <key>` | string | `OPENAI_API_KEY` | *(empty)* |
+| `--openai-model <name>` | string | `OPENAI_MODEL` | *(empty)* |
+
+#### Queue Configuration
+
+| Flag | Type | Env Var | Default |
+|------|------|---------|---------|
+| `--shared-queue <bool>` | bool | — | `true` |
+| `--crawl-queue <name>` | string | `AXON_CRAWL_QUEUE` | `axon.crawl.jobs` |
+| `--batch-queue <name>` | string | `AXON_BATCH_QUEUE` | `axon.batch.jobs` |
+| `--extract-queue <name>` | string | `AXON_EXTRACT_QUEUE` | `axon.extract.jobs` |
+| `--embed-queue <name>` | string | `AXON_EMBED_QUEUE` | `axon.embed.jobs` |
 
 ## Architecture
 
@@ -78,8 +144,7 @@ axon_cli/
 │   ├── cli/
 │   │   ├── mod.rs
 │   │   └── commands/       # One file per command (scrape, crawl, map, batch, …)
-│   │       ├── common.rs   # run_embed_and_save(), shared embed/save helpers
-│   │       └── passthrough.rs  # Pass-through to Spider Cloud / remote API
+│   │       └── common.rs   # run_embed_and_save(), shared embed/save helpers
 │   ├── core/
 │   │   ├── config.rs       # CLI parsing (clap), Config struct, performance profiles
 │   │   ├── content.rs      # HTML→markdown, URL→filename, transform pipeline
@@ -121,9 +186,9 @@ axon_cli/
 | Service | Image | Exposed Port | Purpose |
 |---------|-------|-------------|---------|
 | `axon-postgres` | postgres:17-alpine | `53432` | Job persistence |
-| `axon-redis` | redis:alpine | `53379` | Queue state / caching |
-| `axon-rabbitmq` | rabbitmq:management | `45535` | AMQP job queue |
-| `axon-qdrant` | qdrant/qdrant | `53333`, `53334` (gRPC) | Vector store |
+| `axon-redis` | redis:7.4-alpine | `53379` | Queue state / caching |
+| `axon-rabbitmq` | rabbitmq:4.0-management | `45535` | AMQP job queue |
+| `axon-qdrant` | qdrant/qdrant:v1.13.1 | `53333`, `53334` (gRPC) | Vector store |
 | `axon-workers` | built from Dockerfile | — | 4 workers (crawl/batch/extract/embed) |
 
 All services live on the `cortex` bridge network. Data persisted to `/home/jmagar/appdata/axon-*`.
@@ -275,6 +340,72 @@ cortex doctor
 ```
 
 Checks: Postgres, Redis, RabbitMQ, Qdrant, TEI, LLM endpoint reachability.
+
+## Database Schema
+
+Tables are auto-created on first worker/command start via `CREATE TABLE IF NOT EXISTS` in each `*_jobs.rs` file's `ensure_schema()` function.
+
+### axon_crawl_jobs
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `id` | UUID | NOT NULL | — | Primary key, job identifier |
+| `url` | TEXT | NOT NULL | — | Target URL for the crawl |
+| `status` | TEXT | NOT NULL | — | `pending` / `running` / `completed` / `failed` / `canceled` |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Job creation timestamp |
+| `updated_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Last status change |
+| `started_at` | TIMESTAMPTZ | NULL | — | When worker began processing |
+| `finished_at` | TIMESTAMPTZ | NULL | — | When job completed/failed/canceled |
+| `error_text` | TEXT | NULL | — | Error message on failure |
+| `result_json` | JSONB | NULL | — | Crawl results (pages found, stats) |
+| `config_json` | JSONB | NOT NULL | — | Serialized job configuration |
+
+**Index:** `idx_axon_crawl_jobs_status` on `status`.
+
+### axon_batch_jobs
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `id` | UUID | NOT NULL | — | Primary key |
+| `status` | TEXT | NOT NULL | — | `pending` / `running` / `completed` / `failed` / `canceled` |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Job creation timestamp |
+| `updated_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Last status change |
+| `started_at` | TIMESTAMPTZ | NULL | — | When worker began processing |
+| `finished_at` | TIMESTAMPTZ | NULL | — | When job completed/failed/canceled |
+| `error_text` | TEXT | NULL | — | Error message on failure |
+| `urls_json` | JSONB | NOT NULL | — | Array of URLs to batch-scrape |
+| `result_json` | JSONB | NULL | — | Batch results |
+| `config_json` | JSONB | NOT NULL | — | Serialized job configuration |
+
+### axon_extract_jobs
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `id` | UUID | NOT NULL | — | Primary key |
+| `status` | TEXT | NOT NULL | — | `pending` / `running` / `completed` / `failed` / `canceled` |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Job creation timestamp |
+| `updated_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Last status change |
+| `started_at` | TIMESTAMPTZ | NULL | — | When worker began processing |
+| `finished_at` | TIMESTAMPTZ | NULL | — | When job completed/failed/canceled |
+| `error_text` | TEXT | NULL | — | Error message on failure |
+| `urls_json` | JSONB | NOT NULL | — | Array of URLs for LLM extraction |
+| `result_json` | JSONB | NULL | — | Extracted structured data |
+| `config_json` | JSONB | NOT NULL | — | Serialized job configuration |
+
+### axon_embed_jobs
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `id` | UUID | NOT NULL | — | Primary key |
+| `status` | TEXT | NOT NULL | — | `pending` / `running` / `completed` / `failed` / `canceled` |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Job creation timestamp |
+| `updated_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Last status change |
+| `started_at` | TIMESTAMPTZ | NULL | — | When worker began processing |
+| `finished_at` | TIMESTAMPTZ | NULL | — | When job completed/failed/canceled |
+| `error_text` | TEXT | NULL | — | Error message on failure |
+| `input_text` | TEXT | NOT NULL | — | Input path, URL, or text to embed |
+| `result_json` | JSONB | NULL | — | Embedding results (chunk count, point IDs) |
+| `config_json` | JSONB | NOT NULL | — | Serialized job configuration |
 
 ## Code Style
 

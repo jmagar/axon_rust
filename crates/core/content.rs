@@ -2,8 +2,7 @@ use spider::url::Url;
 use spider_transformations::transformation::content::{
     transform_content_input, ReturnFormat, TransformConfig, TransformInput,
 };
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+
 
 pub fn build_transform_config() -> TransformConfig {
     TransformConfig {
@@ -54,19 +53,19 @@ pub fn url_to_filename(url: &str, idx: u32) -> String {
     let path = parsed.as_ref().map(|u| u.path()).unwrap_or("/unknown-path");
 
     let stem_raw = format!("{host}{path}");
-    let mut stem = String::with_capacity(stem_raw.len());
-    for ch in stem_raw.chars() {
-        if ch.is_ascii_alphanumeric() {
-            stem.push(ch.to_ascii_lowercase());
-        } else {
-            stem.push('-');
-        }
-    }
+    let stem: String = stem_raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .take(80)
+        .collect();
 
-    let mut hasher = DefaultHasher::new();
-    url.hash(&mut hasher);
-    let hash = hasher.finish();
-    format!("{:04}-{stem}-{hash:016x}.md", idx)
+    format!("{:04}-{stem}.md", idx)
 }
 
 pub fn find_between<'a>(haystack: &'a str, start: &str, end: &str) -> Option<&'a str> {
@@ -126,4 +125,52 @@ pub fn extract_loc_values(xml: &str) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_redact_url_postgres() {
+        let url = "postgresql://axon:secret123@localhost:5432/axon";
+        let redacted = redact_url(url);
+        assert!(!redacted.contains("secret123"));
+        assert!(redacted.contains("***"));
+    }
+
+    #[test]
+    fn test_redact_url_amqp() {
+        let url = "amqp://guest:guest@localhost:5672";
+        let redacted = redact_url(url);
+        assert!(!redacted.contains("guest:guest"));
+    }
+
+    #[test]
+    fn test_redact_url_no_credentials() {
+        let url = "http://example.com/path";
+        assert_eq!(redact_url(url), url);
+    }
+
+    #[test]
+    fn test_redact_url_unparseable() {
+        // Should not panic, should return sentinel
+        let result = redact_url("not a url at all !!!@#$");
+        assert_eq!(result, "***redacted***");
+    }
+
+    #[test]
+    fn test_redact_url_username_only() {
+        let url = "postgresql://admin@localhost:5432/db";
+        let redacted = redact_url(url);
+        assert!(!redacted.contains("admin@"));
+        assert!(redacted.contains("***"));
+    }
+
+    #[test]
+    fn test_redact_url_redis_with_password() {
+        let url = "redis://:mypassword@localhost:6379";
+        let redacted = redact_url(url);
+        assert!(!redacted.contains("mypassword"));
+    }
 }

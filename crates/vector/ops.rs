@@ -10,7 +10,16 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+use std::time::Duration;
 use uuid::Uuid;
+
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("failed to build reqwest client")
+});
 
 fn qdrant_base(cfg: &Config) -> String {
     cfg.qdrant_url.trim_end_matches('/').to_string()
@@ -20,7 +29,7 @@ async fn tei_embed(cfg: &Config, inputs: &[String]) -> Result<Vec<Vec<f32>>, Box
     if inputs.is_empty() {
         return Ok(Vec::new());
     }
-    let client = reqwest::Client::new();
+    let client = &*HTTP_CLIENT;
     let mut vectors = Vec::new();
 
     // Respect TEI max client batch size when provided, but cap default to avoid huge request bodies.
@@ -56,7 +65,7 @@ async fn tei_embed(cfg: &Config, inputs: &[String]) -> Result<Vec<Vec<f32>>, Box
 }
 
 async fn ensure_collection(cfg: &Config, dim: usize) -> Result<(), Box<dyn Error>> {
-    let client = reqwest::Client::new();
+    let client = &*HTTP_CLIENT;
     let url = format!("{}/collections/{}", qdrant_base(cfg), cfg.collection);
     let create = serde_json::json!({
         "vectors": {"size": dim, "distance": "Cosine"}
@@ -69,7 +78,7 @@ async fn qdrant_upsert(cfg: &Config, points: &[serde_json::Value]) -> Result<(),
     if points.is_empty() {
         return Ok(());
     }
-    let client = reqwest::Client::new();
+    let client = &*HTTP_CLIENT;
     let url = format!(
         "{}/collections/{}/points?wait=true",
         qdrant_base(cfg),
@@ -86,9 +95,14 @@ async fn qdrant_upsert(cfg: &Config, points: &[serde_json::Value]) -> Result<(),
     Ok(())
 }
 
-async fn qdrant_scroll_all(cfg: &Config) -> Result<Vec<serde_json::Value>, Box<dyn Error>> {
-    let client = reqwest::Client::new();
-    let mut out = Vec::new();
+/// Paginate the entire Qdrant collection, calling `process_page` on each batch
+/// of points. Each page is dropped after processing, so only the aggregated
+/// state (held by the caller via the closure) stays in memory.
+async fn qdrant_scroll_pages(
+    cfg: &Config,
+    mut process_page: impl FnMut(&[serde_json::Value]),
+) -> Result<(), Box<dyn Error>> {
+    let client = &*HTTP_CLIENT;
     let mut offset: Option<serde_json::Value> = None;
 
     loop {
@@ -122,7 +136,7 @@ async fn qdrant_scroll_all(cfg: &Config) -> Result<Vec<serde_json::Value>, Box<d
         if points.is_empty() {
             break;
         }
-        out.extend(points);
+        process_page(&points);
 
         offset = val["result"].get("next_page_offset").cloned();
         if offset.as_ref().is_none() || offset == Some(serde_json::Value::Null) {
@@ -130,7 +144,7 @@ async fn qdrant_scroll_all(cfg: &Config) -> Result<Vec<serde_json::Value>, Box<d
         }
     }
 
-    Ok(out)
+    Ok(())
 }
 
 async fn qdrant_search(
@@ -138,7 +152,7 @@ async fn qdrant_search(
     vector: &[f32],
     limit: usize,
 ) -> Result<Vec<serde_json::Value>, Box<dyn Error>> {
-    let client = reqwest::Client::new();
+    let client = &*HTTP_CLIENT;
     let url = format!(
         "{}/collections/{}/points/search",
         qdrant_base(cfg),
@@ -164,7 +178,7 @@ async fn qdrant_retrieve_by_url(
     cfg: &Config,
     url_match: &str,
 ) -> Result<Vec<serde_json::Value>, Box<dyn Error>> {
-    let client = reqwest::Client::new();
+    let client = &*HTTP_CLIENT;
     let mut out = Vec::new();
     let mut offset: Option<serde_json::Value> = None;
 
@@ -455,16 +469,18 @@ pub async fn run_retrieve_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 pub async fn run_sources_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let points = qdrant_scroll_all(cfg).await?;
     let mut by_url: BTreeMap<String, usize> = BTreeMap::new();
-    for p in points {
-        let payload = p.get("payload").cloned().unwrap_or_default();
-        let url = payload_url(&payload);
-        if url.is_empty() {
-            continue;
+    qdrant_scroll_pages(cfg, |points| {
+        for p in points {
+            let payload = p.get("payload").cloned().unwrap_or_default();
+            let url = payload_url(&payload);
+            if url.is_empty() {
+                continue;
+            }
+            *by_url.entry(url).or_insert(0) += 1;
         }
-        *by_url.entry(url).or_insert(0) += 1;
-    }
+    })
+    .await?;
     if cfg.json_output {
         println!("{}", serde_json::to_string_pretty(&by_url)?);
     } else {
@@ -481,18 +497,20 @@ pub async fn run_sources_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 pub async fn run_domains_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let points = qdrant_scroll_all(cfg).await?;
     let mut by_domain: BTreeMap<String, (usize, BTreeSet<String>)> = BTreeMap::new();
-    for p in points {
-        let payload = p.get("payload").cloned().unwrap_or_default();
-        let domain = payload_domain(&payload);
-        let url = payload_url(&payload);
-        let entry = by_domain.entry(domain).or_insert((0, BTreeSet::new()));
-        entry.0 += 1;
-        if !url.is_empty() {
-            entry.1.insert(url);
+    qdrant_scroll_pages(cfg, |points| {
+        for p in points {
+            let payload = p.get("payload").cloned().unwrap_or_default();
+            let domain = payload_domain(&payload);
+            let url = payload_url(&payload);
+            let entry = by_domain.entry(domain).or_insert((0, BTreeSet::new()));
+            entry.0 += 1;
+            if !url.is_empty() {
+                entry.1.insert(url);
+            }
         }
-    }
+    })
+    .await?;
     if cfg.json_output {
         println!("{}", serde_json::to_string_pretty(&by_domain)?);
     } else {
@@ -509,7 +527,7 @@ pub async fn run_domains_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 pub async fn run_stats_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let client = reqwest::Client::new();
+    let client = &*HTTP_CLIENT;
     let info = client
         .get(format!(
             "{}/collections/{}",
@@ -560,7 +578,81 @@ pub async fn run_stats_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chunk_text_short_returns_single() {
+        let text = "hello world";
+        let chunks = chunk_text(text);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], text);
+    }
+
+    #[test]
+    fn test_chunk_text_exactly_2000_chars() {
+        let text = "a".repeat(2000);
+        let chunks = chunk_text(&text);
+        assert_eq!(chunks.len(), 1);
+    }
+
+    #[test]
+    fn test_chunk_text_2001_chars_gives_two() {
+        let text = "a".repeat(2001);
+        let chunks = chunk_text(&text);
+        assert_eq!(chunks.len(), 2);
+        // Second chunk should have 201 chars (1 new + 200 overlap)
+        assert_eq!(chunks[1].len(), 201);
+    }
+
+    #[test]
+    fn test_chunk_text_multibyte_utf8_no_panic() {
+        // CJK characters --- 3 bytes each
+        let text = "\u{4e2d}".repeat(2500);
+        let chunks = chunk_text(&text);
+        // Must not panic; each chunk must be valid UTF-8
+        for chunk in &chunks {
+            assert!(std::str::from_utf8(chunk.as_bytes()).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_chunk_text_empty_string() {
+        let chunks = chunk_text("");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "");
+    }
+
+    #[test]
+    fn test_chunk_text_overlap_content() {
+        // Create text that's 2200 chars: chunks should overlap by 200
+        let text: String = (0..2200).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        let chunks = chunk_text(&text);
+        assert_eq!(chunks.len(), 2);
+        // The last 200 chars of chunk[0] should equal the first 200 chars of chunk[1]
+        let overlap_from_first = &chunks[0][chunks[0].len() - 200..];
+        let overlap_from_second = &chunks[1][..200];
+        assert_eq!(overlap_from_first, overlap_from_second);
+    }
+
+    #[test]
+    fn test_chunk_text_large_document() {
+        let text = "x".repeat(10_000);
+        let chunks = chunk_text(&text);
+        // With 2000 char chunks and 200 overlap, step is 1800
+        // ceil((10000 - 2000) / 1800) + 1 = ceil(8000/1800) + 1 = 5 + 1 = 6
+        assert!(chunks.len() >= 5);
+        // All chunks except possibly the last should be exactly 2000 chars
+        for chunk in &chunks[..chunks.len() - 1] {
+            assert_eq!(chunk.len(), 2000);
+        }
+    }
+}
+
 pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
+    const MAX_CONTEXT_CHARS: usize = 12_000;
+
     let query = cfg
         .query
         .clone()
@@ -585,7 +677,16 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         let url = payload_url(&payload);
         let txt = payload_text(&payload);
         if !txt.is_empty() {
-            context.push_str(&format!("Source: {}\n{}\n\n", url, txt));
+            let entry = format!("Source: {}\n{}\n\n", url, txt);
+            if context.len() + entry.len() > MAX_CONTEXT_CHARS {
+                eprintln!(
+                    "warning: context truncated at {} chars (max {}); some chunks omitted",
+                    context.len(),
+                    MAX_CONTEXT_CHARS
+                );
+                break;
+            }
+            context.push_str(&entry);
         }
     }
 
@@ -593,7 +694,7 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         return Err("OPENAI_BASE_URL and OPENAI_MODEL required for ask".into());
     }
 
-    let client = reqwest::Client::new();
+    let client = &*HTTP_CLIENT;
     let mut req = client
         .post(format!(
             "{}/chat/completions",

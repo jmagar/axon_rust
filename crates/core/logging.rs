@@ -1,17 +1,22 @@
-use console::Style;
+use tracing::{info, warn};
 
-fn tag(label: &str, style: Style) -> String {
-    style.apply_to(label).to_string()
+pub fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .json()
+        .init();
 }
 
 pub fn log_info(msg: &str) {
-    eprintln!("{} {}", tag("◐", Style::new().cyan()), msg);
+    info!("{}", msg);
 }
 
 pub fn log_warn(msg: &str) {
-    eprintln!("{} {}", tag("⚠", Style::new().yellow()), msg);
+    warn!("{}", msg);
 }
 
 pub fn log_done(msg: &str) {
-    eprintln!("{} {}", tag("✓", Style::new().green()), msg);
+    info!(status = "done", "{}", msg);
 }

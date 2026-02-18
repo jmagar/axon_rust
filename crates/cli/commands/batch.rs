@@ -3,7 +3,7 @@ use crate::axon_cli::crates::cli::commands::run_doctor;
 use crate::axon_cli::crates::core::config::Config;
 use crate::axon_cli::crates::core::content::{to_markdown, url_to_filename};
 use crate::axon_cli::crates::core::http::{build_client, fetch_html};
-use crate::axon_cli::crates::core::logging::log_done;
+use crate::axon_cli::crates::core::logging::{log_done, log_warn};
 use crate::axon_cli::crates::core::ui::{
     accent, confirm_destructive, muted, primary, status_text, symbol_for_status,
 };
@@ -15,7 +15,6 @@ use crate::axon_cli::crates::vector::ops::embed_path_native;
 use indicatif::{ProgressBar, ProgressStyle};
 use spider::tokio;
 use std::error::Error;
-use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -221,9 +220,20 @@ pub async fn run_batch(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
     let batch_dir = cfg.output_dir.join("batch-markdown");
     if batch_dir.exists() {
-        fs::remove_dir_all(&batch_dir)?;
+        if std::env::var("AXON_NO_WIPE").is_ok() {
+            log_warn(&format!(
+                "AXON_NO_WIPE set — keeping existing batch dir: {}",
+                batch_dir.display()
+            ));
+        } else {
+            log_warn(&format!(
+                "Clearing batch output directory: {}",
+                batch_dir.display()
+            ));
+            tokio::fs::remove_dir_all(&batch_dir).await?;
+        }
     }
-    fs::create_dir_all(&batch_dir)?;
+    tokio::fs::create_dir_all(&batch_dir).await?;
 
     let client = build_client(20)?;
     let semaphore = Arc::new(tokio::sync::Semaphore::new(cfg.batch_concurrency.max(1)));
@@ -254,7 +264,7 @@ pub async fn run_batch(cfg: &Config) -> Result<(), Box<dyn Error>> {
         progress.inc(1);
         if let Ok(Some((idx, url, markdown))) = res {
             let file = batch_dir.join(url_to_filename(&url, idx));
-            fs::write(&file, &markdown)?;
+            tokio::fs::write(&file, &markdown).await?;
             if cfg.json_output {
                 println!(
                     "{}",

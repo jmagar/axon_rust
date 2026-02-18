@@ -1,2 +1,2 @@
 #!/command/with-contenv bash
-exec /usr/local/bin/cortex batch worker
+exec s6-setuidgid axon /usr/local/bin/cortex batch worker

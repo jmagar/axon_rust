@@ -45,7 +45,8 @@ impl CommandKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum RenderMode {
     Http,
     Chrome,
@@ -500,7 +501,10 @@ fn into_config(cli: Cli) -> Config {
             .pg_url
             .or_else(|| env::var("AXON_PG_URL").ok())
             .or_else(|| env::var("NUQ_DATABASE_URL").ok())
-            .unwrap_or_else(|| "postgresql://axon:postgres@127.0.0.1:53432/axon".to_string()),
+            .unwrap_or_else(|| {
+                eprintln!("warning: AXON_PG_URL not set — using default credentials; set it in .env for production");
+                "postgresql://axon:postgres@127.0.0.1:53432/axon".to_string()
+            }),
     );
 
     let redis_url = normalize_local_service_url(
@@ -508,7 +512,10 @@ fn into_config(cli: Cli) -> Config {
             .redis_url
             .or_else(|| env::var("AXON_REDIS_URL").ok())
             .or_else(|| env::var("REDIS_URL").ok())
-            .unwrap_or_else(|| "redis://127.0.0.1:53379".to_string()),
+            .unwrap_or_else(|| {
+                eprintln!("warning: AXON_REDIS_URL not set — using default; set it in .env for production");
+                "redis://127.0.0.1:53379".to_string()
+            }),
     );
 
     let amqp_url = normalize_local_service_url(
@@ -516,7 +523,10 @@ fn into_config(cli: Cli) -> Config {
             .amqp_url
             .or_else(|| env::var("AXON_AMQP_URL").ok())
             .or_else(|| env::var("NUQ_RABBITMQ_URL").ok())
-            .unwrap_or_else(|| "amqp://guest:guest@127.0.0.1:45535/%2f".to_string()),
+            .unwrap_or_else(|| {
+                eprintln!("warning: AXON_AMQP_URL not set — using default credentials; set it in .env for production");
+                "amqp://axon:axonrabbit@127.0.0.1:45535/%2f".to_string()
+            }),
     );
 
     let mut crawl_concurrency_limit = global.crawl_concurrency_limit;

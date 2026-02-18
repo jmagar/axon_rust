@@ -9,7 +9,7 @@ use self::crates::cli::commands::{
     run_stats_native, run_status, start_url_from_cfg,
 };
 use self::crates::core::config::{parse_args, CommandKind};
-use self::crates::core::logging::{log_done, log_info};
+use self::crates::core::logging::{init_tracing, log_done, log_info};
 use std::error::Error;
 
 fn is_job_subcommand(cfg: &self::crates::core::config::Config) -> bool {
@@ -38,6 +38,7 @@ fn is_async_enqueue_mode(cfg: &self::crates::core::config::Config) -> bool {
 }
 
 pub async fn run() -> Result<(), Box<dyn Error>> {
+    init_tracing();
     let cfg = parse_args();
 
     let start_url = start_url_from_cfg(&cfg);

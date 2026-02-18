@@ -1,28 +1,28 @@
 use crate::axon_cli::crates::core::config::{Config, RenderMode};
-use crate::axon_cli::crates::core::content::redact_url;
 use crate::axon_cli::crates::core::health::redis_healthy;
 use crate::axon_cli::crates::core::logging::{log_done, log_info, log_warn};
 use crate::axon_cli::crates::crawl::engine::{
     append_sitemap_backfill, run_crawl_once, SitemapBackfillStats,
 };
+use crate::axon_cli::crates::jobs::common::{
+    claim_next_pending, claim_pending_by_id, enqueue_job, make_pool, mark_job_failed,
+    open_amqp_channel,
+};
 use crate::axon_cli::crates::jobs::embed_jobs::start_embed_job;
 use chrono::{DateTime, Utc};
-use lapin::options::{
-    BasicAckOptions, BasicConsumeOptions, BasicPublishOptions, QueueDeclareOptions,
-};
+use futures_util::StreamExt;
+use lapin::options::{BasicAckOptions, BasicConsumeOptions};
 use lapin::types::FieldTable;
-use lapin::{BasicProperties, Channel, Connection, ConnectionProperties};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use spider::tokio;
-use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, PgPool};
 use std::error::Error;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio_executor_trait::Tokio as TokioExecutor;
-use tokio_reactor_trait::Tokio as TokioReactor;
 use uuid::Uuid;
+
+const TABLE: &str = "axon_crawl_jobs";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CrawlJobConfig {
@@ -34,7 +34,7 @@ struct CrawlJobConfig {
     drop_thin_markdown: bool,
     discover_sitemaps: bool,
     embed: bool,
-    render_mode: String,
+    render_mode: RenderMode,
     collection: String,
     output_dir: String,
     crawl_concurrency_limit: Option<usize>,
@@ -71,11 +71,7 @@ fn to_job_config(cfg: &Config) -> CrawlJobConfig {
         drop_thin_markdown: cfg.drop_thin_markdown,
         discover_sitemaps: cfg.discover_sitemaps,
         embed: cfg.embed,
-        render_mode: match cfg.render_mode {
-            RenderMode::Http => "http".to_string(),
-            RenderMode::Chrome => "chrome".to_string(),
-            RenderMode::AutoSwitch => "auto-switch".to_string(),
-        },
+        render_mode: cfg.render_mode,
         collection: cfg.collection.clone(),
         output_dir: cfg.output_dir.to_string_lossy().to_string(),
         crawl_concurrency_limit: cfg.crawl_concurrency_limit,
@@ -88,29 +84,6 @@ fn to_job_config(cfg: &Config) -> CrawlJobConfig {
         retry_backoff_ms: cfg.retry_backoff_ms,
         shared_queue: cfg.shared_queue,
     }
-}
-
-fn render_mode_from_str(value: &str) -> RenderMode {
-    match value {
-        "http" => RenderMode::Http,
-        "chrome" => RenderMode::Chrome,
-        _ => RenderMode::AutoSwitch,
-    }
-}
-
-async fn pool(cfg: &Config) -> Result<PgPool, Box<dyn Error>> {
-    let p = tokio::time::timeout(
-        Duration::from_secs(5),
-        PgPoolOptions::new().max_connections(5).connect(&cfg.pg_url),
-    )
-    .await
-    .map_err(|_| {
-        format!(
-            "postgres connect timeout: {} (if running in Docker without published ports, run from same Docker network or expose postgres)",
-            cfg.pg_url
-        )
-    })??;
-    Ok(p)
 }
 
 async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
@@ -133,10 +106,6 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
     .execute(pool)
     .await?;
 
-    sqlx::query("ALTER TABLE axon_crawl_jobs ADD COLUMN IF NOT EXISTS result_json JSONB")
-        .execute(pool)
-        .await?;
-
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_axon_crawl_jobs_status ON axon_crawl_jobs(status)")
         .execute(pool)
         .await?;
@@ -144,38 +113,13 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn open_channel(cfg: &Config) -> Result<Channel, Box<dyn Error>> {
-    let props = ConnectionProperties::default()
-        .with_executor(TokioExecutor::current())
-        .with_reactor(TokioReactor);
-    let conn = tokio::time::timeout(
-        Duration::from_secs(5),
-        Connection::connect(&cfg.amqp_url, props),
-    )
-    .await
-    .map_err(|_| {
-        format!(
-            "amqp connect timeout: {} (if running in Docker without published ports, run from same Docker network or expose rabbitmq)",
-            redact_url(&cfg.amqp_url)
-        )
-    })??;
-    let ch = conn.create_channel().await?;
-    ch.queue_declare(
-        &cfg.crawl_queue,
-        QueueDeclareOptions::default(),
-        FieldTable::default(),
-    )
-    .await?;
-    Ok(ch)
-}
-
 pub async fn doctor(cfg: &Config) -> Result<serde_json::Value, Box<dyn Error>> {
-    let pg_ok = match pool(cfg).await {
+    let pg_ok = match make_pool(cfg).await {
         Ok(p) => ensure_schema(&p).await.is_ok(),
         Err(_) => false,
     };
 
-    let amqp_result = open_channel(cfg).await;
+    let amqp_result = open_amqp_channel(cfg, &cfg.crawl_queue).await;
     let amqp_ok = amqp_result.is_ok();
     let amqp_error = amqp_result.err().map(|e| e.to_string());
 
@@ -190,23 +134,8 @@ pub async fn doctor(cfg: &Config) -> Result<serde_json::Value, Box<dyn Error>> {
     }))
 }
 
-async fn enqueue(cfg: &Config, job_id: Uuid) -> Result<(), Box<dyn Error>> {
-    let ch = open_channel(cfg).await?;
-    let payload = job_id.to_string();
-    ch.basic_publish(
-        "",
-        &cfg.crawl_queue,
-        BasicPublishOptions::default(),
-        payload.as_bytes(),
-        BasicProperties::default(),
-    )
-    .await?
-    .await?;
-    Ok(())
-}
-
 pub async fn start_crawl_job(cfg: &Config, start_url: &str) -> Result<Uuid, Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
 
     let id = Uuid::new_v4();
@@ -224,7 +153,7 @@ pub async fn start_crawl_job(cfg: &Config, start_url: &str) -> Result<Uuid, Box<
     .execute(&pool)
     .await?;
 
-    if let Err(err) = enqueue(cfg, id).await {
+    if let Err(err) = enqueue_job(cfg, &cfg.crawl_queue, id).await {
         log_warn(&format!(
             "amqp enqueue failed for {id}; worker fallback polling will pick it up: {err}"
         ));
@@ -233,7 +162,7 @@ pub async fn start_crawl_job(cfg: &Config, start_url: &str) -> Result<Uuid, Box<
 }
 
 pub async fn get_job(cfg: &Config, id: Uuid) -> Result<Option<CrawlJob>, Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
     let row = sqlx::query_as::<_, CrawlJob>(
         r#"
@@ -250,7 +179,7 @@ pub async fn get_job(cfg: &Config, id: Uuid) -> Result<Option<CrawlJob>, Box<dyn
 }
 
 pub async fn list_jobs(cfg: &Config, limit: i64) -> Result<Vec<CrawlJob>, Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
     let rows = sqlx::query_as::<_, CrawlJob>(
         r#"
@@ -268,7 +197,7 @@ pub async fn list_jobs(cfg: &Config, limit: i64) -> Result<Vec<CrawlJob>, Box<dy
 }
 
 pub async fn cancel_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
 
     let rows = sqlx::query(
@@ -288,7 +217,7 @@ pub async fn cancel_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Error>> 
 }
 
 pub async fn cleanup_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
     let rows = sqlx::query(
         "DELETE FROM axon_crawl_jobs WHERE status IN ('failed','canceled') OR (status='pending' AND created_at < NOW() - INTERVAL '1 day')",
@@ -300,14 +229,14 @@ pub async fn cleanup_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
 }
 
 pub async fn clear_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
     let rows = sqlx::query("DELETE FROM axon_crawl_jobs")
         .execute(&pool)
         .await?
         .rows_affected();
 
-    if let Ok(ch) = open_channel(cfg).await {
+    if let Ok(ch) = open_amqp_channel(cfg, &cfg.crawl_queue).await {
         let _ = ch
             .queue_purge(
                 &cfg.crawl_queue,
@@ -353,7 +282,7 @@ async fn process_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), Box<dy
     job_cfg.drop_thin_markdown = parsed.drop_thin_markdown;
     job_cfg.discover_sitemaps = parsed.discover_sitemaps;
     job_cfg.embed = parsed.embed;
-    job_cfg.render_mode = render_mode_from_str(&parsed.render_mode);
+    job_cfg.render_mode = parsed.render_mode;
     job_cfg.collection = parsed.collection;
     job_cfg.crawl_concurrency_limit = parsed.crawl_concurrency_limit;
     job_cfg.sitemap_concurrency_limit = parsed.sitemap_concurrency_limit;
@@ -451,57 +380,13 @@ async fn process_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), Box<dy
     Ok(())
 }
 
-async fn claim_next_pending_job(pool: &PgPool) -> Result<Option<Uuid>, Box<dyn Error>> {
-    let row = sqlx::query_as::<_, (Uuid,)>(
-        r#"
-        WITH next_job AS (
-            SELECT id
-            FROM axon_crawl_jobs
-            WHERE status = 'pending'
-            ORDER BY created_at ASC
-            FOR UPDATE SKIP LOCKED
-            LIMIT 1
-        )
-        UPDATE axon_crawl_jobs j
-        SET status = 'running', updated_at = NOW(), started_at = COALESCE(started_at, NOW())
-        FROM next_job
-        WHERE j.id = next_job.id
-        RETURNING j.id
-        "#,
-    )
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|(id,)| id))
-}
-
-async fn claim_pending_by_id(pool: &PgPool, id: Uuid) -> Result<bool, Box<dyn Error>> {
-    let updated = sqlx::query(
-        "UPDATE axon_crawl_jobs SET status='running', updated_at=NOW(), started_at=COALESCE(started_at, NOW()), error_text=NULL WHERE id=$1 AND status='pending'",
-    )
-    .bind(id)
-    .execute(pool)
-    .await?
-    .rows_affected();
-    Ok(updated > 0)
-}
-
-async fn mark_crawl_job_failed(pool: &PgPool, id: Uuid, error_text: &str) {
-    let _ = sqlx::query(
-        "UPDATE axon_crawl_jobs SET status='failed', updated_at=NOW(), finished_at=NOW(), error_text=$2 WHERE id=$1 AND status='running'",
-    )
-    .bind(id)
-    .bind(error_text)
-    .execute(pool)
-    .await;
-}
-
 async fn run_worker_polling_loop(cfg: &Config, pool: &PgPool) -> Result<(), Box<dyn Error>> {
     log_warn("amqp unavailable; running crawl worker in postgres polling mode");
     loop {
-        if let Some(job_id) = claim_next_pending_job(pool).await? {
+        if let Some(job_id) = claim_next_pending(pool, TABLE).await? {
             if let Err(err) = process_job(cfg, pool, job_id).await {
                 let error_text = err.to_string();
-                mark_crawl_job_failed(pool, job_id, &error_text).await;
+                mark_job_failed(pool, TABLE, job_id, &error_text).await;
                 log_warn(&format!("worker failed crawl job {job_id}: {error_text}"));
             }
         } else {
@@ -511,10 +396,10 @@ async fn run_worker_polling_loop(cfg: &Config, pool: &PgPool) -> Result<(), Box<
 }
 
 pub async fn run_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let pool = pool(cfg).await?;
+    let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
 
-    let ch = match open_channel(cfg).await {
+    let ch = match open_amqp_channel(cfg, &cfg.crawl_queue).await {
         Ok(ch) => ch,
         Err(_) => return run_worker_polling_loop(cfg, &pool).await,
     };
@@ -532,7 +417,6 @@ pub async fn run_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
         cfg.crawl_queue
     ));
 
-    use futures_util::StreamExt;
     while let Some(msg) = consumer.next().await {
         let delivery = match msg {
             Ok(d) => d,
@@ -547,10 +431,10 @@ pub async fn run_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
             .and_then(|s| Uuid::parse_str(s.trim()).ok());
 
         if let Some(job_id) = parsed {
-            if claim_pending_by_id(&pool, job_id).await.unwrap_or(false) {
+            if claim_pending_by_id(&pool, TABLE, job_id).await.unwrap_or(false) {
                 if let Err(err) = process_job(cfg, &pool, job_id).await {
                     let error_text = err.to_string();
-                    mark_crawl_job_failed(&pool, job_id, &error_text).await;
+                    mark_job_failed(&pool, TABLE, job_id, &error_text).await;
                     log_warn(&format!("worker failed crawl job {job_id}: {error_text}"));
                 }
             }

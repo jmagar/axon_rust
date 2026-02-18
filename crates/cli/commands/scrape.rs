@@ -7,7 +7,6 @@ use crate::axon_cli::crates::core::logging::log_done;
 use crate::axon_cli::crates::core::ui::{muted, primary, print_option, print_phase};
 use crate::axon_cli::crates::vector::ops::embed_path_native;
 use std::error::Error;
-use std::fs;
 
 pub async fn run_scrape(cfg: &Config, url: &str) -> Result<(), Box<dyn Error>> {
     print_phase("◐", "Scraping", url);
@@ -32,7 +31,7 @@ pub async fn run_scrape(cfg: &Config, url: &str) -> Result<(), Box<dyn Error>> {
     };
 
     if let Some(path) = &cfg.output_path {
-        fs::write(path, &output)?;
+        tokio::fs::write(path, &output).await?;
         log_done(&format!("wrote output: {}", path.to_string_lossy()));
     } else {
         println!("{} {}", primary("Scrape Results for"), url);
@@ -42,8 +41,8 @@ pub async fn run_scrape(cfg: &Config, url: &str) -> Result<(), Box<dyn Error>> {
 
     if cfg.embed {
         let embed_dir = cfg.output_dir.join("scrape-markdown");
-        fs::create_dir_all(&embed_dir)?;
-        fs::write(embed_dir.join(url_to_filename(url, 1)), markdown)?;
+        tokio::fs::create_dir_all(&embed_dir).await?;
+        tokio::fs::write(embed_dir.join(url_to_filename(url, 1)), markdown).await?;
         embed_path_native(cfg, &embed_dir.to_string_lossy()).await?;
     }
 

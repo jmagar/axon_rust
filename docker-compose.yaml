@@ -25,7 +25,7 @@ services:
     image: postgres:17-alpine
     container_name: axon-postgres
     ports:
-      - "53432:5432"
+      - "127.0.0.1:53432:5432"  # homelab-only: not exposed to network
     volumes:
       - /home/jmagar/appdata/axon-postgres:/var/lib/postgresql/data
     healthcheck:
@@ -41,15 +41,15 @@ services:
 
   axon-redis:
     <<: *common-service
-    image: redis:alpine
+    image: redis:7.4-alpine
     container_name: axon-redis
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-changeme}"]
     ports:
-      - "53379:6379"
+      - "127.0.0.1:53379:6379"  # homelab-only: not exposed to network
     volumes:
       - /home/jmagar/appdata/axon-redis:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      test: ["CMD", "redis-cli", "-p", "6379", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -57,10 +57,13 @@ services:
 
   axon-rabbitmq:
     <<: *common-service
-    image: rabbitmq:management
+    image: rabbitmq:4.0-management
     container_name: axon-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-axon}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-axonrabbit}
     ports:
-      - "45535:5672"
+      - "127.0.0.1:45535:5672"  # homelab-only: not exposed to network
     volumes:
       - /home/jmagar/appdata/axon-rabbitmq:/var/lib/rabbitmq
     healthcheck:
@@ -72,13 +75,19 @@ services:
 
   axon-qdrant:
     <<: *common-service
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.13.1
     container_name: axon-qdrant
     ports:
-      - "53333:6333"
-      - "53334:6334"
+      - "127.0.0.1:53333:6333"  # homelab-only: not exposed to network
+      - "127.0.0.1:53334:6334"  # gRPC — homelab-only
     volumes:
       - /home/jmagar/appdata/axon-qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   axon-workers:
     <<: *common-service
@@ -94,7 +103,15 @@ services:
       axon-rabbitmq:
         condition: service_healthy
       axon-qdrant:
-        condition: service_started
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 512M
     healthcheck:
       test: ["CMD", "/usr/local/bin/healthcheck-workers.sh"]
       interval: 30s

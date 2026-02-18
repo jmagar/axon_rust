@@ -11,7 +11,6 @@ use crate::axon_cli::crates::jobs::extract_jobs::{
     list_extract_jobs, run_extract_worker, start_extract_job,
 };
 use std::error::Error;
-use std::fs;
 use uuid::Uuid;
 
 pub async fn run_extract(cfg: &Config) -> Result<(), Box<dyn Error>> {
@@ -254,7 +253,7 @@ pub async fn run_extract(cfg: &Config) -> Result<(), Box<dyn Error>> {
         .clone()
         .unwrap_or_else(|| cfg.output_dir.join("extract.json"));
     if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent)?;
+        tokio::fs::create_dir_all(parent).await?;
     }
     let output = serde_json::json!({
         "urls": urls,
@@ -266,7 +265,7 @@ pub async fn run_extract(cfg: &Config) -> Result<(), Box<dyn Error>> {
         "runs": runs,
         "results": all_results
     });
-    fs::write(&output_path, serde_json::to_string_pretty(&output)?)?;
+    tokio::fs::write(&output_path, serde_json::to_string_pretty(&output)?).await?;
 
     if cfg.json_output {
         println!("{}", serde_json::to_string_pretty(&output)?);

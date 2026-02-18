@@ -41,14 +41,18 @@ pub fn validate_url(url: &str) -> Result<(), Box<dyn Error>> {
 
     let host = parsed.host_str().ok_or("URL has no host")?;
 
-    // Block .internal and .local TLDs
+    // Block localhost and .internal/.local TLDs
     let lower = host.to_ascii_lowercase();
+    if lower == "localhost" || lower.ends_with(".localhost") {
+        return Err(format!("blocked host '{host}': localhost not allowed").into());
+    }
     if lower.ends_with(".internal") || lower.ends_with(".local") {
         return Err(format!("blocked host '{host}': .internal/.local domains not allowed").into());
     }
 
-    // Parse as IP to check for private/loopback/link-local ranges
-    if let Ok(ip) = host.parse::<IpAddr>() {
+    // Use Url::host() for typed IP extraction — avoids string-parsing edge cases
+    // with IPv6 bracket notation that host_str().parse::<IpAddr>() may miss.
+    let check_ip = |ip: IpAddr| -> Result<(), Box<dyn Error>> {
         if ip.is_loopback() {
             return Err(format!("blocked IP '{ip}': loopback address not allowed").into());
         }
@@ -85,6 +89,16 @@ pub fn validate_url(url: &str) -> Result<(), Box<dyn Error>> {
                 }
             }
         }
+        Ok(())
+    };
+
+    // Use parsed.host() for typed extraction — host_str().parse::<IpAddr>()
+    // silently fails for IPv6 because spider::url::Url returns zone-scoped or
+    // bracket-ambiguous representations. The Host enum gives us the parsed addr directly.
+    match parsed.host() {
+        Some(spider::url::Host::Ipv4(v4)) => check_ip(IpAddr::V4(v4))?,
+        Some(spider::url::Host::Ipv6(v6)) => check_ip(IpAddr::V6(v6))?,
+        _ => {}
     }
 
     Ok(())
@@ -107,4 +121,140 @@ pub async fn fetch_html(client: &reqwest::Client, url: &str) -> Result<String, B
         .text()
         .await?;
     Ok(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Public URLs should be allowed ---
+
+    #[test]
+    fn test_validate_url_allows_public_https() {
+        assert!(validate_url("https://example.com/").is_ok());
+    }
+
+    #[test]
+    fn test_validate_url_allows_public_http() {
+        assert!(validate_url("http://example.com/page").is_ok());
+    }
+
+    // --- Loopback addresses ---
+
+    #[test]
+    fn test_validate_url_blocks_loopback_ipv4() {
+        assert!(validate_url("http://127.0.0.1/").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_blocks_localhost() {
+        assert!(validate_url("http://localhost/").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_blocks_ipv6_loopback() {
+        assert!(validate_url("http://[::1]/").is_err());
+    }
+
+    // --- AWS metadata / link-local ---
+
+    #[test]
+    fn test_validate_url_blocks_aws_metadata() {
+        assert!(validate_url("http://169.254.169.254/latest/meta-data/").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_blocks_link_local_boundary() {
+        // 169.254.169.253 is still in 169.254.0.0/16 — should be blocked
+        assert!(validate_url("http://169.254.169.253/").is_err());
+    }
+
+    // --- RFC-1918 private ranges ---
+
+    #[test]
+    fn test_validate_url_blocks_10_network() {
+        assert!(validate_url("http://10.0.0.1/").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_blocks_10_network_upper() {
+        assert!(validate_url("http://10.255.255.255/").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_blocks_172_16() {
+        assert!(validate_url("http://172.16.0.1/").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_allows_172_15() {
+        // 172.15.255.255 is just below the 172.16.0.0/12 range — should ALLOW
+        assert!(validate_url("http://172.15.255.255/").is_ok());
+    }
+
+    #[test]
+    fn test_validate_url_allows_172_32() {
+        // 172.32.0.0 is just above the 172.16-31 range — should ALLOW
+        assert!(validate_url("http://172.32.0.0/").is_ok());
+    }
+
+    #[test]
+    fn test_validate_url_blocks_192_168() {
+        assert!(validate_url("http://192.168.0.1/").is_err());
+    }
+
+    // --- Blocked URL schemes ---
+
+    #[test]
+    fn test_validate_url_blocks_ftp() {
+        assert!(validate_url("ftp://example.com/").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_blocks_file() {
+        assert!(validate_url("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_blocks_data() {
+        assert!(validate_url("data:text/plain,hello").is_err());
+    }
+
+    // --- TLD blocking ---
+
+    #[test]
+    fn test_validate_url_blocks_internal_tld() {
+        assert!(validate_url("http://host.internal/").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_blocks_local_tld() {
+        assert!(validate_url("http://host.local/").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_blocks_internal_tld_case_insensitive() {
+        assert!(validate_url("http://HOST.INTERNAL/").is_err());
+    }
+
+    // --- Invalid URLs ---
+
+    #[test]
+    fn test_validate_url_blocks_invalid_url() {
+        assert!(validate_url("not a valid url at all").is_err());
+    }
+
+    // --- IPv6 private ranges ---
+
+    #[test]
+    fn test_validate_url_blocks_ipv6_ula() {
+        // fc00::1 is unique-local address (fc00::/7)
+        assert!(validate_url("http://[fc00::1]/").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_blocks_ipv6_link_local() {
+        // fe80::1 is link-local (fe80::/10)
+        assert!(validate_url("http://[fe80::1]/").is_err());
+    }
 }
