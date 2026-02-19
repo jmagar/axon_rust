@@ -1,4 +1,9 @@
 use crate::axon_cli::crates::core::config::Config;
+use crate::axon_cli::crates::core::content::redact_url;
+use crate::axon_cli::crates::core::health::{
+    browser_backend_selection, browser_diagnostics_pattern, do_not_port_guardrails,
+    webdriver_url_from_env, BrowserBackendSelection,
+};
 use crate::axon_cli::crates::core::ui::{accent, muted, primary, status_text, symbol_for_status};
 use crate::axon_cli::crates::jobs::batch_jobs::list_batch_jobs;
 use crate::axon_cli::crates::jobs::crawl_jobs::list_jobs;
@@ -8,6 +13,41 @@ use console::style;
 use serde_json::Value;
 use std::env;
 use std::error::Error;
+use std::time::Duration;
+
+fn with_path(base: &str, path: &str) -> String {
+    let trimmed = base.trim_end_matches('/');
+    if path.starts_with('/') {
+        format!("{trimmed}{path}")
+    } else {
+        format!("{trimmed}/{path}")
+    }
+}
+
+async fn probe_http(url: &str, paths: &[&str]) -> (bool, Option<String>) {
+    if url.trim().is_empty() {
+        return (false, Some("not configured".to_string()));
+    }
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(4))
+        .build()
+    {
+        Ok(c) => c,
+        Err(err) => return (false, Some(err.to_string())),
+    };
+
+    let mut last_error = None;
+    for path in paths {
+        let endpoint = with_path(url, path);
+        match client.get(endpoint).send().await {
+            Ok(resp) => return (true, Some(format!("http {}", resp.status().as_u16()))),
+            Err(err) => last_error = Some(err.to_string()),
+        }
+    }
+
+    (false, last_error)
+}
 
 fn styled_metric(token: String, color: &str) -> String {
     if env::var("AXON_NO_COLOR").is_ok() || env::var("CORTEX_NO_COLOR").is_ok() {
@@ -45,6 +85,22 @@ fn summarize_urls(urls_json: &Value) -> (String, usize) {
 }
 
 pub async fn run_status(cfg: &Config) -> Result<(), Box<dyn Error>> {
+    let webdriver_url = webdriver_url_from_env();
+    let diagnostics = browser_diagnostics_pattern();
+    let webdriver_probe = match webdriver_url.as_deref() {
+        Some(url) => probe_http(url, &["/status", "/wd/hub/status"]).await,
+        None => (false, Some("not configured".to_string())),
+    };
+    let backend_selection = browser_backend_selection(
+        true,
+        webdriver_url.is_some(),
+        webdriver_url.is_some() && webdriver_probe.0,
+    );
+    let backend_selection_label = match backend_selection {
+        BrowserBackendSelection::Chrome => "chrome",
+        BrowserBackendSelection::WebDriverFallback => "webdriver",
+    };
+
     let (crawl_jobs, batch_jobs, extract_jobs, embed_jobs) = spider::tokio::try_join!(
         async {
             list_jobs(cfg, 20)
@@ -75,10 +131,74 @@ pub async fn run_status(cfg: &Config) -> Result<(), Box<dyn Error>> {
                 "local_crawl_jobs": crawl_jobs,
                 "local_batch_jobs": batch_jobs,
                 "local_extract_jobs": extract_jobs,
-                "local_embed_jobs": embed_jobs
+                "local_embed_jobs": embed_jobs,
+                "browser_runtime": {
+                    "selection": backend_selection_label,
+                    "webdriver": {
+                        "configured": webdriver_url.is_some(),
+                        "ok": webdriver_probe.0,
+                        "url": webdriver_url.as_deref().map(redact_url),
+                        "detail": webdriver_probe.1,
+                    },
+                    "diagnostics": {
+                        "enabled": diagnostics.enabled,
+                        "screenshot": diagnostics.screenshot,
+                        "events": diagnostics.events,
+                        "output_dir": diagnostics.output_dir,
+                    },
+                    "do_not_port_guardrails": do_not_port_guardrails(),
+                }
             }))?
         );
     } else {
+        println!("{}", primary("Runtime"));
+        println!(
+            "  {} selection {}",
+            symbol_for_status("completed"),
+            muted(backend_selection_label)
+        );
+        println!(
+            "  {} webdriver {} {}",
+            symbol_for_status(if webdriver_probe.0 {
+                "completed"
+            } else {
+                "failed"
+            }),
+            status_text(if webdriver_probe.0 {
+                "completed"
+            } else {
+                "failed"
+            }),
+            muted(&if let Some(url) = webdriver_url.as_deref() {
+                format!(
+                    "{} ({})",
+                    redact_url(url),
+                    webdriver_probe
+                        .1
+                        .clone()
+                        .unwrap_or_else(|| "unreachable".to_string())
+                )
+            } else {
+                "not configured (optional fallback)".to_string()
+            })
+        );
+        println!(
+            "  diagnostics: {} (screenshot={} events={} dir={})",
+            muted(if diagnostics.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }),
+            diagnostics.screenshot,
+            diagnostics.events,
+            diagnostics.output_dir
+        );
+        println!(
+            "  do-not-port guardrails: {}",
+            do_not_port_guardrails().len()
+        );
+        println!();
+
         println!("{}", primary("Job Status (all)"));
         println!(
             "  {} {} | {} {} | {} {} | {} {}",

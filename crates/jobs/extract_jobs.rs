@@ -1,10 +1,12 @@
 use crate::axon_cli::crates::core::config::Config;
+use crate::axon_cli::crates::core::content::{
+    run_extract_with_engine, DeterministicExtractionEngine,
+};
 use crate::axon_cli::crates::core::health::redis_healthy;
 use crate::axon_cli::crates::core::logging::{log_done, log_info, log_warn};
-use crate::axon_cli::crates::extract::remote_extract::run_remote_extract;
 use crate::axon_cli::crates::jobs::common::{
     claim_next_pending, claim_pending_by_id, enqueue_job, make_pool, mark_job_failed,
-    open_amqp_channel, JobTable,
+    open_amqp_channel, reclaim_stale_running_jobs, JobTable,
 };
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
@@ -15,10 +17,14 @@ use serde::{Deserialize, Serialize};
 use spider::tokio;
 use sqlx::{FromRow, PgPool};
 use std::error::Error;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const TABLE: JobTable = JobTable::Extract;
+const STALE_RUNNING_TIMEOUT_SECS: i64 = 300;
+const STALE_CONFIRMATION_SECS: i64 = 60;
+const STALE_SWEEP_INTERVAL_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ExtractJobConfig {
@@ -196,26 +202,58 @@ async fn process_extract_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<()
         let mut all_results = Vec::new();
         let mut pages_visited = 0usize;
         let mut pages_with_data = 0usize;
+        let mut deterministic_pages = 0usize;
+        let mut llm_fallback_pages = 0usize;
+        let mut llm_requests = 0usize;
+        let mut prompt_tokens = 0u64;
+        let mut completion_tokens = 0u64;
+        let mut total_tokens = 0u64;
+        let mut estimated_cost_usd = 0.0f64;
+        let mut parser_hits = serde_json::Map::new();
+        let engine = Arc::new(DeterministicExtractionEngine::with_default_parsers());
 
         for url in urls {
-            match run_remote_extract(
+            match run_extract_with_engine(
                 &url,
                 &prompt,
                 job_cfg.max_pages,
                 &cfg.openai_base_url,
                 &cfg.openai_api_key,
                 &cfg.openai_model,
+                Arc::clone(&engine),
             )
             .await
             {
                 Ok(run) => {
                     pages_visited += run.pages_visited;
                     pages_with_data += run.pages_with_data;
+                    deterministic_pages += run.metrics.deterministic_pages;
+                    llm_fallback_pages += run.metrics.llm_fallback_pages;
+                    llm_requests += run.metrics.llm_requests;
+                    prompt_tokens += run.metrics.prompt_tokens;
+                    completion_tokens += run.metrics.completion_tokens;
+                    total_tokens += run.metrics.total_tokens;
+                    estimated_cost_usd += run.metrics.estimated_cost_usd;
+                    for (name, count) in run.parser_hits.clone() {
+                        let current = parser_hits
+                            .get(&name)
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        parser_hits.insert(name, serde_json::json!(current + count as u64));
+                    }
                     all_results.extend(run.results.clone());
                     runs.push(serde_json::json!({
                         "url": run.start_url,
                         "pages_visited": run.pages_visited,
                         "pages_with_data": run.pages_with_data,
+                        "deterministic_pages": run.metrics.deterministic_pages,
+                        "llm_fallback_pages": run.metrics.llm_fallback_pages,
+                        "llm_requests": run.metrics.llm_requests,
+                        "prompt_tokens": run.metrics.prompt_tokens,
+                        "completion_tokens": run.metrics.completion_tokens,
+                        "total_tokens": run.metrics.total_tokens,
+                        "estimated_cost_usd": run.metrics.estimated_cost_usd,
+                        "parser_hits": run.parser_hits,
                         "total_items": run.results.len(),
                         "results": run.results
                     }));
@@ -238,6 +276,14 @@ async fn process_extract_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<()
             "model": cfg.openai_model,
             "pages_visited": pages_visited,
             "pages_with_data": pages_with_data,
+            "deterministic_pages": deterministic_pages,
+            "llm_fallback_pages": llm_fallback_pages,
+            "llm_requests": llm_requests,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "estimated_cost_usd": estimated_cost_usd,
+            "parser_hits": parser_hits,
             "total_items": all_results.len(),
             "runs": runs,
             "results": all_results
@@ -290,7 +336,36 @@ pub async fn run_extract_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
             "extract worker listening on queue={}",
             cfg.extract_queue
         ));
-        while let Some(msg) = consumer.next().await {
+        loop {
+            let msg = match tokio::time::timeout(
+                Duration::from_secs(STALE_SWEEP_INTERVAL_SECS),
+                consumer.next(),
+            )
+            .await
+            {
+                Ok(Some(msg)) => msg,
+                Ok(None) => break,
+                Err(_) => {
+                    if let Ok(reclaimed) = reclaim_stale_running_jobs(
+                        &pool,
+                        TABLE,
+                        "extract",
+                        STALE_RUNNING_TIMEOUT_SECS,
+                        STALE_CONFIRMATION_SECS,
+                        "amqp",
+                    )
+                    .await
+                    {
+                        if reclaimed > 0 {
+                            log_warn(&format!(
+                                "watchdog reclaimed {} stale extract jobs",
+                                reclaimed
+                            ));
+                        }
+                    }
+                    continue;
+                }
+            };
             let delivery = match msg {
                 Ok(d) => d,
                 Err(_) => continue,
@@ -316,7 +391,25 @@ pub async fn run_extract_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     }
 
     log_warn("amqp unavailable; running extract worker in postgres polling mode");
+    let mut last_sweep = Instant::now();
     loop {
+        if last_sweep.elapsed() >= Duration::from_secs(STALE_SWEEP_INTERVAL_SECS) {
+            if let Ok(reclaimed) = reclaim_stale_running_jobs(
+                &pool,
+                TABLE,
+                "extract",
+                STALE_RUNNING_TIMEOUT_SECS,
+                STALE_CONFIRMATION_SECS,
+                "polling",
+            )
+            .await
+            {
+                if reclaimed > 0 {
+                    log_warn(&format!("watchdog reclaimed {} stale extract jobs", reclaimed));
+                }
+            }
+            last_sweep = Instant::now();
+        }
         if let Some(id) = claim_next_pending(&pool, TABLE).await? {
             if let Err(err) = process_extract_job(cfg, &pool, id).await {
                 let error_text = err.to_string();

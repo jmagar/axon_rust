@@ -43,6 +43,27 @@ async fn record_command_run(cfg: &Config) {
     let _ = tokio::time::timeout(Duration::from_secs(2), attempt).await;
 }
 
+async fn run_once(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
+    match cfg.command {
+        CommandKind::Scrape => run_scrape(cfg, start_url).await?,
+        CommandKind::Map => run_map(cfg, start_url).await?,
+        CommandKind::Crawl => run_crawl(cfg, start_url).await?,
+        CommandKind::Batch => run_batch(cfg).await?,
+        CommandKind::Extract => run_extract(cfg).await?,
+        CommandKind::Search => run_search(cfg).await?,
+        CommandKind::Embed => run_embed(cfg).await?,
+        CommandKind::Doctor => run_doctor(cfg).await?,
+        CommandKind::Query => run_query_native(cfg).await?,
+        CommandKind::Retrieve => run_retrieve_native(cfg).await?,
+        CommandKind::Ask => run_ask_native(cfg).await?,
+        CommandKind::Sources => run_sources_native(cfg).await?,
+        CommandKind::Domains => run_domains_native(cfg).await?,
+        CommandKind::Stats => run_stats_native(cfg).await?,
+        CommandKind::Status => run_status(cfg).await?,
+    }
+    Ok(())
+}
+
 fn is_job_subcommand(cfg: &self::crates::core::config::Config) -> bool {
     matches!(
         cfg.positional.first().map(|s| s.as_str()),
@@ -85,23 +106,36 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
     ));
     record_command_run(&cfg).await;
 
-    match cfg.command {
-        CommandKind::Scrape => run_scrape(&cfg, &start_url).await?,
-        CommandKind::Map => run_map(&cfg, &start_url).await?,
-        CommandKind::Crawl => run_crawl(&cfg, &start_url).await?,
-        CommandKind::Batch => run_batch(&cfg).await?,
-        CommandKind::Extract => run_extract(&cfg).await?,
-        CommandKind::Search => run_search(&cfg).await?,
-        CommandKind::Embed => run_embed(&cfg).await?,
-        CommandKind::Doctor => run_doctor(&cfg).await?,
-        CommandKind::Query => run_query_native(&cfg).await?,
-        CommandKind::Retrieve => run_retrieve_native(&cfg).await?,
-        CommandKind::Ask => run_ask_native(&cfg).await?,
-        CommandKind::Sources => run_sources_native(&cfg).await?,
-        CommandKind::Domains => run_domains_native(&cfg).await?,
-        CommandKind::Stats => run_stats_native(&cfg).await?,
-        CommandKind::Status => run_status(&cfg).await?,
+    if let Some(every_seconds) = cfg.cron_every_seconds {
+        if is_job_subcommand(&cfg) {
+            return Err(
+                "--cron-every-seconds is not supported for job subcommands (status/cancel/list/etc)"
+                    .into(),
+            );
+        }
+        let max_runs = cfg.cron_max_runs.unwrap_or(usize::MAX);
+        let mut run_count = 0usize;
+        while run_count < max_runs {
+            run_count += 1;
+            log_info(&format!(
+                "cron run {} command={} interval={}s",
+                run_count,
+                cfg.command.as_str(),
+                every_seconds
+            ));
+            run_once(&cfg, &start_url).await?;
+            if run_count < max_runs {
+                tokio::time::sleep(Duration::from_secs(every_seconds)).await;
+            }
+        }
+        log_done(&format!(
+            "command={} cron complete runs={}",
+            cfg.command.as_str(),
+            run_count
+        ));
+        return Ok(());
     }
+    run_once(&cfg, &start_url).await?;
 
     if is_async_enqueue_mode(&cfg) {
         log_done(&format!("command={} enqueued", cfg.command.as_str()));

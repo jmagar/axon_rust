@@ -1,16 +1,19 @@
 use crate::axon_cli::crates::cli::commands::common::parse_urls;
 use crate::axon_cli::crates::cli::commands::run_doctor;
 use crate::axon_cli::crates::core::config::Config;
+use crate::axon_cli::crates::core::content::{
+    run_extract_with_engine, DeterministicExtractionEngine,
+};
 use crate::axon_cli::crates::core::logging::log_done;
 use crate::axon_cli::crates::core::ui::{
     accent, confirm_destructive, muted, primary, status_text, symbol_for_status,
 };
-use crate::axon_cli::crates::extract::remote_extract::run_remote_extract;
 use crate::axon_cli::crates::jobs::extract_jobs::{
     cancel_extract_job, cleanup_extract_jobs, clear_extract_jobs, get_extract_job,
     list_extract_jobs, run_extract_worker, start_extract_job,
 };
 use std::error::Error;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub async fn run_extract(cfg: &Config) -> Result<(), Box<dyn Error>> {
@@ -225,24 +228,53 @@ pub async fn run_extract(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let mut all_results = Vec::new();
     let mut pages_visited = 0usize;
     let mut pages_with_data = 0usize;
+    let mut deterministic_pages = 0usize;
+    let mut llm_fallback_pages = 0usize;
+    let mut llm_requests = 0usize;
+    let mut prompt_tokens = 0u64;
+    let mut completion_tokens = 0u64;
+    let mut total_tokens = 0u64;
+    let mut estimated_cost_usd = 0.0f64;
+    let mut parser_hits = serde_json::Map::new();
+    let engine = Arc::new(DeterministicExtractionEngine::with_default_parsers());
 
     for url in &urls {
-        let run = run_remote_extract(
+        let run = run_extract_with_engine(
             url,
             &prompt,
             cfg.max_pages,
             &cfg.openai_base_url,
             &cfg.openai_api_key,
             &cfg.openai_model,
+            Arc::clone(&engine),
         )
         .await?;
         pages_visited += run.pages_visited;
         pages_with_data += run.pages_with_data;
+        deterministic_pages += run.metrics.deterministic_pages;
+        llm_fallback_pages += run.metrics.llm_fallback_pages;
+        llm_requests += run.metrics.llm_requests;
+        prompt_tokens += run.metrics.prompt_tokens;
+        completion_tokens += run.metrics.completion_tokens;
+        total_tokens += run.metrics.total_tokens;
+        estimated_cost_usd += run.metrics.estimated_cost_usd;
+        for (name, count) in &run.parser_hits {
+            let current = parser_hits.get(name).and_then(|v| v.as_u64()).unwrap_or(0);
+            parser_hits.insert(name.clone(), serde_json::json!(current + *count as u64));
+        }
         all_results.extend(run.results.clone());
         runs.push(serde_json::json!({
             "url": run.start_url,
             "pages_visited": run.pages_visited,
             "pages_with_data": run.pages_with_data,
+            "deterministic_pages": run.metrics.deterministic_pages,
+            "llm_fallback_pages": run.metrics.llm_fallback_pages,
+            "llm_requests": run.metrics.llm_requests,
+            "prompt_tokens": run.metrics.prompt_tokens,
+            "completion_tokens": run.metrics.completion_tokens,
+            "total_tokens": run.metrics.total_tokens,
+            "estimated_cost_usd": run.metrics.estimated_cost_usd,
+            "parser_hits": run.parser_hits,
             "total_items": run.results.len(),
             "results": run.results
         }));
@@ -261,6 +293,14 @@ pub async fn run_extract(cfg: &Config) -> Result<(), Box<dyn Error>> {
         "model": cfg.openai_model,
         "pages_visited": pages_visited,
         "pages_with_data": pages_with_data,
+        "deterministic_pages": deterministic_pages,
+        "llm_fallback_pages": llm_fallback_pages,
+        "llm_requests": llm_requests,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "estimated_cost_usd": estimated_cost_usd,
+        "parser_hits": parser_hits,
         "total_items": all_results.len(),
         "runs": runs,
         "results": all_results
@@ -273,6 +313,19 @@ pub async fn run_extract(cfg: &Config) -> Result<(), Box<dyn Error>> {
         println!("{}", primary("Extract Results"));
         println!("  {} {}", muted("Pages visited:"), pages_visited);
         println!("  {} {}", muted("Pages with data:"), pages_with_data);
+        println!(
+            "  {} {}",
+            muted("Deterministic pages:"),
+            deterministic_pages
+        );
+        println!("  {} {}", muted("LLM fallback pages:"), llm_fallback_pages);
+        println!("  {} {}", muted("LLM requests:"), llm_requests);
+        println!("  {} {}", muted("Total tokens:"), total_tokens);
+        println!(
+            "  {} {:.6}",
+            muted("Estimated cost (USD):"),
+            estimated_cost_usd
+        );
         println!("  {} {}", muted("Total items:"), output["total_items"]);
         println!("  {} {}", muted("Saved:"), output_path.display());
     }

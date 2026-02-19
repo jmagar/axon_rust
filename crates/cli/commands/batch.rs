@@ -48,6 +48,36 @@ pub async fn run_batch(cfg: &Config) -> Result<(), Box<dyn Error>> {
                             if let Some(err) = job.error_text.as_deref() {
                                 println!("  {} {}", muted("Error:"), err);
                             }
+                            if let Some(obs) = job
+                                .result_json
+                                .as_ref()
+                                .and_then(|json| json.get("extraction_observability"))
+                            {
+                                if let Some(tokens) =
+                                    obs.get("total_tokens_estimated").and_then(|v| v.as_u64())
+                                {
+                                    println!("  {} {}", muted("Extract tokens est:"), tokens);
+                                }
+                                if let Some(cost) =
+                                    obs.get("estimated_cost_usd").and_then(|v| v.as_f64())
+                                {
+                                    println!("  {} ${:.5}", muted("Extract cost est:"), cost);
+                                }
+                                if let Some(quality_band) =
+                                    obs.get("quality_band").and_then(|v| v.as_str())
+                                {
+                                    println!("  {} {}", muted("Extract quality:"), quality_band);
+                                }
+                            }
+                            if let Some(queue_status) = job
+                                .result_json
+                                .as_ref()
+                                .and_then(|json| json.get("queue_injection"))
+                                .and_then(|json| json.get("queue_status"))
+                                .and_then(|value| value.as_str())
+                            {
+                                println!("  {} {}", muted("Queue injection:"), queue_status);
+                            }
                             println!("Job ID: {}", job.id);
                         }
                     }

@@ -1,10 +1,9 @@
+use crate::axon_cli::crates::cli::commands::crawl::discover_sitemap_urls_with_robots;
 use crate::axon_cli::crates::core::config::{Config, RenderMode};
 use crate::axon_cli::crates::core::http::validate_url;
 use crate::axon_cli::crates::core::logging::log_done;
 use crate::axon_cli::crates::core::ui::{muted, primary, print_option, print_phase, Spinner};
-use crate::axon_cli::crates::crawl::engine::{
-    crawl_and_collect_map, crawl_sitemap_urls, try_auto_switch,
-};
+use crate::axon_cli::crates::crawl::engine::{crawl_and_collect_map, try_auto_switch};
 use std::error::Error;
 
 pub async fn run_map(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
@@ -30,11 +29,13 @@ pub async fn run_map(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>
 
     if cfg.discover_sitemaps {
         let sitemap_spinner = Spinner::new("discovering sitemap URLs");
-        let mut sitemap = crawl_sitemap_urls(cfg, start_url).await?;
+        let mut sitemap = discover_sitemap_urls_with_robots(cfg, start_url)
+            .await?
+            .urls;
         final_urls.append(&mut sitemap);
         final_urls.sort();
         final_urls.dedup();
-        sitemap_spinner.finish("sitemap discovery complete");
+        sitemap_spinner.finish("sitemap/robots discovery complete");
     }
 
     println!("{}", primary(&format!("Map Results for {start_url}")));

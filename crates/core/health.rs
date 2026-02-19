@@ -1,5 +1,29 @@
 use spider::tokio;
+use std::env;
 use std::time::Duration;
+
+const DIAGNOSTICS_DIR_DEFAULT: &str = ".cache/chrome-diagnostics";
+
+const DO_NOT_PORT_GUARDRAILS: &[&str] = &[
+    "captcha/solver-heavy anti-bot flows",
+    "provider-coupled dual-model orchestration",
+    "arbitrary browser automation from prompts",
+    "domain-specific THC pipeline as-is",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserDiagnosticsPattern {
+    pub enabled: bool,
+    pub screenshot: bool,
+    pub events: bool,
+    pub output_dir: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserBackendSelection {
+    Chrome,
+    WebDriverFallback,
+}
 
 pub async fn redis_healthy(redis_url: &str) -> bool {
     let client = match redis::Client::open(redis_url) {
@@ -19,4 +43,201 @@ pub async fn redis_healthy(redis_url: &str) -> bool {
         tokio::time::timeout(Duration::from_secs(5), ping).await,
         Ok(Ok(()))
     )
+}
+
+pub fn webdriver_url_from_env() -> Option<String> {
+    env::var("AXON_WEBDRIVER_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            env::var("WEBDRIVER_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        })
+}
+
+pub fn browser_backend_selection(
+    chrome_ok: bool,
+    webdriver_configured: bool,
+    webdriver_ok: bool,
+) -> BrowserBackendSelection {
+    if !chrome_ok && webdriver_configured && webdriver_ok {
+        BrowserBackendSelection::WebDriverFallback
+    } else {
+        BrowserBackendSelection::Chrome
+    }
+}
+
+pub fn browser_diagnostics_pattern() -> BrowserDiagnosticsPattern {
+    let enabled = env_flag("AXON_CHROME_DIAGNOSTICS");
+    let screenshot = env_flag_or("AXON_CHROME_DIAGNOSTICS_SCREENSHOT", enabled);
+    let events = env_flag_or("AXON_CHROME_DIAGNOSTICS_EVENTS", enabled);
+
+    let output_dir = env::var("AXON_CHROME_DIAGNOSTICS_DIR")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| DIAGNOSTICS_DIR_DEFAULT.to_string());
+
+    BrowserDiagnosticsPattern {
+        enabled,
+        screenshot,
+        events,
+        output_dir,
+    }
+}
+
+pub fn do_not_port_guardrails() -> &'static [&'static str] {
+    DO_NOT_PORT_GUARDRAILS
+}
+
+fn env_flag(key: &str) -> bool {
+    env::var(key)
+        .ok()
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "y" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn env_flag_or(key: &str, fallback: bool) -> bool {
+    env::var(key)
+        .ok()
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "y" | "on"
+            )
+        })
+        .unwrap_or(fallback)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{LazyLock, Mutex};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn with_env_lock<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().expect("env test lock should not poison");
+        f()
+    }
+
+    fn reset_env() {
+        std::env::remove_var("AXON_WEBDRIVER_URL");
+        std::env::remove_var("WEBDRIVER_URL");
+        std::env::remove_var("AXON_CHROME_DIAGNOSTICS");
+        std::env::remove_var("AXON_CHROME_DIAGNOSTICS_SCREENSHOT");
+        std::env::remove_var("AXON_CHROME_DIAGNOSTICS_EVENTS");
+        std::env::remove_var("AXON_CHROME_DIAGNOSTICS_DIR");
+    }
+
+    #[test]
+    fn webdriver_url_prefers_axon_var() {
+        with_env_lock(|| {
+            reset_env();
+            std::env::set_var("WEBDRIVER_URL", "http://fallback.example");
+            std::env::set_var("AXON_WEBDRIVER_URL", "http://preferred.example");
+            assert_eq!(
+                webdriver_url_from_env().as_deref(),
+                Some("http://preferred.example")
+            );
+            reset_env();
+        });
+    }
+
+    #[test]
+    fn webdriver_url_uses_generic_fallback() {
+        with_env_lock(|| {
+            reset_env();
+            std::env::set_var("WEBDRIVER_URL", "http://fallback.example");
+            assert_eq!(
+                webdriver_url_from_env().as_deref(),
+                Some("http://fallback.example")
+            );
+            reset_env();
+        });
+    }
+
+    #[test]
+    fn diagnostics_defaults_to_disabled_with_cache_dir() {
+        with_env_lock(|| {
+            reset_env();
+            let pattern = browser_diagnostics_pattern();
+            assert!(!pattern.enabled);
+            assert!(!pattern.screenshot);
+            assert!(!pattern.events);
+            assert_eq!(pattern.output_dir, ".cache/chrome-diagnostics");
+            reset_env();
+        });
+    }
+
+    #[test]
+    fn diagnostics_enables_screenshot_events_when_global_flag_set() {
+        with_env_lock(|| {
+            reset_env();
+            std::env::set_var("AXON_CHROME_DIAGNOSTICS", "true");
+            let pattern = browser_diagnostics_pattern();
+            assert!(pattern.enabled);
+            assert!(pattern.screenshot);
+            assert!(pattern.events);
+            reset_env();
+        });
+    }
+
+    #[test]
+    fn diagnostics_allows_per_signal_override() {
+        with_env_lock(|| {
+            reset_env();
+            std::env::set_var("AXON_CHROME_DIAGNOSTICS", "true");
+            std::env::set_var("AXON_CHROME_DIAGNOSTICS_EVENTS", "false");
+            std::env::set_var("AXON_CHROME_DIAGNOSTICS_DIR", "/tmp/diag");
+            let pattern = browser_diagnostics_pattern();
+            assert!(pattern.enabled);
+            assert!(pattern.screenshot);
+            assert!(!pattern.events);
+            assert_eq!(pattern.output_dir, "/tmp/diag");
+            reset_env();
+        });
+    }
+
+    #[test]
+    fn selects_webdriver_only_when_chrome_unhealthy_and_fallback_ready() {
+        assert_eq!(
+            browser_backend_selection(false, true, true),
+            BrowserBackendSelection::WebDriverFallback
+        );
+        assert_eq!(
+            browser_backend_selection(true, true, true),
+            BrowserBackendSelection::Chrome
+        );
+        assert_eq!(
+            browser_backend_selection(false, false, true),
+            BrowserBackendSelection::Chrome
+        );
+        assert_eq!(
+            browser_backend_selection(false, true, false),
+            BrowserBackendSelection::Chrome
+        );
+    }
+
+    #[test]
+    fn guardrails_cover_risky_non_portable_items() {
+        let guardrails = do_not_port_guardrails();
+        assert!(guardrails
+            .iter()
+            .any(|line| line.contains("captcha/solver-heavy anti-bot flows")));
+        assert!(guardrails
+            .iter()
+            .any(|line| line.contains("provider-coupled dual-model orchestration")));
+        assert!(guardrails
+            .iter()
+            .any(|line| line.contains("arbitrary browser automation from prompts")));
+        assert!(guardrails
+            .iter()
+            .any(|line| line.contains("domain-specific THC pipeline as-is")));
+    }
 }

@@ -78,6 +78,7 @@ pub struct Config {
     pub start_url: String,
     pub positional: Vec<String>,
     pub urls_csv: Option<String>,
+    pub url_glob: Vec<String>,
     pub query: Option<String>,
     pub search_limit: usize,
     pub max_pages: u32,
@@ -87,10 +88,23 @@ pub struct Config {
     pub output_dir: PathBuf,
     pub output_path: Option<PathBuf>,
     pub render_mode: RenderMode,
+    pub chrome_remote_url: Option<String>,
+    pub chrome_proxy: Option<String>,
+    pub chrome_user_agent: Option<String>,
+    pub chrome_headless: bool,
+    pub chrome_anti_bot: bool,
+    pub chrome_intercept: bool,
+    pub chrome_stealth: bool,
+    pub chrome_bootstrap: bool,
+    pub chrome_bootstrap_timeout_ms: u64,
+    pub chrome_bootstrap_retries: usize,
+    pub webdriver_url: Option<String>,
     pub respect_robots: bool,
     pub min_markdown_chars: usize,
     pub drop_thin_markdown: bool,
     pub discover_sitemaps: bool,
+    pub cache: bool,
+    pub cache_skip_browser: bool,
     pub format: ScrapeFormat,
     pub collection: String,
     pub embed: bool,
@@ -120,6 +134,8 @@ pub struct Config {
     pub openai_api_key: String,
     pub openai_model: String,
     pub ask_diagnostics: bool,
+    pub cron_every_seconds: Option<u64>,
+    pub cron_max_runs: Option<usize>,
     pub json_output: bool,
 }
 
@@ -253,6 +269,39 @@ struct GlobalArgs {
     #[arg(global = true, long, value_enum, default_value_t = RenderMode::AutoSwitch)]
     render_mode: RenderMode,
 
+    #[arg(global = true, long, env = "AXON_CHROME_REMOTE_URL")]
+    chrome_remote_url: Option<String>,
+
+    #[arg(global = true, long, env = "AXON_CHROME_PROXY")]
+    chrome_proxy: Option<String>,
+
+    #[arg(global = true, long, env = "AXON_CHROME_USER_AGENT")]
+    chrome_user_agent: Option<String>,
+
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = true)]
+    chrome_headless: bool,
+
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = true)]
+    chrome_anti_bot: bool,
+
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = true)]
+    chrome_intercept: bool,
+
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = true)]
+    chrome_stealth: bool,
+
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = true)]
+    chrome_bootstrap: bool,
+
+    #[arg(global = true, long, default_value_t = 3000)]
+    chrome_bootstrap_timeout_ms: u64,
+
+    #[arg(global = true, long, default_value_t = 2)]
+    chrome_bootstrap_retries: usize,
+
+    #[arg(global = true, long, env = "AXON_WEBDRIVER_URL")]
+    webdriver_url: Option<String>,
+
     #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
     respect_robots: bool,
 
@@ -265,6 +314,12 @@ struct GlobalArgs {
     #[arg(global = true, long, action = ArgAction::Set, default_value_t = true)]
     discover_sitemaps: bool,
 
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = true)]
+    cache: bool,
+
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
+    cache_skip_browser: bool,
+
     #[arg(global = true, long, value_enum, default_value_t = ScrapeFormat::Markdown)]
     format: ScrapeFormat,
 
@@ -276,6 +331,9 @@ struct GlobalArgs {
 
     #[arg(global = true, long)]
     urls: Option<String>,
+
+    #[arg(global = true, long = "url-glob", value_delimiter = ',')]
+    url_glob: Vec<String>,
 
     #[arg(global = true, long, action = ArgAction::Set, default_value_t = true)]
     embed: bool,
@@ -363,6 +421,12 @@ struct GlobalArgs {
 
     #[arg(global = true, long)]
     openai_model: Option<String>,
+
+    #[arg(global = true, long)]
+    cron_every_seconds: Option<u64>,
+
+    #[arg(global = true, long)]
+    cron_max_runs: Option<usize>,
 }
 
 fn normalize_local_service_url(url: String) -> String {
@@ -622,6 +686,7 @@ fn into_config(cli: Cli) -> Config {
         start_url: global.start_url,
         positional,
         urls_csv: global.urls,
+        url_glob: global.url_glob,
         query: global.query,
         search_limit: global.limit,
         max_pages: global.max_pages,
@@ -631,10 +696,31 @@ fn into_config(cli: Cli) -> Config {
         output_dir: global.output_dir,
         output_path: global.output,
         render_mode: global.render_mode,
+        chrome_remote_url: global
+            .chrome_remote_url
+            .or_else(|| env::var("AXON_CHROME_REMOTE_URL").ok()),
+        chrome_proxy: global
+            .chrome_proxy
+            .or_else(|| env::var("AXON_CHROME_PROXY").ok()),
+        chrome_user_agent: global
+            .chrome_user_agent
+            .or_else(|| env::var("AXON_CHROME_USER_AGENT").ok()),
+        chrome_headless: global.chrome_headless,
+        chrome_anti_bot: global.chrome_anti_bot,
+        chrome_intercept: global.chrome_intercept,
+        chrome_stealth: global.chrome_stealth,
+        chrome_bootstrap: global.chrome_bootstrap,
+        chrome_bootstrap_timeout_ms: global.chrome_bootstrap_timeout_ms.max(250),
+        chrome_bootstrap_retries: global.chrome_bootstrap_retries.min(10),
+        webdriver_url: global
+            .webdriver_url
+            .or_else(|| env::var("AXON_WEBDRIVER_URL").ok()),
         respect_robots: global.respect_robots,
         min_markdown_chars: global.min_markdown_chars,
         drop_thin_markdown: global.drop_thin_markdown,
         discover_sitemaps: global.discover_sitemaps,
+        cache: global.cache,
+        cache_skip_browser: global.cache_skip_browser,
         format: global.format,
         collection: global.collection,
         embed: global.embed,
@@ -692,6 +778,8 @@ fn into_config(cli: Cli) -> Config {
             .or_else(|| env::var("OPENAI_MODEL").ok())
             .unwrap_or_default(),
         ask_diagnostics,
+        cron_every_seconds: global.cron_every_seconds.filter(|value| *value > 0),
+        cron_max_runs: global.cron_max_runs.filter(|value| *value > 0),
         json_output: global.json,
     };
 
@@ -831,8 +919,33 @@ fn print_top_level_help() {
     );
     println!(
         "  {:<28} {}",
+        cmd("--cache <bool>"),
+        dim("reuse prior crawl artifacts when possible")
+    );
+    println!(
+        "  {:<28} {}",
+        cmd("--cache-skip-browser <bool>"),
+        dim("force HTTP crawl path when cache flow is enabled")
+    );
+    println!(
+        "  {:<28} {}",
         cmd("--max-pages <n>"),
         dim("crawl page limit (0 = uncapped)")
+    );
+    println!(
+        "  {:<28} {}",
+        cmd("--url-glob <pattern[,..]>"),
+        dim("expand URL seeds via brace globs (e.g. {1..10}, {a,b})")
+    );
+    println!(
+        "  {:<28} {}",
+        cmd("--cron-every-seconds <n>"),
+        dim("repeat command every n seconds")
+    );
+    println!(
+        "  {:<28} {}",
+        cmd("--cron-max-runs <n>"),
+        dim("stop cron loop after n runs")
     );
     println!("  {:<28} {}", cmd("--max-depth <n>"), dim("crawl depth"));
     println!(

@@ -1,12 +1,14 @@
 use crate::axon_cli::crates::core::config::Config;
 use crate::axon_cli::crates::core::content::redact_url;
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use lapin::options::QueueDeclareOptions;
 use lapin::types::FieldTable;
 use lapin::{Channel, Connection, ConnectionProperties};
+use serde_json::Value;
 use spider::tokio;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::time::Duration;
 use tokio_executor_trait::Tokio as TokioExecutor;
 use tokio_reactor_trait::Tokio as TokioReactor;
@@ -145,7 +147,7 @@ pub async fn enqueue_job(cfg: &Config, queue_name: &str, job_id: Uuid) -> Result
     use lapin::options::BasicPublishOptions;
     use lapin::BasicProperties;
 
-    let (conn, ch) = open_amqp_connection_and_channel(cfg, queue_name).await?;
+    let (_conn, ch) = open_amqp_connection_and_channel(cfg, queue_name).await?;
 
     let payload = job_id.to_string();
     ch.basic_publish(
@@ -158,10 +160,126 @@ pub async fn enqueue_job(cfg: &Config, queue_name: &str, job_id: Uuid) -> Result
     .await?
     .await?;
 
-    // Best-effort graceful teardown prevents noisy Lapin shutdown errors in
-    // short-lived CLI processes that enqueue and exit immediately.
-    let _ = ch.close(200, "bye").await;
-    let _ = conn.close(200, "bye").await;
-
     Ok(())
+}
+
+fn stale_watchdog_payload(
+    mut result_json: Value,
+    observed_updated_at: DateTime<Utc>,
+) -> Value {
+    if !result_json.is_object() {
+        result_json = serde_json::json!({});
+    }
+    if let Some(obj) = result_json.as_object_mut() {
+        obj.insert(
+            "_watchdog".to_string(),
+            serde_json::json!({
+                "first_seen_stale_at": Utc::now().to_rfc3339(),
+                "observed_updated_at": observed_updated_at.to_rfc3339(),
+            }),
+        );
+    }
+    result_json
+}
+
+fn stale_watchdog_confirmed(
+    result_json: &Value,
+    observed_updated_at: DateTime<Utc>,
+    confirm_secs: i64,
+) -> bool {
+    let Some(watchdog) = result_json.get("_watchdog") else {
+        return false;
+    };
+    let Some(observed) = watchdog
+        .get("observed_updated_at")
+        .and_then(|value| value.as_str())
+    else {
+        return false;
+    };
+    if observed != observed_updated_at.to_rfc3339() {
+        return false;
+    }
+    let Some(first_seen) = watchdog
+        .get("first_seen_stale_at")
+        .and_then(|value| value.as_str())
+    else {
+        return false;
+    };
+    let Ok(first_seen_at) = DateTime::parse_from_rfc3339(first_seen) else {
+        return false;
+    };
+    let elapsed = Utc::now()
+        .signed_duration_since(first_seen_at.with_timezone(&Utc))
+        .num_seconds();
+    elapsed >= confirm_secs
+}
+
+/// Reclaim stale running jobs with a two-pass confirmation model.
+///
+/// Pass 1: mark stale candidate in `result_json._watchdog` with observed `updated_at`.
+/// Pass 2: if still stale and unchanged after `confirm_secs`, mark as failed.
+pub async fn reclaim_stale_running_jobs(
+    pool: &PgPool,
+    table: JobTable,
+    job_kind: &str,
+    idle_timeout_secs: i64,
+    confirm_secs: i64,
+    marker: &str,
+) -> Result<u64> {
+    let select_query = format!(
+        r#"
+        SELECT id, updated_at, result_json
+        FROM {}
+        WHERE status = 'running'
+          AND updated_at < NOW() - make_interval(secs => $1::int)
+        ORDER BY updated_at ASC
+        LIMIT 50
+        "#,
+        table.as_str()
+    );
+    let rows = sqlx::query(&select_query)
+        .bind(idle_timeout_secs as i32)
+        .fetch_all(pool)
+        .await?;
+
+    let mut reclaimed = 0u64;
+    for row in rows {
+        let id: Uuid = row.try_get("id")?;
+        let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
+        let result_json: Option<Value> = row.try_get("result_json")?;
+        let current_json = result_json.unwrap_or_else(|| serde_json::json!({}));
+        let idle_seconds = Utc::now().signed_duration_since(updated_at).num_seconds();
+
+        if stale_watchdog_confirmed(&current_json, updated_at, confirm_secs) {
+            let msg = format!(
+                "watchdog reclaimed stale running {} job (idle={}s marker={})",
+                job_kind, idle_seconds, marker
+            );
+            let fail_query = format!(
+                "UPDATE {} SET status='failed', updated_at=NOW(), finished_at=NOW(), error_text=$2 WHERE id=$1 AND status='running'",
+                table.as_str()
+            );
+            let affected = sqlx::query(&fail_query)
+                .bind(id)
+                .bind(msg)
+                .execute(pool)
+                .await?
+                .rows_affected();
+            reclaimed += affected;
+            continue;
+        }
+
+        let marked = stale_watchdog_payload(current_json, updated_at);
+        let mark_query = format!(
+            "UPDATE {} SET result_json=$2 WHERE id=$1 AND status='running'",
+            table.as_str()
+        );
+        let _ = sqlx::query(&mark_query)
+            .bind(id)
+            .bind(marked)
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(reclaimed)
 }
