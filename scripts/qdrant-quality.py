@@ -19,6 +19,7 @@ import os
 import re
 import socket
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -99,6 +100,7 @@ def render_help_text() -> str:
             f"  {accent('--dry-run')}                      {muted('Preview delete actions without deleting')}",
             f"  {accent('--json')}                         {muted('Emit machine-readable JSON output')}",
             f"  {accent('--sample <n>')}                   {muted('Limit scan to first N points for quick checks')}",
+            f"  {accent('--yes')}                          {muted('Skip confirmation prompt for destructive commands')}",
             f"  {accent('--help')}                         {muted('Show this help')}",
             "",
             primary("Examples"),
@@ -262,6 +264,9 @@ class NormalizedExcludePrefixes:
 
 
 def qdrant_request(path: str, method: str = "GET", body: dict[str, Any] | None = None, timeout: int = 30) -> dict[str, Any]:
+    def should_retry_http(status: int) -> bool:
+        return status == 429 or status >= 500
+
     url = f"{QDRANT_URL}{path}"
     payload = None
     headers = {"Content-Type": "application/json"}
@@ -270,15 +275,30 @@ def qdrant_request(path: str, method: str = "GET", body: dict[str, Any] | None =
         payload = json.dumps(body).encode("utf-8")
 
     req = urllib.request.Request(url=url, data=payload, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        msg = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Qdrant request failed {exc.code} {exc.reason}: {msg}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Qdrant request failed: {exc.reason}") from exc
+    retries = 3
+    backoff_seconds = 0.25
+    last_error: Exception | None = None
+
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if attempt < retries and should_retry_http(exc.code):
+                time.sleep(backoff_seconds * (attempt + 1))
+                continue
+            msg = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Qdrant request failed {exc.code} {exc.reason}: {msg}") from exc
+        except urllib.error.URLError as exc:
+            last_error = exc
+            if attempt < retries:
+                time.sleep(backoff_seconds * (attempt + 1))
+                continue
+            raise RuntimeError(f"Qdrant request failed: {exc.reason}") from exc
+
+    raise RuntimeError(f"Qdrant request failed after retries: {last_error}")
 
 
 def get_cluster_info() -> dict[str, Any]:
@@ -846,6 +866,21 @@ def analyze_exclude_sync(effective_excludes: list[str]) -> dict[str, Any]:
     }
 
 
+def confirm_destructive_action(command: str, *, yes: bool, dry_run: bool, target: str) -> None:
+    if dry_run:
+        return
+    if yes:
+        return
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            f"Destructive command '{command}' on {target} requires --yes in non-interactive mode"
+        )
+    prompt = f"{command} will mutate {target}. Proceed? [y/N]: "
+    answer = input(prompt).strip().lower()
+    if answer not in {"y", "yes"}:
+        raise RuntimeError("Aborted by user")
+
+
 def check_collection(
     collection: str,
     *,
@@ -1051,6 +1086,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="Limit scan to first N points (0 = full collection scan).",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip confirmation prompt for destructive commands.",
     )
 
     sub = parser.add_subparsers(
@@ -1345,6 +1385,12 @@ def main() -> int:
         return 0
 
     if command == "delete-duplicates":
+        confirm_destructive_action(
+            command,
+            yes=args.yes,
+            dry_run=dry_run_mode,
+            target=f"collection '{args.collection}'",
+        )
         result = check_collection(
             args.collection,
             delete_duplicates=True,
@@ -1358,6 +1404,12 @@ def main() -> int:
         return 0
 
     if command == "delete-excluded":
+        confirm_destructive_action(
+            command,
+            yes=args.yes,
+            dry_run=dry_run_mode,
+            target=f"collection '{args.collection}'",
+        )
         result = check_collection(
             args.collection,
             delete_excluded=True,
@@ -1371,6 +1423,12 @@ def main() -> int:
         return 0
 
     if command == "delete-duplicates-all":
+        confirm_destructive_action(
+            command,
+            yes=args.yes,
+            dry_run=dry_run_mode,
+            target="all collections",
+        )
         collections = list_collections()
         all_results: list[dict[str, Any]] = []
         for name in collections:
@@ -1389,6 +1447,12 @@ def main() -> int:
         return 0
 
     if command == "delete-excluded-all":
+        confirm_destructive_action(
+            command,
+            yes=args.yes,
+            dry_run=dry_run_mode,
+            target="all collections",
+        )
         collections = list_collections()
         all_results: list[dict[str, Any]] = []
         for name in collections:

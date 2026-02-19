@@ -78,9 +78,6 @@ struct QdrantPayload {
     chunk_text: String,
     #[serde(default)]
     text: String,
-    #[serde(default)]
-    title: String,
-    chunk_header: Option<String>,
     chunk_index: Option<i64>,
 }
 
@@ -413,33 +410,6 @@ pub fn chunk_text(text: &str) -> Vec<String> {
     out
 }
 
-fn tokenize_query_terms(text: &str) -> Vec<String> {
-    let stop = [
-        "the", "and", "for", "with", "that", "this", "from", "into", "how", "what", "where",
-        "when", "you", "your", "are", "can", "does", "create", "make",
-    ];
-    let stop_words: HashSet<&str> = stop.into_iter().collect();
-    text.to_ascii_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|t| t.len() >= 3 && !stop_words.contains(*t))
-        .map(str::to_string)
-        .collect()
-}
-
-fn canonical_url_key(raw: &str) -> String {
-    let normalized = normalize_url(raw);
-    let Ok(mut parsed) = Url::parse(&normalized) else {
-        return normalized.trim_end_matches('/').to_string();
-    };
-    parsed.set_fragment(None);
-    parsed.set_query(None);
-    let mut s = parsed.to_string();
-    if s.ends_with('/') {
-        s.pop();
-    }
-    s
-}
-
 fn payload_url(payload: &serde_json::Value) -> String {
     payload
         .get("url")
@@ -478,16 +448,6 @@ struct AskCandidate {
     rerank_score: f64,
 }
 
-#[derive(Debug, Clone)]
-struct QueryCandidate {
-    score: f64,
-    url: String,
-    chunk_text: String,
-    chunk_index: i64,
-    chunk_header: Option<String>,
-    title: String,
-}
-
 fn tokenize_query(text: &str) -> Vec<String> {
     let stop = [
         "the", "and", "for", "with", "that", "this", "from", "into", "how", "what", "where",
@@ -499,107 +459,6 @@ fn tokenize_query(text: &str) -> Vec<String> {
         .filter(|t| t.len() >= 3 && !stop_words.contains(*t))
         .map(str::to_string)
         .collect()
-}
-
-fn sentence_candidates(text: &str) -> Vec<String> {
-    text.replace('\n', ". ")
-        .split(['.', '!', '?'])
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-fn is_probable_header(sentence: &str) -> bool {
-    let words: Vec<&str> = sentence.split_whitespace().collect();
-    if words.len() <= 5 && sentence.len() <= 60 {
-        return true;
-    }
-    false
-}
-
-fn truncate_chars(input: &str, max_chars: usize) -> String {
-    let end = input
-        .char_indices()
-        .nth(max_chars)
-        .map(|(idx, _)| idx)
-        .unwrap_or(input.len());
-    input[..end].to_string()
-}
-
-fn meaningful_snippet(chunk_text: &str, query: &str) -> String {
-    let terms = tokenize_query_terms(query);
-    if terms.is_empty() {
-        return truncate_chars(chunk_text.trim(), 180);
-    }
-
-    let mut best: Option<(f64, String)> = None;
-    for sentence in sentence_candidates(chunk_text) {
-        if sentence.len() < 20 || is_probable_header(&sentence) {
-            continue;
-        }
-        let lowered = sentence.to_ascii_lowercase();
-        let mut hits = 0usize;
-        for t in &terms {
-            if lowered.contains(t) {
-                hits += 1;
-            }
-        }
-        let coverage = hits as f64 / terms.len() as f64;
-        let length_bonus = (sentence.len().min(220) as f64) / 220.0 * 0.10;
-        let score = coverage + length_bonus;
-        if best.as_ref().map(|(s, _)| score > *s).unwrap_or(true) {
-            best = Some((score, sentence));
-        }
-    }
-
-    if let Some((_, sentence)) = best {
-        return truncate_chars(sentence.trim(), 180);
-    }
-
-    let fallback = chunk_text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && line.len() >= 30)
-        .unwrap_or(chunk_text.trim());
-    truncate_chars(fallback, 180)
-}
-
-fn select_best_preview_item(items: &[QueryCandidate], query: &str) -> Option<QueryCandidate> {
-    let terms = tokenize_query_terms(query);
-    items
-        .iter()
-        .cloned()
-        .max_by(|a, b| {
-            let preview_score = |item: &QueryCandidate| -> f64 {
-                let snippet = meaningful_snippet(&item.chunk_text, query).to_ascii_lowercase();
-                let mut term_hits = 0usize;
-                for t in &terms {
-                    if snippet.contains(t) {
-                        term_hits += 1;
-                    }
-                }
-                let lexical = if terms.is_empty() {
-                    0.0
-                } else {
-                    term_hits as f64 / terms.len() as f64
-                };
-                let header_penalty = if item
-                    .chunk_header
-                    .as_ref()
-                    .map(|h| h.len() <= 60)
-                    .unwrap_or(false)
-                {
-                    0.05
-                } else {
-                    0.0
-                };
-                item.score + lexical * 0.35 - header_penalty
-            };
-            preview_score(a)
-                .partial_cmp(&preview_score(b))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
 }
 
 fn tokenize_text_set(text: &str) -> HashSet<String> {
@@ -978,78 +837,30 @@ pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         return Err("TEI returned no vector for query".into());
     }
     let vector = query_vectors.remove(0);
-    let requested_limit = cfg.search_limit.max(1);
-    let fetch_limit = (requested_limit.saturating_mul(10)).clamp(requested_limit, 1000);
-    let hits = qdrant_search(cfg, &vector, fetch_limit).await?;
-
-    let mut grouped: HashMap<String, Vec<QueryCandidate>> = HashMap::new();
-    for hit in hits {
-        let payload = hit.payload;
-        let url = payload_url_typed(&payload).to_string();
-        let chunk_text = payload_text_typed(&payload).to_string();
-        if url.is_empty() || chunk_text.is_empty() {
-            continue;
-        }
-        let key = canonical_url_key(&url);
-        grouped.entry(key).or_default().push(QueryCandidate {
-            score: hit.score,
-            url,
-            chunk_text,
-            chunk_index: payload.chunk_index.unwrap_or(0),
-            chunk_header: payload.chunk_header,
-            title: payload.title,
-        });
-    }
-
-    let mut previews = grouped
-        .into_values()
-        .filter_map(|items| select_best_preview_item(&items, &query).map(|best| (best, items.len())))
-        .collect::<Vec<_>>();
-    previews.sort_by(|(a, _), (b, _)| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    previews.truncate(requested_limit);
+    let hits = qdrant_search(cfg, &vector, cfg.search_limit.max(1)).await?;
 
     if !cfg.json_output {
         println!("{}", primary(&format!("Query Results for \"{query}\"")));
-        println!("{} {}\n", muted("Showing"), previews.len());
+        println!("{} {}\n", muted("Showing"), hits.len());
     }
 
-    for (i, (item, chunk_count)) in previews.iter().enumerate() {
-        let score = item.score;
-        let url = &item.url;
-        let snippet = meaningful_snippet(&item.chunk_text, &query);
-        let header_display = item
-            .chunk_header
-            .as_ref()
-            .filter(|h| !h.is_empty())
-            .map(|h| format!(" - {h}"))
-            .unwrap_or_default();
+    for (i, h) in hits.iter().enumerate() {
+        let score = h.score;
+        let payload = &h.payload;
+        let url = payload_url_typed(payload);
+        let snippet = query_snippet(payload);
         if cfg.json_output {
             println!(
                 "{}",
-                serde_json::json!({
-                    "rank": i + 1,
-                    "score": score,
-                    "url": url,
-                    "snippet": snippet,
-                    "chunk_index": item.chunk_index,
-                    "chunks": chunk_count,
-                    "chunk_header": item.chunk_header,
-                    "title": if item.title.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(item.title.clone()) }
-                })
+                serde_json::json!({"rank": i + 1, "score": score, "url": url, "snippet": snippet})
             );
         } else {
             println!(
-                "  • {}. {} [{:.2}] {}{} {}",
+                "  • {}. {} [{:.2}] {}",
                 i + 1,
                 status_text("completed"),
                 score,
-                accent(url),
-                muted(&format!(" ({} chunks)", chunk_count)),
-                muted(&header_display)
+                accent(&url)
             );
             println!("    {}", snippet);
         }
@@ -2054,19 +1865,6 @@ mod tests {
         let snippet = query_snippet(&payload);
         assert!(!snippet.contains('\n'));
         assert!(snippet.chars().count() <= 140);
-    }
-
-    #[test]
-    fn test_meaningful_snippet_prefers_query_relevant_sentence() {
-        let chunk = "Installation Guide\nWelcome.\nTo configure auth tokens, set API_KEY and restart service. Additional unrelated footer.";
-        let snippet = meaningful_snippet(chunk, "auth token api");
-        assert!(snippet.to_ascii_lowercase().contains("auth"));
-    }
-
-    #[test]
-    fn test_canonical_url_key_drops_query_fragment() {
-        let key = canonical_url_key("https://example.dev/docs/install/?a=1#intro");
-        assert_eq!(key, "https://example.dev/docs/install");
     }
 
     #[test]

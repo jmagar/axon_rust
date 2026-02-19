@@ -10,7 +10,7 @@ use crate::axon_cli::crates::core::ui::{
 };
 use crate::axon_cli::crates::jobs::extract_jobs::{
     cancel_extract_job, cleanup_extract_jobs, clear_extract_jobs, get_extract_job,
-    list_extract_jobs, run_extract_worker, start_extract_job,
+    list_extract_jobs, recover_stale_extract_jobs, run_extract_worker, start_extract_job,
 };
 use std::error::Error;
 use std::sync::Arc;
@@ -184,6 +184,19 @@ pub async fn run_extract(cfg: &Config) -> Result<(), Box<dyn Error>> {
             }
             "worker" => {
                 run_extract_worker(cfg).await?;
+                return Ok(());
+            }
+            "recover" => {
+                let reclaimed = recover_stale_extract_jobs(cfg).await?;
+                if cfg.json_output {
+                    println!("{}", serde_json::json!({"reclaimed": reclaimed}));
+                } else {
+                    println!(
+                        "{} reclaimed {} stale extract jobs",
+                        symbol_for_status("completed"),
+                        reclaimed
+                    );
+                }
                 return Ok(());
             }
             "doctor" => {

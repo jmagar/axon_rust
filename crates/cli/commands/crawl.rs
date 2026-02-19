@@ -8,8 +8,9 @@ use crate::axon_cli::crates::core::ui::{
     symbol_for_status, Spinner,
 };
 use crate::axon_cli::crates::crawl::engine::{append_sitemap_backfill, run_crawl_once};
-use crate::axon_cli::crates::jobs::crawl_jobs::{
-    cancel_job, cleanup_jobs, clear_jobs, get_job, list_jobs, run_worker, start_crawl_job,
+use crate::axon_cli::crates::jobs::crawl_jobs_dispatch::{
+    cancel_job, cleanup_jobs, clear_jobs, get_job, list_jobs, recover_stale_crawl_jobs, run_worker,
+    start_crawl_job,
 };
 use crate::axon_cli::crates::jobs::embed_jobs::start_embed_job;
 use serde::{Deserialize, Serialize};
@@ -427,6 +428,19 @@ pub async fn run_crawl(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Erro
             }
             "worker" => {
                 run_worker(cfg).await?;
+                return Ok(());
+            }
+            "recover" => {
+                let reclaimed = recover_stale_crawl_jobs(cfg).await?;
+                if cfg.json_output {
+                    println!("{}", serde_json::json!({"reclaimed": reclaimed}));
+                } else {
+                    println!(
+                        "{} reclaimed {} stale crawl jobs",
+                        symbol_for_status("completed"),
+                        reclaimed
+                    );
+                }
                 return Ok(());
             }
             "doctor" => {

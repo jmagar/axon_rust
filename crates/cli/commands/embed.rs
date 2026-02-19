@@ -6,7 +6,7 @@ use crate::axon_cli::crates::core::ui::{
 };
 use crate::axon_cli::crates::jobs::embed_jobs::{
     cancel_embed_job, cleanup_embed_jobs, clear_embed_jobs, get_embed_job, list_embed_jobs,
-    run_embed_worker, start_embed_job,
+    recover_stale_embed_jobs, run_embed_worker, start_embed_job,
 };
 use crate::axon_cli::crates::vector::ops::embed_path_native;
 use std::error::Error;
@@ -179,6 +179,19 @@ pub async fn run_embed(cfg: &Config) -> Result<(), Box<dyn Error>> {
             }
             "worker" => {
                 run_embed_worker(cfg).await?;
+                return Ok(());
+            }
+            "recover" => {
+                let reclaimed = recover_stale_embed_jobs(cfg).await?;
+                if cfg.json_output {
+                    println!("{}", serde_json::json!({"reclaimed": reclaimed}));
+                } else {
+                    println!(
+                        "{} reclaimed {} stale embed jobs",
+                        symbol_for_status("completed"),
+                        reclaimed
+                    );
+                }
                 return Ok(());
             }
             "doctor" => {

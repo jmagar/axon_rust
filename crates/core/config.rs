@@ -13,6 +13,7 @@ pub enum CommandKind {
     Extract,
     Search,
     Embed,
+    Debug,
     Doctor,
     Query,
     Retrieve,
@@ -33,6 +34,7 @@ impl CommandKind {
             Self::Extract => "extract",
             Self::Search => "search",
             Self::Embed => "embed",
+            Self::Debug => "debug",
             Self::Doctor => "doctor",
             Self::Query => "query",
             Self::Retrieve => "retrieve",
@@ -136,6 +138,8 @@ pub struct Config {
     pub ask_diagnostics: bool,
     pub cron_every_seconds: Option<u64>,
     pub cron_max_runs: Option<usize>,
+    pub watchdog_stale_timeout_secs: i64,
+    pub watchdog_confirm_secs: i64,
     pub json_output: bool,
 }
 
@@ -158,6 +162,7 @@ enum CliCommand {
     Extract(ExtractArgs),
     Search(TextArg),
     Embed(EmbedArgs),
+    Debug(TextArg),
     Doctor,
     Query(TextArg),
     Retrieve(UrlArg),
@@ -239,6 +244,7 @@ enum JobSubcommand {
     Cleanup,
     Clear,
     Worker,
+    Recover,
     #[command(hide = true)]
     Doctor,
 }
@@ -422,6 +428,22 @@ struct GlobalArgs {
     #[arg(global = true, long)]
     openai_model: Option<String>,
 
+    #[arg(
+        global = true,
+        long,
+        env = "AXON_JOB_STALE_TIMEOUT_SECS",
+        default_value_t = 300
+    )]
+    watchdog_stale_timeout_secs: i64,
+
+    #[arg(
+        global = true,
+        long,
+        env = "AXON_JOB_STALE_CONFIRM_SECS",
+        default_value_t = 60
+    )]
+    watchdog_confirm_secs: i64,
+
     #[arg(global = true, long)]
     cron_every_seconds: Option<u64>,
 
@@ -529,6 +551,7 @@ fn positional_from_job(job: JobSubcommand) -> Vec<String> {
         JobSubcommand::Cleanup => vec!["cleanup".to_string()],
         JobSubcommand::Clear => vec!["clear".to_string()],
         JobSubcommand::Worker => vec!["worker".to_string()],
+        JobSubcommand::Recover => vec!["recover".to_string()],
         JobSubcommand::Doctor => vec!["doctor".to_string()],
     }
 }
@@ -620,6 +643,7 @@ fn into_config(cli: Cli) -> Config {
                 args.input.into_iter().collect()
             },
         ),
+        CliCommand::Debug(args) => (CommandKind::Debug, args.value),
         CliCommand::Doctor => (CommandKind::Doctor, Vec::new()),
         CliCommand::Query(args) => (CommandKind::Query, args.value),
         CliCommand::Retrieve(args) => (
@@ -714,7 +738,8 @@ fn into_config(cli: Cli) -> Config {
         chrome_bootstrap_retries: global.chrome_bootstrap_retries.min(10),
         webdriver_url: global
             .webdriver_url
-            .or_else(|| env::var("AXON_WEBDRIVER_URL").ok()),
+            .or_else(|| env::var("AXON_WEBDRIVER_URL").ok())
+            .or_else(|| env::var("WEBDRIVER_URL").ok()),
         respect_robots: global.respect_robots,
         min_markdown_chars: global.min_markdown_chars,
         drop_thin_markdown: global.drop_thin_markdown,
@@ -780,6 +805,8 @@ fn into_config(cli: Cli) -> Config {
         ask_diagnostics,
         cron_every_seconds: global.cron_every_seconds.filter(|value| *value > 0),
         cron_max_runs: global.cron_max_runs.filter(|value| *value > 0),
+        watchdog_stale_timeout_secs: global.watchdog_stale_timeout_secs.max(30),
+        watchdog_confirm_secs: global.watchdog_confirm_secs.max(10),
         json_output: global.json,
     };
 
@@ -833,7 +860,7 @@ fn maybe_print_top_level_help_and_exit() {
 }
 
 fn print_top_level_help() {
-    let colors_enabled = env::var("AXON_NO_COLOR").is_err() && env::var("CORTEX_NO_COLOR").is_err();
+    let colors_enabled = env::var("AXON_NO_COLOR").is_err();
     let colorize = |code: &str, text: &str| {
         if colors_enabled {
             format!("{code}{text}\x1b[0m")
@@ -1005,6 +1032,11 @@ fn print_top_level_help() {
     println!();
     println!("  {}", section("Jobs & Diagnostics"));
     println!("  {:<28} {}", cmd("status"), dim("Show queued job status"));
+    println!(
+        "  {:<28} {}",
+        cmd("debug [context]"),
+        dim("LLM-assisted stack troubleshooting")
+    );
     println!("  {:<28} {}", cmd("doctor"), dim("Run local diagnostics"));
     println!();
     println!(

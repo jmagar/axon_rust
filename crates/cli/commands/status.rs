@@ -6,7 +6,7 @@ use crate::axon_cli::crates::core::health::{
 };
 use crate::axon_cli::crates::core::ui::{accent, muted, primary, status_text, symbol_for_status};
 use crate::axon_cli::crates::jobs::batch_jobs::list_batch_jobs;
-use crate::axon_cli::crates::jobs::crawl_jobs::list_jobs;
+use crate::axon_cli::crates::jobs::crawl_jobs_dispatch::list_jobs;
 use crate::axon_cli::crates::jobs::embed_jobs::list_embed_jobs;
 use crate::axon_cli::crates::jobs::extract_jobs::list_extract_jobs;
 use console::style;
@@ -50,7 +50,7 @@ async fn probe_http(url: &str, paths: &[&str]) -> (bool, Option<String>) {
 }
 
 fn styled_metric(token: String, color: &str) -> String {
-    if env::var("AXON_NO_COLOR").is_ok() || env::var("CORTEX_NO_COLOR").is_ok() {
+    if env::var("AXON_NO_COLOR").is_ok() {
         return token;
     }
     match color {

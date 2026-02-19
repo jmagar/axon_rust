@@ -9,7 +9,7 @@ use crate::axon_cli::crates::core::ui::{
 };
 use crate::axon_cli::crates::jobs::batch_jobs::{
     cancel_batch_job, cleanup_batch_jobs, clear_batch_jobs, get_batch_job, list_batch_jobs,
-    run_batch_worker, start_batch_job,
+    recover_stale_batch_jobs, run_batch_worker, start_batch_job,
 };
 use crate::axon_cli::crates::vector::ops::embed_path_native;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -217,6 +217,19 @@ pub async fn run_batch(cfg: &Config) -> Result<(), Box<dyn Error>> {
             }
             "worker" => {
                 run_batch_worker(cfg).await?;
+                return Ok(());
+            }
+            "recover" => {
+                let reclaimed = recover_stale_batch_jobs(cfg).await?;
+                if cfg.json_output {
+                    println!("{}", serde_json::json!({"reclaimed": reclaimed}));
+                } else {
+                    println!(
+                        "{} reclaimed {} stale batch jobs",
+                        symbol_for_status("completed"),
+                        reclaimed
+                    );
+                }
                 return Ok(());
             }
             "doctor" => {

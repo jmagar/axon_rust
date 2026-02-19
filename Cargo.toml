@@ -44,3 +44,8 @@ strip = true
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "ask_query_retrieve"
+harness = false

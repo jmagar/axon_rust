@@ -43,6 +43,82 @@ impl JobTable {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn test_config(pg_url: &str) -> Config {
+    use crate::axon_cli::crates::core::config::{
+        CommandKind, PerformanceProfile, RenderMode, ScrapeFormat,
+    };
+    use std::path::PathBuf;
+
+    Config {
+        command: CommandKind::Status,
+        start_url: "https://example.com".to_string(),
+        positional: Vec::new(),
+        urls_csv: None,
+        url_glob: Vec::new(),
+        query: None,
+        search_limit: 5,
+        max_pages: 10,
+        max_depth: 2,
+        include_subdomains: true,
+        exclude_path_prefix: Vec::new(),
+        output_dir: PathBuf::from(".cache/test-worker-jobs"),
+        output_path: None,
+        render_mode: RenderMode::AutoSwitch,
+        chrome_remote_url: None,
+        chrome_proxy: None,
+        chrome_user_agent: None,
+        chrome_headless: true,
+        chrome_anti_bot: true,
+        chrome_intercept: true,
+        chrome_stealth: true,
+        chrome_bootstrap: false,
+        chrome_bootstrap_timeout_ms: 45_000,
+        chrome_bootstrap_retries: 1,
+        webdriver_url: None,
+        respect_robots: false,
+        min_markdown_chars: 50,
+        drop_thin_markdown: false,
+        discover_sitemaps: true,
+        cache: true,
+        cache_skip_browser: false,
+        format: ScrapeFormat::Markdown,
+        collection: "test".to_string(),
+        embed: false,
+        batch_concurrency: 2,
+        wait: false,
+        yes: true,
+        performance_profile: PerformanceProfile::Balanced,
+        crawl_concurrency_limit: Some(2),
+        sitemap_concurrency_limit: Some(2),
+        backfill_concurrency_limit: Some(2),
+        max_sitemaps: 10,
+        delay_ms: 0,
+        request_timeout_ms: Some(5_000),
+        fetch_retries: 0,
+        retry_backoff_ms: 0,
+        shared_queue: true,
+        pg_url: pg_url.to_string(),
+        redis_url: "redis://127.0.0.1:1".to_string(),
+        amqp_url: "amqp://guest:guest@127.0.0.1:1/%2f".to_string(),
+        crawl_queue: "axon.test.crawl".to_string(),
+        batch_queue: "axon.test.batch".to_string(),
+        extract_queue: "axon.test.extract".to_string(),
+        embed_queue: "axon.test.embed".to_string(),
+        tei_url: "http://127.0.0.1:1".to_string(),
+        qdrant_url: "http://127.0.0.1:1".to_string(),
+        openai_base_url: "http://127.0.0.1:1/v1".to_string(),
+        openai_api_key: "test".to_string(),
+        openai_model: "test-model".to_string(),
+        ask_diagnostics: false,
+        cron_every_seconds: None,
+        cron_max_runs: None,
+        watchdog_stale_timeout_secs: 300,
+        watchdog_confirm_secs: 60,
+        json_output: false,
+    }
+}
+
 /// Create a shared PgPool with a 5-second connection timeout and up to 5 connections.
 /// Call once at startup and pass the pool to all functions.
 pub async fn make_pool(cfg: &Config) -> Result<PgPool> {
@@ -163,10 +239,14 @@ pub async fn enqueue_job(cfg: &Config, queue_name: &str, job_id: Uuid) -> Result
     Ok(())
 }
 
-fn stale_watchdog_payload(
-    mut result_json: Value,
-    observed_updated_at: DateTime<Utc>,
-) -> Value {
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WatchdogSweepStats {
+    pub stale_candidates: u64,
+    pub marked_candidates: u64,
+    pub reclaimed_jobs: u64,
+}
+
+fn stale_watchdog_payload(mut result_json: Value, observed_updated_at: DateTime<Utc>) -> Value {
     if !result_json.is_object() {
         result_json = serde_json::json!({});
     }
@@ -225,7 +305,7 @@ pub async fn reclaim_stale_running_jobs(
     idle_timeout_secs: i64,
     confirm_secs: i64,
     marker: &str,
-) -> Result<u64> {
+) -> Result<WatchdogSweepStats> {
     let select_query = format!(
         r#"
         SELECT id, updated_at, result_json
@@ -242,7 +322,8 @@ pub async fn reclaim_stale_running_jobs(
         .fetch_all(pool)
         .await?;
 
-    let mut reclaimed = 0u64;
+    let mut stats = WatchdogSweepStats::default();
+    stats.stale_candidates = rows.len() as u64;
     for row in rows {
         let id: Uuid = row.try_get("id")?;
         let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
@@ -265,7 +346,7 @@ pub async fn reclaim_stale_running_jobs(
                 .execute(pool)
                 .await?
                 .rows_affected();
-            reclaimed += affected;
+            stats.reclaimed_jobs += affected;
             continue;
         }
 
@@ -279,7 +360,250 @@ pub async fn reclaim_stale_running_jobs(
             .bind(marked)
             .execute(pool)
             .await?;
+        stats.marked_candidates += 1;
     }
 
-    Ok(reclaimed)
+    Ok(stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+    use std::env;
+    use uuid::Uuid;
+
+    fn watchdog_json(observed: DateTime<Utc>, first_seen: &str) -> Value {
+        serde_json::json!({
+            "_watchdog": {
+                "observed_updated_at": observed.to_rfc3339(),
+                "first_seen_stale_at": first_seen
+            }
+        })
+    }
+
+    #[test]
+    fn stale_watchdog_payload_adds_metadata_and_normalizes_shape() {
+        let observed = Utc::now() - Duration::seconds(45);
+        let payload = stale_watchdog_payload(serde_json::json!("not-an-object"), observed);
+        let watchdog = payload.get("_watchdog").expect("missing _watchdog");
+        let observed_value = watchdog
+            .get("observed_updated_at")
+            .and_then(|v| v.as_str())
+            .expect("missing observed_updated_at");
+        assert_eq!(observed_value, observed.to_rfc3339());
+        let first_seen = watchdog
+            .get("first_seen_stale_at")
+            .and_then(|v| v.as_str())
+            .expect("missing first_seen_stale_at");
+        assert!(DateTime::parse_from_rfc3339(first_seen).is_ok());
+    }
+
+    #[test]
+    fn stale_watchdog_confirmed_requires_watchdog_metadata() {
+        let observed = Utc::now() - Duration::seconds(10);
+        assert!(!stale_watchdog_confirmed(
+            &serde_json::json!({}),
+            observed,
+            30
+        ));
+    }
+
+    #[test]
+    fn stale_watchdog_confirmed_rejects_observed_timestamp_mismatch() {
+        let observed = Utc::now() - Duration::seconds(90);
+        let mismatched = observed + Duration::seconds(1);
+        let payload = watchdog_json(
+            observed,
+            &(Utc::now() - Duration::seconds(120)).to_rfc3339(),
+        );
+        assert!(!stale_watchdog_confirmed(&payload, mismatched, 60));
+    }
+
+    #[test]
+    fn stale_watchdog_confirmed_rejects_malformed_first_seen() {
+        let observed = Utc::now() - Duration::seconds(120);
+        let payload = watchdog_json(observed, "not-a-timestamp");
+        assert!(!stale_watchdog_confirmed(&payload, observed, 60));
+    }
+
+    #[test]
+    fn stale_watchdog_confirmed_requires_confirmation_window() {
+        let observed = Utc::now() - Duration::seconds(10);
+        let payload = watchdog_json(observed, &Utc::now().to_rfc3339());
+        assert!(!stale_watchdog_confirmed(&payload, observed, 60));
+    }
+
+    #[test]
+    fn stale_watchdog_confirmed_true_after_confirmation_window_elapsed() {
+        let observed = Utc::now() - Duration::seconds(120);
+        let payload = watchdog_json(
+            observed,
+            &(Utc::now() - Duration::seconds(180)).to_rfc3339(),
+        );
+        assert!(stale_watchdog_confirmed(&payload, observed, 60));
+    }
+
+    #[tokio::test]
+    async fn reclaim_stale_running_jobs_two_pass_flow_marks_then_reclaims() -> Result<()> {
+        let pg_url = match env::var("AXON_TEST_PG_URL").or_else(|_| env::var("AXON_PG_URL")) {
+            Ok(url) if !url.trim().is_empty() => url,
+            _ => return Ok(()),
+        };
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&pg_url)
+            .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS axon_embed_jobs (
+                id UUID PRIMARY KEY,
+                status TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                started_at TIMESTAMPTZ,
+                finished_at TIMESTAMPTZ,
+                error_text TEXT,
+                input_text TEXT NOT NULL,
+                result_json JSONB
+                ,
+                config_json JSONB NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await?;
+
+        let job_id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO axon_embed_jobs (id, status, updated_at, input_text, result_json, config_json)
+            VALUES ($1, 'running', NOW() - INTERVAL '20 minutes', 'integration-test', '{}'::jsonb, '{}'::jsonb)
+            "#,
+        )
+        .bind(job_id)
+        .execute(&pool)
+        .await?;
+
+        let first =
+            reclaim_stale_running_jobs(&pool, JobTable::Embed, "embed", 300, 60, "test").await?;
+        assert_eq!(first.stale_candidates, 1);
+        assert_eq!(first.marked_candidates, 1);
+        assert_eq!(first.reclaimed_jobs, 0);
+
+        let marked_json: Value =
+            sqlx::query_scalar("SELECT result_json FROM axon_embed_jobs WHERE id = $1")
+                .bind(job_id)
+                .fetch_one(&pool)
+                .await?;
+        assert!(marked_json.get("_watchdog").is_some());
+
+        let second =
+            reclaim_stale_running_jobs(&pool, JobTable::Embed, "embed", 300, 0, "test").await?;
+        assert_eq!(second.reclaimed_jobs, 1);
+
+        let status: String = sqlx::query_scalar("SELECT status FROM axon_embed_jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(status, "failed");
+
+        let _ = sqlx::query("DELETE FROM axon_embed_jobs WHERE id = $1")
+            .bind(job_id)
+            .execute(&pool)
+            .await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn claim_and_fail_lifecycle_transitions_are_state_guarded() -> Result<()> {
+        let pg_url = match env::var("AXON_TEST_PG_URL").or_else(|_| env::var("AXON_PG_URL")) {
+            Ok(url) if !url.trim().is_empty() => url,
+            _ => return Ok(()),
+        };
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&pg_url)
+            .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS axon_embed_jobs (
+                id UUID PRIMARY KEY,
+                status TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                started_at TIMESTAMPTZ,
+                finished_at TIMESTAMPTZ,
+                error_text TEXT,
+                input_text TEXT NOT NULL,
+                result_json JSONB,
+                config_json JSONB NOT NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await?;
+
+        let pending_id = Uuid::new_v4();
+        let already_running_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO axon_embed_jobs (id, status, input_text, config_json) VALUES ($1, 'pending', 'claim-test', '{}'::jsonb)",
+        )
+        .bind(pending_id)
+        .execute(&pool)
+        .await?;
+        sqlx::query(
+            "INSERT INTO axon_embed_jobs (id, status, input_text, config_json, started_at) VALUES ($1, 'running', 'run-test', '{}'::jsonb, NOW())",
+        )
+        .bind(already_running_id)
+        .execute(&pool)
+        .await?;
+
+        assert!(claim_pending_by_id(&pool, JobTable::Embed, pending_id).await?);
+        assert!(!claim_pending_by_id(&pool, JobTable::Embed, pending_id).await?);
+
+        mark_job_failed(&pool, JobTable::Embed, pending_id, "synthetic-failure").await;
+        mark_job_failed(
+            &pool,
+            JobTable::Embed,
+            already_running_id,
+            "running-failure",
+        )
+        .await;
+
+        let pending_status: String =
+            sqlx::query_scalar("SELECT status FROM axon_embed_jobs WHERE id=$1")
+                .bind(pending_id)
+                .fetch_one(&pool)
+                .await?;
+        let pending_error: Option<String> =
+            sqlx::query_scalar("SELECT error_text FROM axon_embed_jobs WHERE id=$1")
+                .bind(pending_id)
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(pending_status, "failed");
+        assert_eq!(pending_error.as_deref(), Some("synthetic-failure"));
+
+        let running_status: String =
+            sqlx::query_scalar("SELECT status FROM axon_embed_jobs WHERE id=$1")
+                .bind(already_running_id)
+                .fetch_one(&pool)
+                .await?;
+        let running_error: Option<String> =
+            sqlx::query_scalar("SELECT error_text FROM axon_embed_jobs WHERE id=$1")
+                .bind(already_running_id)
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(running_status, "failed");
+        assert_eq!(running_error.as_deref(), Some("running-failure"));
+
+        let _ = sqlx::query("DELETE FROM axon_embed_jobs WHERE id = $1 OR id = $2")
+            .bind(pending_id)
+            .bind(already_running_id)
+            .execute(&pool)
+            .await;
+        Ok(())
+    }
 }

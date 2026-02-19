@@ -1,6 +1,7 @@
 pub mod batch;
 pub mod common;
 pub mod crawl;
+pub mod debug;
 pub mod doctor;
 pub mod embed;
 pub mod extract;
@@ -16,6 +17,7 @@ pub use crate::axon_cli::crates::vector::ops::{
 pub use batch::run_batch;
 pub use common::start_url_from_cfg;
 pub use crawl::run_crawl;
+pub use debug::run_debug;
 pub use doctor::run_doctor;
 pub use embed::run_embed;
 pub use extract::run_extract;

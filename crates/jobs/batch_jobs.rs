@@ -24,9 +24,8 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const TABLE: JobTable = JobTable::Batch;
-const STALE_RUNNING_TIMEOUT_SECS: i64 = 300;
-const STALE_CONFIRMATION_SECS: i64 = 60;
 const STALE_SWEEP_INTERVAL_SECS: u64 = 30;
+const WORKER_CONCURRENCY: usize = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BatchJobConfig {
@@ -360,19 +359,43 @@ pub async fn start_batch_job(cfg: &Config, urls: &[String]) -> Result<Uuid, Box<
     let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
 
-    let id = Uuid::new_v4();
+    let urls_json = serde_json::to_value(urls)?;
     let cfg_json = serde_json::to_value(BatchJobConfig {
         embed: cfg.embed,
         collection: cfg.collection.clone(),
         output_dir: cfg.output_dir.to_string_lossy().to_string(),
         extraction_prompt: cfg.query.clone(),
     })?;
+    if let Some(existing_id) = sqlx::query_scalar::<_, Uuid>(
+        r#"
+        SELECT id
+        FROM axon_batch_jobs
+        WHERE status IN ('pending','running')
+          AND urls_json = $1
+          AND config_json = $2
+        ORDER BY created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(urls_json.clone())
+    .bind(cfg_json.clone())
+    .fetch_optional(&pool)
+    .await?
+    {
+        log_info(&format!(
+            "batch dedupe hit: reusing active job {} for {} urls",
+            existing_id,
+            urls.len()
+        ));
+        return Ok(existing_id);
+    }
+    let id = Uuid::new_v4();
 
     sqlx::query(
         r#"INSERT INTO axon_batch_jobs (id, status, urls_json, config_json) VALUES ($1, 'pending', $2, $3)"#,
     )
     .bind(id)
-    .bind(serde_json::to_value(urls)?)
+    .bind(urls_json)
     .bind(cfg_json)
     .execute(&pool)
     .await?;
@@ -546,101 +569,172 @@ async fn process_batch_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
 pub async fn run_batch_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
+    match reclaim_stale_running_jobs(
+        &pool,
+        TABLE,
+        "batch",
+        cfg.watchdog_stale_timeout_secs,
+        cfg.watchdog_confirm_secs,
+        "startup",
+    )
+    .await
+    {
+        Ok(stats) => {
+            if stats.stale_candidates > 0 || stats.reclaimed_jobs > 0 {
+                log_info(&format!(
+                    "watchdog batch startup sweep candidates={} marked={} reclaimed={}",
+                    stats.stale_candidates, stats.marked_candidates, stats.reclaimed_jobs
+                ));
+            }
+        }
+        Err(err) => log_warn(&format!("watchdog batch startup sweep failed: {err}")),
+    }
 
-    if let Ok(ch) = open_amqp_channel(cfg, &cfg.batch_queue).await {
-        let mut consumer = ch
-            .basic_consume(
-                &cfg.batch_queue,
-                "axon-rust-batch-worker",
-                BasicConsumeOptions::default(),
-                FieldTable::default(),
-            )
-            .await?;
-        log_info(&format!(
-            "batch worker listening on queue={}",
-            cfg.batch_queue
-        ));
-        loop {
-            let msg = match tokio::time::timeout(
-                Duration::from_secs(STALE_SWEEP_INTERVAL_SECS),
-                consumer.next(),
-            )
-            .await
-            {
-                Ok(Some(msg)) => msg,
-                Ok(None) => break,
-                Err(_) => {
-                    if let Ok(reclaimed) = reclaim_stale_running_jobs(
+    let run_amqp_lane = |lane: usize| {
+        let pool = pool.clone();
+        async move {
+            let ch = open_amqp_channel(cfg, &cfg.batch_queue).await?;
+            let tag = format!("axon-rust-batch-worker-{lane}");
+            let mut consumer = ch
+                .basic_consume(
+                    &cfg.batch_queue,
+                    &tag,
+                    BasicConsumeOptions::default(),
+                    FieldTable::default(),
+                )
+                .await?;
+            log_info(&format!(
+                "batch worker lane={} listening on queue={} concurrency={}",
+                lane, cfg.batch_queue, WORKER_CONCURRENCY
+            ));
+            loop {
+                let msg = match tokio::time::timeout(
+                    Duration::from_secs(STALE_SWEEP_INTERVAL_SECS),
+                    consumer.next(),
+                )
+                .await
+                {
+                    Ok(Some(msg)) => msg,
+                    Ok(None) => break,
+                    Err(_) => {
+                        if let Ok(stats) = reclaim_stale_running_jobs(
+                            &pool,
+                            TABLE,
+                            "batch",
+                            cfg.watchdog_stale_timeout_secs,
+                            cfg.watchdog_confirm_secs,
+                            "amqp",
+                        )
+                        .await
+                        {
+                            if stats.stale_candidates > 0 || stats.reclaimed_jobs > 0 {
+                                log_info(&format!(
+                                "watchdog batch sweep lane={} candidates={} marked={} reclaimed={}",
+                                lane,
+                                stats.stale_candidates,
+                                stats.marked_candidates,
+                                stats.reclaimed_jobs
+                            ));
+                            }
+                        }
+                        continue;
+                    }
+                };
+                let delivery = match msg {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                let parsed = std::str::from_utf8(&delivery.data)
+                    .ok()
+                    .and_then(|s| Uuid::parse_str(s.trim()).ok());
+                if let Some(job_id) = parsed {
+                    if claim_pending_by_id(&pool, TABLE, job_id)
+                        .await
+                        .unwrap_or(false)
+                    {
+                        if let Err(err) = process_batch_job(cfg, &pool, job_id).await {
+                            let error_text = err.to_string();
+                            mark_job_failed(&pool, TABLE, job_id, &error_text).await;
+                            log_warn(&format!("worker failed batch job {job_id}: {error_text}"));
+                        }
+                    }
+                }
+                delivery.ack(BasicAckOptions::default()).await?;
+            }
+            Result::<(), Box<dyn Error>>::Ok(())
+        }
+    };
+
+    let run_polling_lane = |lane: usize| {
+        let pool = pool.clone();
+        async move {
+            log_info(&format!(
+                "batch worker polling lane={} active queue={}",
+                lane, cfg.batch_queue
+            ));
+            let mut last_sweep = Instant::now();
+            loop {
+                if last_sweep.elapsed() >= Duration::from_secs(STALE_SWEEP_INTERVAL_SECS) {
+                    if let Ok(stats) = reclaim_stale_running_jobs(
                         &pool,
                         TABLE,
                         "batch",
-                        STALE_RUNNING_TIMEOUT_SECS,
-                        STALE_CONFIRMATION_SECS,
-                        "amqp",
+                        cfg.watchdog_stale_timeout_secs,
+                        cfg.watchdog_confirm_secs,
+                        "polling",
                     )
                     .await
                     {
-                        if reclaimed > 0 {
-                            log_warn(&format!("watchdog reclaimed {} stale batch jobs", reclaimed));
+                        if stats.stale_candidates > 0 || stats.reclaimed_jobs > 0 {
+                            log_info(&format!(
+                                "watchdog batch sweep lane={} candidates={} marked={} reclaimed={}",
+                                lane,
+                                stats.stale_candidates,
+                                stats.marked_candidates,
+                                stats.reclaimed_jobs
+                            ));
                         }
                     }
-                    continue;
+                    last_sweep = Instant::now();
                 }
-            };
-            let delivery = match msg {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
-            let parsed = std::str::from_utf8(&delivery.data)
-                .ok()
-                .and_then(|s| Uuid::parse_str(s.trim()).ok());
-            if let Some(job_id) = parsed {
-                if claim_pending_by_id(&pool, TABLE, job_id)
-                    .await
-                    .unwrap_or(false)
-                {
-                    if let Err(err) = process_batch_job(cfg, &pool, job_id).await {
+                if let Some(id) = claim_next_pending(&pool, TABLE).await? {
+                    if let Err(err) = process_batch_job(cfg, &pool, id).await {
                         let error_text = err.to_string();
-                        mark_job_failed(&pool, TABLE, job_id, &error_text).await;
-                        log_warn(&format!("worker failed batch job {job_id}: {error_text}"));
+                        mark_job_failed(&pool, TABLE, id, &error_text).await;
+                        log_warn(&format!("worker failed batch job {id}: {error_text}"));
                     }
+                } else {
+                    tokio::time::sleep(Duration::from_millis(800)).await;
                 }
             }
-            delivery.ack(BasicAckOptions::default()).await?;
+            #[allow(unreachable_code)]
+            Result::<(), Box<dyn Error>>::Ok(())
         }
+    };
+
+    if open_amqp_channel(cfg, &cfg.batch_queue).await.is_ok() {
+        tokio::try_join!(run_amqp_lane(1), run_amqp_lane(2))?;
         return Ok(());
     }
 
     log_warn("amqp unavailable; running batch worker in postgres polling mode");
-    let mut last_sweep = Instant::now();
-    loop {
-        if last_sweep.elapsed() >= Duration::from_secs(STALE_SWEEP_INTERVAL_SECS) {
-            if let Ok(reclaimed) = reclaim_stale_running_jobs(
-                &pool,
-                TABLE,
-                "batch",
-                STALE_RUNNING_TIMEOUT_SECS,
-                STALE_CONFIRMATION_SECS,
-                "polling",
-            )
-            .await
-            {
-                if reclaimed > 0 {
-                    log_warn(&format!("watchdog reclaimed {} stale batch jobs", reclaimed));
-                }
-            }
-            last_sweep = Instant::now();
-        }
-        if let Some(id) = claim_next_pending(&pool, TABLE).await? {
-            if let Err(err) = process_batch_job(cfg, &pool, id).await {
-                let error_text = err.to_string();
-                mark_job_failed(&pool, TABLE, id, &error_text).await;
-                log_warn(&format!("worker failed batch job {id}: {error_text}"));
-            }
-        } else {
-            tokio::time::sleep(Duration::from_millis(800)).await;
-        }
-    }
+    tokio::try_join!(run_polling_lane(1), run_polling_lane(2))?;
+    Ok(())
+}
+
+pub async fn recover_stale_batch_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
+    let pool = make_pool(cfg).await?;
+    ensure_schema(&pool).await?;
+    let stats = reclaim_stale_running_jobs(
+        &pool,
+        TABLE,
+        "batch",
+        cfg.watchdog_stale_timeout_secs,
+        cfg.watchdog_confirm_secs,
+        "manual",
+    )
+    .await?;
+    Ok(stats.reclaimed_jobs)
 }
 
 pub async fn batch_doctor(cfg: &Config) -> Result<serde_json::Value, Box<dyn Error>> {
@@ -653,4 +747,148 @@ pub async fn batch_doctor(cfg: &Config) -> Result<serde_json::Value, Box<dyn Err
         "redis_ok": redis_ok,
         "all_ok": pg_ok && amqp_ok && redis_ok
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::axon_cli::crates::jobs::common::test_config;
+    use chrono::{DateTime, Duration, Utc};
+    use std::env;
+    use tokio::time::{sleep, timeout, Duration as TokioDuration};
+
+    fn pg_url() -> Option<String> {
+        env::var("AXON_TEST_PG_URL")
+            .ok()
+            .or_else(|| env::var("AXON_PG_URL").ok())
+            .filter(|v| !v.trim().is_empty())
+    }
+
+    #[tokio::test]
+    async fn batch_start_job_dedupes_active_pending_job() -> Result<(), Box<dyn Error>> {
+        let Some(pg_url) = pg_url() else {
+            return Ok(());
+        };
+        let cfg = test_config(&pg_url);
+        let url = format!("https://example.com/batch/{}", Uuid::new_v4());
+        let urls = vec![url];
+
+        let first_id = start_batch_job(&cfg, &urls).await?;
+        let second_id = start_batch_job(&cfg, &urls).await?;
+        assert_eq!(first_id, second_id);
+
+        let pool = make_pool(&cfg).await?;
+        let _ = sqlx::query("DELETE FROM axon_batch_jobs WHERE id = $1")
+            .bind(first_id)
+            .execute(&pool)
+            .await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn batch_recover_reclaims_confirmed_stale_running_job() -> Result<(), Box<dyn Error>> {
+        let Some(pg_url) = pg_url() else {
+            return Ok(());
+        };
+        let cfg = test_config(&pg_url);
+        let url = format!("https://example.com/batch-recover/{}", Uuid::new_v4());
+        let urls = vec![url];
+        let id = start_batch_job(&cfg, &urls).await?;
+        let pool = make_pool(&cfg).await?;
+
+        sqlx::query(
+            "UPDATE axon_batch_jobs SET status='running', updated_at=NOW() - INTERVAL '20 minutes' WHERE id=$1",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await?;
+
+        let observed_updated_at: DateTime<Utc> =
+            sqlx::query_scalar("SELECT updated_at FROM axon_batch_jobs WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await?;
+        let watchdog = serde_json::json!({
+            "_watchdog": {
+                "observed_updated_at": observed_updated_at.to_rfc3339(),
+                "first_seen_stale_at": (Utc::now() - Duration::minutes(10)).to_rfc3339()
+            }
+        });
+        sqlx::query("UPDATE axon_batch_jobs SET result_json=$2 WHERE id=$1")
+            .bind(id)
+            .bind(watchdog)
+            .execute(&pool)
+            .await?;
+
+        let reclaimed = recover_stale_batch_jobs(&cfg).await?;
+        assert!(reclaimed >= 1);
+
+        let status: String = sqlx::query_scalar("SELECT status FROM axon_batch_jobs WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(status, "failed");
+
+        let _ = sqlx::query("DELETE FROM axon_batch_jobs WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn batch_worker_e2e_processes_pending_job_to_terminal_status(
+    ) -> Result<(), Box<dyn Error>> {
+        let Some(pg_url) = pg_url() else {
+            return Ok(());
+        };
+        let cfg = test_config(&pg_url);
+        let url = format!("https://example.com/batch-worker/{}", Uuid::new_v4());
+        let urls = vec![url];
+        let id = start_batch_job(&cfg, &urls).await?;
+
+        let worker_cfg = cfg.clone();
+        let worker = tokio::task::spawn_local(async move {
+            let _ = run_batch_worker(&worker_cfg).await;
+        });
+
+        let pool = make_pool(&cfg).await?;
+        let wait = timeout(TokioDuration::from_secs(8), async {
+            loop {
+                let status: Option<String> =
+                    sqlx::query_scalar("SELECT status FROM axon_batch_jobs WHERE id=$1")
+                        .bind(id)
+                        .fetch_optional(&pool)
+                        .await
+                        .ok()
+                        .flatten();
+                if matches!(status.as_deref(), Some("completed" | "failed" | "canceled")) {
+                    break;
+                }
+                sleep(TokioDuration::from_millis(100)).await;
+            }
+        })
+        .await;
+        worker.abort();
+        let _ = worker.await;
+        assert!(
+            wait.is_ok(),
+            "batch worker did not reach terminal state in time"
+        );
+
+        let status: String = sqlx::query_scalar("SELECT status FROM axon_batch_jobs WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await?;
+        assert!(matches!(
+            status.as_str(),
+            "completed" | "failed" | "canceled"
+        ));
+
+        let _ = sqlx::query("DELETE FROM axon_batch_jobs WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await;
+        Ok(())
+    }
 }

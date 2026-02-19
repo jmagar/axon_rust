@@ -96,6 +96,24 @@ services:
       retries: 5
       start_period: 20s
 
+  axon-webdriver:
+    <<: *common-service
+    image: selenium/standalone-chrome:4.34.0
+    container_name: axon-webdriver
+    shm_size: "2gb"
+    ports:
+      - "127.0.0.1:4444:4444"  # WebDriver endpoint for browser fallback
+      - "127.0.0.1:7900:7900"  # Optional VNC viewer
+    environment:
+      SE_NODE_MAX_SESSIONS: "1"
+      SE_NODE_OVERRIDE_MAX_SESSIONS: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:4444/wd/hub/status >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
   axon-workers:
     <<: *common-service
     container_name: axon-workers

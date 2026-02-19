@@ -1,0 +1,6 @@
+# Temporary file-level exceptions for monolith policy.
+# One repo-relative path per line, no globs.
+# Add a ticket/date in comments when possible, then remove quickly.
+#
+# Example:
+# crates/legacy/massive_module.rs

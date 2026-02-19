@@ -1,6 +1,6 @@
 ---
 description: Semantic search over embedded content in Qdrant
-argument-hint: "<search query>" [--limit N] [--domain example.com]
+argument-hint: "<search query>" [--limit N]
 allowed-tools: Bash(axon *)
 ---
 
@@ -12,33 +12,18 @@ Execute the Axon query command with the provided arguments:
 axon query $ARGUMENTS
 ```
 
-## Instructions
-
-1. **Execute the command** using the Bash tool with the arguments provided
-2. **Parse the response** to extract:
-   - Ranked search results
-   - Relevance scores
-   - Content snippets
-   - Source URLs
-3. **Present the results** including:
-   - Top N results (ranked by similarity)
-   - Relevance score for each result
-   - Content preview/snippet
-   - Source URL and metadata
-4. **Summarize findings**:
-   - Most relevant result
-   - Common themes across results
-   - Suggested follow-up queries
+`--limit` is honored via the global CLI flag and controls how many hits are requested from Qdrant.
 
 ## Expected Output
 
-The command returns JSON containing:
-- `results`: Array of search results with:
-  - `score`: Similarity score (0-1)
-  - `content`: Content snippet
-  - `url`: Source URL
-  - `metadata`: Page metadata
-- `query`: Original search query
-- `total`: Total results found
+Plaintext mode:
+- Header: `Query Results for "..."`
+- Count line: `Showing N`
+- Ranked bullet list with `score`, `url`, and a snippet preview
 
-Present search results ranked by relevance with scores and content previews.
+JSON mode:
+- One JSON object per hit:
+  - `rank`
+  - `score`
+  - `url`
+  - `snippet`

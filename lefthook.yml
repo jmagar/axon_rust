@@ -1,0 +1,11 @@
+pre-commit:
+  parallel: true
+  commands:
+    monolith:
+      run: python3 scripts/enforce_monoliths.py --staged
+    rustfmt:
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+    clippy:
+      glob: "*.{rs,toml}"
+      run: cargo clippy --all-targets -- -D warnings

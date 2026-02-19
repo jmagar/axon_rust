@@ -1,0 +1,3 @@
+# sha256  path
+16a085432c898b1f908e36bda6ed058a79e7a6b00edc11f56609a9f185d58414  crates/vector/ops_legacy.rs
+4a95adaf3c4cbf454b08176d5f6815f8d3584e906b9e084becc3506d58a94b32  crates/jobs/crawl_jobs_legacy.rs

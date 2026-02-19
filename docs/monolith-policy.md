@@ -1,0 +1,80 @@
+# Monolith Policy
+
+This repository enforces a ratcheting policy to prevent new monolithic files and functions from being introduced.
+
+## Scope
+
+- Enforced on changed code, not the full legacy tree.
+- Enforced locally via `lefthook` pre-commit.
+- Enforced in CI for pull requests and pushes.
+
+## Limits
+
+- File size limit: `400` lines
+- Rust function size limit: `80` lines
+
+## Checked File Types
+
+File-size enforcement applies to changed files with these extensions:
+
+- `.rs`
+- `.py`
+- `.sh`
+- `.toml`
+- `.yaml`
+- `.yml`
+
+Function-size enforcement applies to changed Rust functions in `.rs` files.
+
+## Test Exemptions
+
+The following paths/patterns are exempt:
+
+- `tests/**`
+- `**/tests/**`
+- `**/*_test.*`
+- `**/*.test.*`
+- `**/*.spec.*`
+- `benches/**`
+
+## Exceptions
+
+Temporary file-level exceptions can be added to `.monolith-allowlist` (one repo-relative path per line).
+
+Rules:
+
+- Use exceptions only when necessary.
+- Add a comment with ticket/date/owner above the entry.
+- Remove entries as soon as refactoring is complete.
+
+## Local Enforcement
+
+Install hooks:
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+Run policy manually against staged changes:
+
+```bash
+python3 scripts/enforce_monoliths.py --staged
+```
+
+## CI Enforcement
+
+CI runs:
+
+```bash
+python3 scripts/enforce_monoliths.py --base "$BASE_SHA" --head "$HEAD_SHA"
+```
+
+This keeps enforcement ratcheted to the change set under review.
+
+## Config Files
+
+- Policy logic: `scripts/enforce_monoliths.py`
+- Local hooks: `lefthook.yml`
+- Hook installer: `scripts/install-git-hooks.sh`
+- CI job: `.github/workflows/ci.yml`
+- Exception list: `.monolith-allowlist`

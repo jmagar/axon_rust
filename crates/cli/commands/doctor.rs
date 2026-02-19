@@ -1,12 +1,12 @@
 use crate::axon_cli::crates::core::config::Config;
 use crate::axon_cli::crates::core::content::redact_url;
 use crate::axon_cli::crates::core::health::{
-    browser_backend_selection, browser_diagnostics_pattern, do_not_port_guardrails,
-    webdriver_url_from_env, BrowserBackendSelection,
+    browser_backend_selection, browser_diagnostics_pattern, webdriver_url_from_env,
+    BrowserBackendSelection,
 };
 use crate::axon_cli::crates::core::ui::{muted, primary, status_text, symbol_for_status};
 use crate::axon_cli::crates::jobs::batch_jobs::batch_doctor;
-use crate::axon_cli::crates::jobs::crawl_jobs::doctor as crawl_doctor;
+use crate::axon_cli::crates::jobs::crawl_jobs_dispatch::doctor as crawl_doctor;
 use crate::axon_cli::crates::jobs::embed_jobs::embed_doctor;
 use crate::axon_cli::crates::jobs::extract_jobs::extract_doctor;
 use serde_json::Value;
@@ -145,6 +145,123 @@ fn openai_state(cfg: &Config, openai_model: &str) -> (&'static str, bool) {
     }
 }
 
+pub async fn build_doctor_report(cfg: &Config) -> Result<Value, Box<dyn Error>> {
+    let webdriver_url = webdriver_url_from_env();
+    let diagnostics = browser_diagnostics_pattern();
+
+    let (
+        crawl_report,
+        batch_report,
+        extract_report,
+        embed_report,
+        tei_probe,
+        tei_info_probe,
+        qdrant_probe,
+        webdriver_probe,
+    ) = spider::tokio::join!(
+        crawl_doctor(cfg),
+        batch_doctor(cfg),
+        extract_doctor(cfg),
+        embed_doctor(cfg),
+        probe_http(&cfg.tei_url, &["/health", "/"]),
+        probe_tei_info(&cfg.tei_url),
+        probe_http(&cfg.qdrant_url, &["/healthz", "/"]),
+        async {
+            match webdriver_url.as_deref() {
+                Some(url) => Some(probe_http(url, &["/status", "/wd/hub/status"]).await),
+                None => None,
+            }
+        },
+    );
+
+    let crawl_report = crawl_report?;
+    let batch_report = batch_report?;
+    let extract_report = extract_report?;
+    let embed_report = embed_report?;
+
+    let postgres_ok = crawl_report["postgres_ok"].as_bool().unwrap_or(false);
+    let redis_ok = crawl_report["redis_ok"].as_bool().unwrap_or(false);
+    let amqp_ok = crawl_report["amqp_ok"].as_bool().unwrap_or(false);
+    let tei_ok = tei_probe.0;
+    let tei_detail = tei_probe.1;
+    let tei_info = tei_info_probe.0;
+    let tei_info_detail = tei_info_probe.1;
+    let tei_model = tei_info.as_ref().and_then(tei_model_from_info);
+    let tei_summary = tei_info.as_ref().and_then(tei_info_summary);
+    let qdrant_ok = qdrant_probe.0;
+    let qdrant_detail = qdrant_probe.1;
+    let webdriver_configured = webdriver_url.is_some();
+    let webdriver_ok = webdriver_probe
+        .as_ref()
+        .map(|probe| probe.0)
+        .unwrap_or(false);
+    let webdriver_detail = webdriver_probe.and_then(|probe| probe.1);
+    let backend_selection = browser_backend_selection(true, webdriver_configured, webdriver_ok);
+    let backend_selection_label = match backend_selection {
+        BrowserBackendSelection::Chrome => "chrome",
+        BrowserBackendSelection::WebDriverFallback => "webdriver",
+    };
+
+    let openai_model = resolve_openai_model(cfg);
+    let openai = openai_state(cfg, &openai_model);
+
+    let pipelines = serde_json::json!({
+        "crawl": crawl_report["all_ok"].as_bool().unwrap_or(false),
+        "batch": batch_report["all_ok"].as_bool().unwrap_or(false),
+        "extract": extract_report["all_ok"].as_bool().unwrap_or(false),
+        "embed": embed_report["all_ok"].as_bool().unwrap_or(false),
+    });
+
+    let services = serde_json::json!({
+        "postgres": { "ok": postgres_ok, "url": redact_url(&cfg.pg_url) },
+        "redis": { "ok": redis_ok, "url": redact_url(&cfg.redis_url) },
+        "amqp": { "ok": amqp_ok, "url": redact_url(&cfg.amqp_url) },
+        "tei": {
+            "ok": tei_ok,
+            "url": cfg.tei_url,
+            "detail": tei_detail,
+            "info_detail": tei_info_detail,
+            "model": tei_model,
+            "summary": tei_summary,
+            "info": tei_info
+        },
+        "qdrant": { "ok": qdrant_ok, "url": cfg.qdrant_url, "detail": qdrant_detail },
+        "webdriver": {
+            "ok": webdriver_ok,
+            "configured": webdriver_configured,
+            "url": webdriver_url,
+            "detail": webdriver_detail
+        },
+        "openai": { "ok": openai.1, "state": openai.0, "base_url": cfg.openai_base_url, "model": openai_model },
+    });
+
+    let browser_runtime = serde_json::json!({
+        "selection": backend_selection_label,
+        "fallback_enabled": webdriver_configured,
+        "fallback_ready": webdriver_ok,
+        "diagnostics": {
+            "enabled": diagnostics.enabled,
+            "screenshot": diagnostics.screenshot,
+            "events": diagnostics.events,
+            "output_dir": diagnostics.output_dir,
+        },
+    });
+
+    let all_ok = pipelines["crawl"].as_bool().unwrap_or(false)
+        && pipelines["batch"].as_bool().unwrap_or(false)
+        && pipelines["extract"].as_bool().unwrap_or(false)
+        && pipelines["embed"].as_bool().unwrap_or(false)
+        && tei_ok
+        && qdrant_ok;
+
+    Ok(serde_json::json!({
+        "services": services,
+        "pipelines": pipelines,
+        "browser_runtime": browser_runtime,
+        "all_ok": all_ok
+    }))
+}
+
 pub async fn run_doctor(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let webdriver_url = webdriver_url_from_env();
     let diagnostics = browser_diagnostics_pattern();
@@ -245,7 +362,6 @@ pub async fn run_doctor(cfg: &Config) -> Result<(), Box<dyn Error>> {
             "events": diagnostics.events,
             "output_dir": diagnostics.output_dir,
         },
-        "do_not_port_guardrails": do_not_port_guardrails(),
     });
 
     let all_ok = pipelines["crawl"].as_bool().unwrap_or(false)
@@ -358,10 +474,6 @@ pub async fn run_doctor(cfg: &Config) -> Result<(), Box<dyn Error>> {
         diagnostics.events,
         diagnostics.output_dir
     );
-    println!("  do-not-port guardrails:");
-    for item in do_not_port_guardrails() {
-        println!("    - {}", muted(item));
-    }
     println!();
     println!(
         "{} overall {}",
