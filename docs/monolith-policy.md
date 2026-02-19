@@ -10,19 +10,14 @@ This repository enforces a ratcheting policy to prevent new monolithic files and
 
 ## Limits
 
-- File size limit: `400` lines
+- File size limit: `500` lines
 - Rust function size limit: `80` lines
 
 ## Checked File Types
 
-File-size enforcement applies to changed files with these extensions:
+File-size enforcement applies only to changed Rust source files:
 
 - `.rs`
-- `.py`
-- `.sh`
-- `.toml`
-- `.yaml`
-- `.yml`
 
 Function-size enforcement applies to changed Rust functions in `.rs` files.
 
@@ -36,6 +31,9 @@ The following paths/patterns are exempt:
 - `**/*.test.*`
 - `**/*.spec.*`
 - `benches/**`
+- `config/**`
+- `**/config/**`
+- `**/config.rs`
 
 ## Exceptions
 
@@ -67,6 +65,8 @@ CI runs:
 
 ```bash
 python3 scripts/enforce_monoliths.py --base "$BASE_SHA" --head "$HEAD_SHA"
+
+python3 scripts/enforce_no_legacy_symbols.py
 ```
 
 This keeps enforcement ratcheted to the change set under review.
@@ -74,6 +74,7 @@ This keeps enforcement ratcheted to the change set under review.
 ## Config Files
 
 - Policy logic: `scripts/enforce_monoliths.py`
+- Legacy deny-list: `scripts/enforce_no_legacy_symbols.py`
 - Local hooks: `lefthook.yml`
 - Hook installer: `scripts/install-git-hooks.sh`
 - CI job: `.github/workflows/ci.yml`

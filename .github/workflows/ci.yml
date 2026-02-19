@@ -10,22 +10,14 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Check + Lint + Format
+  monolith:
+    name: monolith
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history required for base-ref comparison in monolith enforcement
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-
-      - name: cargo check
-        run: cargo check --all-targets
-
-      - name: Enforce monolith policy (changed files only)
+          fetch-depth: 0
+      - name: Enforce monolith policy (changed Rust files only)
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -46,17 +38,62 @@ jobs:
 
           python3 scripts/enforce_monoliths.py --base "$BASE_SHA" --head "$HEAD_SHA"
 
+  no-legacy-symbols:
+    name: no-legacy-symbols
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce legacy symbol deny-list
+        run: python3 scripts/enforce_no_legacy_symbols.py
+
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt check
+        run: cargo fmt --all -- --check
+
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check (warnings are errors)
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo check --all-targets
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: cargo fmt check
-        run: cargo fmt --check
-
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: cargo test
         run: cargo test --all
 
   security:
-    name: Security Audit
+    name: security
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

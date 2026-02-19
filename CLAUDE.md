@@ -1,4 +1,4 @@
-# axon_cli — Cortex CLI (Rust + Spider.rs)
+# axon_cli — Axon CLI (Rust + Spider.rs)
 
 Web crawl, scrape, batch, extract, embed, and query — all in one binary backed by a self-hosted RAG stack.
 
@@ -9,16 +9,16 @@ Web crawl, scrape, batch, extract, embed, and query — all in one binary backed
 docker compose up -d
 
 # Build the CLI
-cargo build --release --bin cortex
+cargo build --release --bin axon
 
 # Run the CLI (binary lives in target/release/)
-./target/release/cortex --help
+./target/release/axon --help
 
-# Or build + run in one shot (also available as 'axon' binary)
-cargo run --bin cortex -- scrape https://example.com --wait true
+# Or build + run in one shot
+cargo run --bin axon -- scrape https://example.com --wait true
 ```
 
-> **Note:** Two binary aliases are compiled: `cortex` (primary) and `axon`. Both run the same entrypoint.
+> **Note:** The binary is named `axon`. Build with `cargo build --bin axon`.
 
 ## Commands
 
@@ -39,17 +39,19 @@ cargo run --bin cortex -- scrape https://example.com --wait true
 | `stats` | Qdrant collection stats | No |
 | `status` | Show async job queue status | No |
 | `doctor` | Diagnose service connectivity | No |
+| `debug` | Run doctor + LLM-assisted troubleshooting | No |
 
 ### Job Subcommands (for crawl / batch / extract / embed)
 
 ```bash
-cortex crawl status <job_id>
-cortex crawl cancel <job_id>
-cortex crawl errors <job_id>
-cortex crawl list
-cortex crawl cleanup
-cortex crawl clear
-cortex crawl worker   # run a worker inline
+axon crawl status <job_id>
+axon crawl cancel <job_id>
+axon crawl errors <job_id>
+axon crawl list
+axon crawl cleanup
+axon crawl clear
+axon crawl recover    # reclaim stale/interrupted jobs
+axon crawl worker     # run a worker inline
 ```
 
 ### Global Flags Reference
@@ -68,7 +70,7 @@ All flags are `--global` (usable with any subcommand).
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--max-pages <n>` | u32 | `200` | Page cap for crawl (0 = uncapped). |
+| `--max-pages <n>` | u32 | `0` | Page cap for crawl (0 = uncapped, default). |
 | `--max-depth <n>` | usize | `5` | Maximum crawl depth from start URL. |
 | `--render-mode <mode>` | enum | `auto-switch` | `http`, `chrome`, or `auto-switch`. Auto-switch tries HTTP first, falls back to Chrome if >60% thin pages. |
 | `--format <fmt>` | enum | `markdown` | Output format: `markdown`, `html`, `rawHtml`, `json`. |
@@ -91,7 +93,7 @@ All flags are `--global` (usable with any subcommand).
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--collection <name>` | string | `spider_rust` | Qdrant collection name. Also settable via `AXON_COLLECTION` env var. |
+| `--collection <name>` | string | `cortex` | Qdrant collection name. Also settable via `AXON_COLLECTION` env var. |
 | `--embed <bool>` | bool | `true` | Auto-embed scraped content into Qdrant. |
 | `--limit <n>` | usize | `10` | Result limit for search/query commands. |
 | `--query <text>` | string | — | Query text (alternative to positional argument for some commands). |
@@ -117,7 +119,7 @@ All flags are `--global` (usable with any subcommand).
 |------|------|---------|----------|
 | `--pg-url <url>` | string | `AXON_PG_URL` / `NUQ_DATABASE_URL` | `postgresql://axon:postgres@127.0.0.1:53432/axon` |
 | `--redis-url <url>` | string | `AXON_REDIS_URL` / `REDIS_URL` | `redis://127.0.0.1:53379` |
-| `--amqp-url <url>` | string | `AXON_AMQP_URL` / `NUQ_RABBITMQ_URL` | `amqp://guest:guest@127.0.0.1:45535/%2f` |
+| `--amqp-url <url>` | string | `AXON_AMQP_URL` / `NUQ_RABBITMQ_URL` | `amqp://axon:axonrabbit@127.0.0.1:45535/%2f` |
 | `--qdrant-url <url>` | string | `QDRANT_URL` | `http://127.0.0.1:53333` |
 | `--tei-url <url>` | string | `TEI_URL` | *(empty)* |
 | `--openai-base-url <url>` | string | `OPENAI_BASE_URL` | *(empty)* |
@@ -144,7 +146,8 @@ axon_cli/
 │   ├── cli/
 │   │   ├── mod.rs
 │   │   └── commands/       # One file per command (scrape, crawl, map, batch, …)
-│   │       └── common.rs   # run_embed_and_save(), shared embed/save helpers
+│   │       ├── common.rs   # URL parsing utilities: parse_urls, expand_url_glob_seed
+│   │       └── probe.rs    # HTTP probe helpers used by doctor
 │   ├── core/
 │   │   ├── config.rs       # CLI parsing (clap), Config struct, performance profiles
 │   │   ├── content.rs      # HTML→markdown, URL→filename, transform pipeline
@@ -161,14 +164,14 @@ axon_cli/
 │   │   ├── mod.rs
 │   │   └── remote_extract.rs  # LLM extraction via OpenAI-compatible API
 │   ├── jobs/               # AMQP-backed async job workers
-│   │   ├── crawl_jobs.rs
-│   │   ├── batch_jobs.rs
-│   │   ├── extract_jobs.rs
-│   │   └── embed_jobs.rs
+│   │   ├── common.rs       # Shared infra: make_pool, open_amqp_channel, claim_next_pending
+│   │   ├── crawl_jobs.rs, crawl_jobs_dispatch.rs
+│   │   ├── batch_jobs.rs, extract_jobs.rs, embed_jobs.rs
+│   │   └── crawl_jobs_v2/  # V2 pipeline: config, manifest, processor, repo, sitemap, watchdog, worker
 │   └── vector/
-│       ├── mod.rs
-│       └── ops.rs          # tei_embed(), qdrant_upsert(), qdrant_search(),
-│                           # run_query_native(), run_ask_native(), run_sources_native(), …
+│       ├── mod.rs, ops.rs, ops_dispatch.rs
+│       │   # ops.rs: tei_embed(), qdrant_upsert(), qdrant_search(), run_query_native(), run_ask_native()
+│       └── ops_v2/         # V2 ops: commands, input, qdrant, ranking, stats, tei
 ├── docker/
 │   ├── Dockerfile          # Multi-stage build; s6-overlay for service supervision
 │   └── s6/

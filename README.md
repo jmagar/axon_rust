@@ -401,10 +401,13 @@ Concurrency tuned relative to available CPU cores:
 
 Axon enforces a ratcheting monolith policy on changed code:
 
-- File size limit (changed files): `400` lines
+- File size limit (changed Rust files): `500` lines
 - Rust function size limit (changed functions): `80` lines
-- Test files are exempt (`tests/**`, `**/*_test.*`, `**/*.test.*`, `**/*.spec.*`, `benches/**`)
+- Only Rust source files (`*.rs`) are checked for file size
+- Test/config paths are exempt (`tests/**`, `**/*_test.*`, `**/*.test.*`, `**/*.spec.*`, `benches/**`, `config/**`, `**/config/**`, `**/config.rs`)
 - Temporary file-level exceptions can be added to `.monolith-allowlist`
+
+Axon also enforces a legacy symbol deny-list in hooks/CI to prevent reintroducing removed v1 paths.
 
 Install local pre-commit enforcement (lefthook):
 

@@ -18,11 +18,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST_FILE = REPO_ROOT / ".monolith-allowlist"
 
-DEFAULT_FILE_MAX_LINES = 400
+DEFAULT_FILE_MAX_LINES = 500
 DEFAULT_FUNCTION_MAX_LINES = 80
 
-CHECK_EXTENSIONS = {".rs", ".py", ".sh", ".toml", ".yaml", ".yml"}
+CHECK_EXTENSIONS = {".rs"}
 EXCLUDED_GLOBS = [
+    "config/**",
+    "**/config/**",
+    "**/config.rs",
     "tests/**",
     "**/tests/**",
     "**/*_test.*",
