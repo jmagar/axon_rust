@@ -166,10 +166,33 @@ fn configure_website(
         website.with_request_timeout(Some(Duration::from_millis(timeout_ms)));
     }
 
-    if matches!(mode, RenderMode::Chrome) {
+    // Proxy and user-agent apply to both HTTP and Chrome/WebDriver modes.
+    if let Some(ref proxy) = cfg.chrome_proxy {
+        website.with_proxies(Some(vec![proxy.clone()]));
+    }
+    if let Some(ref ua) = cfg.chrome_user_agent {
+        website.with_user_agent(Some(ua.as_str()));
+    }
+
+    // WebDriver and CDP Chrome are mutually exclusive; webdriver_url takes priority.
+    if let Some(ref wd_url) = cfg.webdriver_url {
+        use spider::features::webdriver_common::WebDriverConfig;
+        let wd_cfg = WebDriverConfig {
+            server_url: wd_url.clone(),
+            headless: cfg.chrome_headless,
+            proxy: cfg.chrome_proxy.clone(),
+            user_agent: cfg.chrome_user_agent.clone(),
+            ..WebDriverConfig::default()
+        };
+        website.with_webdriver(wd_cfg);
+    } else if matches!(mode, RenderMode::Chrome) {
+        // CDP Chrome: wire all Chrome-specific fields instead of hardcoded values.
         website
-            .with_chrome_intercept(RequestInterceptConfiguration::new(false))
-            .with_stealth(true);
+            .with_chrome_intercept(RequestInterceptConfiguration::new(cfg.chrome_intercept))
+            .with_stealth(cfg.chrome_stealth || cfg.chrome_anti_bot);
+        if let Some(ref remote_url) = cfg.chrome_remote_url {
+            website.with_chrome_connection(Some(remote_url.clone()));
+        }
         website = website
             .build()
             .map_err(|_| "Failed to build website with chrome settings")?;
@@ -434,11 +457,11 @@ pub async fn run_crawl_once(
             let mut entries = tokio::fs::read_dir(output_dir).await?;
             while let Some(entry) = entries.next_entry().await? {
                 let path = entry.path();
-                let ft = entry.file_type().await?;
-                if ft.is_dir() {
-                    tokio::fs::remove_dir_all(&path).await?;
-                } else {
+                let meta = tokio::fs::symlink_metadata(&path).await?;
+                if meta.is_symlink() || meta.is_file() {
                     tokio::fs::remove_file(&path).await?;
+                } else if meta.is_dir() {
+                    tokio::fs::remove_dir_all(&path).await?;
                 }
             }
         }

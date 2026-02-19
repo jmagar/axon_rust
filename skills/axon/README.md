@@ -58,7 +58,7 @@ FIRECRAWL_API_URL="http://localhost:3002"
 
 **Note:** Self-hosted instances automatically skip authentication.
 
-#### 3. Install Axon CLI (Required)
+### 3. Install Axon CLI (Required)
 
 The CLI should be installed globally:
 
@@ -70,7 +70,7 @@ npm install -g @jmagar/axon
 axon --version
 ```
 
-#### 4. Test It
+### 4. Test It
 
 ```bash
 cd ~/claude-homelab/skills/axon

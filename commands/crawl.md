@@ -1,6 +1,6 @@
 ---
 description: Crawl entire website with depth and path controls
-argument-hint: <url> [--limit N] [--max-depth N]
+argument-hint: <url> [--max-pages N] [--max-depth N]
 allowed-tools: Bash(axon *)
 ---
 
@@ -28,10 +28,19 @@ axon crawl $ARGUMENTS
 
 ## Expected Output
 
-The command returns JSON containing:
+By default, crawl is **asynchronous** (`--wait false`): the command enqueues the job and returns a job ID immediately. Use `--wait true` to block until the crawl completes.
+
+**Async (default):** Returns a job ID to track progress:
+```
+Crawl job enqueued: <job-id>
+```
+
+**Sync (`--wait true`) with `--json`:** Returns JSON containing:
 - `job_id`: Crawl job identifier for status tracking
-- `status`: Current crawl status (queued/running/completed)
+- `status`: Final crawl status (`completed` / `failed`)
 - `pages`: Array of discovered and scraped pages
 - `stats`: Crawl statistics
+
+JSON output is only emitted when the `--json` flag is set. Without `--json`, output is human-readable text.
 
 Present a summary of discovered pages and confirm successful embedding to Qdrant.

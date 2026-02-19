@@ -1,3 +1,4 @@
+use crate::axon_cli::crates::cli::commands::probe::probe_http;
 use crate::axon_cli::crates::core::config::Config;
 use crate::axon_cli::crates::core::content::redact_url;
 use crate::axon_cli::crates::core::health::{
@@ -13,41 +14,6 @@ use console::style;
 use serde_json::Value;
 use std::env;
 use std::error::Error;
-use std::time::Duration;
-
-fn with_path(base: &str, path: &str) -> String {
-    let trimmed = base.trim_end_matches('/');
-    if path.starts_with('/') {
-        format!("{trimmed}{path}")
-    } else {
-        format!("{trimmed}/{path}")
-    }
-}
-
-async fn probe_http(url: &str, paths: &[&str]) -> (bool, Option<String>) {
-    if url.trim().is_empty() {
-        return (false, Some("not configured".to_string()));
-    }
-
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(4))
-        .build()
-    {
-        Ok(c) => c,
-        Err(err) => return (false, Some(err.to_string())),
-    };
-
-    let mut last_error = None;
-    for path in paths {
-        let endpoint = with_path(url, path);
-        match client.get(endpoint).send().await {
-            Ok(resp) => return (true, Some(format!("http {}", resp.status().as_u16()))),
-            Err(err) => last_error = Some(err.to_string()),
-        }
-    }
-
-    (false, last_error)
-}
 
 fn styled_metric(token: String, color: &str) -> String {
     if env::var("AXON_NO_COLOR").is_ok() {
@@ -235,8 +201,8 @@ pub async fn run_status(cfg: &Config) -> Result<(), Box<dyn Error>> {
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0);
                         let pages_target = pages_discovered.saturating_sub(filtered_urls);
-                        let thin_pct = if pages_discovered > 0 {
-                            (thin_md as f64 / pages_discovered as f64) * 100.0
+                        let thin_pct = if pages_target > 0 {
+                            (thin_md as f64 / pages_target as f64) * 100.0
                         } else {
                             0.0
                         };

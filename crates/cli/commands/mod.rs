@@ -6,6 +6,7 @@ pub mod doctor;
 pub mod embed;
 pub mod extract;
 pub mod map;
+pub mod probe;
 pub mod scrape;
 pub mod search;
 pub mod status;

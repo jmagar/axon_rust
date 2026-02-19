@@ -55,7 +55,7 @@ axon <url> [options]
 |-----------|------|-------------|---------|
 | `url` | string | URL to scrape (required) | - |
 | `--format` | string | Output format(s): `markdown`, `html`, `rawHtml`, `links`, `screenshot` | `markdown` |
-| `--only-main-content` | boolean | Extract only main content (removes navigation, footers) | `false` |
+| `--only-main-content` | boolean | Extract only main content (removes navigation, footers) | `true` |
 | `--wait-for` | number | Wait time for JavaScript rendering (milliseconds) | `0` |
 | `--screenshot` | boolean | Capture page screenshot | `false` |
 | `--include-tags` | string | Comma-separated HTML tags to include | all |

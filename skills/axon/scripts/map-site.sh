@@ -10,6 +10,7 @@ ENV_FILE="$HOME/claude-homelab/.env"
 if [[ -f "$ENV_FILE" ]]; then
     # Source .env file and export variables
     set -a
+    # shellcheck source=/dev/null
     source "$ENV_FILE"
     set +a
 else
@@ -101,6 +102,11 @@ main() {
         echo "Mapping URLs from: $url" >&2
     fi
 
+    # Forward any additional Axon map flags.
+    if [[ ${#passthrough_args[@]} -gt 0 ]]; then
+        cmd+=("${passthrough_args[@]}")
+    fi
+
     # Execute command
     "${cmd[@]}"
 
@@ -111,7 +117,3 @@ main() {
 }
 
 main "$@"
-    # Forward any additional Axon map flags.
-    if [[ ${#passthrough_args[@]} -gt 0 ]]; then
-        cmd+=("${passthrough_args[@]}")
-    fi

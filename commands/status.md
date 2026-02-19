@@ -9,7 +9,7 @@ allowed-tools: Bash(axon *)
 Execute the Axon status command with the provided arguments:
 
 ```bash
-axon status $ARGUMENTS
+axon status $ARGUMENTS --json
 ```
 
 ## Instructions
@@ -19,7 +19,7 @@ axon status $ARGUMENTS
    - **Specific job**: Detailed status for single job ID
    - **All jobs**: Summary of all running/completed jobs
 3. **Extract status information**:
-   - Job ID and type (crawl/batch/extract)
+   - Job ID and type (crawl/batch/extract/embed)
    - Current status (queued/running/completed/failed)
    - Progress percentage
    - Completed items / Total items
@@ -36,7 +36,7 @@ axon status $ARGUMENTS
 The command returns JSON containing:
 - `jobs`: Array of job status objects:
   - `job_id`: Job identifier
-  - `type`: Job type (crawl/batch/extract)
+  - `type`: Job type (crawl/batch/extract/embed)
   - `status`: Current status
   - `progress`: Completion percentage
   - `completed`: Items completed

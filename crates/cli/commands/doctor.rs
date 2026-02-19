@@ -1,3 +1,4 @@
+use crate::axon_cli::crates::cli::commands::probe::{probe_http, with_path};
 use crate::axon_cli::crates::core::config::Config;
 use crate::axon_cli::crates::core::content::redact_url;
 use crate::axon_cli::crates::core::health::{
@@ -13,40 +14,6 @@ use serde_json::Value;
 use std::env;
 use std::error::Error;
 use std::time::Duration;
-
-fn with_path(base: &str, path: &str) -> String {
-    let trimmed = base.trim_end_matches('/');
-    if path.starts_with('/') {
-        format!("{trimmed}{path}")
-    } else {
-        format!("{trimmed}/{path}")
-    }
-}
-
-async fn probe_http(url: &str, paths: &[&str]) -> (bool, Option<String>) {
-    if url.trim().is_empty() {
-        return (false, Some("not configured".to_string()));
-    }
-
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(4))
-        .build()
-    {
-        Ok(c) => c,
-        Err(err) => return (false, Some(err.to_string())),
-    };
-
-    let mut last_error = None;
-    for path in paths {
-        let endpoint = with_path(url, path);
-        match client.get(endpoint).send().await {
-            Ok(resp) => return (true, Some(format!("http {}", resp.status().as_u16()))),
-            Err(err) => last_error = Some(err.to_string()),
-        }
-    }
-
-    (false, last_error)
-}
 
 async fn probe_tei_info(url: &str) -> (Option<Value>, Option<String>) {
     if url.trim().is_empty() {
@@ -145,6 +112,13 @@ fn openai_state(cfg: &Config, openai_model: &str) -> (&'static str, bool) {
     }
 }
 
+// NOTE: build_doctor_report and run_doctor share nearly identical probe logic.
+// This duplication is intentional: build_doctor_report returns a structured JSON Value
+// for programmatic consumers (e.g. tests, JSON mode), while run_doctor handles
+// human-readable terminal output with ANSI formatting. Merging them would require
+// threading an output-mode enum through every branch, reducing readability for
+// marginal gain. If the probe logic grows significantly, extract a shared
+// `probe_all_services()` helper that both functions call.
 pub async fn build_doctor_report(cfg: &Config) -> Result<Value, Box<dyn Error>> {
     let webdriver_url = webdriver_url_from_env();
     let diagnostics = browser_diagnostics_pattern();

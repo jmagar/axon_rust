@@ -31,7 +31,7 @@ async fn fetch_html_resilient(
     let normalized = normalize_url(url);
     validate_url(&normalized)?;
 
-    let retries = cfg.fetch_retries.max(1);
+    let retries = cfg.fetch_retries;
     let mut attempt = 0usize;
     loop {
         let response = client.get(&normalized).send().await;

@@ -1,6 +1,10 @@
 use crate::axon_cli::crates::core::config::{Config, RenderMode};
-use crate::axon_cli::crates::core::content::{to_markdown, url_to_filename};
+use crate::axon_cli::crates::core::content::{
+    canonicalize_url, extract_loc_values, extract_robots_sitemaps, is_excluded_url_path,
+    to_markdown, url_to_filename,
+};
 use crate::axon_cli::crates::core::health::redis_healthy;
+use crate::axon_cli::crates::core::http::validate_url;
 use crate::axon_cli::crates::core::logging::{log_done, log_info, log_warn};
 use crate::axon_cli::crates::crawl::engine::{
     append_sitemap_backfill, run_crawl_once, CrawlSummary, SitemapBackfillStats,
@@ -8,7 +12,7 @@ use crate::axon_cli::crates::crawl::engine::{
 use crate::axon_cli::crates::jobs::batch_jobs::{apply_queue_injection, InjectionCandidate};
 use crate::axon_cli::crates::jobs::common::{
     claim_next_pending, claim_pending_by_id, enqueue_job, make_pool, mark_job_failed,
-    open_amqp_channel, JobTable,
+    open_amqp_channel, stale_watchdog_confirmed, stale_watchdog_payload, JobTable,
 };
 use crate::axon_cli::crates::jobs::embed_jobs::start_embed_job;
 use chrono::{DateTime, Utc};
@@ -256,85 +260,6 @@ struct RobotsBackfillStats {
     filtered_existing: usize,
 }
 
-fn normalize_prefix(prefix: &str) -> Option<String> {
-    let trimmed = prefix.trim();
-    if trimmed.is_empty() || trimmed == "/" {
-        return None;
-    }
-    let mut value = if trimmed.starts_with('/') {
-        trimmed.to_string()
-    } else {
-        format!("/{trimmed}")
-    };
-    if value.len() > 1 && value.ends_with('/') {
-        value.truncate(value.len() - 1);
-    }
-    Some(value)
-}
-
-fn is_excluded_url_path(url: &str, prefixes: &[String]) -> bool {
-    let Ok(parsed) = Url::parse(url) else {
-        return false;
-    };
-    let path = parsed.path();
-    prefixes
-        .iter()
-        .filter_map(|p| normalize_prefix(p))
-        .any(|p| path == p || (path.starts_with(&p) && path.as_bytes().get(p.len()) == Some(&b'/')))
-}
-
-fn canonicalize_url(url: &str) -> Option<String> {
-    let mut parsed = Url::parse(url).ok()?;
-    parsed.set_fragment(None);
-    let path = parsed.path().to_string();
-    if path.len() > 1 && path.ends_with('/') {
-        parsed.set_path(path.trim_end_matches('/'));
-    }
-    Some(parsed.to_string())
-}
-
-fn extract_loc_values(xml: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let lower = xml.to_ascii_lowercase();
-    let mut cursor = 0usize;
-    while let Some(start) = lower[cursor..].find("<loc>") {
-        let start_idx = cursor + start + "<loc>".len();
-        let Some(end_rel) = lower[start_idx..].find("</loc>") else {
-            break;
-        };
-        let end_idx = start_idx + end_rel;
-        let value = xml[start_idx..end_idx].trim();
-        if !value.is_empty() {
-            out.push(value.replace("&amp;", "&"));
-        }
-        cursor = end_idx + "</loc>".len();
-    }
-    out
-}
-
-fn extract_robots_sitemaps(robots_txt: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in robots_txt.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        if !key.trim().eq_ignore_ascii_case("sitemap") {
-            continue;
-        }
-        let url = value.trim();
-        if !url.is_empty() {
-            out.push(url.to_string());
-        }
-    }
-    out.sort();
-    out.dedup();
-    out
-}
-
 async fn fetch_text_with_retry(
     client: &reqwest::Client,
     url: &str,
@@ -408,6 +333,10 @@ async fn discover_sitemap_urls_with_robots(
         if !seen_sitemaps.insert(canonical_sitemap.clone()) {
             continue;
         }
+        if validate_url(&canonical_sitemap).is_err() {
+            stats.failed_fetches += 1;
+            continue;
+        }
         let Some(xml) = fetch_text_with_retry(
             &client,
             &canonical_sitemap,
@@ -474,8 +403,9 @@ async fn append_robots_backfill(
     output_dir: &Path,
     seen_urls: &HashSet<String>,
     summary: &mut CrawlSummary,
-) -> Result<RobotsBackfillStats, Box<dyn Error>> {
+) -> Result<(RobotsBackfillStats, RobotsDiscoveryStats), Box<dyn Error>> {
     let discovery = discover_sitemap_urls_with_robots(cfg, start_url).await?;
+    let discovery_stats = discovery.stats.clone();
     let manifest_path = output_dir.join("manifest.jsonl");
     let already_written = read_manifest_urls(&manifest_path).await?;
     let candidates: Vec<String> = discovery
@@ -485,11 +415,14 @@ async fn append_robots_backfill(
         .cloned()
         .collect();
     if candidates.is_empty() {
-        return Ok(RobotsBackfillStats {
-            discovered_urls: discovery.urls.len(),
-            filtered_existing: discovery.urls.len(),
-            ..RobotsBackfillStats::default()
-        });
+        return Ok((
+            RobotsBackfillStats {
+                discovered_urls: discovery.urls.len(),
+                filtered_existing: discovery.urls.len(),
+                ..RobotsBackfillStats::default()
+            },
+            discovery_stats,
+        ));
     }
 
     let markdown_dir = output_dir.join("markdown");
@@ -541,7 +474,7 @@ async fn append_robots_backfill(
         stats.written += 1;
     }
     manifest.flush().await?;
-    Ok(stats)
+    Ok((stats, discovery_stats))
 }
 
 async fn latest_completed_result_for_url(
@@ -979,7 +912,7 @@ async fn process_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), Box<dy
                 &mut final_summary,
             )
             .await?;
-            robots_backfill_stats = append_robots_backfill(
+            (robots_backfill_stats, robots_discovery_stats) = append_robots_backfill(
                 &job_cfg,
                 &url,
                 &job_cfg.output_dir,
@@ -987,9 +920,6 @@ async fn process_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), Box<dy
                 &mut final_summary,
             )
             .await?;
-            robots_discovery_stats = discover_sitemap_urls_with_robots(&job_cfg, &url)
-                .await?
-                .stats;
         }
 
         if job_cfg.embed {
@@ -1107,57 +1037,6 @@ async fn process_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), Box<dy
     Ok(())
 }
 
-fn stale_watchdog_payload(
-    mut result_json: serde_json::Value,
-    observed_updated_at: DateTime<Utc>,
-) -> serde_json::Value {
-    if !result_json.is_object() {
-        result_json = serde_json::json!({});
-    }
-    if let Some(obj) = result_json.as_object_mut() {
-        obj.insert(
-            "_watchdog".to_string(),
-            serde_json::json!({
-                "first_seen_stale_at": Utc::now().to_rfc3339(),
-                "observed_updated_at": observed_updated_at.to_rfc3339(),
-            }),
-        );
-    }
-    result_json
-}
-
-fn stale_watchdog_confirmed(
-    result_json: &serde_json::Value,
-    observed_updated_at: DateTime<Utc>,
-    confirm_secs: i64,
-) -> bool {
-    let Some(watchdog) = result_json.get("_watchdog") else {
-        return false;
-    };
-    let Some(observed) = watchdog
-        .get("observed_updated_at")
-        .and_then(|value| value.as_str())
-    else {
-        return false;
-    };
-    if observed != observed_updated_at.to_rfc3339() {
-        return false;
-    }
-    let Some(first_seen) = watchdog
-        .get("first_seen_stale_at")
-        .and_then(|value| value.as_str())
-    else {
-        return false;
-    };
-    let Ok(first_seen_at) = DateTime::parse_from_rfc3339(first_seen) else {
-        return false;
-    };
-    let elapsed = Utc::now()
-        .signed_duration_since(first_seen_at.with_timezone(&Utc))
-        .num_seconds();
-    elapsed >= confirm_secs
-}
-
 async fn reclaim_stale_running_jobs(
     pool: &PgPool,
     lane: usize,
@@ -1178,8 +1057,10 @@ async fn reclaim_stale_running_jobs(
     .fetch_all(pool)
     .await?;
 
-    let mut stats = CrawlWatchdogSweepStats::default();
-    stats.stale_candidates = stale_jobs.len() as u64;
+    let mut stats = CrawlWatchdogSweepStats {
+        stale_candidates: stale_jobs.len() as u64,
+        ..Default::default()
+    };
     for job in stale_jobs {
         let idle_seconds = Utc::now()
             .signed_duration_since(job.updated_at)
@@ -1569,55 +1450,61 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn crawl_worker_e2e_processes_pending_job_to_terminal_status(
     ) -> Result<(), Box<dyn Error>> {
-        let Some(pg_url) = pg_url() else {
-            return Ok(());
-        };
-        let cfg = test_config(&pg_url);
-        let url = format!("https://example.com/crawl-worker/{}", Uuid::new_v4());
-        let id = start_crawl_job(&cfg, &url).await?;
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let Some(pg_url) = pg_url() else {
+                    return Ok(());
+                };
+                let cfg = test_config(&pg_url);
+                let url = format!("https://example.com/crawl-worker/{}", Uuid::new_v4());
+                let id = start_crawl_job(&cfg, &url).await?;
 
-        let worker_cfg = cfg.clone();
-        let worker = tokio::task::spawn_local(async move {
-            let _ = run_worker(&worker_cfg).await;
-        });
+                let worker_cfg = cfg.clone();
+                let worker = tokio::task::spawn_local(async move {
+                    let _ = run_worker(&worker_cfg).await;
+                });
 
-        let pool = make_pool(&cfg).await?;
-        let wait = timeout(TokioDuration::from_secs(8), async {
-            loop {
-                let status: Option<String> =
-                    sqlx::query_scalar("SELECT status FROM axon_crawl_jobs WHERE id=$1")
+                let pool = make_pool(&cfg).await?;
+                let wait = timeout(TokioDuration::from_secs(8), async {
+                    loop {
+                        let status: Option<String> =
+                            sqlx::query_scalar("SELECT status FROM axon_crawl_jobs WHERE id=$1")
+                                .bind(id)
+                                .fetch_optional(&pool)
+                                .await
+                                .ok()
+                                .flatten();
+                        if matches!(status.as_deref(), Some("completed" | "failed" | "canceled")) {
+                            break;
+                        }
+                        sleep(TokioDuration::from_millis(100)).await;
+                    }
+                })
+                .await;
+                worker.abort();
+                let _ = worker.await;
+                assert!(
+                    wait.is_ok(),
+                    "crawl worker did not reach terminal state in time"
+                );
+
+                let status: String =
+                    sqlx::query_scalar("SELECT status FROM axon_crawl_jobs WHERE id = $1")
                         .bind(id)
-                        .fetch_optional(&pool)
-                        .await
-                        .ok()
-                        .flatten();
-                if matches!(status.as_deref(), Some("completed" | "failed" | "canceled")) {
-                    break;
-                }
-                sleep(TokioDuration::from_millis(100)).await;
-            }
-        })
-        .await;
-        worker.abort();
-        let _ = worker.await;
-        assert!(
-            wait.is_ok(),
-            "crawl worker did not reach terminal state in time"
-        );
+                        .fetch_one(&pool)
+                        .await?;
+                assert!(matches!(
+                    status.as_str(),
+                    "completed" | "failed" | "canceled"
+                ));
 
-        let status: String = sqlx::query_scalar("SELECT status FROM axon_crawl_jobs WHERE id = $1")
-            .bind(id)
-            .fetch_one(&pool)
-            .await?;
-        assert!(matches!(
-            status.as_str(),
-            "completed" | "failed" | "canceled"
-        ));
-
-        let _ = sqlx::query("DELETE FROM axon_crawl_jobs WHERE id = $1")
-            .bind(id)
-            .execute(&pool)
-            .await;
-        Ok(())
+                let _ = sqlx::query("DELETE FROM axon_crawl_jobs WHERE id = $1")
+                    .bind(id)
+                    .execute(&pool)
+                    .await;
+                Ok::<(), Box<dyn Error>>(())
+            })
+            .await
     }
 }

@@ -500,7 +500,7 @@ struct NormalizedExcludePrefixes {
 }
 
 fn normalize_exclude_prefixes(input: Vec<String>) -> NormalizedExcludePrefixes {
-    let disable_by_empty = input.len() == 1 && matches!(input[0].trim(), "" | "/");
+    let disable_by_empty = input.iter().any(|v| matches!(v.trim(), "" | "/"));
     let disable_by_none = input.iter().any(|v| v.trim().eq_ignore_ascii_case("none"));
     if disable_by_none {
         let ignored: Vec<&str> = input

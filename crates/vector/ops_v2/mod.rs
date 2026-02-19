@@ -8,7 +8,7 @@ pub mod ranking;
 pub mod stats;
 pub mod tei;
 
-pub use crate::axon_cli::crates::vector::ops_legacy::{EmbedProgress, EmbedSummary};
+pub use tei::{EmbedProgress, EmbedSummary};
 
 pub fn chunk_text(text: &str) -> Vec<String> {
     input::chunk_text(text)

@@ -10,18 +10,17 @@ set -euo pipefail
 # ============================================================================
 
 # Load credentials from .env file
-if [[ -f ~/claude-homelab/.env ]]; then
-    source ~/claude-homelab/.env
+if [[ -f ~/.claude-homelab/.env ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source ~/.claude-homelab/.env
+    set +a
 else
-    echo "ERROR: .env file not found at ~/claude-homelab/.env" >&2
+    echo "ERROR: .env file not found at ~/.claude-homelab/.env" >&2
     exit 1
 fi
 
-# Validate required credentials
-if [[ -z "${FIRECRAWL_API_KEY:-}" ]]; then
-    echo "ERROR: FIRECRAWL_API_KEY must be set in .env" >&2
-    exit 1
-fi
+# FIRECRAWL_API_KEY is optional for self-hosted setups; only passed if non-empty
 
 # Configuration
 OUTPUT_DIR="/tmp/axon-batch-processing"
@@ -95,6 +94,15 @@ while [[ $ATTEMPT -lt $MAX_ATTEMPTS ]]; do
         echo "$STATUS_OUTPUT" | jq '.' > "$OUTPUT_DIR/batch-results.json"
         echo "Results saved to: $OUTPUT_DIR/batch-results.json"
         break
+    fi
+
+    # Check if failed
+    if [[ "$STATUS" == "failed" ]]; then
+        echo "❌ Batch job failed!"
+        ERROR_MSG=$(echo "$STATUS_OUTPUT" | jq -r '.error // "Unknown error"')
+        echo "Error: $ERROR_MSG"
+        echo "$STATUS_OUTPUT" | jq '.' > "$OUTPUT_DIR/batch-results.json"
+        exit 1
     fi
 
     # Wait before next check

@@ -280,8 +280,7 @@ axon batch url1 url2 --wait --poll-interval 10
 ```json
 {
   "success": true,
-  "id": "batch-xyz789",
-  "url": "https://api.firecrawl.dev/v1/batch/scrape/batch-xyz789"
+  "id": "batch-xyz789"
 }
 ```
 

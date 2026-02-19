@@ -31,7 +31,9 @@ axon batch $ARGUMENTS
 
 ## Expected Output
 
-The command returns JSON containing:
+By default, output is human-readable text. Add `--json` for machine-readable output.
+
+With `--json`, the command returns JSON containing:
 - `id`: Batch job identifier
 - `status`: Current status (queued/running/completed/failed)
 - `total`: Total URLs in batch

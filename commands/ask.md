@@ -32,6 +32,8 @@ The command returns a final answer (non-streaming) plus timing data.
 
 ## Environment Knobs
 
+All context tuning is done via environment variables — there is no `--max-context` CLI flag.
+
 | Variable | Default | Purpose |
 |---|---|---|
 | `AXON_ASK_CANDIDATE_LIMIT` | `64` | Search candidate pool size |

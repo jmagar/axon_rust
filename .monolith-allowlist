@@ -4,3 +4,21 @@
 #
 # Example:
 # crates/legacy/massive_module.rs
+
+# Pre-existing large files — tracked for future refactoring (2026-02-19)
+crates/cli/commands/crawl.rs
+crates/cli/commands/doctor.rs
+crates/cli/commands/status.rs
+crates/core/config.rs
+crates/core/content.rs
+crates/crawl/engine.rs
+crates/jobs/batch_jobs.rs
+crates/jobs/common.rs
+crates/jobs/crawl_jobs.rs
+crates/vector/ops.rs
+crates/vector/ops_v2/commands.rs
+crates/vector/ops_v2/qdrant.rs
+crates/vector/ops_v2/stats.rs
+crates/vector/ops_v2/tei.rs
+scripts/qdrant-quality.py
+skills/axon/examples/monitor-website.sh

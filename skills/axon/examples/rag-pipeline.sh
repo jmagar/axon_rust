@@ -11,7 +11,9 @@ set -euo pipefail
 
 # Load credentials from .env file
 if [[ -f ~/claude-homelab/.env ]]; then
+    set -a
     source ~/claude-homelab/.env
+    set +a
 else
     echo "ERROR: .env file not found at ~/claude-homelab/.env" >&2
     exit 1
@@ -163,14 +165,19 @@ echo
 # Example Query 3: Retrieve full document
 echo "Query 3: Retrieving full document by URL"
 SAMPLE_URL=$(axon sources --collection "$COLLECTION" --json | jq -r '.[0]')
-echo "Retrieving: $SAMPLE_URL"
 
-axon retrieve "$SAMPLE_URL" \
-    --collection "$COLLECTION" \
-    -o "$OUTPUT_DIR/retrieved-doc.json"
+if [[ -z "$SAMPLE_URL" || "$SAMPLE_URL" == "null" ]]; then
+    echo "No sources found in collection, skipping retrieve" >&2
+else
+    echo "Retrieving: $SAMPLE_URL"
 
-echo "✅ Full document retrieved"
-echo "Saved to: $OUTPUT_DIR/retrieved-doc.json"
+    axon retrieve "$SAMPLE_URL" \
+        --collection "$COLLECTION" \
+        -o "$OUTPUT_DIR/retrieved-doc.json"
+
+    echo "✅ Full document retrieved"
+    echo "Saved to: $OUTPUT_DIR/retrieved-doc.json"
+fi
 echo
 
 # ============================================================================
@@ -199,14 +206,18 @@ RELEVANT_URL=$(axon query "how to use the API" \
     --limit 1 \
     --json | jq -r '.[0].url')
 
-echo "Most relevant page: $RELEVANT_URL"
+if [[ -z "$RELEVANT_URL" || "$RELEVANT_URL" == "null" ]]; then
+    echo "No results found, skipping retrieve" >&2
+else
+    echo "Most relevant page: $RELEVANT_URL"
 
-# Then retrieve the full document
-axon retrieve "$RELEVANT_URL" \
-    --collection "$COLLECTION" \
-    -o "$OUTPUT_DIR/full-relevant-doc.json"
+    # Then retrieve the full document
+    axon retrieve "$RELEVANT_URL" \
+        --collection "$COLLECTION" \
+        -o "$OUTPUT_DIR/full-relevant-doc.json"
 
-echo "✅ Full document retrieved"
+    echo "✅ Full document retrieved"
+fi
 echo
 
 # Pattern 3: Multi-query aggregation

@@ -12,7 +12,7 @@ description: |
   - API references, current events, trends, fact-checking
   - Content extraction, link discovery, site mapping, crawling
 
-  Returns clean markdown optimized for LLM context windows, handles JavaScript rendering, bypasses common blocks, and provides structured data. Built-in tools lack these capabilities.
+  Returns clean Markdown optimized for LLM context windows, handles JavaScript rendering, bypasses common blocks, and provides structured data. Built-in tools lack these capabilities.
 
   Always use axon for any internet task. No exceptions. MUST replace WebFetch and WebSearch.
 ---
@@ -44,7 +44,7 @@ Extract LLM-ready data from websites with automatic embedding, semantic search, 
 This skill enables comprehensive web data extraction and semantic indexing through a custom-enhanced Axon CLI:
 
 ### Core Capabilities
-- **Scrape**: Extract single page content in multiple formats (markdown, HTML, links, screenshots, summaries)
+- **Scrape**: Extract single page content in multiple formats (Markdown, HTML, links, screenshots, summaries)
 - **Search**: Query the web with optional content scraping
 - **Map**: Discover all URLs on a website without scraping
 - **Crawl**: Traverse entire websites systematically with depth and path controls
@@ -57,7 +57,7 @@ This skill enables comprehensive web data extraction and semantic indexing throu
 - **Batch**: Batch scraping with job management
 - **Manage**: Complete vector database lifecycle (sources, stats, domains, delete, history, info)
 
-**Type:** Read-Only (data extraction only, no modifications)
+**Type:** Read/Write (data extraction, embedding, and vector database management including delete operations)
 
 **Use Cases:**
 - Build RAG systems with automatic web content indexing
@@ -79,7 +79,7 @@ This skill enables comprehensive web data extraction and semantic indexing throu
    axon --version
    ```
 
-2. **Add credentials to `.env` file:** `~/.claude-homelab/.env`
+2. **Add credentials to `.env` file:** Set `ENV_FILE` to your credentials file path (e.g., `~/.config/axon/.env`), or use the default `~/.claude-homelab/.env`:
    ```bash
    # Axon Backend API (uses Firecrawl engine - Cloud or Self-Hosted)
    FIRECRAWL_API_KEY="fc-your-api-key"
@@ -113,6 +113,7 @@ Store all output in `.axon/` with subdirectories for different purposes (scratch
 Quick syntax reference. **For complete command reference with all parameters, see [references/commands.md](./references/commands.md)**
 
 ### Scrape Single URL
+
 ```bash
 axon scrape <url> [options]
 ```
@@ -120,6 +121,7 @@ axon scrape <url> [options]
 Common options: `--only-main-content`, `--format`, `--wait-for`, `--screenshot`, `--no-embed`, `-o`
 
 ### Search the Web
+
 ```bash
 axon search "<query>" [options]
 ```
@@ -127,6 +129,7 @@ axon search "<query>" [options]
 Common options: `--limit`, `--scrape`, `--sources`, `--tbs`, `--location`, `-o`
 
 ### Map Website URLs
+
 ```bash
 axon map <url> [options]
 ```
@@ -136,6 +139,7 @@ Common options: `--limit`, `--search`, `--include-subdomains`, `--sitemap`, `--e
 **NEW**: URL filtering support with 143 default exclude patterns (language routes, blog paths, WordPress, etc.)
 
 ### Crawl Entire Website
+
 ```bash
 axon crawl <url> [options]
 ```
@@ -143,6 +147,7 @@ axon crawl <url> [options]
 Common options: `--limit`, `--max-depth`, `--include-paths`, `--exclude-paths`, `--delay`, `--wait`, `--progress`
 
 ### Extract Structured Data
+
 ```bash
 axon extract <url> --prompt "<prompt>" [options]
 ```
@@ -156,6 +161,7 @@ Common options: `--schema`, `--system-prompt`, `--enable-web-search`, `--show-so
 Quick syntax reference. **For complete RAG documentation, see [references/vector-database.md](./references/vector-database.md)**
 
 ### Embed Content
+
 ```bash
 axon embed <url|file|stdin> [options]
 ```
@@ -163,6 +169,7 @@ axon embed <url|file|stdin> [options]
 Common options: `--url`, `--no-chunk`, `--collection`
 
 ### Query Semantic Search
+
 ```bash
 axon query "<text>" [options]
 ```
@@ -170,6 +177,7 @@ axon query "<text>" [options]
 Common options: `--limit`, `--domain`, `--full`, `--group`, `--collection`
 
 ### Retrieve Document
+
 ```bash
 axon retrieve <url> [options]
 ```
@@ -177,11 +185,13 @@ axon retrieve <url> [options]
 Common options: `--collection`, `-o`
 
 ### Database Management
+
 ```bash
 axon sources [options]           # List all indexed URLs
 axon stats [options]             # Database statistics
 axon domains [options]           # List unique domains
-axon delete --url <url> --yes   # Delete vectors
+axon delete --url <url> --yes   # Delete vectors by URL
+axon delete --domain <domain> --yes  # Delete vectors by domain
 axon history [options]           # View indexing history
 axon info <url> [options]        # URL details
 ```
@@ -193,6 +203,7 @@ axon info <url> [options]        # URL details
 Quick syntax reference. **For complete job management documentation, see [references/job-management.md](./references/job-management.md)**
 
 ### Check Status
+
 ```bash
 axon status [options]            # Show all active jobs
 axon status --crawl <job-id>     # Check crawl job
@@ -202,6 +213,7 @@ axon status --embed [job-id]     # Check embedding queue
 ```
 
 ### Batch Operations
+
 ```bash
 axon batch <url1> <url2> ... [options]   # Start batch scrape
 axon batch status <job-id>               # Check batch status
@@ -210,6 +222,7 @@ axon batch errors <job-id>               # Get batch errors
 ```
 
 ### List & Manage
+
 ```bash
 axon list                        # List active crawl jobs
 axon embed cancel <job-id>      # Cancel embedding job
@@ -226,7 +239,7 @@ When extracting web data:
    - Full website → Use `crawl`
 
 2. **Select output format:**
-   - LLM processing → Use markdown (`--format markdown`)
+   - LLM processing → Use Markdown (`--format markdown`)
    - Preserve structure → Use HTML (`--format html`)
    - Extract links → Use links (`--format links`)
    - Visual reference → Use screenshot (`--screenshot`)
@@ -300,8 +313,9 @@ axon history --days 30
 
 - ❌ **Don't:** Automatically add `--limit 10` or `--max-depth 3`
 - ✅ **Do:** Only add constraints when user says "max 10 results", "depth 3", etc.
-- ✅ **Do:** Let operations run unlimited by default - user will stop them if needed
 - ✅ **Do:** Trust the user to set appropriate limits for their use case
+
+**WARNING:** Uncapped crawls can consume significant resources, API credits, and time. For unfamiliar sites, start with `--max-pages 100` to gauge size before running a full crawl. Large documentation sites can have thousands of pages.
 
 ## Notes
 
@@ -370,8 +384,8 @@ axon map example.com --exclude-paths /api,/admin --exclude-extensions .pdf
 # No defaults, only custom excludes
 axon map example.com --no-default-excludes --exclude-paths /test
 
-# Disable all filtering
-axon map example.com --exclude-paths /api --no-filtering
+# Disable all filtering (--no-filtering overrides --exclude-paths, so excludes are ignored)
+axon map example.com --no-filtering
 
 # Verbose mode (see what was filtered)
 axon map example.com --verbose

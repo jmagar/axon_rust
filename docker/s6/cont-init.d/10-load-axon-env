@@ -15,11 +15,21 @@ else
 
     line="${line#export }"
     line="${line%$'\r'}"
+
+    # Skip lines without '=' (bare variable names)
+    [[ "$line" != *=* ]] && continue
+
     key="${line%%=*}"
     value="${line#*=}"
 
     key="$(echo "$key" | tr -d '[:space:]')"
     [[ -z "$key" ]] && continue
+
+    # Validate key is a valid shell identifier
+    if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "[cont-init] WARNING: skipping invalid key '$key'" >&2
+      continue
+    fi
 
     if [[ "$value" != \"* && "$value" != \'* ]]; then
       value="${value%%[[:space:]]#*}"
@@ -41,6 +51,24 @@ else
 fi
 
 output_dir="${AXON_OUTPUT_DIR:-/app/.cache/axon-rust/output}"
-mkdir -p "$output_dir"
-chown -R axon:axon "$output_dir"
-chmod -R u+rwX,g+rwX "$output_dir"
+
+# Validate output_dir is non-empty and under an expected prefix
+if [[ -z "$output_dir" ]]; then
+  echo "[cont-init] ERROR: output_dir is empty, refusing to chown/chmod" >&2
+  exit 1
+fi
+
+# Resolve to absolute path and ensure it's under a safe prefix
+resolved_dir="$(realpath -m "$output_dir")"
+case "$resolved_dir" in
+  /app/*|/home/*|/data/*|/tmp/*)
+    ;;
+  *)
+    echo "[cont-init] ERROR: output_dir '$resolved_dir' is not under /app/, /home/, /data/, or /tmp/" >&2
+    exit 1
+    ;;
+esac
+
+mkdir -p "$resolved_dir"
+chown -R axon:axon "$resolved_dir"
+chmod -R u+rwX,g+rwX "$resolved_dir"

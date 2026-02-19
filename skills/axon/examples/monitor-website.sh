@@ -10,18 +10,17 @@ set -euo pipefail
 # ============================================================================
 
 # Load credentials from .env file
-if [[ -f ~/claude-homelab/.env ]]; then
-    source ~/claude-homelab/.env
+if [[ -f ~/.claude-homelab/.env ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source ~/.claude-homelab/.env
+    set +a
 else
-    echo "ERROR: .env file not found at ~/claude-homelab/.env" >&2
+    echo "ERROR: .env file not found at ~/.claude-homelab/.env" >&2
     exit 1
 fi
 
-# Validate required credentials
-if [[ -z "${FIRECRAWL_API_KEY:-}" ]]; then
-    echo "ERROR: FIRECRAWL_API_KEY must be set in .env" >&2
-    exit 1
-fi
+# FIRECRAWL_API_KEY is optional for self-hosted setups; only passed if non-empty
 
 # Configuration
 MONITOR_DIR="/tmp/axon-monitoring"
@@ -221,7 +220,7 @@ cat > "$MONITOR_DIR/monitor-cron.sh" <<'EOF'
 set -euo pipefail
 
 # Configuration
-source ~/claude-homelab/.env
+source ~/.claude-homelab/.env
 MONITOR_DIR="/tmp/axon-monitoring"
 STATE_DIR="$MONITOR_DIR/state"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
@@ -306,12 +305,12 @@ if [[ $CHANGES_DETECTED -gt 0 ]]; then
         echo "Gotify configured, sending notification..."
 
         # Build notification message
-        MESSAGE="Website monitoring detected $CHANGES_DETECTED page(s) with changes:\n"
+        MESSAGE="Website monitoring detected $CHANGES_DETECTED page(s) with changes:"
         for url in "${MONITORED_PAGES[@]}"; do
             FILENAME=$(echo "$url" | sed 's|https://||' | sed 's|/|_|g')
             DIFF_FILE=$(find "$DIFF_DIR" -name "${FILENAME}.*.diff" -type f | tail -n 1)
             if [[ -n "$DIFF_FILE" ]]; then
-                MESSAGE+="\n- $url"
+                MESSAGE+=$'\n'"- $url"
             fi
         done
 

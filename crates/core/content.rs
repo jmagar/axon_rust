@@ -114,20 +114,80 @@ pub fn extract_links(html: &str, limit: usize) -> Vec<String> {
 
 pub fn extract_loc_values(xml: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut pos = 0usize;
-    while let Some(start_rel) = xml[pos..].find("<loc>") {
-        let start = pos + start_rel + 5;
-        if let Some(end_rel) = xml[start..].find("</loc>") {
-            let end = start + end_rel;
-            let value = xml[start..end].trim();
-            if !value.is_empty() {
-                out.push(value.to_string());
-            }
-            pos = end + 6;
-        } else {
+    let lower = xml.to_ascii_lowercase();
+    let mut cursor = 0usize;
+    while let Some(start) = lower[cursor..].find("<loc>") {
+        let start_idx = cursor + start + "<loc>".len();
+        let Some(end_rel) = lower[start_idx..].find("</loc>") else {
             break;
+        };
+        let end_idx = start_idx + end_rel;
+        let value = xml[start_idx..end_idx].trim();
+        if !value.is_empty() {
+            out.push(value.replace("&amp;", "&"));
+        }
+        cursor = end_idx + "</loc>".len();
+    }
+    out
+}
+
+pub fn normalize_prefix(prefix: &str) -> Option<String> {
+    let trimmed = prefix.trim();
+    if trimmed.is_empty() || trimmed == "/" {
+        return None;
+    }
+    let mut value = if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    };
+    if value.len() > 1 && value.ends_with('/') {
+        value.truncate(value.len() - 1);
+    }
+    Some(value)
+}
+
+pub fn is_excluded_url_path(url: &str, prefixes: &[String]) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    let path = parsed.path();
+    prefixes
+        .iter()
+        .filter_map(|p| normalize_prefix(p))
+        .any(|p| path == p || (path.starts_with(&p) && path.as_bytes().get(p.len()) == Some(&b'/')))
+}
+
+pub fn canonicalize_url(url: &str) -> Option<String> {
+    let mut parsed = Url::parse(url).ok()?;
+    parsed.set_fragment(None);
+    let path = parsed.path().to_string();
+    if path.len() > 1 && path.ends_with('/') {
+        parsed.set_path(path.trim_end_matches('/'));
+    }
+    Some(parsed.to_string())
+}
+
+pub fn extract_robots_sitemaps(robots_txt: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in robots_txt.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !key.trim().eq_ignore_ascii_case("sitemap") {
+            continue;
+        }
+        let url = value.trim();
+        if !url.is_empty() {
+            out.push(url.to_string());
         }
     }
+    out.sort();
+    out.dedup();
     out
 }
 
@@ -355,13 +415,13 @@ fn extract_attr(tag: &str, attr_name: &str) -> Option<String> {
         format!("{} = '", attr_name),
     ];
 
-    for pattern in patterns {
+    for pattern in &patterns {
         if let Some(idx) = tag.to_ascii_lowercase().find(&pattern.to_ascii_lowercase()) {
+            let quote_char = pattern.chars().last().unwrap_or('"');
             let start = idx + pattern.len();
             let rest = &tag[start..];
-            let quote = rest.chars().next()?;
-            let end = rest[1..].find(quote)? + 1;
-            return Some(rest[1..end].trim().to_string());
+            let end = rest.find(quote_char)?;
+            return Some(rest[..end].trim().to_string());
         }
     }
 
@@ -626,7 +686,7 @@ mod tests {
     fn test_default_engine_extracts_json_ld() {
         let html = r#"
             <html><head>
-            <script type=\"application/ld+json\">{"@type":"Article","headline":"Hello"}</script>
+            <script type="application/ld+json">{"@type":"Article","headline":"Hello"}</script>
             </head></html>
         "#;
         let engine = DeterministicExtractionEngine::with_default_parsers();

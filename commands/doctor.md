@@ -16,18 +16,18 @@ Run comprehensive diagnostics on the Axon infrastructure stack and provide troub
 ### Steps
 
 1. **Check if we're in the Axon project**
-   - If `axon` is not in PATH, check if we're in `/home/jmagar/workspace/axon`
-   - If we are, use `pnpm local doctor` instead of `axon doctor`
+   - If `axon` (or `cortex`) is not in PATH, check if we're in the Axon project directory
+   - If we are, build and run the binary directly with `cargo run --bin cortex -- doctor`
    - If not in project and `axon` not available, inform user they need to either:
-     - Navigate to the Axon project directory
-     - Install Axon globally
+     - Navigate to the Axon project directory (`/home/jmagar/workspace/axon_rust`)
+     - Build the binary: `cargo build --release --bin cortex`
 
 2. **Run doctor diagnostics**
    ```bash
-   # Use the appropriate command based on location
+   # Use the appropriate command based on availability
    axon doctor --json --pretty
-   # OR
-   pnpm local doctor --json --pretty
+   # OR (if axon not in PATH but in the project directory)
+   cargo run --bin cortex -- doctor --json --pretty
    ```
 
 3. **Analyze the results**
@@ -49,8 +49,8 @@ Run comprehensive diagnostics on the Axon infrastructure stack and provide troub
    - If user wants debug mode, run:
      ```bash
      axon doctor debug
-     # OR
-     pnpm local doctor debug
+     # OR (if axon not in PATH but in the project directory)
+     cargo run --bin cortex -- doctor debug
      ```
 
 ### Output Format
@@ -72,13 +72,13 @@ Run comprehensive diagnostics on the Axon infrastructure stack and provide troub
 
 **Docker services not running:**
 ```bash
-cd /home/jmagar/workspace/axon
+cd $PWD
 docker compose up -d
 ```
 
 **TEI unreachable:**
-- Check if steamy-wsl is accessible: `ping 100.74.16.82`
-- Verify TEI is running: `curl http://100.74.16.82:52000/health`
+- Check if the TEI host is accessible: `ping <TEI-HOST>`
+- Verify TEI is running: `curl $TEI_URL/health`
 
 **Qdrant connection issues:**
 - Check Qdrant container: `docker logs axon-qdrant --tail 50`

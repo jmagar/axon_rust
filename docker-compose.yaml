@@ -1,10 +1,10 @@
-name: cortex
+name: axon
 
 x-common-service: &common-service
   env_file:
     - .env
   networks:
-    - cortex
+    - axon
   restart: unless-stopped
   extra_hosts:
     - "host.docker.internal:host-gateway"
@@ -100,6 +100,9 @@ services:
     <<: *common-service
     image: selenium/standalone-chrome:4.34.0
     container_name: axon-webdriver
+    # Override env_file to prevent app secrets from leaking into the browser container.
+    # Selenium only needs its own SE_* vars — no database credentials or API keys.
+    env_file: []
     shm_size: "2gb"
     ports:
       - "127.0.0.1:4444:4444"  # WebDriver endpoint for browser fallback
@@ -151,5 +154,5 @@ services:
       - /home/jmagar/appdata/axon-worker-output:/app/.cache/axon-rust/output
 
 networks:
-  cortex:
+  axon:
     driver: bridge

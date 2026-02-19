@@ -1,6 +1,9 @@
 use crate::axon_cli::crates::cli::commands::run_doctor;
 use crate::axon_cli::crates::core::config::{Config, RenderMode};
-use crate::axon_cli::crates::core::content::{to_markdown, url_to_filename};
+use crate::axon_cli::crates::core::content::{
+    canonicalize_url, extract_loc_values, extract_robots_sitemaps, is_excluded_url_path,
+    to_markdown, url_to_filename,
+};
 use crate::axon_cli::crates::core::http::validate_url;
 use crate::axon_cli::crates::core::logging::log_done;
 use crate::axon_cli::crates::core::ui::{
@@ -540,7 +543,14 @@ pub async fn run_crawl(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Erro
     } else {
         HashSet::new()
     };
-    if cfg.cache && !previous_urls.is_empty() {
+    let cache_ttl_secs: u64 = 24 * 60 * 60;
+    let cache_stale = manifest_path
+        .metadata()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|mtime| SystemTime::now().duration_since(mtime).ok())
+        .is_some_and(|age| age.as_secs() > cache_ttl_secs);
+    if cfg.cache && !previous_urls.is_empty() && !cache_stale {
         let report_path = write_audit_diff(
             &cfg.output_dir,
             start_url,
@@ -698,85 +708,6 @@ fn now_epoch_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)
-}
-
-fn canonicalize_url(url: &str) -> Option<String> {
-    let mut parsed = Url::parse(url).ok()?;
-    parsed.set_fragment(None);
-    let path = parsed.path().to_string();
-    if path.len() > 1 && path.ends_with('/') {
-        parsed.set_path(path.trim_end_matches('/'));
-    }
-    Some(parsed.to_string())
-}
-
-fn normalize_prefix(prefix: &str) -> Option<String> {
-    let trimmed = prefix.trim();
-    if trimmed.is_empty() || trimmed == "/" {
-        return None;
-    }
-    let mut value = if trimmed.starts_with('/') {
-        trimmed.to_string()
-    } else {
-        format!("/{trimmed}")
-    };
-    if value.len() > 1 && value.ends_with('/') {
-        value.truncate(value.len() - 1);
-    }
-    Some(value)
-}
-
-fn is_excluded_url_path(url: &str, prefixes: &[String]) -> bool {
-    let Ok(parsed) = Url::parse(url) else {
-        return false;
-    };
-    let path = parsed.path();
-    prefixes
-        .iter()
-        .filter_map(|p| normalize_prefix(p))
-        .any(|p| path == p || (path.starts_with(&p) && path.as_bytes().get(p.len()) == Some(&b'/')))
-}
-
-fn extract_loc_values(xml: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let lower = xml.to_ascii_lowercase();
-    let mut cursor = 0usize;
-    while let Some(start) = lower[cursor..].find("<loc>") {
-        let start_idx = cursor + start + "<loc>".len();
-        let Some(end_rel) = lower[start_idx..].find("</loc>") else {
-            break;
-        };
-        let end_idx = start_idx + end_rel;
-        let value = xml[start_idx..end_idx].trim();
-        if !value.is_empty() {
-            out.push(value.replace("&amp;", "&"));
-        }
-        cursor = end_idx + "</loc>".len();
-    }
-    out
-}
-
-fn extract_robots_sitemaps(robots_txt: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in robots_txt.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        if !key.trim().eq_ignore_ascii_case("sitemap") {
-            continue;
-        }
-        let url = value.trim();
-        if !url.is_empty() {
-            out.push(url.to_string());
-        }
-    }
-    out.sort();
-    out.dedup();
-    out
 }
 
 async fn fetch_text_with_retry(
@@ -1026,16 +957,19 @@ async fn read_manifest_entries(
             .get("markdown_chars")
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
-        let bytes = if file_path.is_empty() {
-            Vec::new()
+        let fingerprint = if file_path.is_empty() {
+            "no-file-path".to_string()
         } else {
-            tokio::fs::read(&file_path).await.unwrap_or_default()
+            match tokio::fs::read(&file_path).await {
+                Ok(bytes) => fnv1a64_hex(&bytes),
+                Err(_) => "file-not-found".to_string(),
+            }
         };
         entries.push(ManifestAuditEntry {
             url: url.to_string(),
             file_path,
             markdown_chars,
-            fingerprint: fnv1a64_hex(&bytes),
+            fingerprint,
         });
     }
     Ok(entries)

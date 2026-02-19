@@ -6,9 +6,8 @@
 set -euo pipefail
 
 # Load environment variables from .env
-ENV_FILE="$HOME/claude-homelab/.env"
+ENV_FILE="${ENV_FILE:-$HOME/.claude-homelab/.env}"
 if [[ -f "$ENV_FILE" ]]; then
-    # Source .env file and export variables
     set -a
     source "$ENV_FILE"
     set +a
@@ -68,6 +67,10 @@ main() {
         output_file="$1"
         shift
     fi
+    # Strip leading "--" separator so it is not forwarded as an argument
+    if [[ "${1:-}" == "--" ]]; then
+        shift
+    fi
     local -a passthrough_args=("$@")
 
     # Validate URL format
@@ -78,11 +81,6 @@ main() {
 
     # Build firecrawl command
     local -a cmd=(axon scrape "$url" --only-main-content)
-
-    # Add API key if set (cloud API)
-    if [[ -n "${FIRECRAWL_API_KEY:-}" ]]; then
-        cmd+=(--api-key "$FIRECRAWL_API_KEY")
-    fi
 
     # Add custom API URL if set (self-hosted)
     if [[ -n "${FIRECRAWL_API_URL:-}" ]]; then
@@ -99,8 +97,8 @@ main() {
         cmd+=("${passthrough_args[@]}")
     fi
 
-    # Execute command
-    "${cmd[@]}"
+    # Execute command (API key passed via env to avoid process list exposure)
+    FIRECRAWL_API_KEY="${FIRECRAWL_API_KEY:-}" "${cmd[@]}"
 }
 
 main "$@"

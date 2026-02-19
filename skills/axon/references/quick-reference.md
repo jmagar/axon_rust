@@ -330,7 +330,7 @@ FIRECRAWL_NO_TELEMETRY=1 axon https://example.com
 
 ## Wrapper Script Examples
 
-All wrapper scripts source credentials from `~/claude-homelab/.env`.
+All wrapper scripts source credentials from `~/.claude-homelab/.env`.
 
 ```bash
 # Scrape single URL

@@ -11,7 +11,9 @@ set -euo pipefail
 
 # Load credentials from .env file
 if [[ -f ~/claude-homelab/.env ]]; then
+    set -a
     source ~/claude-homelab/.env
+    set +a
 else
     echo "ERROR: .env file not found at ~/claude-homelab/.env" >&2
     echo "Please create .env with FIRECRAWL_API_KEY" >&2

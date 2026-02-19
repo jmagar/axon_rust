@@ -194,8 +194,12 @@ def hostname_resolves(hostname: str) -> bool:
 
 def endpoint_reachable(base_url: str) -> bool:
     try:
-        req = urllib.request.Request(f"{base_url.rstrip('/')}/", method="GET")
-        with urllib.request.urlopen(req, timeout=2):
+        url = f"{base_url.rstrip('/')}/"
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=2):  # noqa: S310
             return True
     except Exception:
         return False
@@ -309,7 +313,7 @@ def get_cluster_info() -> dict[str, Any]:
 def list_collections() -> list[str]:
     data = qdrant_request("/collections", timeout=10)
     rows = data.get("result", {}).get("collections", [])
-    return [row.get("name") for row in rows if isinstance(row, dict) and row.get("name")]
+    return [name for row in rows if isinstance(row, dict) and isinstance(name := row.get("name"), str)]
 
 
 def list_aliases() -> list[dict[str, str]]:
@@ -491,6 +495,7 @@ def parse_csv_values(raw: str) -> list[str]:
 
 def normalize_exclude_prefixes(values: list[str]) -> NormalizedExcludePrefixes:
     disable_by_empty = len(values) == 1 and values[0].strip() in {"", "/"}
+    # "none" is a sentinel: clear all exclude prefixes (disable filtering entirely).
     disable_by_none = any(v.strip().lower() == "none" for v in values)
     if disable_by_none:
         return NormalizedExcludePrefixes(prefixes=[], disable_defaults=True)
@@ -719,27 +724,34 @@ def analyze_payload_schema(points: list[dict[str, Any]]) -> dict[str, Any]:
         "scraped_at": {"present": 0, "missing": 0, "type_mismatch": 0},
     }
 
+    def inspect(
+        checks: dict[str, dict[str, int]],
+        payload: dict[str, Any],
+        field: str,
+        value: Any,
+        expected: tuple[type, ...],
+        aliases: list[str] | None = None,
+    ) -> None:
+        vals: list[Any] = [value]
+        if aliases:
+            vals.extend(payload.get(a) for a in aliases)
+        actual = next((v for v in vals if v is not None), None)
+        if actual is None:
+            checks[field]["missing"] += 1
+            return
+        if isinstance(actual, expected):
+            checks[field]["present"] += 1
+            return
+        checks[field]["type_mismatch"] += 1
+
     for point in points:
         payload = point.get("payload") or {}
 
-        def inspect(field: str, value: Any, expected: tuple[type, ...], aliases: list[str] | None = None) -> None:
-            vals: list[Any] = [value]
-            if aliases:
-                vals.extend(payload.get(a) for a in aliases)
-            actual = next((v for v in vals if v is not None), None)
-            if actual is None:
-                checks[field]["missing"] += 1
-                return
-            if isinstance(actual, expected):
-                checks[field]["present"] += 1
-                return
-            checks[field]["type_mismatch"] += 1
-
-        inspect("url", payload.get("url"), (str,))
-        inspect("chunk_text", payload.get("chunk_text"), (str,))
-        inspect("chunk_index", payload.get("chunk_index"), (int,))
-        inspect("title", payload.get("title"), (str,))
-        inspect("scraped_at", payload.get("scraped_at"), (str,), aliases=["scrapedAt", "file_modified_at", "fileModifiedAt"])
+        inspect(checks, payload, "url", payload.get("url"), (str,))
+        inspect(checks, payload, "chunk_text", payload.get("chunk_text"), (str,))
+        inspect(checks, payload, "chunk_index", payload.get("chunk_index"), (int,))
+        inspect(checks, payload, "title", payload.get("title"), (str,))
+        inspect(checks, payload, "scraped_at", payload.get("scraped_at"), (str,), aliases=["scrapedAt", "file_modified_at", "fileModifiedAt"])
 
     return {
         "total_points": len(points),
@@ -876,7 +888,8 @@ def confirm_destructive_action(command: str, *, yes: bool, dry_run: bool, target
             f"Destructive command '{command}' on {target} requires --yes in non-interactive mode"
         )
     prompt = f"{command} will mutate {target}. Proceed? [y/N]: "
-    answer = input(prompt).strip().lower()
+    print(prompt, end="", flush=True, file=sys.stderr)
+    answer = input().strip().lower()
     if answer not in {"y", "yes"}:
         raise RuntimeError("Aborted by user")
 

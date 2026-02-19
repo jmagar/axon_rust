@@ -1,10 +1,10 @@
 ---
-description: Search the web and auto-scrape/index results
-argument-hint: "<search query>" [--limit N] [--scrapeOptions]
+description: Search the web and return a list of result URLs
+argument-hint: "<search query>" [--limit N]
 allowed-tools: Bash(axon *)
 ---
 
-# Web Search with Auto-Indexing
+# Web Search
 
 Execute the Axon search command with the provided arguments:
 
@@ -16,38 +16,32 @@ axon search $ARGUMENTS
 
 1. **Execute the command** using the Bash tool with the arguments provided
 2. **Parse the response** to extract:
-   - Search results with URLs
-   - Scraped content for each result
-   - Embedding confirmation
+   - Result URLs from the search
 3. **Present the results** including:
-   - Top N results with titles and descriptions
-   - Scraped content snippets
-   - Source URLs
-   - Confirmation of Qdrant embedding
-4. **Confirm auto-indexing**:
-   - All results have been scraped
-   - All content has been embedded into Qdrant
-   - Results are now searchable via `/axon:query`
+   - List of result URLs
+
+## Behavior
+
+`search` queries DuckDuckGo and returns a plain list of result URLs. It does **not** auto-scrape or index results — use `/axon:scrape` or `/axon:batch` to fetch and embed content from the returned URLs.
+
+Use `--limit N` (default: 10) to control the number of URLs returned.
 
 ## Expected Output
 
-The command returns JSON containing:
-- `results`: Array of search results with:
-  - `title`: Page title
-  - `url`: Source URL
-  - `description`: Meta description
-  - `content`: Scraped markdown content
-  - `metadata`: Page metadata
-- `embedded`: Confirmation of Qdrant embedding
-- `query`: Original search query
-- `total`: Total results found and indexed
+The command prints result URLs to stdout, one per line:
 
-Present search results with scraped content and confirm successful auto-indexing.
+```
+  • https://example.com/result-1
+  • https://example.com/result-2
+  ...
+```
+
+There is no JSON output mode for this command.
 
 ## Key Differences from /axon:query
 
-- **`/axon:search`**: Searches the **web** and auto-scrapes/indexes results (adds to knowledge base)
+- **`/axon:search`**: Searches the **web** via DuckDuckGo and returns a URL list
 - **`/axon:query`**: Searches your **existing knowledge base** in Qdrant (semantic search)
 
-Use `/axon:search` when you need new information from the web.
+Use `/axon:search` to discover URLs, then `/axon:scrape` or `/axon:batch` to fetch and index the content.
 Use `/axon:query` to search what you've already indexed.

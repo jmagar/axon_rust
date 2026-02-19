@@ -21,14 +21,14 @@ Error: 401 Unauthorized - Invalid or missing API key
 
 1. Check API key in `.env` file:
 ```bash
-cat ~/claude-homelab/.env | grep FIRECRAWL_API_KEY
+cat ~/.claude-homelab/.env | grep FIRECRAWL_API_KEY
 ```
 
 2. Verify API key is correct:
 ```bash
 # Get new key from https://firecrawl.dev/
 # Update .env file
-echo 'FIRECRAWL_API_KEY="fc-your-new-key"' >> ~/claude-homelab/.env
+echo 'FIRECRAWL_API_KEY="fc-your-new-key"' >> ~/.claude-homelab/.env
 ```
 
 3. Test authentication:
@@ -59,7 +59,7 @@ Error: API key required for cloud API
 
 1. Add API key to `.env`:
 ```bash
-echo 'FIRECRAWL_API_KEY="fc-your-api-key"' >> ~/claude-homelab/.env
+echo 'FIRECRAWL_API_KEY="fc-your-api-key"' >> ~/.claude-homelab/.env
 ```
 
 2. Or provide via flag:
@@ -69,8 +69,8 @@ axon https://example.com --api-key fc-YOUR-KEY
 
 3. Or use self-hosted instance (no key required):
 ```bash
-echo 'FIRECRAWL_API_URL="http://localhost:3002"' >> ~/claude-homelab/.env
-echo 'FIRECRAWL_API_KEY=""' >> ~/claude-homelab/.env
+echo 'FIRECRAWL_API_URL="http://localhost:3002"' >> ~/.claude-homelab/.env
+echo 'FIRECRAWL_API_KEY=""' >> ~/.claude-homelab/.env
 ```
 
 ---
@@ -100,7 +100,7 @@ curl http://localhost:3002/health
 
 2. Verify API URL in `.env`:
 ```bash
-cat ~/claude-homelab/.env | grep FIRECRAWL_API_URL
+cat ~/.claude-homelab/.env | grep FIRECRAWL_API_URL
 ```
 
 3. Start service if stopped:
@@ -557,7 +557,7 @@ axon --status
 
 4. Use self-hosted instance:
 ```bash
-echo 'FIRECRAWL_API_URL="http://localhost:3002"' >> ~/claude-homelab/.env
+echo 'FIRECRAWL_API_URL="http://localhost:3002"' >> ~/.claude-homelab/.env
 ```
 
 ---
@@ -602,7 +602,7 @@ axon crawl https://example.com --limit 50 --max-depth 2 --wait
 
 **Error:**
 ```
-ERROR: .env file not found at ~/claude-homelab/.env
+ERROR: .env file not found at ~/.claude-homelab/.env
 ```
 
 **Causes:**
@@ -614,13 +614,13 @@ ERROR: .env file not found at ~/claude-homelab/.env
 
 1. Create `.env` file:
 ```bash
-touch ~/claude-homelab/.env
-chmod 600 ~/claude-homelab/.env
+touch ~/.claude-homelab/.env
+chmod 600 ~/.claude-homelab/.env
 ```
 
 2. Add credentials:
 ```bash
-cat >> ~/claude-homelab/.env <<EOF
+cat >> ~/.claude-homelab/.env <<EOF
 FIRECRAWL_API_KEY="fc-your-api-key"
 FIRECRAWL_API_URL="https://api.firecrawl.dev"
 EOF
@@ -628,12 +628,12 @@ EOF
 
 3. Verify file exists:
 ```bash
-ls -la ~/claude-homelab/.env
+ls -la ~/.claude-homelab/.env
 ```
 
 4. Check file permissions:
 ```bash
-chmod 600 ~/claude-homelab/.env
+chmod 600 ~/.claude-homelab/.env
 ```
 
 ---
@@ -654,21 +654,21 @@ Using credentials from .env but getting auth errors
 
 1. Check `.env` syntax:
 ```bash
-cat ~/claude-homelab/.env
+cat ~/.claude-homelab/.env
 # Look for syntax errors (quotes, spacing)
 ```
 
 2. Source manually to test:
 ```bash
 set -a
-source ~/claude-homelab/.env
+source ~/.claude-homelab/.env
 set +a
 echo $FIRECRAWL_API_KEY
 ```
 
 3. Verify variable names:
 ```bash
-grep FIRECRAWL ~/claude-homelab/.env
+grep FIRECRAWL ~/.claude-homelab/.env
 # Should be FIRECRAWL_API_KEY and FIRECRAWL_API_URL
 ```
 
@@ -685,13 +685,13 @@ axon https://example.com --api-key fc-YOUR-KEY
 
 **Error:**
 ```
-JavaScript heap out of memory
+out of memory / OOM killed / memory allocation failed
 ```
 
 **Causes:**
-- Large crawl results
+- Large crawl results exceeding available RAM
 - Too many concurrent requests
-- Memory leak
+- System OOM killer terminating the process
 
 **Solutions:**
 
@@ -700,26 +700,32 @@ JavaScript heap out of memory
 axon crawl https://example.com --limit 100 --max-depth 2 --wait
 ```
 
-2. Use async mode:
+2. Reduce batch concurrency:
 ```bash
-# Non-blocking, process results incrementally
-axon crawl https://example.com --limit 500
+axon crawl https://example.com --batch-concurrency 4 --wait
 ```
 
-3. Increase Node.js memory:
+3. Check available system memory:
 ```bash
-NODE_OPTIONS="--max-old-space-size=4096" axon crawl https://example.com --wait
+free -h
 ```
 
-4. Process in batches:
+4. Increase process memory limits (Linux):
+```bash
+# Check current limits
+ulimit -v
+
+# Increase virtual memory limit for current session
+ulimit -v unlimited
+```
+
+5. Process in batches to reduce peak memory:
 ```bash
 # Map first to get URLs
-axon map https://example.com --limit 1000 -o urls.json
+axon map https://example.com -o urls.json
 
-# Scrape URLs in batches
-for url in $(jq -r '.urls[]' urls.json | head -100); do
-    axon "$url" >> results.md
-done
+# Scrape URLs in smaller batches
+axon batch --urls "$(jq -r '.urls[:50] | join(",")' urls.json)" --wait
 ```
 
 ---
@@ -766,36 +772,34 @@ axon https://example.com -o /mnt/storage/output.md
 
 **Error:**
 ```
-bash: npx: command not found
+bash: axon: command not found
 ```
 
 **Causes:**
-- Node.js not installed
-- npx not in PATH
+- `axon` binary not built or not in PATH
+- Binary not compiled yet
 
 **Solutions:**
 
-1. Install Node.js:
+1. Check if `axon` is already available:
 ```bash
-# Ubuntu/Debian
-sudo apt install nodejs npm
-
-# Or use nvm
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-nvm install 18
+which axon
 ```
 
-2. Verify installation:
+2. Build from source:
 ```bash
-node --version
-npm --version
-npx --version
+cd /path/to/axon_rust
+cargo build --release --bin axon
 ```
 
-3. Install CLI globally:
+3. Add to PATH:
 ```bash
-npm install -g @jmagar/axon
-axon --version
+export PATH="$PATH:/path/to/axon_rust/target/release"
+```
+
+4. Or create a symlink:
+```bash
+sudo ln -sf /path/to/axon_rust/target/release/axon /usr/local/bin/axon
 ```
 
 ---

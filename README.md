@@ -33,7 +33,7 @@ Axon is a single CLI for crawl/scrape/extract plus local vector retrieval and Q&
 - `axon-qdrant` -> `localhost:53333` (HTTP), `53334` (gRPC)
 - `axon-workers` (s6-supervised worker container)
 
-Services run on the `cortex` bridge network with persistent volumes under `/home/jmagar/appdata/axon-*`.
+Services run on the `axon` bridge network with persistent volumes under `/home/jmagar/appdata/axon-*`.
 
 ## Quick Start
 

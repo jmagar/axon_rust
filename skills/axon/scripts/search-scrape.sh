@@ -6,10 +6,10 @@
 set -euo pipefail
 
 # Load environment variables from .env
-ENV_FILE="$HOME/claude-homelab/.env"
+ENV_FILE="${ENV_FILE:-$HOME/.claude-homelab/.env}"
 if [[ -f "$ENV_FILE" ]]; then
-    # Source .env file and export variables
     set -a
+    # shellcheck source=/dev/null
     source "$ENV_FILE"
     set +a
 else
@@ -66,8 +66,8 @@ main() {
     local query="$1"
     local limit="${2:-}"
 
-    # Validate limit is a number if provided
-    if [[ -n "$limit" ]] && ! [[ "$limit" =~ ^[0-9]+$ ]]; then
+    # Validate limit is a positive number if provided
+    if [[ -n "$limit" ]] && { ! [[ "$limit" =~ ^[0-9]+$ ]] || [[ "$limit" -lt 1 ]]; }; then
         echo "ERROR: Limit must be a positive number" >&2
         exit 1
     fi
@@ -81,11 +81,6 @@ main() {
         cmd+=(--limit "$limit")
     fi
 
-    # Add API key if set (cloud API)
-    if [[ -n "${FIRECRAWL_API_KEY:-}" ]]; then
-        cmd+=(--api-key "$FIRECRAWL_API_KEY")
-    fi
-
     # Add custom API URL if set (self-hosted)
     if [[ -n "${FIRECRAWL_API_URL:-}" ]]; then
         cmd+=(--api-url "$FIRECRAWL_API_URL")
@@ -93,13 +88,13 @@ main() {
 
     cmd+=(-- "$query")
 
-    # Execute command
+    # Execute command (API key passed via env to avoid process list exposure)
     if [[ -n "$limit" ]]; then
         echo "Searching and scraping: $query (limit: $limit)" >&2
     else
         echo "Searching and scraping: $query (no limit)" >&2
     fi
-    "${cmd[@]}"
+    FIRECRAWL_API_KEY="${FIRECRAWL_API_KEY:-}" "${cmd[@]}"
 }
 
 main "$@"

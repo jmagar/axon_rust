@@ -9,7 +9,7 @@
 # Options:
 #   -o, --output FILE    Output file path (default: .cache/indexed-base-urls.txt)
 #   -u, --qdrant-url URL Qdrant URL (default: http://localhost:53333)
-#   -c, --collection NAME Collection name (default: cortex or $QDRANT_COLLECTION)
+#   -c, --collection NAME Collection name (default: axon or $QDRANT_COLLECTION)
 #   -b, --batch-size N   Batch size for scrolling (default: 10000)
 #   -q, --quiet          Suppress progress messages
 #   -h, --help           Show this help message
@@ -23,7 +23,7 @@ set -euo pipefail
 
 # Default configuration
 QDRANT_URL="${QDRANT_URL:-http://localhost:53333}"
-COLLECTION="${QDRANT_COLLECTION:-cortex}"
+COLLECTION="${QDRANT_COLLECTION:-axon}"
 BATCH_SIZE=10000
 OUTPUT_FILE=".cache/indexed-base-urls.txt"
 QUIET=false
@@ -124,7 +124,7 @@ fi
 
 # Check Qdrant connection
 log_info "Connecting to Qdrant at $QDRANT_URL..."
-if ! collection_info=$(curl -s "$QDRANT_URL/collections/$COLLECTION" 2>/dev/null); then
+if ! collection_info=$(curl -s --max-time 30 "$QDRANT_URL/collections/$COLLECTION" 2>/dev/null); then
     log_error "Failed to connect to Qdrant at $QDRANT_URL"
     exit 1
 fi
@@ -157,7 +157,7 @@ while true; do
     fi
 
     # Fetch batch
-    response=$(curl -s -X POST "$QDRANT_URL/collections/$COLLECTION/points/scroll" \
+    response=$(curl -s --max-time 30 -X POST "$QDRANT_URL/collections/$COLLECTION/points/scroll" \
         -H "Content-Type: application/json" \
         -d "$request_body")
 

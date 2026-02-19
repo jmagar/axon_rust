@@ -671,9 +671,10 @@ fn select_diverse_candidates(
 
     let mut selected: Vec<AskCandidate> = Vec::new();
     let mut per_url_count: HashMap<String, usize> = HashMap::new();
+    let mut selected_indices: HashSet<usize> = HashSet::new();
 
     // Pass 1: one per URL for source diversity.
-    for candidate in candidates {
+    for (i, candidate) in candidates.iter().enumerate() {
         if selected.len() >= target_count {
             break;
         }
@@ -682,12 +683,16 @@ fn select_diverse_candidates(
         }
         selected.push(candidate.clone());
         per_url_count.insert(candidate.url.clone(), 1);
+        selected_indices.insert(i);
     }
 
-    // Pass 2: fill remaining slots up to max-per-url.
-    for candidate in candidates {
+    // Pass 2: fill remaining slots up to max-per-url, skipping already-selected.
+    for (i, candidate) in candidates.iter().enumerate() {
         if selected.len() >= target_count {
             break;
+        }
+        if selected_indices.contains(&i) {
+            continue;
         }
         let used = *per_url_count.get(&candidate.url).unwrap_or(&0);
         if used >= max_per_url {
@@ -695,6 +700,7 @@ fn select_diverse_candidates(
         }
         selected.push(candidate.clone());
         per_url_count.insert(candidate.url.clone(), used + 1);
+        selected_indices.insert(i);
     }
 
     selected
@@ -1755,10 +1761,7 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         return Err("Failed to retrieve any context sources for ask".into());
     }
 
-    let context = format!(
-        "Answer only from the provided sources.\nCite supporting sources inline using [S#] labels.\nIf the sources are incomplete, say so explicitly.\n\nSources:\n{}",
-        context_entries.join(separator)
-    );
+    let context = format!("Sources:\n{}", context_entries.join(separator));
     let context_elapsed_ms = context_started.elapsed().as_millis();
 
     if cfg.ask_diagnostics {
@@ -1823,8 +1826,8 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         .json(&serde_json::json!({
             "model": cfg.openai_model,
             "messages": [
-                {"role": "system", "content": "Answer only using provided context. Cite sources like [S1]."},
-                {"role": "user", "content": format!("Question: {}\n\nContext:\n{}", query, context)}
+                {"role": "system", "content": "Answer only from the provided sources. Cite supporting sources inline using [S#] labels. If the sources are incomplete, say so explicitly."},
+                {"role": "user", "content": format!("{}\n\n{}", query, context)}
             ],
             "temperature": 0.1
         }));

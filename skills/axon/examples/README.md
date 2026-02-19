@@ -15,12 +15,14 @@ See [../SKILL.md Setup section](../SKILL.md#setup) for detailed configuration.
 ## Examples
 
 ### 1. basic-scrape.sh
+
 **Purpose**: Simple web page scraping workflows
 **Use Cases**: Documentation extraction, blog content, static site scraping
 **Complexity**: Beginner
 **Runtime**: ~2 minutes
 
 **What it demonstrates:**
+
 - Single page scraping to markdown
 - Multiple format output (markdown + HTML)
 - JavaScript-heavy sites (wait-for parameter)
@@ -29,11 +31,13 @@ See [../SKILL.md Setup section](../SKILL.md#setup) for detailed configuration.
 - Disabling auto-embedding
 
 **Run it:**
+
 ```bash
 ./skills/axon/examples/basic-scrape.sh
 ```
 
 **Expected output:**
+
 - `/tmp/axon-intro.md` - Scraped documentation
 - `/tmp/axon-multi-format.json` - Multiple formats
 - `/tmp/axon-links.json` - Extracted links
@@ -41,12 +45,14 @@ See [../SKILL.md Setup section](../SKILL.md#setup) for detailed configuration.
 ---
 
 ### 2. rag-pipeline.sh
+
 **Purpose**: Complete RAG system build with semantic search
 **Use Cases**: Knowledge base creation, documentation search, content discovery
 **Complexity**: Intermediate
 **Runtime**: ~10-15 minutes (depends on site size)
 
 **What it demonstrates:**
+
 - Site mapping (URL discovery)
 - Full site crawling with auto-embedding
 - Verifying embedded content
@@ -58,16 +64,19 @@ See [../SKILL.md Setup section](../SKILL.md#setup) for detailed configuration.
 - Incremental updates
 
 **Requirements:**
-- ✅ Qdrant running
-- ✅ TEI running
-- ✅ Environment variables configured
+
+- Qdrant running
+- TEI running
+- Environment variables configured
 
 **Run it:**
+
 ```bash
 ./skills/axon/examples/rag-pipeline.sh
 ```
 
 **Expected output:**
+
 - `/tmp/axon-rag-pipeline/sitemap.json` - Discovered URLs
 - `/tmp/axon-rag-pipeline/query*.json` - Search results
 - Content embedded in Qdrant collection
@@ -75,12 +84,14 @@ See [../SKILL.md Setup section](../SKILL.md#setup) for detailed configuration.
 ---
 
 ### 3. batch-processing.sh
+
 **Purpose**: Efficient parallel scraping of multiple URLs
 **Use Cases**: Data collection, competitive analysis, content aggregation
 **Complexity**: Intermediate
 **Runtime**: ~5-10 minutes
 
 **What it demonstrates:**
+
 - Async batch scraping (start and check later)
 - Status polling and monitoring
 - Synchronous batch (wait for completion)
@@ -92,11 +103,13 @@ See [../SKILL.md Setup section](../SKILL.md#setup) for detailed configuration.
 - Cancelling running jobs
 
 **Run it:**
+
 ```bash
 ./skills/axon/examples/batch-processing.sh
 ```
 
 **Expected output:**
+
 - `/tmp/axon-batch-processing/batch-results.json` - Batch results
 - `/tmp/axon-batch-processing/all-content.md` - Combined content
 - `/tmp/axon-batch-processing/url-list.txt` - Example URL list
@@ -104,12 +117,14 @@ See [../SKILL.md Setup section](../SKILL.md#setup) for detailed configuration.
 ---
 
 ### 4. monitor-website.sh
+
 **Purpose**: Track changes to web pages over time
 **Use Cases**: Documentation monitoring, pricing page alerts, ToS tracking, competitor analysis
 **Complexity**: Advanced
 **Runtime**: ~5 minutes (initial), then scheduled
 
 **What it demonstrates:**
+
 - Baseline snapshot capture
 - Change detection via diff
 - Detailed change analysis
@@ -120,17 +135,20 @@ See [../SKILL.md Setup section](../SKILL.md#setup) for detailed configuration.
 - Baseline updates
 
 **Run it:**
+
 ```bash
 ./skills/axon/examples/monitor-website.sh
 ```
 
 **Expected output:**
+
 - `/tmp/axon-monitoring/state/*.baseline.md` - Baseline snapshots
 - `/tmp/axon-monitoring/diffs/*.diff` - Change diffs
 - `/tmp/axon-monitoring/alerts/*.alert.txt` - Change alerts
 - `/tmp/axon-monitoring/monitor-cron.sh` - Automated monitoring script
 
 **Schedule automated monitoring:**
+
 ```bash
 crontab -e
 # Add: 0 */6 * * * /tmp/axon-monitoring/monitor-cron.sh
@@ -179,38 +197,45 @@ All examples are designed to be easily customizable:
 ## Learning Path
 
 **Beginner**: Start with `basic-scrape.sh`
-→ Understand scraping fundamentals and output formats
+-> Understand scraping fundamentals and output formats
 
 **Intermediate**: Move to `batch-processing.sh`
-→ Learn parallel operations and job management
+-> Learn parallel operations and job management
 
 **Advanced**: Explore `rag-pipeline.sh`
-→ Build complete RAG systems with semantic search
+-> Build complete RAG systems with semantic search
 
 **Production**: Study `monitor-website.sh`
-→ Implement automated monitoring and alerting
+-> Implement automated monitoring and alerting
 
 ## Troubleshooting
 
 ### "FIRECRAWL_API_KEY must be set"
+
 **Solution**: Add `FIRECRAWL_API_KEY=fc-...` to `~/.claude-homelab/.env`
 
 ### "RAG infrastructure not configured"
+
 **Solution**: Set up Qdrant and TEI (see [../SKILL.md Setup](../SKILL.md#setup))
 
 ### "Command not found: axon"
-**Solution**: Install Axon CLI:
+
+**Solution**: Build the Axon CLI from source:
+
 ```bash
-npm install -g @jmagar/axon
-# or
-pnpm install -g @jmagar/axon
+cargo build --release --bin axon
+# Then add to your PATH or run directly:
+./target/release/axon --help
 ```
 
 ### Rate limit errors
+
 **Solution**: Add delays between requests or upgrade API plan
 
 ### Job timeout errors
+
 **Solution**: Increase polling attempts in batch-processing.sh:
+
 ```bash
 MAX_ATTEMPTS=60  # Wait longer
 SLEEP_INTERVAL=10  # Check less frequently

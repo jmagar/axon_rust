@@ -5,18 +5,6 @@
 
 set -euo pipefail
 
-# Load environment variables from .env
-ENV_FILE="$HOME/claude-homelab/.env"
-if [[ -f "$ENV_FILE" ]]; then
-    # Source .env file and export variables
-    set -a
-    source "$ENV_FILE"
-    set +a
-else
-    echo "ERROR: .env file not found at $ENV_FILE" >&2
-    exit 1
-fi
-
 # === Functions ===
 
 usage() {
@@ -48,15 +36,29 @@ Output:
 EOF
 }
 
-# === Main Script ===
-
-main() {
-    # Check for help flag
-    if [[ "${1:-}" == "--help" ]]; then
+# Check for --help/-h before loading .env
+for arg in "$@"; do
+    if [[ "$arg" == "--help" || "$arg" == "-h" ]]; then
         usage
         exit 0
     fi
+done
 
+# Load environment variables from .env
+ENV_FILE="${ENV_FILE:-$HOME/.claude-homelab/.env}"
+if [[ -f "$ENV_FILE" ]]; then
+    # Source .env file and export variables
+    set -a
+    source "$ENV_FILE"
+    set +a
+else
+    echo "ERROR: .env file not found at $ENV_FILE" >&2
+    exit 1
+fi
+
+# === Main Script ===
+
+main() {
     # Validate arguments
     if [[ $# -lt 1 ]]; then
         echo "ERROR: URL required" >&2
@@ -74,15 +76,15 @@ main() {
         exit 1
     fi
 
-    # Validate limit is a number if provided
-    if [[ -n "$limit" ]] && ! [[ "$limit" =~ ^[0-9]+$ ]]; then
-        echo "ERROR: Limit must be a positive number" >&2
+    # Validate limit is a positive number if provided
+    if [[ -n "$limit" ]] && ! [[ "$limit" =~ ^[1-9][0-9]*$ ]]; then
+        echo "ERROR: Limit must be a positive number (>0)" >&2
         exit 1
     fi
 
-    # Validate max_depth is a number if provided
-    if [[ -n "$max_depth" ]] && ! [[ "$max_depth" =~ ^[0-9]+$ ]]; then
-        echo "ERROR: Max depth must be a positive number" >&2
+    # Validate max_depth is a positive number if provided
+    if [[ -n "$max_depth" ]] && ! [[ "$max_depth" =~ ^[1-9][0-9]*$ ]]; then
+        echo "ERROR: Max depth must be a positive number (>0)" >&2
         exit 1
     fi
 
@@ -103,11 +105,6 @@ main() {
         cmd+=(--max-depth "$max_depth")
     fi
 
-    # Add API key if set (cloud API)
-    if [[ -n "${FIRECRAWL_API_KEY:-}" ]]; then
-        cmd+=(--api-key "$FIRECRAWL_API_KEY")
-    fi
-
     # Add custom API URL if set (self-hosted)
     if [[ -n "${FIRECRAWL_API_URL:-}" ]]; then
         cmd+=(--api-url "$FIRECRAWL_API_URL")
@@ -121,7 +118,8 @@ main() {
         echo "No limits imposed" >&2
     fi
     echo "" >&2
-    "${cmd[@]}"
+    # Pass API key via environment variable to avoid exposure in process list
+    FIRECRAWL_API_KEY="${FIRECRAWL_API_KEY:-}" "${cmd[@]}"
 }
 
 main "$@"

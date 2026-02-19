@@ -130,7 +130,7 @@ fn build_old_context(
         "Sources:",
         &(full_docs_context
             .into_iter()
-            .chain(supplemental_context.into_iter())
+            .chain(supplemental_context)
             .collect::<Vec<_>>()
             .join(separator)),
     ]

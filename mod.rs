@@ -9,7 +9,7 @@ use self::crates::cli::commands::{
     run_sources_native, run_stats_native, run_status, start_url_from_cfg,
 };
 use self::crates::core::config::{parse_args, CommandKind, Config};
-use self::crates::core::logging::{init_tracing, log_done, log_info};
+use self::crates::core::logging::{init_tracing, log_done, log_info, log_warn};
 use sqlx::postgres::PgPoolOptions;
 use std::error::Error;
 use std::time::Duration;
@@ -123,7 +123,12 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         cfg.collection,
         cfg.performance_profile
     ));
-    record_command_run(&cfg).await;
+    {
+        let cfg_clone = cfg.clone();
+        tokio::spawn(async move {
+            record_command_run(&cfg_clone).await;
+        });
+    }
 
     if let Some(every_seconds) = cfg.cron_every_seconds {
         if is_job_subcommand(&cfg) {
@@ -142,7 +147,12 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 cfg.command.as_str(),
                 every_seconds
             ));
-            run_once(&cfg, &start_url).await?;
+            match run_once(&cfg, &start_url).await {
+                Ok(_) => {}
+                Err(e) => {
+                    log_warn(&format!("cron run_once failed: {e:#}"));
+                }
+            }
             if run_count < max_runs {
                 tokio::time::sleep(Duration::from_secs(every_seconds)).await;
             }

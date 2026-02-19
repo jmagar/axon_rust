@@ -246,7 +246,10 @@ pub struct WatchdogSweepStats {
     pub reclaimed_jobs: u64,
 }
 
-fn stale_watchdog_payload(mut result_json: Value, observed_updated_at: DateTime<Utc>) -> Value {
+pub(crate) fn stale_watchdog_payload(
+    mut result_json: Value,
+    observed_updated_at: DateTime<Utc>,
+) -> Value {
     if !result_json.is_object() {
         result_json = serde_json::json!({});
     }
@@ -262,7 +265,7 @@ fn stale_watchdog_payload(mut result_json: Value, observed_updated_at: DateTime<
     result_json
 }
 
-fn stale_watchdog_confirmed(
+pub(crate) fn stale_watchdog_confirmed(
     result_json: &Value,
     observed_updated_at: DateTime<Utc>,
     confirm_secs: i64,
@@ -318,12 +321,14 @@ pub async fn reclaim_stale_running_jobs(
         table.as_str()
     );
     let rows = sqlx::query(&select_query)
-        .bind(idle_timeout_secs as i32)
+        .bind(idle_timeout_secs.min(i32::MAX as i64) as i32)
         .fetch_all(pool)
         .await?;
 
-    let mut stats = WatchdogSweepStats::default();
-    stats.stale_candidates = rows.len() as u64;
+    let mut stats = WatchdogSweepStats {
+        stale_candidates: rows.len() as u64,
+        ..Default::default()
+    };
     for row in rows {
         let id: Uuid = row.try_get("id")?;
         let updated_at: DateTime<Utc> = row.try_get("updated_at")?;

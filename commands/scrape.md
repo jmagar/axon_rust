@@ -16,7 +16,7 @@ axon scrape $ARGUMENTS
 
 1. **Execute the command** using the Bash tool with the arguments provided
 2. **Parse the response** to extract:
-   - Scraped content (markdown format)
+   - Scraped content (Markdown format)
    - Metadata (title, description, URL)
    - Embedding confirmation
 3. **Present the results** in a clear, formatted way
@@ -25,7 +25,7 @@ axon scrape $ARGUMENTS
 ## Expected Output
 
 The command returns JSON containing:
-- `content`: LLM-ready markdown content
+- `content`: LLM-ready Markdown content
 - `metadata`: Page metadata (title, description, etc.)
 - `embedded`: Confirmation of Qdrant embedding
 

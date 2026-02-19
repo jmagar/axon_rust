@@ -124,10 +124,19 @@ fn default_queue_injection_rules() -> Vec<QueueInjectionRule> {
 }
 
 fn load_queue_injection_rules() -> Vec<QueueInjectionRule> {
-    let maybe_rules = std::env::var("AXON_QUEUE_INJECTION_RULES_JSON")
-        .ok()
-        .and_then(|raw| serde_json::from_str::<Vec<QueueInjectionRule>>(&raw).ok())
-        .filter(|rules| !rules.is_empty());
+    let maybe_rules = match std::env::var("AXON_QUEUE_INJECTION_RULES_JSON") {
+        Ok(raw) => match serde_json::from_str::<Vec<QueueInjectionRule>>(&raw) {
+            Ok(rules) if !rules.is_empty() => Some(rules),
+            Ok(_) => None,
+            Err(e) => {
+                log_warn(&format!(
+                    "AXON_QUEUE_INJECTION_RULES_JSON parse failed, using defaults: {e}"
+                ));
+                None
+            }
+        },
+        Err(_) => None,
+    };
     maybe_rules.unwrap_or_else(default_queue_injection_rules)
 }
 
@@ -144,7 +153,12 @@ fn estimate_quality_score(url: &str, markdown_chars: usize) -> f64 {
     } else {
         0.05
     };
-    let depth_bonus = (normalized_url.matches('/').count() as f64 / 12.0).clamp(0.0, 0.10);
+    let path_slashes = normalized_url
+        .find("://")
+        .and_then(|i| normalized_url.get(i + 3..))
+        .map(|path| path.matches('/').count())
+        .unwrap_or(0);
+    let depth_bonus = (path_slashes as f64 / 12.0).clamp(0.0, 0.10);
     (0.70 * density_score + signal_bonus + depth_bonus).clamp(0.0, 1.0)
 }
 
@@ -547,7 +561,9 @@ async fn process_batch_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
     if job_cfg.embed {
         let mut embed_cfg = cfg.clone();
         embed_cfg.collection = job_cfg.collection;
-        embed_path_native(&embed_cfg, &out_dir.to_string_lossy()).await?;
+        if let Err(e) = embed_path_native(&embed_cfg, &out_dir.to_string_lossy()).await {
+            log_warn(&format!("batch job {id}: embed failed (non-fatal): {e:#}"));
+        }
     }
 
     sqlx::query(

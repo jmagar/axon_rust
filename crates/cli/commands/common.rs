@@ -43,7 +43,16 @@ fn expand_brace_token(token: &str) -> Vec<String> {
         .collect()
 }
 
+const MAX_EXPANSION_DEPTH: usize = 10;
+
 fn expand_url_glob_seed(seed: &str) -> Vec<String> {
+    expand_url_glob_seed_inner(seed, 0)
+}
+
+fn expand_url_glob_seed_inner(seed: &str, depth: usize) -> Vec<String> {
+    if depth >= MAX_EXPANSION_DEPTH {
+        return vec![seed.to_string()];
+    }
     let Some(open_idx) = seed.find('{') else {
         return vec![seed.to_string()];
     };
@@ -62,7 +71,7 @@ fn expand_url_glob_seed(seed: &str) -> Vec<String> {
     let mut out = Vec::new();
     for choice in choices {
         let next = format!("{prefix}{choice}{suffix}");
-        out.extend(expand_url_glob_seed(&next));
+        out.extend(expand_url_glob_seed_inner(&next, depth + 1));
     }
     out
 }

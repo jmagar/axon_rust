@@ -266,7 +266,11 @@ cat urls.txt | xargs -P 10 -I {} sh -c '
 # Search and scrape results in parallel
 axon search "AI research" --limit 20 --json | \
     jq -r '.data.web[].url' | \
-    xargs -P 10 -I {} axon scrape "{}" -o ".axon/research-{}.md"
+    xargs -P 10 -I {} sh -c '
+        url="{}"
+        filename=$(echo "$url" | tr "/:?&#" "_____")
+        axon scrape "$url" -o ".axon/research-${filename}.md"
+    '
 ```
 
 ### Parallelization Guidelines
@@ -289,7 +293,12 @@ for url in $(cat urls.txt); do
 
     # Limit concurrent jobs to 10
     if (( $(jobs -r | wc -l) >= 10 )); then
-        wait -n  # Wait for any job to finish
+        # wait -n requires bash >= 4.3; fall back to wait (all) on older versions
+        if [[ "${BASH_VERSINFO[0]}" -ge 5 || ( "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 3 ) ]]; then
+            wait -n
+        else
+            wait
+        fi
     fi
 done
 wait  # Wait for remaining jobs
