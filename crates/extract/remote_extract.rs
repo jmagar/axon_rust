@@ -1,17 +1,7 @@
-use crate::axon_cli::crates::core::http::build_client;
+use crate::axon_cli::crates::core::http::http_client;
 use spider::tokio;
 use spider::website::Website;
 use std::error::Error;
-use std::sync::LazyLock;
-
-static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> =
-    LazyLock::new(|| build_client(30).map_err(|e| e.to_string()));
-
-fn http_client() -> Result<&'static reqwest::Client, Box<dyn Error>> {
-    HTTP_CLIENT
-        .as_ref()
-        .map_err(|err| format!("failed to initialize HTTP client: {err}").into())
-}
 
 #[derive(Debug, Clone)]
 pub struct ExtractRun {

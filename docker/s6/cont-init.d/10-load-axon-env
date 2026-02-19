@@ -3,34 +3,38 @@
 set -euo pipefail
 
 env_file="${AXON_ENV_FILE:-/app/.env}"
+output_dir="${AXON_OUTPUT_DIR:-/app/.cache/axon-rust/output}"
 
 if [[ ! -f "$env_file" ]]; then
   echo "[cont-init] env file not found at $env_file, using runtime environment only"
-  exit 0
+else
+  echo "[cont-init] loading environment from $env_file"
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+    line="${line#export }"
+    key="${line%%=*}"
+    value="${line#*=}"
+
+    key="$(echo "$key" | tr -d '[:space:]')"
+    [[ -z "$key" ]] && continue
+
+    if [[ "$value" =~ ^\".*\"$ ]]; then
+      value="${value#\"}"
+      value="${value%\"}"
+    elif [[ "$value" =~ ^\'.*\'$ ]]; then
+      value="${value#\'}"
+      value="${value%\'}"
+    fi
+
+    if [[ -z "${!key+x}" ]]; then
+      export "$key=$value"
+    fi
+  done < "$env_file"
 fi
 
-echo "[cont-init] loading environment from $env_file"
-
-while IFS= read -r line || [[ -n "$line" ]]; do
-  [[ -z "$line" ]] && continue
-  [[ "$line" =~ ^[[:space:]]*# ]] && continue
-
-  line="${line#export }"
-  key="${line%%=*}"
-  value="${line#*=}"
-
-  key="$(echo "$key" | tr -d '[:space:]')"
-  [[ -z "$key" ]] && continue
-
-  if [[ "$value" =~ ^\".*\"$ ]]; then
-    value="${value#\"}"
-    value="${value%\"}"
-  elif [[ "$value" =~ ^\'.*\'$ ]]; then
-    value="${value#\'}"
-    value="${value%\'}"
-  fi
-
-  if [[ -z "${!key+x}" ]]; then
-    export "$key=$value"
-  fi
-done < "$env_file"
+mkdir -p "$output_dir"
+chown -R axon:axon "$output_dir"
+chmod -R u+rwX,g+rwX "$output_dir"

@@ -31,10 +31,10 @@ pub async fn run_crawl(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Erro
                             println!(
                                 "{}",
                                 serde_json::to_string_pretty(&serde_json::json!({
-                                        "id": job.id,
-                                        "url": job.url,
-                                        "status": job.status,
-                                        "created_at": job.created_at,
+                                    "id": job.id,
+                                    "url": job.url,
+                                    "status": job.status,
+                                    "created_at": job.created_at,
                                     "updated_at": job.updated_at,
                                     "started_at": job.started_at,
                                     "finished_at": job.finished_at,
@@ -266,7 +266,7 @@ pub async fn run_crawl(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Erro
         println!("  {} {}", primary("Crawl Job"), accent(&job_id.to_string()));
         println!(
             "  {}",
-            muted(&format!("Check status: cortex crawl status {job_id}"))
+            muted(&format!("Check status: axon crawl status {job_id}"))
         );
         println!();
         println!("Job ID: {job_id}");

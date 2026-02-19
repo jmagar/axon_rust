@@ -51,19 +51,19 @@ docker compose ps
 
 ```bash
 # 3) run CLI
-cargo run --bin cortex -- doctor
-cargo run --bin cortex -- scrape https://example.com --wait true
-cargo run --bin cortex -- crawl https://docs.rs/spider --wait false
-cargo run --bin cortex -- status
+cargo run --bin axon -- doctor
+cargo run --bin axon -- scrape https://example.com --wait true
+cargo run --bin axon -- crawl https://docs.rs/spider --wait false
+cargo run --bin axon -- status
 ```
 
 ```bash
 # Optional local alias to match standalone naming
-alias cortex='cargo run --bin cortex --'
+alias axon='cargo run --bin axon --'
 
-cortex doctor
-cortex query "spider crawler"
-cortex ask "what does spider.rs support?"
+axon doctor
+axon query "spider crawler"
+axon ask "what does spider.rs support?"
 ```
 
 ## Env Setup
@@ -93,7 +93,7 @@ Startup loads `.env` via `docker/s6/cont-init.d/10-load-axon-env`. Health checks
 
 ## Troubleshooting
 
-- `cortex doctor` (or cargo equivalent) for service reachability (Postgres/Redis/AMQP/Qdrant/TEI/OpenAI)
+- `axon doctor` (or cargo equivalent) for service reachability (Postgres/Redis/AMQP/Qdrant/TEI/OpenAI)
 - `docker compose logs -f axon-workers` to inspect worker failures
 - Jobs stuck in pending: ensure `axon-workers` is healthy and AMQP/Redis are reachable
 - `ask`/`extract` failures: verify `OPENAI_BASE_URL` is a base URL (for example `http://host/v1`, not `/chat/completions`)

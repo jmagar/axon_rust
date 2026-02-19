@@ -44,7 +44,25 @@ fn is_excluded_url_path(url: &str, excludes: &[String]) -> bool {
         .ok()
         .map(|u| u.path().to_string())
         .unwrap_or_else(|| "/".to_string());
-    excludes.iter().any(|prefix| path.starts_with(prefix))
+    excludes
+        .iter()
+        .any(|prefix| is_path_prefix_excluded(&path, prefix))
+}
+
+fn is_path_prefix_excluded(path: &str, prefix: &str) -> bool {
+    let normalized = if prefix.starts_with('/') {
+        prefix
+    } else {
+        return is_path_prefix_excluded(path, &format!("/{prefix}"));
+    };
+    let boundary_prefix = normalized.trim_end_matches('/');
+    if boundary_prefix.is_empty() {
+        return false;
+    }
+    path == boundary_prefix
+        || path
+            .strip_prefix(boundary_prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn regex_escape(value: &str) -> String {
@@ -752,5 +770,37 @@ mod tests {
         // markdown_files = 15 >= 10 → coverage OK
         // thin_ratio = 5/50 = 0.10 → OK
         assert!(!should_fallback_to_chrome(&summary(50, 5, 15), 50));
+    }
+
+    #[test]
+    fn test_exclude_path_prefix_matches_segment_boundary() {
+        let excludes = vec!["/de".to_string()];
+        assert!(is_excluded_url_path("https://example.com/de", &excludes));
+        assert!(is_excluded_url_path(
+            "https://example.com/de/docs",
+            &excludes
+        ));
+        assert!(!is_excluded_url_path(
+            "https://example.com/developer",
+            &excludes
+        ));
+        assert!(!is_excluded_url_path(
+            "https://example.com/design",
+            &excludes
+        ));
+    }
+
+    #[test]
+    fn test_exclude_path_prefix_handles_non_normalized_input() {
+        let excludes = vec!["de/".to_string()];
+        assert!(is_excluded_url_path("https://example.com/de", &excludes));
+        assert!(is_excluded_url_path(
+            "https://example.com/de/guide",
+            &excludes
+        ));
+        assert!(!is_excluded_url_path(
+            "https://example.com/developer",
+            &excludes
+        ));
     }
 }

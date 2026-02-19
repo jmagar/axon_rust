@@ -57,7 +57,7 @@ services:
 
   axon-rabbitmq:
     <<: *common-service
-    image: rabbitmq:4.0-management
+    image: rabbitmq:4.0
     container_name: axon-rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-axon}
@@ -66,6 +66,7 @@ services:
       - "127.0.0.1:45535:5672"  # homelab-only: not exposed to network
     volumes:
       - /home/jmagar/appdata/axon-rabbitmq:/var/lib/rabbitmq
+      - ./docker/rabbitmq/20-axon.conf:/etc/rabbitmq/conf.d/20-axon.conf:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 10s
@@ -117,7 +118,11 @@ services:
           cpus: '1.0'
           memory: 512M
     healthcheck:
-      test: ["CMD", "/usr/local/bin/healthcheck-workers.sh"]
+      test:
+        [
+          "CMD-SHELL",
+          "/command/s6-svstat -u /run/service/crawl-worker >/dev/null && /command/s6-svstat -u /run/service/batch-worker >/dev/null && /command/s6-svstat -u /run/service/extract-worker >/dev/null && /command/s6-svstat -u /run/service/embed-worker >/dev/null",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3

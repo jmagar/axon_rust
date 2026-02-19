@@ -1,4 +1,4 @@
-#!/command/with-contenv sh
+#!/bin/sh
 # shellcheck shell=sh
 set -eu
 

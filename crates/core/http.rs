@@ -1,7 +1,17 @@
 use spider::url::Url;
 use std::error::Error;
 use std::net::IpAddr;
+use std::sync::LazyLock;
 use std::time::Duration;
+
+pub static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> =
+    LazyLock::new(|| build_client(30).map_err(|e| e.to_string()));
+
+pub fn http_client() -> Result<&'static reqwest::Client, Box<dyn Error>> {
+    HTTP_CLIENT
+        .as_ref()
+        .map_err(|err| format!("failed to initialize HTTP client: {err}").into())
+}
 
 pub fn normalize_url(url: &str) -> String {
     let trimmed = url.trim();

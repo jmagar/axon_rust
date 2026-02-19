@@ -180,11 +180,13 @@ async fn process_embed_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
         let job_cfg: EmbedJobConfig = serde_json::from_value(cfg_json)?;
         let mut embed_cfg = cfg.clone();
         embed_cfg.collection = job_cfg.collection.clone();
-        embed_path_native(&embed_cfg, &input_text).await?;
+        let summary = embed_path_native(&embed_cfg, &input_text).await?;
 
         Ok(Some(serde_json::json!({
             "input": input_text,
             "collection": job_cfg.collection,
+            "docs_embedded": summary.docs_embedded,
+            "chunks_embedded": summary.chunks_embedded,
             "source": "rust"
         })))
     }

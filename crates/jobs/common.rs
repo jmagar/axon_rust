@@ -12,6 +12,16 @@ use tokio_executor_trait::Tokio as TokioExecutor;
 use tokio_reactor_trait::Tokio as TokioReactor;
 use uuid::Uuid;
 
+fn durable_queue_options() -> QueueDeclareOptions {
+    QueueDeclareOptions {
+        durable: true,
+        auto_delete: false,
+        exclusive: false,
+        nowait: false,
+        passive: false,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum JobTable {
     Crawl,
@@ -68,12 +78,8 @@ pub async fn open_amqp_channel(cfg: &Config, queue_name: &str) -> Result<Channel
     .context("amqp connect failed")?;
     let ch = tokio::time::timeout(Duration::from_secs(5), async {
         let ch = conn.create_channel().await?;
-        ch.queue_declare(
-            queue_name,
-            QueueDeclareOptions::default(),
-            FieldTable::default(),
-        )
-        .await?;
+        ch.queue_declare(queue_name, durable_queue_options(), FieldTable::default())
+            .await?;
         Ok::<Channel, lapin::Error>(ch)
     })
     .await
@@ -131,7 +137,32 @@ pub async fn enqueue_job(cfg: &Config, queue_name: &str, job_id: Uuid) -> Result
     use lapin::options::BasicPublishOptions;
     use lapin::BasicProperties;
 
-    let ch = open_amqp_channel(cfg, queue_name).await?;
+    let props = ConnectionProperties::default()
+        .with_executor(TokioExecutor::current())
+        .with_reactor(TokioReactor);
+    let conn = tokio::time::timeout(
+        Duration::from_secs(5),
+        Connection::connect(&cfg.amqp_url, props),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "amqp connect timeout: {} (if running in Docker without published ports, run from same Docker network or expose rabbitmq)",
+            redact_url(&cfg.amqp_url)
+        )
+    })?
+    .context("amqp connect failed")?;
+
+    let ch = tokio::time::timeout(Duration::from_secs(5), async {
+        let ch = conn.create_channel().await?;
+        ch.queue_declare(queue_name, durable_queue_options(), FieldTable::default())
+            .await?;
+        Ok::<Channel, lapin::Error>(ch)
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("amqp channel/queue declare timeout for queue={queue_name}"))?
+    .context("amqp create channel/declare queue failed")?;
+
     let payload = job_id.to_string();
     ch.basic_publish(
         "",
@@ -142,5 +173,11 @@ pub async fn enqueue_job(cfg: &Config, queue_name: &str, job_id: Uuid) -> Result
     )
     .await?
     .await?;
+
+    // Best-effort graceful teardown prevents noisy Lapin shutdown errors in
+    // short-lived CLI processes that enqueue and exit immediately.
+    let _ = ch.close(200, "bye").await;
+    let _ = conn.close(200, "bye").await;
+
     Ok(())
 }

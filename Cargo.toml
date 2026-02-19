@@ -7,12 +7,8 @@ edition = "2021"
 path = "mod.rs"
 
 [[bin]]
-name = "cortex"
-path = "main.rs"
-
-[[bin]]
 name = "axon"
-path = "axon_main.rs"
+path = "main.rs"
 
 [dependencies]
 anyhow = "1"
@@ -27,7 +23,7 @@ futures-util = "0.3"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-spider = { version = "2", default-features = false, features = ["basic", "chrome"] }
+spider = { version = "2", default-features = false, features = ["basic", "chrome", "regex"] }
 spider_transformations = "2"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
 tokio = { version = "1", features = ["full"] }

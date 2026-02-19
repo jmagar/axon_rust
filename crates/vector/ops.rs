@@ -1,6 +1,6 @@
 use crate::axon_cli::crates::core::config::Config;
 use crate::axon_cli::crates::core::content::to_markdown;
-use crate::axon_cli::crates::core::http::{build_client, fetch_html};
+use crate::axon_cli::crates::core::http::{build_client, fetch_html, http_client};
 use crate::axon_cli::crates::core::ui::{accent, muted, primary, status_text, symbol_for_status};
 use chrono::Utc;
 use reqwest::StatusCode;
@@ -10,17 +10,7 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 use uuid::Uuid;
-
-static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> =
-    LazyLock::new(|| build_client(30).map_err(|e| e.to_string()));
-
-fn http_client() -> Result<&'static reqwest::Client, Box<dyn Error>> {
-    HTTP_CLIENT
-        .as_ref()
-        .map_err(|err| format!("failed to initialize HTTP client: {err}").into())
-}
 
 fn qdrant_base(cfg: &Config) -> String {
     cfg.qdrant_url.trim_end_matches('/').to_string()
@@ -314,7 +304,13 @@ fn payload_domain(payload: &serde_json::Value) -> String {
         .to_string()
 }
 
-pub async fn embed_path_native(cfg: &Config, input: &str) -> Result<(), Box<dyn Error>> {
+#[derive(Debug, Clone, Copy)]
+pub struct EmbedSummary {
+    pub docs_embedded: usize,
+    pub chunks_embedded: usize,
+}
+
+pub async fn embed_path_native(cfg: &Config, input: &str) -> Result<EmbedSummary, Box<dyn Error>> {
     if cfg.tei_url.is_empty() {
         return Err("TEI_URL not configured".into());
     }
@@ -331,12 +327,14 @@ pub async fn embed_path_native(cfg: &Config, input: &str) -> Result<(), Box<dyn 
     }
 
     let mut all_points = Vec::new();
+    let mut docs_embedded = 0usize;
     let mut collection_ensured = false;
     for (url, raw) in docs {
         let chunks = chunk_text(&raw);
         if chunks.is_empty() {
             continue;
         }
+        docs_embedded += 1;
         let vectors = tei_embed(cfg, &chunks).await?;
         if vectors.is_empty() {
             return Err("TEI returned no vectors for this document".into());
@@ -382,7 +380,10 @@ pub async fn embed_path_native(cfg: &Config, input: &str) -> Result<(), Box<dyn 
             accent(&cfg.collection)
         );
     }
-    Ok(())
+    Ok(EmbedSummary {
+        docs_embedded,
+        chunks_embedded: all_points.len(),
+    })
 }
 
 pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {

@@ -390,7 +390,11 @@ async fn process_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), Box<dy
     }
     .await;
 
-    let _ = progress_task.await;
+    if let Err(err) = progress_task.await {
+        log_warn(&format!(
+            "progress_task panicked while serializing progress for crawl job {id}: {err}"
+        ));
+    }
 
     match result {
         Ok(result_json) => {

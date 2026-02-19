@@ -123,7 +123,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "cortex", about = "Axon CLI (Rust + Spider.rs)")]
+#[command(name = "axon", about = "Axon CLI (Rust + Spider.rs)")]
 struct Cli {
     #[command(subcommand)]
     command: CliCommand,
@@ -275,7 +275,7 @@ struct GlobalArgs {
         global = true,
         long,
         env = "AXON_COLLECTION",
-        default_value = "spider_rust"
+        default_value = "cortex"
     )]
     collection: String,
 
@@ -404,7 +404,21 @@ fn default_exclude_prefixes() -> Vec<String> {
     .collect()
 }
 
-fn normalize_exclude_prefixes(input: Vec<String>) -> Vec<String> {
+struct NormalizedExcludePrefixes {
+    prefixes: Vec<String>,
+    disable_defaults: bool,
+}
+
+fn normalize_exclude_prefixes(input: Vec<String>) -> NormalizedExcludePrefixes {
+    let disable_by_empty = input.len() == 1 && matches!(input[0].trim(), "" | "/");
+    let disable_by_none = input.iter().any(|v| v.trim().eq_ignore_ascii_case("none"));
+    if disable_by_none {
+        return NormalizedExcludePrefixes {
+            prefixes: Vec::new(),
+            disable_defaults: true,
+        };
+    }
+
     let mut out = Vec::new();
     for raw in input {
         let trimmed = raw.trim();
@@ -420,7 +434,10 @@ fn normalize_exclude_prefixes(input: Vec<String>) -> Vec<String> {
     }
     out.sort();
     out.dedup();
-    out
+    NormalizedExcludePrefixes {
+        prefixes: out,
+        disable_defaults: disable_by_empty,
+    }
 }
 
 fn positional_from_job(job: JobSubcommand) -> Vec<String> {
@@ -578,6 +595,8 @@ fn into_config(cli: Cli) -> Config {
         backfill_concurrency_limit = Some(limit);
     }
 
+    let normalized_excludes = normalize_exclude_prefixes(global.exclude_path_prefix);
+
     let mut cfg = Config {
         command,
         start_url: global.start_url,
@@ -588,7 +607,7 @@ fn into_config(cli: Cli) -> Config {
         max_pages: global.max_pages,
         max_depth: global.max_depth,
         include_subdomains: global.include_subdomains,
-        exclude_path_prefix: normalize_exclude_prefixes(global.exclude_path_prefix),
+        exclude_path_prefix: normalized_excludes.prefixes,
         output_dir: global.output_dir,
         output_path: global.output,
         render_mode: global.render_mode,
@@ -655,7 +674,7 @@ fn into_config(cli: Cli) -> Config {
         json_output: global.json,
     };
 
-    if cfg.exclude_path_prefix.is_empty() {
+    if cfg.exclude_path_prefix.is_empty() && !normalized_excludes.disable_defaults {
         cfg.exclude_path_prefix = default_exclude_prefixes();
     }
 
@@ -705,7 +724,7 @@ fn maybe_print_top_level_help_and_exit() {
 }
 
 fn print_top_level_help() {
-    let colors_enabled = env::var("CORTEX_NO_COLOR").is_err();
+    let colors_enabled = env::var("AXON_NO_COLOR").is_err() && env::var("CORTEX_NO_COLOR").is_err();
     let colorize = |code: &str, text: &str| {
         if colors_enabled {
             format!("{code}{text}\x1b[0m")
@@ -726,7 +745,7 @@ fn print_top_level_help() {
     let primary = "\x1b[38;2;244;143;177m"; // #F48FB1
     let accent = "\x1b[38;2;144;202;249m"; // #90CAF9
 
-    let title = bold(&colorize(primary, "CORTEX CLI"));
+    let title = bold(&colorize(primary, "AXON CLI"));
     let divider = colorize(primary, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     let section = |name: &str| bold(&colorize(primary, name));
     let cmd = |name: &str| colorize(accent, name);
@@ -739,7 +758,7 @@ fn print_top_level_help() {
                 .map(|s| s.to_string())
         })
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "cortex".to_string());
+        .unwrap_or_else(|| "axon".to_string());
 
     println!("  {title}");
     println!("  {divider}");
@@ -768,7 +787,7 @@ fn print_top_level_help() {
     println!(
         "  {}",
         dim(&format!(
-            "{bin_name} query \"embedding pipeline\" --collection axon"
+            "{bin_name} query \"embedding pipeline\" --collection cortex"
         ))
     );
     println!();
@@ -782,7 +801,7 @@ fn print_top_level_help() {
     println!(
         "  {:<28} {}",
         cmd("--collection <name>"),
-        dim("vector collection (default spider_rust)")
+        dim("vector collection (default cortex)")
     );
     println!(
         "  {:<28} {}",
