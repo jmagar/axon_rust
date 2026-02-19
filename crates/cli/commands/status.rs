@@ -7,7 +7,7 @@ use crate::axon_cli::crates::core::health::{
 };
 use crate::axon_cli::crates::core::ui::{accent, muted, primary, status_text, symbol_for_status};
 use crate::axon_cli::crates::jobs::batch_jobs::list_batch_jobs;
-use crate::axon_cli::crates::jobs::crawl_jobs_dispatch::list_jobs;
+use crate::axon_cli::crates::jobs::crawl_jobs_v2::list_jobs;
 use crate::axon_cli::crates::jobs::embed_jobs::list_embed_jobs;
 use crate::axon_cli::crates::jobs::extract_jobs::list_extract_jobs;
 use console::style;

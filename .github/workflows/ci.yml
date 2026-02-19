@@ -53,6 +53,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.93.1
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: cargo fmt check
@@ -64,6 +65,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.1
       - uses: Swatinem/rust-cache@v2
       - name: cargo check (warnings are errors)
         env:
@@ -77,6 +80,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.93.1
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: cargo clippy
@@ -88,6 +92,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.1
       - uses: Swatinem/rust-cache@v2
       - name: cargo test
         run: cargo test --all
@@ -98,6 +104,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.1
       - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-audit

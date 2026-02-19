@@ -1,8 +1,16 @@
 #[test]
 fn ops_v2_modules_do_not_call_legacy_functions() {
     let files = [
-        include_str!("../crates/vector/ops_v2/commands.rs"),
-        include_str!("../crates/vector/ops_v2/qdrant.rs"),
+        include_str!("../crates/vector/ops_v2/commands/mod.rs"),
+        include_str!("../crates/vector/ops_v2/commands/query.rs"),
+        include_str!("../crates/vector/ops_v2/commands/suggest.rs"),
+        include_str!("../crates/vector/ops_v2/commands/ask.rs"),
+        include_str!("../crates/vector/ops_v2/commands/streaming.rs"),
+        include_str!("../crates/vector/ops_v2/qdrant/mod.rs"),
+        include_str!("../crates/vector/ops_v2/qdrant/types.rs"),
+        include_str!("../crates/vector/ops_v2/qdrant/utils.rs"),
+        include_str!("../crates/vector/ops_v2/qdrant/client.rs"),
+        include_str!("../crates/vector/ops_v2/qdrant/commands.rs"),
         include_str!("../crates/vector/ops_v2/tei.rs"),
         include_str!("../crates/vector/ops_v2/stats.rs"),
     ];

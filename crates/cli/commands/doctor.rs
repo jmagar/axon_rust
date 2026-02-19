@@ -7,7 +7,7 @@ use crate::axon_cli::crates::core::health::{
 };
 use crate::axon_cli::crates::core::ui::{muted, primary, status_text, symbol_for_status};
 use crate::axon_cli::crates::jobs::batch_jobs::batch_doctor;
-use crate::axon_cli::crates::jobs::crawl_jobs_dispatch::doctor as crawl_doctor;
+use crate::axon_cli::crates::jobs::crawl_jobs_v2::doctor as crawl_doctor;
 use crate::axon_cli::crates::jobs::embed_jobs::embed_doctor;
 use crate::axon_cli::crates::jobs::extract_jobs::extract_doctor;
 use serde_json::Value;

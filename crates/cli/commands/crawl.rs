@@ -11,7 +11,7 @@ use crate::axon_cli::crates::core::ui::{
     symbol_for_status, Spinner,
 };
 use crate::axon_cli::crates::crawl::engine::{append_sitemap_backfill, run_crawl_once};
-use crate::axon_cli::crates::jobs::crawl_jobs_dispatch::{
+use crate::axon_cli::crates::jobs::crawl_jobs_v2::{
     cancel_job, cleanup_jobs, clear_jobs, get_job, list_jobs, recover_stale_crawl_jobs, run_worker,
     start_crawl_job,
 };
@@ -467,8 +467,8 @@ pub async fn run_crawl(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Erro
 
     if !cfg.wait {
         let chrome_bootstrap = bootstrap_chrome_runtime(cfg).await;
-        let job_id = start_crawl_job(cfg, start_url).await?;
 
+        // Print header immediately so the user sees feedback before DB/AMQP I/O.
         print_phase("◐", "Crawling", start_url);
         println!("  {}", primary("Options:"));
         print_option("maxDepth", &cfg.max_depth.to_string());
@@ -512,9 +512,11 @@ pub async fn run_crawl(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Erro
             );
         }
         println!();
-        for warning in chrome_bootstrap.warnings {
+        for warning in &chrome_bootstrap.warnings {
             println!("{} {}", muted("[Chrome Bootstrap]"), warning);
         }
+
+        let job_id = start_crawl_job(cfg, start_url).await?;
 
         println!(
             "  {}",

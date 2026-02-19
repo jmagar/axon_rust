@@ -231,7 +231,7 @@ pub async fn enqueue_job(cfg: &Config, queue_name: &str, job_id: Uuid) -> Result
     use lapin::options::BasicPublishOptions;
     use lapin::BasicProperties;
 
-    let (_conn, ch) = open_amqp_connection_and_channel(cfg, queue_name).await?;
+    let (conn, ch) = open_amqp_connection_and_channel(cfg, queue_name).await?;
 
     let payload = job_id.to_string();
     ch.basic_publish(
@@ -243,6 +243,13 @@ pub async fn enqueue_job(cfg: &Config, queue_name: &str, job_id: Uuid) -> Result
     )
     .await?
     .await?;
+
+    // Explicitly close channel then connection so lapin's AMQP CLOSE handshake
+    // completes synchronously. Without this, lapin defers cleanup to background
+    // tokio tasks that race with #[tokio::main] shutdown, producing:
+    // "A Tokio 1.x context was found, but it is being shutdown."
+    drop(ch);
+    let _ = conn.close(200, "").await;
 
     Ok(())
 }
