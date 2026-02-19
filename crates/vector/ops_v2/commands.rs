@@ -7,6 +7,8 @@ use spider::url::Url;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::error::Error;
+use std::io::Write;
+use std::sync::Arc;
 
 pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let query = cfg
@@ -67,12 +69,138 @@ fn env_usize_clamped(key: &str, default: usize, min: usize, max: usize) -> usize
         .clamp(min, max)
 }
 
-fn env_f64_clamped(key: &str, default: f64, min: f64, max: f64) -> f64 {
-    env::var(key)
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(default)
-        .clamp(min, max)
+fn extract_sse_token(data: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(data).ok()?;
+    value["choices"][0]["delta"]["content"]
+        .as_str()
+        .or_else(|| value["choices"][0]["message"]["content"].as_str())
+        .or_else(|| value["choices"][0]["text"].as_str())
+        .map(str::to_string)
+}
+
+fn process_sse_line(
+    line: &str,
+    answer: &mut String,
+    print_tokens: bool,
+    saw_stream_payload: &mut bool,
+) -> Result<bool, Box<dyn Error>> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || !trimmed.starts_with("data: ") {
+        return Ok(false);
+    }
+    let data = trimmed.trim_start_matches("data: ").trim();
+    if data.is_empty() {
+        return Ok(false);
+    }
+    if data == "[DONE]" {
+        return Ok(true);
+    }
+
+    if let Some(token) = extract_sse_token(data) {
+        *saw_stream_payload = true;
+        answer.push_str(&token);
+        if print_tokens {
+            print!("{token}");
+            std::io::stdout().flush()?;
+        }
+    }
+    Ok(false)
+}
+
+async fn ask_llm_streaming(
+    cfg: &Config,
+    client: &reqwest::Client,
+    query: &str,
+    context: &str,
+    print_tokens: bool,
+) -> Result<String, Box<dyn Error>> {
+    let mut req = client
+        .post(format!(
+            "{}/chat/completions",
+            cfg.openai_base_url.trim_end_matches('/')
+        ))
+        .json(&serde_json::json!({
+            "model": cfg.openai_model,
+            "messages": [
+                {"role": "system", "content": "Answer only using provided context. Cite sources like [S1]."},
+                {"role": "user", "content": format!("Question: {}\n\nContext:\n{}", query, context)}
+            ],
+            "temperature": 0.1,
+            "stream": true
+        }));
+
+    if !cfg.openai_api_key.is_empty() {
+        req = req.bearer_auth(&cfg.openai_api_key);
+    }
+
+    let response = req.send().await?;
+    if !response.status().is_success() {
+        return Err(format!("streaming request failed with status {}", response.status()).into());
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut answer = String::new();
+    let mut pending = String::new();
+    let mut saw_stream_payload = false;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        pending.push_str(&String::from_utf8_lossy(&chunk));
+
+        while let Some(newline_idx) = pending.find('\n') {
+            let mut line = pending[..newline_idx].to_string();
+            pending.drain(..=newline_idx);
+            if line.ends_with('\r') {
+                let _ = line.pop();
+            }
+            let done = process_sse_line(&line, &mut answer, print_tokens, &mut saw_stream_payload)?;
+            if done {
+                return Ok(answer);
+            }
+        }
+    }
+
+    if !pending.trim().is_empty() {
+        let _ = process_sse_line(&pending, &mut answer, print_tokens, &mut saw_stream_payload)?;
+    }
+
+    if saw_stream_payload {
+        return Ok(answer);
+    }
+
+    Err("streaming response returned no token payload".into())
+}
+
+async fn ask_llm_non_streaming(
+    cfg: &Config,
+    client: &reqwest::Client,
+    query: &str,
+    context: &str,
+) -> Result<String, Box<dyn Error>> {
+    let mut req = client
+        .post(format!(
+            "{}/chat/completions",
+            cfg.openai_base_url.trim_end_matches('/')
+        ))
+        .json(&serde_json::json!({
+            "model": cfg.openai_model,
+            "messages": [
+                {"role": "system", "content": "Answer only using provided context. Cite sources like [S1]."},
+                {"role": "user", "content": format!("Question: {}\n\nContext:\n{}", query, context)}
+            ],
+            "temperature": 0.1
+        }));
+
+    if !cfg.openai_api_key.is_empty() {
+        req = req.bearer_auth(&cfg.openai_api_key);
+    }
+
+    let response = req.send().await?.error_for_status()?;
+    let json: serde_json::Value = response.json().await?;
+    Ok(json["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("(no answer)")
+        .to_string())
 }
 
 fn push_context_entry(
@@ -321,8 +449,7 @@ ALREADY_INDEXED_URLS:\n{existing_url_context}"
 }
 
 pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let max_context_chars =
-        env_usize_clamped("AXON_ASK_MAX_CONTEXT_CHARS", 120_000, 20_000, 400_000);
+    let max_context_chars = cfg.ask_max_context_chars;
     let ask_started = std::time::Instant::now();
 
     let query = cfg
@@ -343,13 +470,14 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         return Err("TEI returned no vector for ask query".into());
     }
     let vecq = ask_vectors.remove(0);
-    let candidate_pool_limit = env_usize_clamped("AXON_ASK_CANDIDATE_LIMIT", 64, 8, 200);
-    let chunk_limit = env_usize_clamped("AXON_ASK_CHUNK_LIMIT", 10, 3, 40);
-    let full_docs_limit = env_usize_clamped("AXON_ASK_FULL_DOCS", 4, 1, 20);
-    let backfill_limit = env_usize_clamped("AXON_ASK_BACKFILL_CHUNKS", 3, 0, 20);
-    let doc_fetch_concurrency = env_usize_clamped("AXON_ASK_DOC_FETCH_CONCURRENCY", 4, 1, 16);
-    let doc_chunk_limit = env_usize_clamped("AXON_ASK_DOC_CHUNK_LIMIT", 192, 8, 2000);
-    let min_relevance_score = env_f64_clamped("AXON_ASK_MIN_RELEVANCE_SCORE", 0.0, -1.0, 2.0);
+    let candidate_pool_limit = cfg.ask_candidate_limit;
+    let chunk_limit = cfg.ask_chunk_limit;
+    let full_docs_limit = cfg.ask_full_docs;
+    let backfill_limit = cfg.ask_backfill_chunks;
+    let doc_fetch_concurrency = cfg.ask_doc_fetch_concurrency;
+    let doc_chunk_limit = cfg.ask_doc_chunk_limit;
+    let min_relevance_score = cfg.ask_min_relevance_score;
+    let query_tokens = ranking::tokenize_query(&query);
 
     let hits = qdrant::qdrant_search(cfg, &vecq, candidate_pool_limit).await?;
     let mut candidates = Vec::new();
@@ -357,6 +485,7 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         let score = hit.score;
         let payload = &hit.payload;
         let url = qdrant::payload_url_typed(payload).to_string();
+        let path = ranking::extract_path_from_url(&url);
         let chunk_text = qdrant::payload_text_typed(payload).to_string();
         if url.is_empty() || chunk_text.len() < 40 {
             continue;
@@ -364,8 +493,9 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         candidates.push(ranking::AskCandidate {
             score,
             url: url.clone(),
+            path: path.clone(),
             chunk_text: chunk_text.clone(),
-            url_tokens: ranking::tokenize_path_set(&url),
+            url_tokens: ranking::tokenize_path_set(&path),
             chunk_tokens: ranking::tokenize_text_set(&chunk_text),
             rerank_score: score,
         });
@@ -374,7 +504,7 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         return Err("No relevant documents found for ask query".into());
     }
 
-    let reranked = ranking::rerank_ask_candidates(&candidates, &query)
+    let reranked = ranking::rerank_ask_candidates(&candidates, &query_tokens)
         .into_iter()
         .filter(|c| c.rerank_score >= min_relevance_score)
         .collect::<Vec<_>>();
@@ -385,8 +515,8 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         )
         .into());
     }
-    let top_chunks = ranking::select_diverse_candidates(&reranked, chunk_limit, 2);
-    let top_full_docs = ranking::select_diverse_candidates(&reranked, full_docs_limit, 1);
+    let top_chunk_indices = ranking::select_diverse_candidates(&reranked, chunk_limit, 2);
+    let top_full_doc_indices = ranking::select_diverse_candidates(&reranked, full_docs_limit, 1);
     let retrieval_elapsed_ms = retrieval_started.elapsed().as_millis();
 
     let context_started = std::time::Instant::now();
@@ -395,7 +525,8 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let separator = "\n\n---\n\n";
     let mut source_idx = 1usize;
     let mut top_chunks_selected = 0usize;
-    for chunk in &top_chunks {
+    for &chunk_idx in &top_chunk_indices {
+        let chunk = &reranked[chunk_idx];
         let entry = format!(
             "## Top Chunk [S{}]: {}\n\n{}",
             source_idx, chunk.url, chunk.chunk_text
@@ -415,19 +546,25 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
     let mut fetched_docs = Vec::new();
     if context_char_count < max_context_chars {
-        let mut fetch_stream = stream::iter(top_full_docs.iter().enumerate().map(
-            |(idx, doc)| async move {
-                let url = doc.url.clone();
-                let points = qdrant::qdrant_retrieve_by_url(cfg, &url, Some(doc_chunk_limit)).await;
-                (idx, url, points)
+        let cfg_arc = Arc::new(cfg.clone());
+        let mut fetch_stream = stream::iter(top_full_doc_indices.iter().enumerate().map(
+            |(order, &doc_idx)| {
+                let cfg_for_task = Arc::clone(&cfg_arc);
+                let url = reranked[doc_idx].url.clone();
+                async move {
+                    let points =
+                        qdrant::qdrant_retrieve_by_url(&cfg_for_task, &url, Some(doc_chunk_limit))
+                            .await;
+                    (order, url, points)
+                }
             },
         ))
         .buffer_unordered(doc_fetch_concurrency);
-        while let Some((idx, url, points)) = fetch_stream.next().await {
-            fetched_docs.push((idx, url, points?));
+        while let Some((order, url, points)) = fetch_stream.next().await {
+            fetched_docs.push((order, url, points?));
         }
     }
-    fetched_docs.sort_by_key(|(idx, _, _)| *idx);
+    fetched_docs.sort_by_key(|(order, _, _)| *order);
 
     let mut inserted_full_doc_urls: HashSet<String> = HashSet::new();
     let mut full_docs_selected = 0usize;
@@ -451,18 +588,22 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         source_idx += 1;
     }
 
-    let supplemental = ranking::select_diverse_candidates(
-        &reranked
-            .iter()
-            .filter(|c| !inserted_full_doc_urls.contains(&c.url))
-            .cloned()
-            .collect::<Vec<_>>(),
+    let supplemental_candidate_indices = reranked
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| !inserted_full_doc_urls.contains(&candidate.url))
+        .map(|(idx, _)| idx)
+        .collect::<Vec<_>>();
+    let supplemental = ranking::select_diverse_candidates_from_indices(
+        &reranked,
+        &supplemental_candidate_indices,
         backfill_limit,
         1,
     );
 
     let mut supplemental_count = 0usize;
-    for chunk in &supplemental {
+    for &chunk_idx in &supplemental {
+        let chunk = &reranked[chunk_idx];
         let entry = format!(
             "## Supplemental Chunk [S{}]: {}\n\n{}",
             source_idx, chunk.url, chunk.chunk_text
@@ -493,13 +634,15 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     if cfg.ask_diagnostics {
         let mut diagnostic_sources: Vec<String> = Vec::new();
         diagnostic_sources.extend(
-            top_full_docs
+            top_full_doc_indices
                 .iter()
+                .map(|&idx| &reranked[idx])
                 .map(|c| format!("full-doc score={:.3} url={}", c.score, c.url)),
         );
         diagnostic_sources.extend(
             supplemental
                 .iter()
+                .map(|&idx| &reranked[idx])
                 .take(supplemental_count)
                 .map(|c| format!("chunk score={:.3} url={}", c.score, c.url)),
         );
@@ -544,30 +687,27 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     }
 
     let client = http_client()?;
-    let mut req = client
-        .post(format!(
-            "{}/chat/completions",
-            cfg.openai_base_url.trim_end_matches('/')
-        ))
-        .json(&serde_json::json!({
-            "model": cfg.openai_model,
-            "messages": [
-                {"role": "system", "content": "Answer only using provided context. Cite sources like [S1]."},
-                {"role": "user", "content": format!("Question: {}\n\nContext:\n{}", query, context)}
-            ],
-            "temperature": 0.1
-        }));
-
-    if !cfg.openai_api_key.is_empty() {
-        req = req.bearer_auth(&cfg.openai_api_key);
-    }
-
     let llm_started = std::time::Instant::now();
-    let response = req.send().await?.error_for_status()?;
-    let json: serde_json::Value = response.json().await?;
-    let answer = json["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("(no answer)");
+    if !cfg.json_output {
+        println!("{}", primary("Conversation"));
+        println!("  {} {}", primary("You:"), query);
+        print!("  {} ", primary("Assistant:"));
+        std::io::stdout().flush()?;
+    }
+    let streamed_answer = ask_llm_streaming(cfg, client, &query, &context, !cfg.json_output).await;
+    let answer = match streamed_answer {
+        Ok(value) => value,
+        Err(_) => {
+            let fallback = ask_llm_non_streaming(cfg, client, &query, &context).await?;
+            if !cfg.json_output {
+                print!("{fallback}");
+            }
+            fallback
+        }
+    };
+    if !cfg.json_output {
+        println!();
+    }
     let llm_elapsed_ms = llm_started.elapsed().as_millis();
     let total_elapsed_ms = ask_started.elapsed().as_millis();
     if cfg.json_output {
@@ -599,9 +739,6 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
             }))?
         );
     } else {
-        println!("{}", primary("Conversation"));
-        println!("  {} {}", primary("You:"), query);
-        println!("  {} {}", primary("Assistant:"), answer);
         if cfg.ask_diagnostics {
             println!(
                 "  {} candidates={} reranked={} chunks={} full_docs={} supplemental={} context_chars={}",

@@ -8,6 +8,7 @@
 # Pre-existing large files — tracked for future refactoring (2026-02-19)
 crates/cli/commands/crawl.rs
 crates/cli/commands/doctor.rs
+crates/cli/commands/extract.rs
 crates/cli/commands/status.rs
 crates/core/config.rs
 crates/core/content.rs
@@ -15,6 +16,7 @@ crates/crawl/engine.rs
 crates/jobs/batch_jobs.rs
 crates/jobs/common.rs
 crates/jobs/crawl_jobs.rs
+crates/jobs/extract_jobs.rs
 crates/vector/ops.rs
 crates/vector/ops_v2/commands.rs
 crates/vector/ops_v2/qdrant.rs

@@ -1,6 +1,7 @@
 use crate::axon_cli::crates::core::config::Config;
 use crate::axon_cli::crates::core::http::http_client;
 use crate::axon_cli::crates::core::ui::{accent, muted, primary};
+use futures_util::future::join_all;
 use serde::Deserialize;
 use spider::url::Url;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -48,6 +49,8 @@ struct QdrantScrollResult {
 struct QdrantScrollResponse {
     result: QdrantScrollResult,
 }
+
+const RETRIEVE_MAX_POINTS_CEILING: usize = 500;
 
 fn env_usize_clamped(key: &str, default: usize, min: usize, max: usize) -> usize {
     env::var(key)
@@ -103,7 +106,12 @@ pub fn base_url(url: &str) -> Option<String> {
 
 pub fn render_full_doc_from_points(mut points: Vec<QdrantPoint>) -> String {
     points.sort_by_key(|p| p.payload.chunk_index.unwrap_or(i64::MAX));
-    let mut text = String::new();
+    let capacity = points
+        .iter()
+        .map(|point| payload_text_typed(&point.payload).len())
+        .sum::<usize>()
+        + points.len();
+    let mut text = String::with_capacity(capacity);
     for point in points {
         let chunk = payload_text_typed(&point.payload);
         if chunk.is_empty() {
@@ -125,6 +133,12 @@ pub fn query_snippet(payload: &QdrantPayload) -> String {
     text[..end].to_string()
 }
 
+fn retrieve_max_points(max_points: Option<usize>) -> usize {
+    max_points
+        .unwrap_or(RETRIEVE_MAX_POINTS_CEILING)
+        .min(RETRIEVE_MAX_POINTS_CEILING)
+}
+
 async fn qdrant_scroll_pages(
     cfg: &Config,
     mut process_page: impl FnMut(&[serde_json::Value]),
@@ -138,7 +152,7 @@ async fn qdrant_scroll_pages(
             "with_payload": true,
             "with_vector": false
         });
-        if let Some(off) = offset.clone() {
+        if let Some(off) = offset.take() {
             body["offset"] = off;
         }
 
@@ -263,6 +277,7 @@ pub(crate) async fn qdrant_retrieve_by_url(
     let client = http_client()?;
     let mut out = Vec::new();
     let mut offset: Option<serde_json::Value> = None;
+    let max_points = retrieve_max_points(max_points);
 
     loop {
         let mut body = serde_json::json!({
@@ -278,7 +293,7 @@ pub(crate) async fn qdrant_retrieve_by_url(
                 ]
             }
         });
-        if let Some(off) = offset.clone() {
+        if let Some(off) = offset.take() {
             body["offset"] = off;
         }
 
@@ -300,11 +315,9 @@ pub(crate) async fn qdrant_retrieve_by_url(
             break;
         }
         out.extend(points);
-        if let Some(max) = max_points {
-            if out.len() >= max {
-                out.truncate(max);
-                break;
-            }
+        if out.len() >= max_points {
+            out.truncate(max_points);
+            break;
         }
 
         offset = val.result.next_page_offset;
@@ -318,10 +331,18 @@ pub(crate) async fn qdrant_retrieve_by_url(
 
 pub async fn run_retrieve_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let target = cfg.positional.first().ok_or("retrieve requires URL")?;
+    let max_points = retrieve_max_points(None);
+    let candidates = crate::axon_cli::crates::vector::ops_v2::input::url_lookup_candidates(target);
+    let results = join_all(candidates.iter().map(|candidate| async move {
+        qdrant_retrieve_by_url(cfg, candidate, Some(max_points)).await
+    }))
+    .await;
+
     let mut points = Vec::new();
-    for candidate in crate::axon_cli::crates::vector::ops_v2::input::url_lookup_candidates(target) {
-        points = qdrant_retrieve_by_url(cfg, &candidate, None).await?;
-        if !points.is_empty() {
+    for result in results {
+        let candidate_points = result?;
+        if !candidate_points.is_empty() {
+            points = candidate_points;
             break;
         }
     }
@@ -330,28 +351,20 @@ pub async fn run_retrieve_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    points.sort_by_key(|p| p.payload.chunk_index.unwrap_or(i64::MAX));
-
-    let mut out = String::new();
-    for p in &points {
-        let t = payload_text_typed(&p.payload);
-        if !t.is_empty() {
-            out.push_str(t);
-            out.push('\n');
-        }
-    }
+    let chunk_count = points.len();
+    let out = render_full_doc_from_points(points);
     if cfg.json_output {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "url": target,
-                "chunks": points.len(),
+                "chunks": chunk_count,
                 "content": out.trim()
             }))?
         );
     } else {
         println!("{}", primary(&format!("Retrieve Result for {target}")));
-        println!("{} {}\n", muted("Chunks:"), points.len());
+        println!("{} {}\n", muted("Chunks:"), chunk_count);
         println!("{}", out.trim());
     }
     Ok(())
@@ -468,4 +481,27 @@ pub async fn run_domains_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{retrieve_max_points, RETRIEVE_MAX_POINTS_CEILING};
+
+    #[test]
+    fn retrieve_max_points_defaults_to_ceiling() {
+        assert_eq!(retrieve_max_points(None), RETRIEVE_MAX_POINTS_CEILING);
+    }
+
+    #[test]
+    fn retrieve_max_points_caps_values_above_ceiling() {
+        assert_eq!(
+            retrieve_max_points(Some(RETRIEVE_MAX_POINTS_CEILING + 250)),
+            RETRIEVE_MAX_POINTS_CEILING
+        );
+    }
+
+    #[test]
+    fn retrieve_max_points_preserves_lower_values() {
+        assert_eq!(retrieve_max_points(Some(128)), 128);
+    }
 }

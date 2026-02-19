@@ -13,6 +13,7 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -101,6 +102,23 @@ struct QdrantSearchHit {
 struct QdrantSearchResponse {
     #[serde(default)]
     result: Vec<QdrantSearchHit>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct QdrantSearchGroup {
+    #[serde(default)]
+    hits: Vec<QdrantSearchHit>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QdrantSearchGroupsResult {
+    #[serde(default)]
+    groups: Vec<QdrantSearchGroup>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QdrantSearchGroupsResponse {
+    result: QdrantSearchGroupsResult,
 }
 
 #[derive(Debug, Deserialize)]
@@ -295,6 +313,36 @@ async fn qdrant_search(
     Ok(res.result)
 }
 
+async fn qdrant_search_groups(
+    cfg: &Config,
+    vector: &[f32],
+    group_limit: usize,
+    group_size: usize,
+) -> Result<Vec<QdrantSearchGroup>, Box<dyn Error>> {
+    let client = http_client()?;
+    let url = format!(
+        "{}/collections/{}/points/search/groups",
+        qdrant_base(cfg),
+        cfg.collection
+    );
+    let res = client
+        .post(url)
+        .json(&serde_json::json!({
+            "vector": vector,
+            "group_by": "url",
+            "limit": group_limit,
+            "group_size": group_size,
+            "with_payload": true,
+            "with_vector": false
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<QdrantSearchGroupsResponse>()
+        .await?;
+    Ok(res.result.groups)
+}
+
 async fn qdrant_retrieve_by_url(
     cfg: &Config,
     url_match: &str,
@@ -414,20 +462,29 @@ pub fn chunk_text(text: &str) -> Vec<String> {
 }
 
 fn tokenize_query_terms(text: &str) -> Vec<String> {
-    let stop = [
-        "the", "and", "for", "with", "that", "this", "from", "into", "how", "what", "where",
-        "when", "you", "your", "are", "can", "does", "create", "make",
-    ];
-    let stop_words: HashSet<&str> = stop.into_iter().collect();
+    tokenize_query(text)
+}
+
+fn tokenize_query_impl(text: &str) -> Vec<String> {
+    static STOP_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+        HashSet::from([
+            "the", "and", "for", "with", "that", "this", "from", "into", "how", "what", "where",
+            "when", "you", "your", "are", "can", "does", "create", "make",
+        ])
+    });
+
     text.to_ascii_lowercase()
         .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|t| t.len() >= 3 && !stop_words.contains(*t))
+        .filter(|t| t.len() >= 3 && !STOP_WORDS.contains(*t))
         .map(str::to_string)
         .collect()
 }
 
 fn canonical_url_key(raw: &str) -> String {
     let normalized = normalize_url(raw);
+    if !normalized.contains('?') && !normalized.contains('#') {
+        return normalized.trim_end_matches('/').to_string();
+    }
     let Ok(mut parsed) = Url::parse(&normalized) else {
         return normalized.trim_end_matches('/').to_string();
     };
@@ -489,21 +546,11 @@ struct QueryCandidate {
 }
 
 fn tokenize_query(text: &str) -> Vec<String> {
-    let stop = [
-        "the", "and", "for", "with", "that", "this", "from", "into", "how", "what", "where",
-        "when", "you", "your", "are", "can", "does", "create", "make",
-    ];
-    let stop_words: HashSet<&str> = stop.into_iter().collect();
-    text.to_ascii_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|t| t.len() >= 3 && !stop_words.contains(*t))
-        .map(str::to_string)
-        .collect()
+    tokenize_query_impl(text)
 }
 
 fn sentence_candidates(text: &str) -> Vec<String> {
-    text.replace('\n', ". ")
-        .split(['.', '!', '?'])
+    text.split(|c: char| matches!(c, '.' | '!' | '?' | '\n'))
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
@@ -511,11 +558,17 @@ fn sentence_candidates(text: &str) -> Vec<String> {
 }
 
 fn is_probable_header(sentence: &str) -> bool {
-    let words: Vec<&str> = sentence.split_whitespace().collect();
-    if words.len() <= 5 && sentence.len() <= 60 {
-        return true;
+    if sentence.len() > 60 {
+        return false;
     }
-    false
+    let mut words = 0usize;
+    for _ in sentence.split_whitespace() {
+        words += 1;
+        if words > 5 {
+            return false;
+        }
+    }
+    true
 }
 
 fn truncate_chars(input: &str, max_chars: usize) -> String {
@@ -529,6 +582,10 @@ fn truncate_chars(input: &str, max_chars: usize) -> String {
 
 fn meaningful_snippet(chunk_text: &str, query: &str) -> String {
     let terms = tokenize_query_terms(query);
+    meaningful_snippet_with_terms(chunk_text, &terms)
+}
+
+fn meaningful_snippet_with_terms(chunk_text: &str, terms: &[String]) -> String {
     if terms.is_empty() {
         return truncate_chars(chunk_text.trim(), 180);
     }
@@ -565,41 +622,43 @@ fn meaningful_snippet(chunk_text: &str, query: &str) -> String {
     truncate_chars(fallback, 180)
 }
 
-fn select_best_preview_item(items: &[QueryCandidate], query: &str) -> Option<QueryCandidate> {
-    let terms = tokenize_query_terms(query);
+#[derive(Debug, Clone)]
+struct QueryPreview {
+    item: QueryCandidate,
+    snippet: String,
+}
+
+fn select_best_preview_item(items: &[QueryCandidate], terms: &[String]) -> Option<QueryPreview> {
     items
         .iter()
         .cloned()
-        .max_by(|a, b| {
-            let preview_score = |item: &QueryCandidate| -> f64 {
-                let snippet = meaningful_snippet(&item.chunk_text, query).to_ascii_lowercase();
-                let mut term_hits = 0usize;
-                for t in &terms {
-                    if snippet.contains(t) {
-                        term_hits += 1;
-                    }
-                }
-                let lexical = if terms.is_empty() {
-                    0.0
-                } else {
-                    term_hits as f64 / terms.len() as f64
-                };
-                let header_penalty = if item
-                    .chunk_header
-                    .as_ref()
-                    .map(|h| h.len() <= 60)
-                    .unwrap_or(false)
-                {
-                    0.05
-                } else {
-                    0.0
-                };
-                item.score + lexical * 0.35 - header_penalty
+        .map(|item| {
+            let snippet = meaningful_snippet_with_terms(&item.chunk_text, terms);
+            let lowered = snippet.to_ascii_lowercase();
+            let term_hits = terms
+                .iter()
+                .filter(|t| lowered.contains(t.as_str()))
+                .count();
+            let lexical = if terms.is_empty() {
+                0.0
+            } else {
+                term_hits as f64 / terms.len() as f64
             };
-            preview_score(a)
-                .partial_cmp(&preview_score(b))
-                .unwrap_or(std::cmp::Ordering::Equal)
+            let header_penalty = if item
+                .chunk_header
+                .as_ref()
+                .map(|h| h.len() <= 60)
+                .unwrap_or(false)
+            {
+                0.05
+            } else {
+                0.0
+            };
+            let preview_score = item.score + lexical * 0.35 - header_penalty;
+            (preview_score, QueryPreview { item, snippet })
         })
+        .max_by(|(a, _), (b, _)| a.total_cmp(b))
+        .map(|(_, preview)| preview)
 }
 
 fn tokenize_text_set(text: &str) -> HashSet<String> {
@@ -985,35 +1044,42 @@ pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     }
     let vector = query_vectors.remove(0);
     let requested_limit = cfg.search_limit.max(1);
-    let fetch_limit = (requested_limit.saturating_mul(10)).clamp(requested_limit, 1000);
-    let hits = qdrant_search(cfg, &vector, fetch_limit).await?;
+    let query_terms = tokenize_query_terms(&query);
+    let group_limit = (requested_limit.saturating_mul(2)).clamp(requested_limit, 1000);
+    let group_size = 10usize;
+    let groups = qdrant_search_groups(cfg, &vector, group_limit, group_size).await?;
 
     let mut grouped: HashMap<String, Vec<QueryCandidate>> = HashMap::new();
-    for hit in hits {
-        let payload = hit.payload;
-        let url = payload_url_typed(&payload).to_string();
-        let chunk_text = payload_text_typed(&payload).to_string();
-        if url.is_empty() || chunk_text.is_empty() {
-            continue;
+    for group in groups {
+        for hit in group.hits {
+            let payload = hit.payload;
+            let url = payload_url_typed(&payload).to_string();
+            let chunk_text = payload_text_typed(&payload).to_string();
+            if url.is_empty() || chunk_text.is_empty() {
+                continue;
+            }
+            let key = canonical_url_key(&url);
+            grouped.entry(key).or_default().push(QueryCandidate {
+                score: hit.score,
+                url,
+                chunk_text,
+                chunk_index: payload.chunk_index.unwrap_or(0),
+                chunk_header: payload.chunk_header,
+                title: payload.title,
+            });
         }
-        let key = canonical_url_key(&url);
-        grouped.entry(key).or_default().push(QueryCandidate {
-            score: hit.score,
-            url,
-            chunk_text,
-            chunk_index: payload.chunk_index.unwrap_or(0),
-            chunk_header: payload.chunk_header,
-            title: payload.title,
-        });
     }
 
     let mut previews = grouped
         .into_values()
-        .filter_map(|items| select_best_preview_item(&items, &query).map(|best| (best, items.len())))
+        .filter_map(|items| {
+            select_best_preview_item(&items, &query_terms).map(|best| (best, items.len()))
+        })
         .collect::<Vec<_>>();
     previews.sort_by(|(a, _), (b, _)| {
-        b.score
-            .partial_cmp(&a.score)
+        b.item
+            .score
+            .partial_cmp(&a.item.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     previews.truncate(requested_limit);
@@ -1024,10 +1090,11 @@ pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     }
 
     for (i, (item, chunk_count)) in previews.iter().enumerate() {
-        let score = item.score;
-        let url = &item.url;
-        let snippet = meaningful_snippet(&item.chunk_text, &query);
+        let score = item.item.score;
+        let url = &item.item.url;
+        let snippet = &item.snippet;
         let header_display = item
+            .item
             .chunk_header
             .as_ref()
             .filter(|h| !h.is_empty())
@@ -1041,10 +1108,10 @@ pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
                     "score": score,
                     "url": url,
                     "snippet": snippet,
-                    "chunk_index": item.chunk_index,
+                    "chunk_index": item.item.chunk_index,
                     "chunks": chunk_count,
-                    "chunk_header": item.chunk_header,
-                    "title": if item.title.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(item.title.clone()) }
+                    "chunk_header": item.item.chunk_header.clone(),
+                    "title": if item.item.title.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(item.item.title.clone()) }
                 })
             );
         } else {

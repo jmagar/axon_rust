@@ -4,9 +4,13 @@ use spider::website::Website;
 use spider_transformations::transformation::content::{
     transform_content_input, ReturnFormat, TransformConfig, TransformInput,
 };
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 pub fn build_transform_config() -> TransformConfig {
     TransformConfig {
@@ -244,15 +248,15 @@ impl DeterministicExtractionEngine {
     pub fn extract(&self, page_url: &str, html: &str) -> PageExtraction {
         let mut all_items = Vec::new();
         let mut parser_hits = Vec::new();
-        let mut seen = HashSet::new();
+        let mut seen_hashes: HashSet<u64> = HashSet::new();
 
         for parser in &self.parsers {
             let items = parser.parse(page_url, html);
             if !items.is_empty() {
                 parser_hits.push(parser.name().to_string());
                 for item in items {
-                    if let Ok(key) = serde_json::to_string(&item) {
-                        if seen.insert(key) {
+                    if let Some(item_hash) = hash_json_value(&item) {
+                        if seen_hashes.insert(item_hash) {
                             all_items.push(item);
                         }
                     }
@@ -265,6 +269,13 @@ impl DeterministicExtractionEngine {
             parser_hits,
         }
     }
+}
+
+fn hash_json_value(value: &serde_json::Value) -> Option<u64> {
+    let payload = serde_json::to_vec(value).ok()?;
+    let mut hasher = DefaultHasher::new();
+    payload.hash(&mut hasher);
+    Some(hasher.finish())
 }
 
 struct JsonLdParser;
@@ -408,15 +419,17 @@ impl DeterministicParser for HtmlTableParser {
 }
 
 fn extract_attr(tag: &str, attr_name: &str) -> Option<String> {
+    let tag_lc = tag.to_ascii_lowercase();
+    let attr_lc = attr_name.to_ascii_lowercase();
     let patterns = [
-        format!("{attr_name}=\""),
-        format!("{}='", attr_name),
-        format!("{} = \"", attr_name),
-        format!("{} = '", attr_name),
+        format!("{attr_lc}=\""),
+        format!("{attr_lc}='"),
+        format!("{attr_lc} = \""),
+        format!("{attr_lc} = '"),
     ];
 
     for pattern in &patterns {
-        if let Some(idx) = tag.to_ascii_lowercase().find(&pattern.to_ascii_lowercase()) {
+        if let Some(idx) = tag_lc.find(pattern) {
             let quote_char = pattern.chars().last().unwrap_or('"');
             let start = idx + pattern.len();
             let rest = &tag[start..];
@@ -457,9 +470,9 @@ async fn extract_items_fallback(
     openai_model: &str,
     prompt: &str,
     page_url: &str,
-    html: &str,
+    markdown: &str,
 ) -> Result<FallbackResponse, Box<dyn Error>> {
-    let trimmed_html: String = html.chars().take(20_000).collect();
+    let trimmed_markdown: String = markdown.chars().take(12_000).collect();
     let response = client
         .post(api_url)
         .bearer_auth(openai_api_key)
@@ -475,7 +488,7 @@ async fn extract_items_fallback(
                 },
                 {
                     "role": "user",
-                    "content": format!("URL: {}\n\nHTML:\n{}", page_url, trimmed_html)
+                    "content": format!("URL: {}\n\nContent (markdown):\n{}", page_url, trimmed_markdown)
                 }
             ],
             "response_format": {"type": "json_object"},
@@ -566,11 +579,16 @@ pub async fn run_extract_with_engine(
 
     let collect = tokio::spawn(async move {
         let mut all_results: Vec<serde_json::Value> = vec![];
+        let mut pages_visited = 0usize;
         let mut pages_with_data = 0usize;
         let mut metrics = ExtractionMetrics::default();
         let mut parser_hits: HashMap<String, usize> = HashMap::new();
+        let fallback_limiter = Arc::new(Semaphore::new(4));
+        let mut fallback_tasks: JoinSet<(String, Result<FallbackResponse, String>)> =
+            JoinSet::new();
 
         while let Ok(page) = rx.recv().await {
+            pages_visited += 1;
             let page_url = page.get_url().to_string();
             let html = page.get_html();
             if html.is_empty() {
@@ -594,17 +612,49 @@ pub async fn run_extract_with_engine(
 
             metrics.llm_fallback_pages += 1;
             metrics.llm_requests += 1;
-            if let Ok(fallback) = extract_items_fallback(
-                &client,
-                &api_url,
-                &api_key,
-                &model,
-                &prompt_text,
-                &page_url,
-                &html,
-            )
-            .await
-            {
+            let api_url_cloned = api_url.clone();
+            let api_key_cloned = api_key.clone();
+            let model_cloned = model.clone();
+            let prompt_cloned = prompt_text.clone();
+            let client_cloned = client.clone();
+            let limiter = Arc::clone(&fallback_limiter);
+            let markdown = to_markdown(&html);
+
+            fallback_tasks.spawn(async move {
+                let Some(permit) = limiter.acquire_owned().await.ok() else {
+                    return (page_url, Err("fallback limiter closed".to_string()));
+                };
+                let _permit = permit;
+                let fallback = extract_items_fallback(
+                    &client_cloned,
+                    &api_url_cloned,
+                    &api_key_cloned,
+                    &model_cloned,
+                    &prompt_cloned,
+                    &page_url,
+                    &markdown,
+                )
+                .await
+                .map_err(|err| err.to_string());
+                (page_url, fallback)
+            });
+
+            while let Some(joined) = fallback_tasks.try_join_next() {
+                if let Ok((_page_url, Ok(fallback))) = joined {
+                    metrics.prompt_tokens += fallback.prompt_tokens;
+                    metrics.completion_tokens += fallback.completion_tokens;
+                    metrics.total_tokens += fallback.total_tokens;
+                    metrics.estimated_cost_usd += fallback.estimated_cost_usd;
+                    if !fallback.items.is_empty() {
+                        pages_with_data += 1;
+                        all_results.extend(fallback.items);
+                    }
+                }
+            }
+        }
+
+        while let Some(joined) = fallback_tasks.join_next().await {
+            if let Ok((_page_url, Ok(fallback))) = joined {
                 metrics.prompt_tokens += fallback.prompt_tokens;
                 metrics.completion_tokens += fallback.completion_tokens;
                 metrics.total_tokens += fallback.total_tokens;
@@ -616,14 +666,19 @@ pub async fn run_extract_with_engine(
             }
         }
 
-        (all_results, pages_with_data, metrics, parser_hits)
+        (
+            all_results,
+            pages_visited,
+            pages_with_data,
+            metrics,
+            parser_hits,
+        )
     });
 
     website.crawl_raw().await;
     website.unsubscribe();
 
-    let (results, pages_with_data, metrics, parser_hits) = collect.await?;
-    let pages_visited: usize = website.get_all_links_visited().await.len();
+    let (results, pages_visited, pages_with_data, metrics, parser_hits) = collect.await?;
 
     Ok(ExtractRun {
         start_url: start_url.to_string(),
@@ -693,6 +748,25 @@ mod tests {
         let page = engine.extract("https://example.com", html);
         assert!(!page.items.is_empty());
         assert!(page.parser_hits.iter().any(|x| x == "json-ld"));
+    }
+
+    #[test]
+    fn test_default_engine_dedups_identical_json_ld_items() {
+        let html = r#"
+            <html><head>
+            <script type="application/ld+json">{"@type":"Article","headline":"Hello"}</script>
+            <script type="application/ld+json">{"@type":"Article","headline":"Hello"}</script>
+            </head></html>
+        "#;
+        let engine = DeterministicExtractionEngine::with_default_parsers();
+        let page = engine.extract("https://example.com", html);
+        assert_eq!(page.items.len(), 1);
+    }
+
+    #[test]
+    fn test_extract_attr_case_insensitive() {
+        let tag = r#"<meta PROPERTY = "og:title" content="Example">"#;
+        assert_eq!(extract_attr(tag, "property").as_deref(), Some("og:title"));
     }
 
     #[test]

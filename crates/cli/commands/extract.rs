@@ -12,6 +12,8 @@ use crate::axon_cli::crates::jobs::extract_jobs::{
     cancel_extract_job, cleanup_extract_jobs, clear_extract_jobs, get_extract_job,
     list_extract_jobs, recover_stale_extract_jobs, run_extract_worker, start_extract_job,
 };
+use futures_util::stream::FuturesUnordered;
+use futures_util::StreamExt;
 use std::error::Error;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -250,18 +252,35 @@ pub async fn run_extract(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let mut estimated_cost_usd = 0.0f64;
     let mut parser_hits = serde_json::Map::new();
     let engine = Arc::new(DeterministicExtractionEngine::with_default_parsers());
+    let max_pages = cfg.max_pages;
+    let openai_base_url = cfg.openai_base_url.clone();
+    let openai_api_key = cfg.openai_api_key.clone();
+    let openai_model = cfg.openai_model.clone();
+    let mut pending_runs = FuturesUnordered::new();
 
-    for url in &urls {
-        let run = run_extract_with_engine(
-            url,
-            &prompt,
-            cfg.max_pages,
-            &cfg.openai_base_url,
-            &cfg.openai_api_key,
-            &cfg.openai_model,
-            Arc::clone(&engine),
-        )
-        .await?;
+    for url in urls.iter().cloned() {
+        let engine = Arc::clone(&engine);
+        let prompt = prompt.clone();
+        let openai_base_url = openai_base_url.clone();
+        let openai_api_key = openai_api_key.clone();
+        let openai_model = openai_model.clone();
+        pending_runs.push(async move {
+            let run = run_extract_with_engine(
+                &url,
+                &prompt,
+                max_pages,
+                &openai_base_url,
+                &openai_api_key,
+                &openai_model,
+                engine,
+            )
+            .await;
+            (url, run)
+        });
+    }
+
+    while let Some((_url, run_result)) = pending_runs.next().await {
+        let run = run_result?;
         pages_visited += run.pages_visited;
         pages_with_data += run.pages_with_data;
         deterministic_pages += run.metrics.deterministic_pages;

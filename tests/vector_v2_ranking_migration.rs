@@ -10,22 +10,24 @@ fn rerank_candidates_boosts_docs_token_match_like_legacy() {
         AskCandidate {
             score: 0.40,
             url: "https://example.com/blog/overview".to_string(),
+            path: "/blog/overview".to_string(),
             chunk_text: "general notes".to_string(),
-            url_tokens: tokenize_path_set("https://example.com/blog/overview"),
+            url_tokens: tokenize_path_set("/blog/overview"),
             chunk_tokens: tokenize_text_set("general notes"),
             rerank_score: 0.40,
         },
         AskCandidate {
             score: 0.39,
             url: "https://example.com/docs/install".to_string(),
+            path: "/docs/install".to_string(),
             chunk_text: "installation steps and setup".to_string(),
-            url_tokens: tokenize_path_set("https://example.com/docs/install"),
+            url_tokens: tokenize_path_set("/docs/install"),
             chunk_tokens: tokenize_text_set("installation steps and setup"),
             rerank_score: 0.39,
         },
     ];
 
-    let reranked = rerank_ask_candidates(&candidates, "install setup");
+    let reranked = rerank_ask_candidates(&candidates, &tokenize_query("install setup"));
     assert_eq!(reranked[0].url, "https://example.com/docs/install");
     assert!(reranked[0].rerank_score > reranked[1].rerank_score);
 }
@@ -35,8 +37,9 @@ fn select_diverse_candidates_respects_max_per_url_like_legacy() {
     let make_candidate = |score: f64, url: &str| AskCandidate {
         score,
         url: url.to_string(),
+        path: "/docs".to_string(),
         chunk_text: "chunk".to_string(),
-        url_tokens: tokenize_path_set(url),
+        url_tokens: tokenize_path_set("/docs"),
         chunk_tokens: tokenize_text_set("chunk"),
         rerank_score: score,
     };
@@ -48,7 +51,10 @@ fn select_diverse_candidates_respects_max_per_url_like_legacy() {
     ];
 
     let selected = select_diverse_candidates(&candidates, 3, 1);
-    let urls: HashSet<String> = selected.into_iter().map(|c| c.url).collect();
+    let urls: HashSet<String> = selected
+        .into_iter()
+        .map(|idx| candidates[idx].url.clone())
+        .collect();
     assert_eq!(urls.len(), 3);
 }
 

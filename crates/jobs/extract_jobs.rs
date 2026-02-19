@@ -9,6 +9,7 @@ use crate::axon_cli::crates::jobs::common::{
     open_amqp_channel, reclaim_stale_running_jobs, JobTable,
 };
 use chrono::{DateTime, Utc};
+use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use lapin::options::{BasicAckOptions, BasicConsumeOptions};
 use lapin::types::FieldTable;
@@ -234,19 +235,35 @@ async fn process_extract_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<()
         let mut estimated_cost_usd = 0.0f64;
         let mut parser_hits = serde_json::Map::new();
         let engine = Arc::new(DeterministicExtractionEngine::with_default_parsers());
+        let max_pages = job_cfg.max_pages;
+        let openai_base_url = cfg.openai_base_url.clone();
+        let openai_api_key = cfg.openai_api_key.clone();
+        let openai_model = cfg.openai_model.clone();
+        let mut pending_runs = FuturesUnordered::new();
 
         for url in urls {
-            match run_extract_with_engine(
-                &url,
-                &prompt,
-                job_cfg.max_pages,
-                &cfg.openai_base_url,
-                &cfg.openai_api_key,
-                &cfg.openai_model,
-                Arc::clone(&engine),
-            )
-            .await
-            {
+            let engine = Arc::clone(&engine);
+            let prompt = prompt.clone();
+            let openai_base_url = openai_base_url.clone();
+            let openai_api_key = openai_api_key.clone();
+            let openai_model = openai_model.clone();
+            pending_runs.push(async move {
+                let run = run_extract_with_engine(
+                    &url,
+                    &prompt,
+                    max_pages,
+                    &openai_base_url,
+                    &openai_api_key,
+                    &openai_model,
+                    engine,
+                )
+                .await;
+                (url, run)
+            });
+        }
+
+        while let Some((url, run_result)) = pending_runs.next().await {
+            match run_result {
                 Ok(run) => {
                     pages_visited += run.pages_visited;
                     pages_with_data += run.pages_with_data;

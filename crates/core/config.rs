@@ -138,6 +138,14 @@ pub struct Config {
     pub openai_api_key: String,
     pub openai_model: String,
     pub ask_diagnostics: bool,
+    pub ask_max_context_chars: usize,
+    pub ask_candidate_limit: usize,
+    pub ask_chunk_limit: usize,
+    pub ask_full_docs: usize,
+    pub ask_backfill_chunks: usize,
+    pub ask_doc_fetch_concurrency: usize,
+    pub ask_doc_chunk_limit: usize,
+    pub ask_min_relevance_score: f64,
     pub cron_every_seconds: Option<u64>,
     pub cron_max_runs: Option<usize>,
     pub watchdog_stale_timeout_secs: i64,
@@ -600,6 +608,23 @@ fn performance_defaults(profile: PerformanceProfile) -> (usize, usize, usize, u6
     }
 }
 
+fn env_usize_clamped(key: &str, default: usize, min: usize, max: usize) -> usize {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v >= min)
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
+fn env_f64_clamped(key: &str, default: f64, min: f64, max: f64) -> f64 {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
 fn into_config(cli: Cli) -> Config {
     let global = cli.global;
 
@@ -807,6 +832,19 @@ fn into_config(cli: Cli) -> Config {
             .or_else(|| env::var("OPENAI_MODEL").ok())
             .unwrap_or_default(),
         ask_diagnostics,
+        ask_max_context_chars: env_usize_clamped(
+            "AXON_ASK_MAX_CONTEXT_CHARS",
+            120_000,
+            20_000,
+            400_000,
+        ),
+        ask_candidate_limit: env_usize_clamped("AXON_ASK_CANDIDATE_LIMIT", 64, 8, 200),
+        ask_chunk_limit: env_usize_clamped("AXON_ASK_CHUNK_LIMIT", 10, 3, 40),
+        ask_full_docs: env_usize_clamped("AXON_ASK_FULL_DOCS", 4, 1, 20),
+        ask_backfill_chunks: env_usize_clamped("AXON_ASK_BACKFILL_CHUNKS", 3, 0, 20),
+        ask_doc_fetch_concurrency: env_usize_clamped("AXON_ASK_DOC_FETCH_CONCURRENCY", 4, 1, 16),
+        ask_doc_chunk_limit: env_usize_clamped("AXON_ASK_DOC_CHUNK_LIMIT", 192, 8, 2000),
+        ask_min_relevance_score: env_f64_clamped("AXON_ASK_MIN_RELEVANCE_SCORE", 0.0, -1.0, 2.0),
         cron_every_seconds: global.cron_every_seconds.filter(|value| *value > 0),
         cron_max_runs: global.cron_max_runs.filter(|value| *value > 0),
         watchdog_stale_timeout_secs: global.watchdog_stale_timeout_secs.max(30),
