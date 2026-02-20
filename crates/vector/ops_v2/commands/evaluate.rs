@@ -99,7 +99,12 @@ async fn run_evaluate_native_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let research_started = Instant::now();
     let (judge_reference, ref_chunk_count) = build_judge_reference(cfg, &query)
         .await
-        .unwrap_or_else(|_| (NO_REFERENCE.to_string(), 0));
+        .unwrap_or_else(|e| {
+            log_warn(&format!(
+                "evaluate: judge reference retrieval failed (proceeding without grounding): {e}"
+            ));
+            (NO_REFERENCE.to_string(), 0)
+        });
     let research_elapsed_ms = research_started.elapsed().as_millis();
     let rag_sources_list = format_rag_sources(&ctx.diagnostic_sources);
     let ref_quality_note = if ref_chunk_count < 3 {
@@ -148,13 +153,10 @@ async fn run_evaluate_native_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 fn evaluate_query(cfg: &Config) -> Result<String, Box<dyn Error>> {
-    if cfg.openai_base_url.is_empty() || cfg.openai_model.is_empty() {
+    if cfg.openai_base_url.trim().is_empty() || cfg.openai_model.trim().is_empty() {
         return Err("OPENAI_BASE_URL and OPENAI_MODEL required for evaluate".into());
     }
-    cfg.query
-        .clone()
-        .or_else(|| (!cfg.positional.is_empty()).then(|| cfg.positional.join(" ")))
-        .ok_or_else(|| "evaluate requires a question".into())
+    super::resolve_query_text(cfg).ok_or_else(|| "evaluate requires a question".into())
 }
 
 fn emit_context_header(
@@ -330,7 +332,7 @@ async fn run_analysis(
             log_warn(&format!(
                 "judge streaming failed, falling back to non-streaming: {e}"
             ));
-            let fallback = judge_llm_non_streaming(
+            match judge_llm_non_streaming(
                 cfg,
                 client,
                 query,
@@ -345,11 +347,22 @@ async fn run_analysis(
                 context_chars,
             )
             .await
-            .unwrap_or_default();
-            if !cfg.json_output {
-                print!("{fallback}");
+            {
+                Ok(fallback) => {
+                    if !cfg.json_output {
+                        print!("{fallback}");
+                    }
+                    fallback
+                }
+                Err(e2) => {
+                    log_warn(&format!(
+                        "evaluate: both streaming and non-streaming judge failed: {e2}"
+                    ));
+                    String::from(
+                        "(judge unavailable — both streaming and non-streaming LLM calls failed)",
+                    )
+                }
             }
-            fallback
         }
     };
     (answer, started.elapsed().as_millis())
