@@ -114,9 +114,9 @@ pub fn extract_meta_description(html: &str) -> Option<String> {
     let marker = "name=\"description\"";
     let idx = lower.find(marker)?;
     let content_idx = lower[idx..].find("content=\"")? + idx + "content=\"".len();
-    let rest = &head[content_idx..];
+    let rest = head.get(content_idx..)?;
     let end = rest.find('"')?;
-    Some(rest[..end].to_string())
+    Some(rest.get(..end)?.to_string())
 }
 
 pub fn extract_links(html: &str, limit: usize) -> Vec<String> {
