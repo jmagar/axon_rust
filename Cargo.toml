@@ -18,6 +18,7 @@ console = "0.15"
 dialoguer = "0.11"
 indicatif = "0.17"
 lapin = "2"
+octocrab = "0.44"
 redis = { version = "0.27", features = ["tokio-comp"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
@@ -45,6 +46,7 @@ strip = true
 tokio = { version = "1", features = ["full", "test-util"] }
 tempfile = "3"
 criterion = "0.5"
+regex = "1"
 
 [[bench]]
 name = "ask_query_retrieve"
