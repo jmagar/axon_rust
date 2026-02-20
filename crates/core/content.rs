@@ -207,6 +207,111 @@ pub fn extract_robots_sitemaps(robots_txt: &str) -> Vec<String> {
     out
 }
 
+struct FallbackConfig {
+    api_url: String,
+    api_key: String,
+    model: String,
+    prompt_text: String,
+    has_fallback: bool,
+}
+
+type PageCollectResult = (
+    Vec<serde_json::Value>,
+    usize,
+    usize,
+    ExtractionMetrics,
+    HashMap<String, usize>,
+);
+
+async fn collect_page_results(
+    mut rx: spider::tokio::sync::broadcast::Receiver<spider::page::Page>,
+    client: reqwest::Client,
+    engine: Arc<DeterministicExtractionEngine>,
+    cfg: FallbackConfig,
+) -> PageCollectResult {
+    let mut all_results: Vec<serde_json::Value> = vec![];
+    let mut pages_visited = 0usize;
+    let mut pages_with_data = 0usize;
+    let mut metrics = ExtractionMetrics::default();
+    let mut parser_hits: HashMap<String, usize> = HashMap::new();
+    let fallback_limiter = Arc::new(Semaphore::new(4));
+    let mut fallback_tasks: JoinSet<(String, Result<FallbackResponse, String>)> = JoinSet::new();
+
+    while let Ok(page) = rx.recv().await {
+        pages_visited += 1;
+        let page_url = page.get_url().to_string();
+        let html = page.get_html();
+        if html.is_empty() {
+            continue;
+        }
+        let deterministic = engine.extract(&page_url, &html);
+        if !deterministic.items.is_empty() {
+            metrics.deterministic_pages += 1;
+            pages_with_data += 1;
+            all_results.extend(deterministic.items);
+            for hit in deterministic.parser_hits {
+                *parser_hits.entry(hit).or_insert(0) += 1;
+            }
+            continue;
+        }
+        if !cfg.has_fallback {
+            continue;
+        }
+        metrics.llm_fallback_pages += 1;
+        metrics.llm_requests += 1;
+        let api_url_c = cfg.api_url.clone();
+        let api_key_c = cfg.api_key.clone();
+        let model_c = cfg.model.clone();
+        let prompt_c = cfg.prompt_text.clone();
+        let client_c = client.clone();
+        let limiter = Arc::clone(&fallback_limiter);
+        let markdown = to_markdown(&html);
+        fallback_tasks.spawn(async move {
+            let Some(permit) = limiter.acquire_owned().await.ok() else {
+                return (page_url, Err("fallback limiter closed".to_string()));
+            };
+            let _permit = permit;
+            let res = extract_items_fallback(
+                &client_c, &api_url_c, &api_key_c, &model_c, &prompt_c, &page_url, &markdown,
+            )
+            .await
+            .map_err(|e| e.to_string());
+            (page_url, res)
+        });
+        while let Some(joined) = fallback_tasks.try_join_next() {
+            drain_fallback_result(joined, &mut pages_with_data, &mut all_results, &mut metrics);
+        }
+    }
+    while let Some(joined) = fallback_tasks.join_next().await {
+        drain_fallback_result(joined, &mut pages_with_data, &mut all_results, &mut metrics);
+    }
+    (
+        all_results,
+        pages_visited,
+        pages_with_data,
+        metrics,
+        parser_hits,
+    )
+}
+
+fn drain_fallback_result(
+    joined: Result<(String, Result<FallbackResponse, String>), tokio::task::JoinError>,
+    pages_with_data: &mut usize,
+    all_results: &mut Vec<serde_json::Value>,
+    metrics: &mut ExtractionMetrics,
+) {
+    if let Ok((_url, Ok(fallback))) = joined {
+        metrics.prompt_tokens += fallback.prompt_tokens;
+        metrics.completion_tokens += fallback.completion_tokens;
+        metrics.total_tokens += fallback.total_tokens;
+        metrics.estimated_cost_usd += fallback.estimated_cost_usd;
+        if !fallback.items.is_empty() {
+            *pages_with_data += 1;
+            all_results.extend(fallback.items);
+        }
+    }
+}
+
 pub async fn run_extract_with_engine(
     start_url: &str,
     prompt: &str,
@@ -222,10 +327,6 @@ pub async fn run_extract_with_engine(
         && !openai_model.is_empty()
         && openai_base_url.starts_with("http");
 
-    let api_key = openai_api_key.to_string();
-    let model = openai_model.to_string();
-    let prompt_text = prompt.to_string();
-
     validate_url(start_url)?;
     let ssrf_patterns: Vec<spider::compact_str::CompactString> = ssrf_blacklist_patterns()
         .into_iter()
@@ -236,113 +337,25 @@ pub async fn run_extract_with_engine(
     website.with_blacklist_url(Some(ssrf_patterns));
     let mut website = website.build().map_err(|_| "build website")?;
 
-    let mut rx = website.subscribe(16).ok_or("subscribe failed")?;
-    let client = http_client()?.clone();
-    let engine_for_task = Arc::clone(&engine);
-
-    let collect = tokio::spawn(async move {
-        let mut all_results: Vec<serde_json::Value> = vec![];
-        let mut pages_visited = 0usize;
-        let mut pages_with_data = 0usize;
-        let mut metrics = ExtractionMetrics::default();
-        let mut parser_hits: HashMap<String, usize> = HashMap::new();
-        let fallback_limiter = Arc::new(Semaphore::new(4));
-        let mut fallback_tasks: JoinSet<(String, Result<FallbackResponse, String>)> =
-            JoinSet::new();
-
-        while let Ok(page) = rx.recv().await {
-            pages_visited += 1;
-            let page_url = page.get_url().to_string();
-            let html = page.get_html();
-            if html.is_empty() {
-                continue;
-            }
-
-            let deterministic = engine_for_task.extract(&page_url, &html);
-            if !deterministic.items.is_empty() {
-                metrics.deterministic_pages += 1;
-                pages_with_data += 1;
-                all_results.extend(deterministic.items);
-                for hit in deterministic.parser_hits {
-                    *parser_hits.entry(hit).or_insert(0) += 1;
-                }
-                continue;
-            }
-
-            if !has_fallback {
-                continue;
-            }
-
-            metrics.llm_fallback_pages += 1;
-            metrics.llm_requests += 1;
-            let api_url_cloned = api_url.clone();
-            let api_key_cloned = api_key.clone();
-            let model_cloned = model.clone();
-            let prompt_cloned = prompt_text.clone();
-            let client_cloned = client.clone();
-            let limiter = Arc::clone(&fallback_limiter);
-            let markdown = to_markdown(&html);
-
-            fallback_tasks.spawn(async move {
-                let Some(permit) = limiter.acquire_owned().await.ok() else {
-                    return (page_url, Err("fallback limiter closed".to_string()));
-                };
-                let _permit = permit;
-                let fallback = extract_items_fallback(
-                    &client_cloned,
-                    &api_url_cloned,
-                    &api_key_cloned,
-                    &model_cloned,
-                    &prompt_cloned,
-                    &page_url,
-                    &markdown,
-                )
-                .await
-                .map_err(|err| err.to_string());
-                (page_url, fallback)
-            });
-
-            while let Some(joined) = fallback_tasks.try_join_next() {
-                if let Ok((_page_url, Ok(fallback))) = joined {
-                    metrics.prompt_tokens += fallback.prompt_tokens;
-                    metrics.completion_tokens += fallback.completion_tokens;
-                    metrics.total_tokens += fallback.total_tokens;
-                    metrics.estimated_cost_usd += fallback.estimated_cost_usd;
-                    if !fallback.items.is_empty() {
-                        pages_with_data += 1;
-                        all_results.extend(fallback.items);
-                    }
-                }
-            }
-        }
-
-        while let Some(joined) = fallback_tasks.join_next().await {
-            if let Ok((_page_url, Ok(fallback))) = joined {
-                metrics.prompt_tokens += fallback.prompt_tokens;
-                metrics.completion_tokens += fallback.completion_tokens;
-                metrics.total_tokens += fallback.total_tokens;
-                metrics.estimated_cost_usd += fallback.estimated_cost_usd;
-                if !fallback.items.is_empty() {
-                    pages_with_data += 1;
-                    all_results.extend(fallback.items);
-                }
-            }
-        }
-
-        (
-            all_results,
-            pages_visited,
-            pages_with_data,
-            metrics,
-            parser_hits,
-        )
-    });
+    let rx = website.subscribe(16).ok_or("subscribe failed")?;
+    let fallback_cfg = FallbackConfig {
+        api_url,
+        api_key: openai_api_key.to_string(),
+        model: openai_model.to_string(),
+        prompt_text: prompt.to_string(),
+        has_fallback,
+    };
+    let collect = tokio::spawn(collect_page_results(
+        rx,
+        http_client()?.clone(),
+        Arc::clone(&engine),
+        fallback_cfg,
+    ));
 
     website.crawl_raw().await;
     website.unsubscribe();
 
     let (results, pages_visited, pages_with_data, metrics, parser_hits) = collect.await?;
-
     Ok(ExtractRun {
         start_url: start_url.to_string(),
         pages_visited,

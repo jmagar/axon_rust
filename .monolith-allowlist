@@ -38,9 +38,3 @@ crates/vector/ops_v2/stats.rs
 crates/vector/ops_v2/tei.rs
 
 # Module-split new files — functions carried over verbatim, tracked for refactoring (2026-02-19)
-
-# Monolith exceptions for security/perf fix branch (2026-02-19)
-# crawl.rs 528 lines — command handlers + sync/async routing; pre-existing, tracked for split
-crates/cli/commands/crawl.rs
-# run_extract_with_engine() 145 lines — end-to-end crawl+LLM pipeline; SSRF fix pushed 4 lines over limit
-crates/core/content.rs
