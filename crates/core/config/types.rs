@@ -22,6 +22,9 @@ pub enum CommandKind {
     Stats,
     Status,
     Dedupe,
+    Github,
+    Reddit,
+    Youtube,
 }
 
 impl CommandKind {
@@ -46,6 +49,9 @@ impl CommandKind {
             Self::Stats => "stats",
             Self::Status => "status",
             Self::Dedupe => "dedupe",
+            Self::Github => "github",
+            Self::Reddit => "reddit",
+            Self::Youtube => "youtube",
         }
     }
 }
@@ -133,6 +139,11 @@ pub struct Config {
     pub batch_queue: String,
     pub extract_queue: String,
     pub embed_queue: String,
+    pub ingest_queue: String,
+    pub github_token: Option<String>,
+    pub github_include_source: bool,
+    pub reddit_client_id: Option<String>,
+    pub reddit_client_secret: Option<String>,
     pub tei_url: String,
     pub qdrant_url: String,
     pub openai_base_url: String,

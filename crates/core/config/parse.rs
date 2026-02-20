@@ -170,6 +170,7 @@ fn into_config(cli: Cli) -> Config {
     let global = cli.global;
 
     let mut ask_diagnostics = false;
+    let mut github_include_source = false;
     let (command, positional) = match cli.command {
         CliCommand::Scrape(args) => (
             CommandKind::Scrape,
@@ -233,6 +234,33 @@ fn into_config(cli: Cli) -> Config {
         CliCommand::Stats => (CommandKind::Stats, Vec::new()),
         CliCommand::Status => (CommandKind::Status, Vec::new()),
         CliCommand::Dedupe => (CommandKind::Dedupe, Vec::new()),
+        CliCommand::Github(args) => {
+            github_include_source = args.include_source;
+            (
+                CommandKind::Github,
+                if let Some(job) = args.job {
+                    positional_from_job(job)
+                } else {
+                    args.repo.into_iter().collect()
+                },
+            )
+        }
+        CliCommand::Reddit(args) => (
+            CommandKind::Reddit,
+            if let Some(job) = args.job {
+                positional_from_job(job)
+            } else {
+                args.target.into_iter().collect()
+            },
+        ),
+        CliCommand::Youtube(args) => (
+            CommandKind::Youtube,
+            if let Some(job) = args.job {
+                positional_from_job(job)
+            } else {
+                args.url.into_iter().collect()
+            },
+        ),
     };
 
     let pg_url = normalize_local_service_url(
@@ -357,6 +385,12 @@ fn into_config(cli: Cli) -> Config {
             .embed_queue
             .or_else(|| env::var("AXON_EMBED_QUEUE").ok())
             .unwrap_or_else(|| "axon.embed.jobs".to_string()),
+        ingest_queue: env::var("AXON_INGEST_QUEUE")
+            .unwrap_or_else(|_| "axon.ingest.jobs".to_string()),
+        github_token: env::var("GITHUB_TOKEN").ok(),
+        github_include_source,
+        reddit_client_id: env::var("REDDIT_CLIENT_ID").ok(),
+        reddit_client_secret: env::var("REDDIT_CLIENT_SECRET").ok(),
         tei_url: global
             .tei_url
             .or_else(|| env::var("TEI_URL").ok())

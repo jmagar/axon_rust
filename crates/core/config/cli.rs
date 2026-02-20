@@ -33,6 +33,9 @@ pub(super) enum CliCommand {
     Stats,
     Status,
     Dedupe,
+    Github(GithubArgs),
+    Reddit(RedditArgs),
+    Youtube(YoutubeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -97,6 +100,39 @@ pub(super) struct EmbedArgs {
     pub(super) job: Option<JobSubcommand>,
     #[arg(value_name = "INPUT")]
     pub(super) input: Option<String>,
+}
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub(super) struct GithubArgs {
+    #[command(subcommand)]
+    pub(super) job: Option<JobSubcommand>,
+    /// GitHub repository in "owner/repo" format
+    #[arg(value_name = "REPO")]
+    pub(super) repo: Option<String>,
+    /// Also index source code files (in addition to markdown, issues, and PRs)
+    #[arg(long, action = ArgAction::Set, default_value_t = false)]
+    pub(super) include_source: bool,
+}
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub(super) struct RedditArgs {
+    #[command(subcommand)]
+    pub(super) job: Option<JobSubcommand>,
+    /// Subreddit name (e.g. "rust") or full thread URL
+    #[arg(value_name = "TARGET")]
+    pub(super) target: Option<String>,
+}
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub(super) struct YoutubeArgs {
+    #[command(subcommand)]
+    pub(super) job: Option<JobSubcommand>,
+    /// Video URL, playlist URL, or channel URL
+    #[arg(value_name = "URL")]
+    pub(super) url: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

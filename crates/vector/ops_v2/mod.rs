@@ -8,7 +8,7 @@ pub mod ranking;
 pub mod stats;
 pub mod tei;
 
-pub use tei::{EmbedProgress, EmbedSummary};
+pub use tei::{embed_text_with_metadata, EmbedProgress, EmbedSummary};
 
 pub fn chunk_text(text: &str) -> Vec<String> {
     input::chunk_text(text)

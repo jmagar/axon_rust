@@ -1,7 +1,9 @@
 use crate::axon_cli::crates::core::config::Config;
 use std::error::Error;
 
-pub use crate::axon_cli::crates::vector::ops_v2::{EmbedProgress, EmbedSummary};
+pub use crate::axon_cli::crates::vector::ops_v2::{
+    embed_text_with_metadata, EmbedProgress, EmbedSummary,
+};
 
 pub fn chunk_text(text: &str) -> Vec<String> {
     crate::axon_cli::crates::vector::ops_v2::chunk_text(text)
