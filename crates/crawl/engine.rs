@@ -256,77 +256,33 @@ pub async fn crawl_and_collect_map(
     mode: RenderMode,
 ) -> Result<(CrawlSummary, Vec<String>), Box<dyn Error>> {
     let mut website = configure_website(cfg, start_url, mode)?;
-    // Buffer at least max_pages worth of messages to prevent silent page drops
-    // under high-throughput crawls (extreme/max profiles). Clamp to 16 384 so
-    // a large --max-pages value can't allocate an unbounded broadcast ring buffer.
-    let subscribe_buf = (cfg.max_pages as usize).clamp(4096, 16_384);
-    let mut rx = website
-        .subscribe(subscribe_buf)
-        .ok_or("failed to subscribe to spider broadcast channel")?;
     let start = Instant::now();
-
-    let transform_cfg = build_transform_config();
-    let exclude_path_prefix = cfg.exclude_path_prefix.clone();
-    let join = tokio::spawn(async move {
-        let mut summary = CrawlSummary::default();
-        let mut urls = Vec::new();
-        let mut seen = HashSet::new();
-
-        loop {
-            let page = match rx.recv().await {
-                Ok(page) => page,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    log_warn(&format!("crawl broadcast lagged: {skipped} pages dropped — increase subscribe buffer or reduce concurrency"));
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            };
-
-            let page_url = page.get_url().to_string();
-            if is_excluded_url_path(&page_url, &exclude_path_prefix) {
-                continue;
-            }
-            let Some(canonical_url) = canonicalize_url_for_dedupe(&page_url) else {
-                continue;
-            };
-            if !seen.insert(canonical_url.clone()) {
-                continue;
-            }
-            summary.pages_seen += 1;
-            urls.push(canonical_url);
-
-            let input = TransformInput {
-                url: None,
-                content: page.get_html_bytes_u8(),
-                screenshot_bytes: None,
-                encoding: None,
-                selector_config: None,
-                ignore_tags: None,
-            };
-            let markdown = transform_content_input(input, transform_cfg);
-            // byte length; sitemap/doc content is ASCII-dominant so bytes ≈ chars
-            let chars = markdown.trim().len();
-            if chars < 200 {
-                summary.thin_pages += 1;
-            }
-            if chars > 0 {
-                summary.markdown_files += 1;
-            }
-        }
-
-        Ok::<(CrawlSummary, Vec<String>), String>((summary, urls))
-    });
 
     match mode {
         RenderMode::Http => website.crawl_raw().await,
         RenderMode::Chrome | RenderMode::AutoSwitch => website.crawl().await,
     }
-    website.unsubscribe();
 
-    let (mut summary, urls) = join
-        .await
-        .map_err(|e| format!("join failure: {e}"))?
-        .map_err(|e| format!("collector failure: {e}"))?;
+    let mut summary = CrawlSummary::default();
+    let mut urls = Vec::new();
+    let mut seen = HashSet::new();
+    let exclude_path_prefix = cfg.exclude_path_prefix.clone();
+
+    for link in website.get_links() {
+        let page_url = link.as_ref().to_string();
+        if is_excluded_url_path(&page_url, &exclude_path_prefix) {
+            continue;
+        }
+        let Some(canonical_url) = canonicalize_url_for_dedupe(&page_url) else {
+            continue;
+        };
+        if !seen.insert(canonical_url.clone()) {
+            continue;
+        }
+        summary.pages_seen += 1;
+        urls.push(canonical_url);
+    }
+
     summary.elapsed_ms = start.elapsed().as_millis();
     Ok((summary, urls))
 }
@@ -488,41 +444,4 @@ pub async fn run_crawl_once(
     summary.elapsed_ms = crawl_start.elapsed().as_millis();
 
     Ok((summary, urls))
-}
-
-pub async fn try_auto_switch(
-    cfg: &Config,
-    start_url: &str,
-    summary: &CrawlSummary,
-    urls: &[String],
-) -> Result<(CrawlSummary, Vec<String>), Box<dyn Error>> {
-    if !matches!(cfg.render_mode, RenderMode::AutoSwitch)
-        || !should_fallback_to_chrome(summary, cfg.max_pages)
-    {
-        return Ok((
-            CrawlSummary {
-                pages_seen: summary.pages_seen,
-                markdown_files: summary.markdown_files,
-                thin_pages: summary.thin_pages,
-                elapsed_ms: summary.elapsed_ms,
-            },
-            urls.to_vec(),
-        ));
-    }
-
-    log_warn("HTTP output looked thin/low-coverage; attempting chrome fallback");
-    match crawl_and_collect_map(cfg, start_url, RenderMode::Chrome).await {
-        Ok((chrome_summary, chrome_urls)) if !chrome_urls.is_empty() => {
-            Ok((chrome_summary, chrome_urls))
-        }
-        _ => Ok((
-            CrawlSummary {
-                pages_seen: summary.pages_seen,
-                markdown_files: summary.markdown_files,
-                thin_pages: summary.thin_pages,
-                elapsed_ms: summary.elapsed_ms,
-            },
-            urls.to_vec(),
-        )),
-    }
 }

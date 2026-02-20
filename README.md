@@ -216,6 +216,9 @@ Copy `.env.example` to `.env`. At minimum set the `[REQUIRED]` vars:
 | `AXON_NO_COLOR` | — | Disable ANSI color output when set |
 | `AXON_DOMAINS_DETAILED` | — | Enable detailed `domains` command output |
 | `AXON_EXTRACT_EST_COST_PER_1K_TOKENS` | — | Override extract cost estimate (USD/1K tokens) |
+| `AXON_LOG_FILE` | `logs/axon.log` | Structured JSON log file path (always on) |
+| `AXON_LOG_MAX_BYTES` | `10485760` | Max bytes per log file before rotation (10MB) |
+| `AXON_LOG_MAX_FILES` | `3` | Total log files to keep (`axon.log`, `.1`, `.2`) |
 
 ### Legacy Aliases
 

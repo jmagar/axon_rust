@@ -100,6 +100,10 @@ async fn fetch_text_with_retry(
                 if let Ok(text) = resp.text().await {
                     return Some(text);
                 }
+            } else if resp.status().is_client_error()
+                && resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS
+            {
+                return None;
             }
         }
         if attempt < retries {

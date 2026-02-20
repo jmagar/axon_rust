@@ -3,7 +3,7 @@ use crate::axon_cli::crates::core::config::{Config, RenderMode};
 use crate::axon_cli::crates::core::http::validate_url;
 use crate::axon_cli::crates::core::logging::log_done;
 use crate::axon_cli::crates::core::ui::{muted, primary, print_option, print_phase, Spinner};
-use crate::axon_cli::crates::crawl::engine::{crawl_and_collect_map, try_auto_switch};
+use crate::axon_cli::crates::crawl::engine::crawl_and_collect_map;
 use std::error::Error;
 
 pub async fn run_map(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
@@ -26,14 +26,14 @@ pub async fn run_map(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>
     } else {
         Some(Spinner::new("mapping crawl in progress"))
     };
-    let (summary, urls) = crawl_and_collect_map(cfg, start_url, initial_mode).await?;
+    let (final_summary, mut final_urls) =
+        crawl_and_collect_map(cfg, start_url, initial_mode).await?;
     if let Some(s) = crawl_spinner {
         s.finish(&format!(
             "initial map crawl complete (pages={})",
-            summary.pages_seen
+            final_summary.pages_seen
         ));
     }
-    let (final_summary, mut final_urls) = try_auto_switch(cfg, start_url, &summary, &urls).await?;
 
     if cfg.discover_sitemaps {
         let sitemap_spinner = if cfg.json_output {
