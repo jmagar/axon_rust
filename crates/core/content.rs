@@ -28,7 +28,11 @@ static TRANSFORM_CONFIG: LazyLock<TransformConfig> = LazyLock::new(|| TransformC
     // too low and get stripped to just the title. main_content=true already
     // extracts <main>/<article>/role=main structurally without the scoring penalty.
     readability: false,
-    clean_html: true,
+    // clean_html uses [class*='ad'] which matches Tailwind `shadow-*` classes
+    // (sh**ad**ow contains "ad"). This wipes all shadow-styled elements from
+    // Tailwind CSS sites (react.dev, shadcn.com, etc.), leaving only the title.
+    // html2md ignores script/style content natively, so clean_html buys nothing.
+    clean_html: false,
     main_content: true,
     filter_images: true,
     filter_svg: true,
@@ -137,12 +141,25 @@ pub fn extract_links(html: &str, limit: usize) -> Vec<String> {
 }
 
 pub fn extract_loc_values(xml: &str) -> Vec<String> {
-    // Sitemap spec (RFC) mandates lowercase element names — no need to lowercase-clone.
+    // Case-insensitive search without cloning the full document (which can be 1–5 MB).
+    // The sitemap spec mandates lowercase, but real-world feeds sometimes use <LOC>.
+    const OPEN: &[u8] = b"<loc>";
+    const CLOSE: &[u8] = b"</loc>";
+    let bytes = xml.as_bytes();
     let mut out = Vec::new();
     let mut cursor = 0usize;
-    while let Some(start) = xml[cursor..].find("<loc>") {
-        let start_idx = cursor + start + "<loc>".len();
-        let Some(end_rel) = xml[start_idx..].find("</loc>") else {
+    while cursor + OPEN.len() <= bytes.len() {
+        let Some(rel) = bytes[cursor..]
+            .windows(OPEN.len())
+            .position(|w| w.eq_ignore_ascii_case(OPEN))
+        else {
+            break;
+        };
+        let start_idx = cursor + rel + OPEN.len();
+        let Some(end_rel) = bytes[start_idx..]
+            .windows(CLOSE.len())
+            .position(|w| w.eq_ignore_ascii_case(CLOSE))
+        else {
             break;
         };
         let end_idx = start_idx + end_rel;
@@ -150,7 +167,7 @@ pub fn extract_loc_values(xml: &str) -> Vec<String> {
         if !value.is_empty() {
             out.push(value.replace("&amp;", "&"));
         }
-        cursor = end_idx + "</loc>".len();
+        cursor = end_idx + CLOSE.len();
     }
     out
 }
