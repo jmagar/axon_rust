@@ -6,7 +6,7 @@ use crate::axon_cli::crates::jobs::common::{
 };
 use chrono::Utc;
 use futures_util::StreamExt;
-use lapin::options::{BasicAckOptions, BasicConsumeOptions};
+use lapin::options::{BasicAckOptions, BasicConsumeOptions, BasicNackOptions};
 use lapin::types::FieldTable;
 use spider::tokio;
 use sqlx::PgPool;
@@ -251,26 +251,58 @@ async fn run_amqp_worker_lane(
         let parsed = std::str::from_utf8(&delivery.data)
             .ok()
             .and_then(|s| Uuid::parse_str(s.trim()).ok());
-
-        // Ack before processing: crawls can run for hours, and RabbitMQ's
-        // consumer_timeout (default 30 min) will forcibly close the channel if
-        // the ack comes too late. The DB is the source of truth for job state;
-        // the watchdog reclaims any job that crashes without completing.
-        if let Err(err) = delivery.ack(BasicAckOptions::default()).await {
+        let Some(job_id) = parsed else {
             log_warn(&format!(
-                "failed to ack crawl delivery (lane={lane}): {err}"
+                "malformed crawl delivery payload (lane={lane}, len={}) - acking and skipping",
+                delivery.data.len()
             ));
-        }
+            if let Err(err) = delivery.ack(BasicAckOptions::default()).await {
+                log_warn(&format!(
+                    "failed to ack malformed crawl delivery (lane={lane}): {err}"
+                ));
+            }
+            continue;
+        };
 
-        if let Some(job_id) = parsed {
-            if claim_pending_by_id(pool, TABLE, job_id)
-                .await
-                .unwrap_or(false)
-            {
+        match claim_pending_by_id(pool, TABLE, job_id).await {
+            Ok(true) => {
+                // Ack before processing: crawls can run for hours, and RabbitMQ's
+                // consumer_timeout (default 30 min) will forcibly close the channel if
+                // the ack comes too late. The DB is the source of truth for job state;
+                // the watchdog reclaims any job that crashes without completing.
+                if let Err(err) = delivery.ack(BasicAckOptions::default()).await {
+                    log_warn(&format!(
+                        "failed to ack crawl delivery (lane={lane}): {err}"
+                    ));
+                    continue;
+                }
                 if let Err(err) = process_job(cfg, pool, job_id).await {
                     let error_text = err.to_string();
                     mark_job_failed(pool, TABLE, job_id, &error_text).await;
                     log_warn(&format!("worker failed crawl job {job_id}: {error_text}"));
+                }
+            }
+            Ok(false) => {
+                if let Err(err) = delivery.ack(BasicAckOptions::default()).await {
+                    log_warn(&format!(
+                        "failed to ack already-claimed crawl delivery (lane={lane}): {err}"
+                    ));
+                }
+            }
+            Err(err) => {
+                log_warn(&format!(
+                    "failed to claim crawl job {job_id} (lane={lane}); nacking for retry: {err}"
+                ));
+                if let Err(nack_err) = delivery
+                    .nack(BasicNackOptions {
+                        requeue: true,
+                        ..Default::default()
+                    })
+                    .await
+                {
+                    log_warn(&format!(
+                        "failed to nack crawl delivery for job {job_id} (lane={lane}): {nack_err}"
+                    ));
                 }
             }
         }

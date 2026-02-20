@@ -30,6 +30,7 @@ pub enum JobTable {
     Batch,
     Extract,
     Embed,
+    Ingest,
 }
 
 impl JobTable {
@@ -39,6 +40,7 @@ impl JobTable {
             Self::Batch => "axon_batch_jobs",
             Self::Extract => "axon_extract_jobs",
             Self::Embed => "axon_embed_jobs",
+            Self::Ingest => "axon_ingest_jobs",
         }
     }
 }
@@ -105,6 +107,11 @@ pub(crate) fn test_config(pg_url: &str) -> Config {
         batch_queue: "axon.test.batch".to_string(),
         extract_queue: "axon.test.extract".to_string(),
         embed_queue: "axon.test.embed".to_string(),
+        ingest_queue: "axon.test.ingest".to_string(),
+        github_token: None,
+        github_include_source: false,
+        reddit_client_id: None,
+        reddit_client_secret: None,
         tei_url: "http://127.0.0.1:1".to_string(),
         qdrant_url: "http://127.0.0.1:1".to_string(),
         openai_base_url: "http://127.0.0.1:1/v1".to_string(),

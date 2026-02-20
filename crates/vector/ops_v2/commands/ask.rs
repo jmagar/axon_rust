@@ -307,7 +307,14 @@ async fn fetch_full_docs(
     ))
     .buffer_unordered(doc_fetch_concurrency);
     while let Some((order, url, points)) = fetch_stream.next().await {
-        fetched_docs.push((order, url, points?));
+        match points {
+            Ok(points) => fetched_docs.push((order, url, points)),
+            Err(err) => {
+                log_warn(&format!(
+                    "ask: failed to retrieve full document for {url}; continuing with remaining context: {err}"
+                ));
+            }
+        }
     }
     fetched_docs.sort_by_key(|(order, _, _)| *order);
     Ok(fetched_docs)
@@ -409,16 +416,7 @@ fn build_diagnostic_sources(
 }
 
 fn ask_query(cfg: &Config) -> Result<String, Box<dyn Error>> {
-    cfg.query
-        .clone()
-        .or_else(|| {
-            if cfg.positional.is_empty() {
-                None
-            } else {
-                Some(cfg.positional.join(" "))
-            }
-        })
-        .ok_or_else(|| "ask requires query".into())
+    super::resolve_query_text(cfg).ok_or_else(|| "ask requires query".into())
 }
 
 fn emit_ask_diagnostics(cfg: &Config, ctx: &AskContext) {
@@ -559,7 +557,7 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let ask_started = std::time::Instant::now();
     let query = ask_query(cfg)?;
 
-    if cfg.openai_base_url.is_empty() || cfg.openai_model.is_empty() {
+    if cfg.openai_base_url.trim().is_empty() || cfg.openai_model.trim().is_empty() {
         return Err("OPENAI_BASE_URL and OPENAI_MODEL required for ask".into());
     }
 

@@ -145,7 +145,7 @@ pub async fn crawl_sitemap_urls(
     let mut out = HashSet::new();
     let timeout = Duration::from_millis(cfg.request_timeout_ms.unwrap_or(30_000));
     let client = reqwest::Client::builder().timeout(timeout).build()?;
-    let start_host = host.clone();
+    let start_host = host;
     let start_path = parsed.path().trim_end_matches('/').to_string();
     let scoped_to_root = start_path.is_empty();
     let scope = SitemapScope {
@@ -292,7 +292,7 @@ pub async fn append_sitemap_backfill(
     let initial_idx = summary.markdown_files;
     let mut worker = BackfillWorker {
         cfg,
-        client: client.clone(),
+        client,
         markdown_dir: &markdown_dir,
         manifest: &mut manifest,
         summary,

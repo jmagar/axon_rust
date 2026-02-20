@@ -3,6 +3,22 @@ use futures_util::StreamExt;
 use std::error::Error;
 use std::io::Write;
 
+/// Build a POST request to the OpenAI-compatible chat completions endpoint with
+/// optional bearer auth. Callers chain `.json(...)` to attach the request body.
+pub(super) fn build_openai_chat_request(
+    client: &reqwest::Client,
+    cfg: &Config,
+) -> reqwest::RequestBuilder {
+    let mut req = client.post(format!(
+        "{}/chat/completions",
+        cfg.openai_base_url.trim_end_matches('/')
+    ));
+    if !cfg.openai_api_key.trim().is_empty() {
+        req = req.bearer_auth(&cfg.openai_api_key);
+    }
+    req
+}
+
 fn judge_system_prompt() -> &'static str {
     "You are an expert evaluator with access to authoritative reference material.\n\
 Compare two AI responses to the same question.\n\
@@ -150,24 +166,15 @@ pub(crate) async fn ask_llm_streaming(
     context: &str,
     print_tokens: bool,
 ) -> Result<String, Box<dyn Error>> {
-    let mut req = client
-        .post(format!(
-            "{}/chat/completions",
-            cfg.openai_base_url.trim_end_matches('/')
-        ))
-        .json(&serde_json::json!({
-            "model": cfg.openai_model,
-            "messages": [
-                {"role": "system", "content": "You are a precise technical research assistant. Answer questions using the retrieved source documents when they are relevant.\n\nSTEP 1 — RELEVANCE CHECK: Before answering, assess whether the retrieved documents genuinely address the question. Look for topical overlap beyond keyword coincidence (e.g., a doc about implementing a library's internal HTTP adapter is NOT relevant to a question about how to use HTTP clients in general).\n\nSTEP 2 — ANSWER based on your assessment:\n\nIF SOURCES ARE RELEVANT:\n1. CITATIONS — Cite inline immediately after each claim using [S#] labels. When multiple sources support the same point, cite all: [S1][S3]. Never make a claim without a citation.\n2. FOOTER — After your answer, add a \"## Sources\" section listing each cited source number and its URL.\n3. SYNTHESIS — Integrate information from multiple sources into a unified answer.\n4. GAPS — State explicitly what the sources cover and what they do not.\n5. PRECISION — Include exact values, function names, file paths, and configuration keys when the sources provide them.\n\nIF SOURCES ARE NOT RELEVANT (documents discuss a related but different topic than what was asked):\n- Open with: \"The indexed knowledge base does not contain directly relevant information for this question.\"\n- Then provide a complete, accurate answer in a section labeled \"## Answer (from training knowledge)\".\n- Do NOT cite [S#] for claims not supported by the retrieved sources."},
-                {"role": "user", "content": format!("Question: {}\n\nContext:\n{}", query, context)}
-            ],
-            "temperature": 0.1,
-            "stream": true
-        }));
-
-    if !cfg.openai_api_key.is_empty() {
-        req = req.bearer_auth(&cfg.openai_api_key);
-    }
+    let req = build_openai_chat_request(client, cfg).json(&serde_json::json!({
+        "model": cfg.openai_model,
+        "messages": [
+            {"role": "system", "content": "You are a precise technical research assistant. Answer questions using the retrieved source documents when they are relevant.\n\nSTEP 1 — RELEVANCE CHECK: Before answering, assess whether the retrieved documents genuinely address the question. Look for topical overlap beyond keyword coincidence (e.g., a doc about implementing a library's internal HTTP adapter is NOT relevant to a question about how to use HTTP clients in general).\n\nSTEP 2 — ANSWER based on your assessment:\n\nIF SOURCES ARE RELEVANT:\n1. CITATIONS — Cite inline immediately after each claim using [S#] labels. When multiple sources support the same point, cite all: [S1][S3]. Never make a claim without a citation.\n2. FOOTER — After your answer, add a \"## Sources\" section listing each cited source number and its URL.\n3. SYNTHESIS — Integrate information from multiple sources into a unified answer.\n4. GAPS — State explicitly what the sources cover and what they do not.\n5. PRECISION — Include exact values, function names, file paths, and configuration keys when the sources provide them.\n\nIF SOURCES ARE NOT RELEVANT (documents discuss a related but different topic than what was asked):\n- Open with: \"The indexed knowledge base does not contain directly relevant information for this question.\"\n- Then provide a complete, accurate answer in a section labeled \"## Answer (from training knowledge)\".\n- Do NOT cite [S#] for claims not supported by the retrieved sources."},
+            {"role": "user", "content": format!("Question: {}\n\nContext:\n{}", query, context)}
+        ],
+        "temperature": 0.1,
+        "stream": true
+    }));
 
     run_sse_stream(req, print_tokens).await
 }
@@ -178,23 +185,14 @@ pub(crate) async fn ask_llm_non_streaming(
     query: &str,
     context: &str,
 ) -> Result<String, Box<dyn Error>> {
-    let mut req = client
-        .post(format!(
-            "{}/chat/completions",
-            cfg.openai_base_url.trim_end_matches('/')
-        ))
-        .json(&serde_json::json!({
-            "model": cfg.openai_model,
-            "messages": [
-                {"role": "system", "content": "You are a precise technical research assistant. Answer questions using the retrieved source documents when they are relevant.\n\nSTEP 1 — RELEVANCE CHECK: Before answering, assess whether the retrieved documents genuinely address the question. Look for topical overlap beyond keyword coincidence (e.g., a doc about implementing a library's internal HTTP adapter is NOT relevant to a question about how to use HTTP clients in general).\n\nSTEP 2 — ANSWER based on your assessment:\n\nIF SOURCES ARE RELEVANT:\n1. CITATIONS — Cite inline immediately after each claim using [S#] labels. When multiple sources support the same point, cite all: [S1][S3]. Never make a claim without a citation.\n2. FOOTER — After your answer, add a \"## Sources\" section listing each cited source number and its URL.\n3. SYNTHESIS — Integrate information from multiple sources into a unified answer.\n4. GAPS — State explicitly what the sources cover and what they do not.\n5. PRECISION — Include exact values, function names, file paths, and configuration keys when the sources provide them.\n\nIF SOURCES ARE NOT RELEVANT (documents discuss a related but different topic than what was asked):\n- Open with: \"The indexed knowledge base does not contain directly relevant information for this question.\"\n- Then provide a complete, accurate answer in a section labeled \"## Answer (from training knowledge)\".\n- Do NOT cite [S#] for claims not supported by the retrieved sources."},
-                {"role": "user", "content": format!("Question: {}\n\nContext:\n{}", query, context)}
-            ],
-            "temperature": 0.1
-        }));
-
-    if !cfg.openai_api_key.is_empty() {
-        req = req.bearer_auth(&cfg.openai_api_key);
-    }
+    let req = build_openai_chat_request(client, cfg).json(&serde_json::json!({
+        "model": cfg.openai_model,
+        "messages": [
+            {"role": "system", "content": "You are a precise technical research assistant. Answer questions using the retrieved source documents when they are relevant.\n\nSTEP 1 — RELEVANCE CHECK: Before answering, assess whether the retrieved documents genuinely address the question. Look for topical overlap beyond keyword coincidence (e.g., a doc about implementing a library's internal HTTP adapter is NOT relevant to a question about how to use HTTP clients in general).\n\nSTEP 2 — ANSWER based on your assessment:\n\nIF SOURCES ARE RELEVANT:\n1. CITATIONS — Cite inline immediately after each claim using [S#] labels. When multiple sources support the same point, cite all: [S1][S3]. Never make a claim without a citation.\n2. FOOTER — After your answer, add a \"## Sources\" section listing each cited source number and its URL.\n3. SYNTHESIS — Integrate information from multiple sources into a unified answer.\n4. GAPS — State explicitly what the sources cover and what they do not.\n5. PRECISION — Include exact values, function names, file paths, and configuration keys when the sources provide them.\n\nIF SOURCES ARE NOT RELEVANT (documents discuss a related but different topic than what was asked):\n- Open with: \"The indexed knowledge base does not contain directly relevant information for this question.\"\n- Then provide a complete, accurate answer in a section labeled \"## Answer (from training knowledge)\".\n- Do NOT cite [S#] for claims not supported by the retrieved sources."},
+            {"role": "user", "content": format!("Question: {}\n\nContext:\n{}", query, context)}
+        ],
+        "temperature": 0.1
+    }));
 
     let response = req.send().await?.error_for_status()?;
     let json: serde_json::Value = response.json().await?;
@@ -210,24 +208,15 @@ pub(crate) async fn baseline_llm_streaming(
     query: &str,
     print_tokens: bool,
 ) -> Result<String, Box<dyn Error>> {
-    let mut req = client
-        .post(format!(
-            "{}/chat/completions",
-            cfg.openai_base_url.trim_end_matches('/')
-        ))
-        .json(&serde_json::json!({
-            "model": cfg.openai_model,
-            "messages": [
-                {"role": "system", "content": "You are a knowledgeable technical assistant. Answer the following question accurately and thoroughly, drawing on your full training knowledge. Where you are uncertain or your knowledge may be outdated, say so explicitly rather than presenting uncertain information as fact. For technical questions, be specific: include exact values, function names, and configuration details where you know them."},
-                {"role": "user", "content": query}
-            ],
-            "temperature": 0.1,
-            "stream": true
-        }));
-
-    if !cfg.openai_api_key.is_empty() {
-        req = req.bearer_auth(&cfg.openai_api_key);
-    }
+    let req = build_openai_chat_request(client, cfg).json(&serde_json::json!({
+        "model": cfg.openai_model,
+        "messages": [
+            {"role": "system", "content": "You are a knowledgeable technical assistant. Answer the following question accurately and thoroughly, drawing on your full training knowledge. Where you are uncertain or your knowledge may be outdated, say so explicitly rather than presenting uncertain information as fact. For technical questions, be specific: include exact values, function names, and configuration details where you know them."},
+            {"role": "user", "content": query}
+        ],
+        "temperature": 0.1,
+        "stream": true
+    }));
 
     run_sse_stream(req, print_tokens).await
 }
@@ -237,23 +226,14 @@ pub(crate) async fn baseline_llm_non_streaming(
     client: &reqwest::Client,
     query: &str,
 ) -> Result<String, Box<dyn Error>> {
-    let mut req = client
-        .post(format!(
-            "{}/chat/completions",
-            cfg.openai_base_url.trim_end_matches('/')
-        ))
-        .json(&serde_json::json!({
-            "model": cfg.openai_model,
-            "messages": [
-                {"role": "system", "content": "You are a knowledgeable technical assistant. Answer the following question accurately and thoroughly, drawing on your full training knowledge. Where you are uncertain or your knowledge may be outdated, say so explicitly rather than presenting uncertain information as fact. For technical questions, be specific: include exact values, function names, and configuration details where you know them."},
-                {"role": "user", "content": query}
-            ],
-            "temperature": 0.1
-        }));
-
-    if !cfg.openai_api_key.is_empty() {
-        req = req.bearer_auth(&cfg.openai_api_key);
-    }
+    let req = build_openai_chat_request(client, cfg).json(&serde_json::json!({
+        "model": cfg.openai_model,
+        "messages": [
+            {"role": "system", "content": "You are a knowledgeable technical assistant. Answer the following question accurately and thoroughly, drawing on your full training knowledge. Where you are uncertain or your knowledge may be outdated, say so explicitly rather than presenting uncertain information as fact. For technical questions, be specific: include exact values, function names, and configuration details where you know them."},
+            {"role": "user", "content": query}
+        ],
+        "temperature": 0.1
+    }));
 
     let response = req.send().await?.error_for_status()?;
     let json: serde_json::Value = response.json().await?;
@@ -291,23 +271,15 @@ pub(crate) async fn judge_llm_streaming(
         source_count,
         context_chars,
     );
-    let mut req = client
-        .post(format!(
-            "{}/chat/completions",
-            cfg.openai_base_url.trim_end_matches('/')
-        ))
-        .json(&serde_json::json!({
-            "model": cfg.openai_model,
-            "messages": [
-                {"role": "system", "content": judge_system_prompt()},
-                {"role": "user", "content": user_msg}
-            ],
-            "temperature": 0.3,
-            "stream": true
-        }));
-    if !cfg.openai_api_key.is_empty() {
-        req = req.bearer_auth(&cfg.openai_api_key);
-    }
+    let req = build_openai_chat_request(client, cfg).json(&serde_json::json!({
+        "model": cfg.openai_model,
+        "messages": [
+            {"role": "system", "content": judge_system_prompt()},
+            {"role": "user", "content": user_msg}
+        ],
+        "temperature": 0.3,
+        "stream": true
+    }));
     run_sse_stream(req, print_tokens).await
 }
 
@@ -338,22 +310,14 @@ pub(crate) async fn judge_llm_non_streaming(
         source_count,
         context_chars,
     );
-    let mut req = client
-        .post(format!(
-            "{}/chat/completions",
-            cfg.openai_base_url.trim_end_matches('/')
-        ))
-        .json(&serde_json::json!({
-            "model": cfg.openai_model,
-            "messages": [
-                {"role": "system", "content": judge_system_prompt()},
-                {"role": "user", "content": user_msg}
-            ],
-            "temperature": 0.3
-        }));
-    if !cfg.openai_api_key.is_empty() {
-        req = req.bearer_auth(&cfg.openai_api_key);
-    }
+    let req = build_openai_chat_request(client, cfg).json(&serde_json::json!({
+        "model": cfg.openai_model,
+        "messages": [
+            {"role": "system", "content": judge_system_prompt()},
+            {"role": "user", "content": user_msg}
+        ],
+        "temperature": 0.3
+    }));
     let response = req.send().await?.error_for_status()?;
     let json: serde_json::Value = response.json().await?;
     Ok(json["choices"][0]["message"]["content"]

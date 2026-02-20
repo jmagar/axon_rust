@@ -153,7 +153,6 @@ fn env_usize_clamped(key: &str, default: usize, min: usize, max: usize) -> usize
     env::var(key)
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .filter(|v| *v >= min)
         .unwrap_or(default)
         .clamp(min, max)
 }

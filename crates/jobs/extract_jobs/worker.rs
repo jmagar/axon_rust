@@ -1,6 +1,6 @@
 use super::*;
 use crate::axon_cli::crates::core::content::ExtractRun;
-use crate::axon_cli::crates::jobs::common::open_amqp_connection_and_channel;
+use crate::axon_cli::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
 
 struct ExtractAggregation {
     runs: Vec<serde_json::Value>,
@@ -62,14 +62,19 @@ async fn mark_extract_canceled(
     let redis_client = redis::Client::open(cfg.redis_url.clone())?;
     let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
     let cancel_key = format!("axon:extract:cancel:{id}");
-    let cancel_before: Option<String> = redis_conn.get(&cancel_key).await.ok();
+    let cancel_before: Option<String> = redis_conn
+        .get(&cancel_key)
+        .await
+        .map_err(|e| format!("failed to check extract cancellation key {cancel_key}: {e}"))?;
     if cancel_before.is_none() {
         return Ok(false);
     }
-    sqlx::query("UPDATE axon_extract_jobs SET status='canceled',updated_at=NOW(),finished_at=NOW() WHERE id=$1")
-        .bind(id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE axon_extract_jobs SET status='canceled',updated_at=NOW(),finished_at=NOW() WHERE id=$1",
+    )
+    .bind(id)
+    .execute(pool)
+    .await?;
     Ok(true)
 }
 
@@ -204,8 +209,6 @@ async fn process_extract_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<()
         )))
     }
     .await;
-    // Convert Box<dyn Error> to String before the match so no !Send type
-    // is held across any await inside the match arms (tokio::spawn Send bound).
     let run_result = run_result.map_err(|e| e.to_string());
 
     match run_result {
@@ -235,145 +238,31 @@ async fn process_extract_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<()
     Ok(())
 }
 
-async fn sweep_stale_extract_jobs(cfg: &Config, pool: &PgPool, source: &str, lane: usize) {
-    if let Ok(stats) = reclaim_stale_running_jobs(
-        pool,
-        TABLE,
-        "extract",
-        cfg.watchdog_stale_timeout_secs,
-        cfg.watchdog_confirm_secs,
-        source,
-    )
-    .await
-    {
-        if stats.stale_candidates > 0 || stats.reclaimed_jobs > 0 {
-            log_info(&format!(
-                "watchdog extract sweep lane={} candidates={} marked={} reclaimed={}",
-                lane, stats.stale_candidates, stats.marked_candidates, stats.reclaimed_jobs
-            ));
-        }
-    }
-}
-
-async fn process_claimed_extract_job(cfg: &Config, pool: &PgPool, id: Uuid) {
-    // Extract error string inside the match arm so `err` (Box<dyn Error>, !Send)
-    // is dropped before any await point — required for tokio::spawn Send bound.
-    let fail_msg = match process_extract_job(cfg, pool, id).await {
+async fn process_claimed_extract_job(cfg: Config, pool: PgPool, id: Uuid) {
+    let fail_msg = match process_extract_job(&cfg, &pool, id).await {
         Ok(()) => None,
         Err(err) => Some(err.to_string()),
     };
     if let Some(error_text) = fail_msg {
-        mark_job_failed(pool, TABLE, id, &error_text).await;
+        mark_job_failed(&pool, TABLE, id, &error_text).await;
         log_warn(&format!("worker failed extract job {id}: {error_text}"));
-    }
-}
-
-async fn run_extract_amqp_lane(
-    cfg: &Config,
-    pool: PgPool,
-    lane: usize,
-) -> Result<(), Box<dyn Error>> {
-    let (_conn, ch) = open_amqp_connection_and_channel(cfg, &cfg.extract_queue).await?;
-    let tag = format!("axon-rust-extract-worker-{lane}");
-    let mut consumer = ch
-        .basic_consume(
-            &cfg.extract_queue,
-            &tag,
-            BasicConsumeOptions::default(),
-            FieldTable::default(),
-        )
-        .await?;
-    log_info(&format!(
-        "extract worker lane={} listening on queue={} concurrency={}",
-        lane, cfg.extract_queue, WORKER_CONCURRENCY
-    ));
-
-    loop {
-        let timed = tokio::time::timeout(
-            Duration::from_secs(STALE_SWEEP_INTERVAL_SECS),
-            consumer.next(),
-        )
-        .await;
-        let delivery = match timed {
-            Ok(Some(Ok(d))) => d,
-            Ok(Some(Err(_))) => continue,
-            Ok(None) => break,
-            Err(_) => {
-                sweep_stale_extract_jobs(cfg, &pool, "amqp", lane).await;
-                continue;
-            }
-        };
-
-        let parsed = std::str::from_utf8(&delivery.data)
-            .ok()
-            .and_then(|s| Uuid::parse_str(s.trim()).ok());
-        delivery.ack(BasicAckOptions::default()).await?;
-        if let Some(job_id) = parsed {
-            if claim_pending_by_id(&pool, TABLE, job_id)
-                .await
-                .unwrap_or(false)
-            {
-                process_claimed_extract_job(cfg, &pool, job_id).await;
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn run_extract_polling_lane(
-    cfg: &Config,
-    pool: PgPool,
-    lane: usize,
-) -> Result<(), Box<dyn Error>> {
-    log_info(&format!(
-        "extract worker polling lane={} active queue={}",
-        lane, cfg.extract_queue
-    ));
-    let mut last_sweep = Instant::now();
-    loop {
-        if last_sweep.elapsed() >= Duration::from_secs(STALE_SWEEP_INTERVAL_SECS) {
-            sweep_stale_extract_jobs(cfg, &pool, "polling", lane).await;
-            last_sweep = Instant::now();
-        }
-        if let Some(id) = claim_next_pending(&pool, TABLE).await? {
-            process_claimed_extract_job(cfg, &pool, id).await;
-        } else {
-            tokio::time::sleep(Duration::from_millis(800)).await;
-        }
     }
 }
 
 pub async fn run_extract_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
-    sweep_stale_extract_jobs(cfg, &pool, "startup", 0).await;
 
-    // Probe AMQP connectivity with a short-lived connection+channel pair.
-    // Close both explicitly so RabbitMQ doesn't accumulate orphaned channels.
-    let amqp_available = match open_amqp_connection_and_channel(cfg, &cfg.extract_queue).await {
-        Ok((conn, ch)) => {
-            let _ = ch.close(0, "probe").await;
-            let _ = conn.close(200, "probe").await;
-            true
-        }
-        Err(_) => false,
+    let wc = WorkerConfig {
+        table: TABLE,
+        queue_name: cfg.extract_queue.clone(),
+        job_kind: "extract",
+        consumer_tag_prefix: "axon-rust-extract-worker",
+        lane_count: WORKER_CONCURRENCY,
     };
-    if amqp_available {
-        let (r1, r2) = tokio::join!(
-            run_extract_amqp_lane(cfg, pool.clone(), 1),
-            run_extract_amqp_lane(cfg, pool.clone(), 2)
-        );
-        r1?;
-        r2?;
-        return Ok(());
-    }
 
-    log_warn("amqp unavailable; running extract worker in postgres polling mode");
-    let (r1, r2) = tokio::join!(
-        run_extract_polling_lane(cfg, pool.clone(), 1),
-        run_extract_polling_lane(cfg, pool, 2)
-    );
-    r1?;
-    r2?;
-    Ok(())
+    let process_fn: ProcessFn =
+        std::sync::Arc::new(|cfg, pool, id| Box::pin(process_claimed_extract_job(cfg, pool, id)));
+
+    run_job_worker(cfg, pool, &wc, process_fn).await
 }

@@ -1,4 +1,5 @@
 use clap::ValueEnum;
+use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy)]
@@ -53,6 +54,12 @@ impl CommandKind {
             Self::Reddit => "reddit",
             Self::Youtube => "youtube",
         }
+    }
+}
+
+impl fmt::Display for CommandKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

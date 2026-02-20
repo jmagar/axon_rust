@@ -1,4 +1,5 @@
 use crate::axon_cli::crates::core::config::Config;
+use crate::axon_cli::crates::core::logging::log_warn;
 use crate::axon_cli::crates::core::ui::{accent, muted, primary};
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -24,11 +25,31 @@ pub async fn run_retrieve_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         .collect();
 
     let mut points = Vec::new();
+    let mut had_success = false;
+    let mut first_error: Option<String> = None;
     while let Some(result) = lookups.next().await {
-        let candidate_points = result?;
-        if !candidate_points.is_empty() {
-            points = candidate_points;
-            break;
+        match result {
+            Ok(candidate_points) => {
+                had_success = true;
+                if !candidate_points.is_empty() {
+                    points = candidate_points;
+                    break;
+                }
+            }
+            Err(err) => {
+                if first_error.is_none() {
+                    first_error = Some(err.to_string());
+                }
+                log_warn(&format!(
+                    "retrieve variant lookup failed for {}: {err}",
+                    target
+                ));
+            }
+        }
+    }
+    if points.is_empty() && !had_success {
+        if let Some(err) = first_error {
+            return Err(format!("retrieve failed for all URL variants: {err}").into());
         }
     }
     if points.is_empty() {

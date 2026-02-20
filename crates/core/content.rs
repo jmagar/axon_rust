@@ -9,6 +9,7 @@ pub use deterministic::{
 };
 
 use super::http::{http_client, ssrf_blacklist_patterns, validate_url};
+use super::logging::log_warn;
 use deterministic::{extract_items_fallback, FallbackResponse};
 use spider::url::Url;
 use spider::website::Website;
@@ -307,10 +308,14 @@ async fn collect_page_results(
         let client_c = client.clone();
         let limiter = Arc::clone(&fallback_limiter);
         let markdown = to_markdown(&html);
+        let permit = match limiter.acquire_owned().await {
+            Ok(permit) => permit,
+            Err(_) => {
+                log_warn("fallback limiter closed; skipping fallback request");
+                continue;
+            }
+        };
         fallback_tasks.spawn(async move {
-            let Some(permit) = limiter.acquire_owned().await.ok() else {
-                return (page_url, Err("fallback limiter closed".to_string()));
-            };
             let _permit = permit;
             let res = extract_items_fallback(
                 &client_c, &api_url_c, &api_key_c, &model_c, &prompt_c, &page_url, &markdown,
@@ -341,14 +346,26 @@ fn drain_fallback_result(
     all_results: &mut Vec<serde_json::Value>,
     metrics: &mut ExtractionMetrics,
 ) {
-    if let Ok((_url, Ok(fallback))) = joined {
-        metrics.prompt_tokens += fallback.prompt_tokens;
-        metrics.completion_tokens += fallback.completion_tokens;
-        metrics.total_tokens += fallback.total_tokens;
-        metrics.estimated_cost_usd += fallback.estimated_cost_usd;
-        if !fallback.items.is_empty() {
-            *pages_with_data += 1;
-            all_results.extend(fallback.items);
+    match joined {
+        Ok((url, Ok(fallback))) => {
+            metrics.prompt_tokens += fallback.prompt_tokens;
+            metrics.completion_tokens += fallback.completion_tokens;
+            metrics.total_tokens += fallback.total_tokens;
+            metrics.estimated_cost_usd += fallback.estimated_cost_usd;
+            let has_items = !fallback.items.is_empty();
+            if has_items {
+                *pages_with_data += 1;
+                all_results.extend(fallback.items);
+            }
+            if !has_items {
+                log_warn(&format!("fallback extraction produced no items for {url}"));
+            }
+        }
+        Ok((url, Err(err))) => {
+            log_warn(&format!("fallback extraction failed for {url}: {err}"));
+        }
+        Err(err) => {
+            log_warn(&format!("fallback extraction task join error: {err}"));
         }
     }
 }

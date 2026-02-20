@@ -137,9 +137,9 @@ async fn enqueue_robots_sitemaps(
     }
 }
 
-fn in_host_scope(cfg: &Config, url_host: &str, host: &str) -> bool {
-    if cfg.include_subdomains {
-        url_host == host || url_host.ends_with(&format!(".{host}"))
+fn in_host_scope(url_host: &str, host: &str, include_subdomains: bool, host_suffix: &str) -> bool {
+    if include_subdomains {
+        url_host == host || url_host.ends_with(host_suffix)
     } else {
         url_host == host
     }
@@ -155,6 +155,8 @@ fn in_path_scope(path: &str, root_path: &str, scoped_to_root: bool) -> bool {
 
 struct SitemapScope<'a> {
     host: &'a str,
+    host_suffix: String,
+    include_subdomains: bool,
     root_path: &'a str,
     scoped_to_root: bool,
 }
@@ -173,7 +175,12 @@ fn canonical_sitemap_loc(
         stats.parse_errors += 1;
         return None;
     };
-    if !in_host_scope(cfg, url_host, scope.host) {
+    if !in_host_scope(
+        url_host,
+        scope.host,
+        scope.include_subdomains,
+        &scope.host_suffix,
+    ) {
         stats.filtered_out_of_scope_host += 1;
         return None;
     }
@@ -201,6 +208,7 @@ pub(crate) async fn discover_sitemap_urls_with_robots(
     let host = parsed.host_str().ok_or("missing host")?.to_string();
     let root_path = parsed.path().trim_end_matches('/').to_string();
     let scoped_to_root = root_path.is_empty();
+    let host_suffix = format!(".{host}");
     let timeout = Duration::from_millis(cfg.request_timeout_ms.unwrap_or(30_000));
     let client = reqwest::Client::builder().timeout(timeout).build()?;
 
@@ -213,6 +221,8 @@ pub(crate) async fn discover_sitemap_urls_with_robots(
 
     let scope = SitemapScope {
         host: &host,
+        host_suffix,
+        include_subdomains: cfg.include_subdomains,
         root_path: &root_path,
         scoped_to_root,
     };
@@ -313,7 +323,7 @@ pub(super) async fn append_robots_backfill(
         };
         stats.fetched_ok += 1;
         let md = to_markdown(&html);
-        let markdown_chars = md.chars().count();
+        let markdown_chars = md.trim().len();
         if markdown_chars < cfg.min_markdown_chars {
             summary.thin_pages += 1;
         }

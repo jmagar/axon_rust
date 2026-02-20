@@ -98,7 +98,10 @@ async fn maybe_cancel_job_before_start(
     let redis_client = redis::Client::open(cfg.redis_url.clone())?;
     let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
     let cancel_key = format!("axon:crawl:cancel:{id}");
-    let cancel_before: Option<String> = redis_conn.get(&cancel_key).await.ok();
+    let cancel_before: Option<String> = redis_conn
+        .get(&cancel_key)
+        .await
+        .map_err(|e| format!("failed to check crawl cancellation key {cancel_key}: {e}"))?;
     if cancel_before.is_none() {
         return Ok(false);
     }

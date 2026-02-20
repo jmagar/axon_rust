@@ -30,16 +30,4 @@ pub(crate) struct QdrantSearchResponse {
     pub(crate) result: Vec<QdrantSearchHit>,
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct QdrantScrollResult {
-    #[serde(default)]
-    pub(crate) points: Vec<QdrantPoint>,
-    pub(crate) next_page_offset: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct QdrantScrollResponse {
-    pub(crate) result: QdrantScrollResult,
-}
-
 pub(crate) const RETRIEVE_MAX_POINTS_CEILING: usize = 500;

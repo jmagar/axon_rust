@@ -5,7 +5,7 @@ use uuid::Uuid;
 pub mod manifest;
 pub mod processor;
 pub mod repo;
-pub mod runtime;
+pub(crate) mod runtime;
 pub mod sitemap;
 pub mod watchdog;
 pub mod worker;

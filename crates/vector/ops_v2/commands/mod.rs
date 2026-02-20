@@ -8,3 +8,21 @@ pub use ask::run_ask_native;
 pub use evaluate::run_evaluate_native;
 pub use query::run_query_native;
 pub use suggest::run_suggest_native;
+
+use crate::axon_cli::crates::core::config::Config;
+
+/// Resolve query text from `--query` flag or positional args, trimming whitespace.
+/// Returns `None` if both are empty/whitespace-only.
+fn resolve_query_text(cfg: &Config) -> Option<String> {
+    cfg.query
+        .clone()
+        .or_else(|| {
+            if cfg.positional.is_empty() {
+                None
+            } else {
+                Some(cfg.positional.join(" "))
+            }
+        })
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}

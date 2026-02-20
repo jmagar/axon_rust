@@ -3,33 +3,22 @@ use crate::axon_cli::crates::core::http::http_client;
 use std::collections::HashSet;
 use std::error::Error;
 
-use super::types::{QdrantPoint, QdrantScrollResponse, QdrantSearchHit, QdrantSearchResponse};
+use super::types::{QdrantPoint, QdrantSearchHit, QdrantSearchResponse};
 use super::utils::{qdrant_base, retrieve_max_points};
 
-pub(crate) async fn qdrant_scroll_pages(
-    cfg: &Config,
-    mut process_page: impl FnMut(&[serde_json::Value]),
+/// Shared scroll pagination loop. POSTs to the given `endpoint` with `initial_body`,
+/// reads `result.points` as raw JSON, and invokes `on_page` for each non-empty page.
+/// The callback returns `true` to continue scrolling or `false` to stop early.
+async fn scroll_pages_raw(
+    client: &reqwest::Client,
+    endpoint: &str,
+    initial_body: serde_json::Value,
+    mut on_page: impl FnMut(&[serde_json::Value]) -> bool,
 ) -> Result<(), Box<dyn Error>> {
-    let client = http_client()?;
-    let mut offset: Option<serde_json::Value> = None;
-
+    let mut body = initial_body;
     loop {
-        let mut body = serde_json::json!({
-            "limit": 256,
-            "with_payload": true,
-            "with_vector": false
-        });
-        if let Some(off) = offset.take() {
-            body["offset"] = off;
-        }
-
-        let url = format!(
-            "{}/collections/{}/points/scroll",
-            qdrant_base(cfg),
-            cfg.collection
-        );
         let val = client
-            .post(url)
+            .post(endpoint)
             .json(&body)
             .send()
             .await?
@@ -44,15 +33,39 @@ pub(crate) async fn qdrant_scroll_pages(
         if points.is_empty() {
             break;
         }
-        process_page(points);
-
-        offset = val["result"].get("next_page_offset").cloned();
-        if offset.as_ref().is_none() || offset == Some(serde_json::Value::Null) {
+        if !on_page(points) {
             break;
         }
-    }
 
+        let next = val["result"].get("next_page_offset").cloned();
+        if next.is_none() || next == Some(serde_json::Value::Null) {
+            break;
+        }
+        body["offset"] = next.unwrap();
+    }
     Ok(())
+}
+
+pub(crate) async fn qdrant_scroll_pages(
+    cfg: &Config,
+    mut process_page: impl FnMut(&[serde_json::Value]),
+) -> Result<(), Box<dyn Error>> {
+    let client = http_client()?;
+    let endpoint = format!(
+        "{}/collections/{}/points/scroll",
+        qdrant_base(cfg),
+        cfg.collection
+    );
+    let body = serde_json::json!({
+        "limit": 256,
+        "with_payload": true,
+        "with_vector": false
+    });
+    scroll_pages_raw(client, &endpoint, body, |points| {
+        process_page(points);
+        true
+    })
+    .await
 }
 
 /// Scroll the collection keeping only the URL field (one entry per unique URL via chunk_index==0
@@ -70,28 +83,13 @@ async fn scroll_url_set(
         cfg.collection
     );
     let mut seen = HashSet::new();
-    let mut body = serde_json::json!({
+    let body = serde_json::json!({
         "limit": 1000,
         "with_payload": {"include": ["url"]},
         "with_vector": false,
         "filter": filter,
     });
-    loop {
-        let val = client
-            .post(&endpoint)
-            .json(&body)
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<serde_json::Value>()
-            .await?;
-        let points = val["result"]["points"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        if points.is_empty() {
-            break;
-        }
+    scroll_pages_raw(client, &endpoint, body, |points| {
         for p in points {
             if let Some(url) = p
                 .get("payload")
@@ -102,15 +100,12 @@ async fn scroll_url_set(
                 seen.insert(url.to_string());
             }
             if limit.is_some_and(|cap| seen.len() >= cap) {
-                return Ok(seen);
+                return false;
             }
         }
-        let next = val["result"].get("next_page_offset").cloned();
-        if next.is_none() || next == Some(serde_json::Value::Null) {
-            break;
-        }
-        body["offset"] = next.unwrap();
-    }
+        true
+    })
+    .await?;
     Ok(seen)
 }
 
@@ -269,56 +264,35 @@ pub(crate) async fn qdrant_retrieve_by_url(
     max_points: Option<usize>,
 ) -> Result<Vec<QdrantPoint>, Box<dyn Error>> {
     let client = http_client()?;
-    let mut out = Vec::new();
-    let mut offset: Option<serde_json::Value> = None;
+    let endpoint = format!(
+        "{}/collections/{}/points/scroll",
+        qdrant_base(cfg),
+        cfg.collection
+    );
+    let body = serde_json::json!({
+        "limit": 256,
+        "with_payload": true,
+        "with_vector": false,
+        "filter": {
+            "must": [
+                {
+                    "key": "url",
+                    "match": {"value": url_match}
+                }
+            ]
+        }
+    });
     let max_points = retrieve_max_points(max_points);
-
-    loop {
-        let mut body = serde_json::json!({
-            "limit": 256,
-            "with_payload": true,
-            "with_vector": false,
-            "filter": {
-                "must": [
-                    {
-                        "key": "url",
-                        "match": {"value": url_match}
-                    }
-                ]
+    let mut out = Vec::new();
+    scroll_pages_raw(client, &endpoint, body, |points| {
+        for p in points {
+            if let Ok(point) = serde_json::from_value::<QdrantPoint>(p.clone()) {
+                out.push(point);
             }
-        });
-        if let Some(off) = offset.take() {
-            body["offset"] = off;
         }
-
-        let val = client
-            .post(format!(
-                "{}/collections/{}/points/scroll",
-                qdrant_base(cfg),
-                cfg.collection
-            ))
-            .json(&body)
-            .send()
-            .await?
-            .error_for_status()?
-            .json::<QdrantScrollResponse>()
-            .await?;
-
-        let points = val.result.points;
-        if points.is_empty() {
-            break;
-        }
-        out.extend(points);
-        if out.len() >= max_points {
-            out.truncate(max_points);
-            break;
-        }
-
-        offset = val.result.next_page_offset;
-        if offset.as_ref().is_none() {
-            break;
-        }
-    }
-
+        out.len() < max_points
+    })
+    .await?;
+    out.truncate(max_points);
     Ok(out)
 }

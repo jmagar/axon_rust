@@ -91,16 +91,7 @@ struct SuggestPromptContext {
 }
 
 fn suggestion_focus(cfg: &Config) -> String {
-    cfg.query
-        .clone()
-        .or_else(|| {
-            if cfg.positional.is_empty() {
-                None
-            } else {
-                Some(cfg.positional.join(" "))
-            }
-        })
-        .unwrap_or_default()
+    super::resolve_query_text(cfg).unwrap_or_default()
 }
 
 async fn build_suggest_prompt_context(
@@ -182,23 +173,14 @@ async fn request_suggestions_from_llm(
     user_prompt: &str,
 ) -> Result<String, Box<dyn Error>> {
     let client = http_client()?;
-    let mut req = client
-        .post(format!(
-            "{}/chat/completions",
-            cfg.openai_base_url.trim_end_matches('/')
-        ))
-        .json(&serde_json::json!({
-            "model": cfg.openai_model,
-            "messages": [
-                {"role": "system", "content": "You propose complementary documentation crawl targets. Output JSON only."},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": 0.2,
-        }));
-
-    if !cfg.openai_api_key.trim().is_empty() {
-        req = req.bearer_auth(&cfg.openai_api_key);
-    }
+    let req = super::streaming::build_openai_chat_request(client, cfg).json(&serde_json::json!({
+        "model": cfg.openai_model,
+        "messages": [
+            {"role": "system", "content": "You propose complementary documentation crawl targets. Output JSON only."},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.2,
+    }));
 
     let response = req.send().await?.error_for_status()?;
     let json: serde_json::Value = response.json().await?;

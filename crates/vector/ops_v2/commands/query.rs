@@ -3,18 +3,10 @@ use crate::axon_cli::crates::core::ui::{muted, primary};
 use crate::axon_cli::crates::vector::ops_v2::{qdrant, ranking, tei};
 use std::error::Error;
 
+use super::resolve_query_text;
+
 pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let query = cfg
-        .query
-        .clone()
-        .or_else(|| {
-            if cfg.positional.is_empty() {
-                None
-            } else {
-                Some(cfg.positional.join(" "))
-            }
-        })
-        .ok_or("query requires text")?;
+    let query = resolve_query_text(cfg).ok_or("query requires text")?;
 
     let mut query_vectors = tei::tei_embed(cfg, std::slice::from_ref(&query)).await?;
     if query_vectors.is_empty() {

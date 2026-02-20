@@ -2,24 +2,19 @@ use crate::axon_cli::crates::core::config::Config;
 use crate::axon_cli::crates::core::health::redis_healthy;
 use crate::axon_cli::crates::core::logging::{log_done, log_info, log_warn};
 use crate::axon_cli::crates::jobs::common::{
-    claim_next_pending, claim_pending_by_id, enqueue_job, make_pool, mark_job_failed,
-    open_amqp_channel, open_amqp_connection_and_channel, reclaim_stale_running_jobs, JobTable,
+    enqueue_job, make_pool, mark_job_failed, open_amqp_channel, open_amqp_connection_and_channel,
+    reclaim_stale_running_jobs, JobTable,
 };
 use crate::axon_cli::crates::vector::ops::{embed_path_native_with_progress, EmbedProgress};
 use chrono::{DateTime, Utc};
-use futures_util::StreamExt;
-use lapin::options::{BasicAckOptions, BasicConsumeOptions};
-use lapin::types::FieldTable;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use spider::tokio;
 use sqlx::{FromRow, PgPool};
 use std::error::Error;
-use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const TABLE: JobTable = JobTable::Embed;
-const STALE_SWEEP_INTERVAL_SECS: u64 = 30;
 const WORKER_CONCURRENCY: usize = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,12 +191,16 @@ async fn process_embed_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
         let Some((input_text, cfg_json)) = row else {
             return Ok::<Option<serde_json::Value>, Box<dyn Error>>(None);
         };
-        log_info(&format!("embed worker started job {id} input={}", &input_text[..80.min(input_text.len())]));
+        let input_preview: String = input_text.chars().take(80).collect();
+        log_info(&format!("embed worker started job {id} input={input_preview}"));
 
         let redis_client = redis::Client::open(cfg.redis_url.clone())?;
         let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
         let cancel_key = format!("axon:embed:cancel:{id}");
-        let cancel_before: Option<String> = redis_conn.get(&cancel_key).await.ok();
+        let cancel_before: Option<String> = redis_conn
+            .get(&cancel_key)
+            .await
+            .map_err(|e| format!("failed to check embed cancellation key {cancel_key}: {e}"))?;
         if cancel_before.is_some() {
             sqlx::query("UPDATE axon_embed_jobs SET status='canceled',updated_at=NOW(),finished_at=NOW() WHERE id=$1")
                 .bind(id)
@@ -283,161 +282,35 @@ async fn process_embed_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
     Ok(())
 }
 
-async fn sweep_stale_embed_jobs(cfg: &Config, pool: &PgPool, source: &str, lane: usize) {
-    if let Ok(stats) = reclaim_stale_running_jobs(
-        pool,
-        TABLE,
-        "embed",
-        cfg.watchdog_stale_timeout_secs,
-        cfg.watchdog_confirm_secs,
-        source,
-    )
-    .await
-    {
-        if stats.stale_candidates > 0 || stats.reclaimed_jobs > 0 {
-            log_info(&format!(
-                "watchdog embed sweep lane={} candidates={} marked={} reclaimed={}",
-                lane, stats.stale_candidates, stats.marked_candidates, stats.reclaimed_jobs
-            ));
-        }
-    }
-}
-
-async fn process_claimed_embed_job(cfg: &Config, pool: &PgPool, id: Uuid) {
-    // Extract error string inside the match arm so `err` (Box<dyn Error>, !Send)
-    // is dropped before any await point — required for tokio::spawn Send bound.
-    let fail_msg = match process_embed_job(cfg, pool, id).await {
+async fn process_claimed_embed_job(cfg: Config, pool: PgPool, id: Uuid) {
+    let fail_msg = match process_embed_job(&cfg, &pool, id).await {
         Ok(()) => None,
         Err(err) => Some(err.to_string()),
     };
     if let Some(error_text) = fail_msg {
-        mark_job_failed(pool, TABLE, id, &error_text).await;
+        mark_job_failed(&pool, TABLE, id, &error_text).await;
         log_warn(&format!("worker failed embed job {id}: {error_text}"));
     }
 }
 
-async fn run_embed_amqp_lane(
-    cfg: &Config,
-    pool: PgPool,
-    lane: usize,
-) -> Result<(), Box<dyn Error>> {
-    let (_conn, ch) = open_amqp_connection_and_channel(cfg, &cfg.embed_queue).await?;
-    let tag = format!("axon-rust-embed-worker-{lane}");
-    let mut consumer = ch
-        .basic_consume(
-            &cfg.embed_queue,
-            &tag,
-            BasicConsumeOptions::default(),
-            FieldTable::default(),
-        )
-        .await?;
-    log_info(&format!(
-        "embed worker lane={} listening on queue={} concurrency={}",
-        lane, cfg.embed_queue, WORKER_CONCURRENCY
-    ));
-    let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(60));
-    heartbeat_interval.tick().await; // consume the immediate first tick
-
-    loop {
-        let timed = tokio::select! {
-            _ = heartbeat_interval.tick() => {
-                log_info(&format!("embed worker heartbeat lane={} alive", lane));
-                continue;
-            },
-            timed = async {
-                tokio::time::timeout(
-                    Duration::from_secs(STALE_SWEEP_INTERVAL_SECS),
-                    consumer.next(),
-                )
-                .await
-            } => timed,
-        };
-        let delivery = match timed {
-            Ok(Some(Ok(d))) => d,
-            Ok(Some(Err(_))) => continue,
-            Ok(None) => break,
-            Err(_) => {
-                sweep_stale_embed_jobs(cfg, &pool, "amqp", lane).await;
-                continue;
-            }
-        };
-        let parsed = std::str::from_utf8(&delivery.data)
-            .ok()
-            .and_then(|s| Uuid::parse_str(s.trim()).ok());
-        delivery.ack(BasicAckOptions::default()).await?;
-        if let Some(job_id) = parsed {
-            if claim_pending_by_id(&pool, TABLE, job_id)
-                .await
-                .unwrap_or(false)
-            {
-                process_claimed_embed_job(cfg, &pool, job_id).await;
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn run_embed_polling_lane(
-    cfg: &Config,
-    pool: PgPool,
-    lane: usize,
-) -> Result<(), Box<dyn Error>> {
-    log_info(&format!(
-        "embed worker polling lane={} active queue={}",
-        lane, cfg.embed_queue
-    ));
-    let mut last_sweep = Instant::now();
-    let mut last_heartbeat = Instant::now();
-    loop {
-        if last_heartbeat.elapsed() >= Duration::from_secs(60) {
-            log_info(&format!("embed worker heartbeat lane={} alive", lane));
-            last_heartbeat = Instant::now();
-        }
-        if last_sweep.elapsed() >= Duration::from_secs(STALE_SWEEP_INTERVAL_SECS) {
-            sweep_stale_embed_jobs(cfg, &pool, "polling", lane).await;
-            last_sweep = Instant::now();
-        }
-        if let Some(id) = claim_next_pending(&pool, TABLE).await? {
-            process_claimed_embed_job(cfg, &pool, id).await;
-        } else {
-            tokio::time::sleep(Duration::from_millis(800)).await;
-        }
-    }
-}
-
 pub async fn run_embed_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
+    use crate::axon_cli::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
+
     let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
-    sweep_stale_embed_jobs(cfg, &pool, "startup", 0).await;
 
-    // Probe AMQP connectivity with a short-lived connection+channel pair.
-    // Close both explicitly so RabbitMQ doesn't accumulate orphaned channels.
-    let amqp_available = match open_amqp_connection_and_channel(cfg, &cfg.embed_queue).await {
-        Ok((conn, ch)) => {
-            let _ = ch.close(0, "probe").await;
-            let _ = conn.close(200, "probe").await;
-            true
-        }
-        Err(_) => false,
+    let wc = WorkerConfig {
+        table: TABLE,
+        queue_name: cfg.embed_queue.clone(),
+        job_kind: "embed",
+        consumer_tag_prefix: "axon-rust-embed-worker",
+        lane_count: WORKER_CONCURRENCY,
     };
-    if amqp_available {
-        let (r1, r2) = tokio::join!(
-            run_embed_amqp_lane(cfg, pool.clone(), 1),
-            run_embed_amqp_lane(cfg, pool.clone(), 2)
-        );
-        r1?;
-        r2?;
-        return Ok(());
-    }
 
-    log_warn("amqp unavailable; running embed worker in postgres polling mode");
-    let (r1, r2) = tokio::join!(
-        run_embed_polling_lane(cfg, pool.clone(), 1),
-        run_embed_polling_lane(cfg, pool, 2)
-    );
-    r1?;
-    r2?;
-    Ok(())
+    let process_fn: ProcessFn =
+        std::sync::Arc::new(|cfg, pool, id| Box::pin(process_claimed_embed_job(cfg, pool, id)));
+
+    run_job_worker(cfg, pool, &wc, process_fn).await
 }
 
 pub async fn recover_stale_embed_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {

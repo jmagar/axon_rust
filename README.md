@@ -8,7 +8,7 @@ Axon is a single CLI for crawl/scrape/extract plus local vector retrieval and Q&
 
 ## Features
 
-- Commands: `scrape`, `crawl`, `map`, `search`, `batch`, `extract`, `embed`, `query`, `retrieve`, `ask`, `evaluate`, `suggest`, `sources`, `domains`, `stats`, `status`, `doctor`, `debug`
+- Commands: `scrape`, `crawl`, `map`, `search`, `batch`, `extract`, `embed`, `query`, `retrieve`, `ask`, `evaluate`, `suggest`, `sources`, `domains`, `stats`, `status`, `doctor`, `dedupe`, `debug`
 - Async queue-backed jobs for `crawl`/`batch`/`extract`/`embed`
 - TEI embeddings + Qdrant vector storage
 - OpenAI-compatible extraction and answer generation

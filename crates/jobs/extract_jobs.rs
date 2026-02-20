@@ -5,25 +5,20 @@ use crate::axon_cli::crates::core::content::{
 use crate::axon_cli::crates::core::health::redis_healthy;
 use crate::axon_cli::crates::core::logging::{log_done, log_info, log_warn};
 use crate::axon_cli::crates::jobs::common::{
-    claim_next_pending, claim_pending_by_id, enqueue_job, make_pool, mark_job_failed,
-    open_amqp_channel, reclaim_stale_running_jobs, JobTable,
+    enqueue_job, make_pool, mark_job_failed, open_amqp_channel, reclaim_stale_running_jobs,
+    JobTable,
 };
 use chrono::{DateTime, Utc};
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
-use lapin::options::{BasicAckOptions, BasicConsumeOptions};
-use lapin::types::FieldTable;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
-use spider::tokio;
 use sqlx::{FromRow, PgPool};
 use std::error::Error;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const TABLE: JobTable = JobTable::Extract;
-const STALE_SWEEP_INTERVAL_SECS: u64 = 30;
 const WORKER_CONCURRENCY: usize = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
