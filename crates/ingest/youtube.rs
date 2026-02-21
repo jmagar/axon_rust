@@ -1,4 +1,6 @@
 use crate::axon_cli::crates::core::config::Config;
+use crate::axon_cli::crates::core::logging::log_warn;
+use crate::axon_cli::crates::vector::ops_dispatch::embed_text_with_metadata;
 use spider::url::Url;
 use std::error::Error;
 
@@ -112,11 +114,87 @@ pub fn extract_video_id(input: &str) -> Option<String> {
 }
 
 /// Ingest a YouTube video, playlist, or channel URL by:
-/// 1. Running yt-dlp to download VTT subtitle files
-/// 2. Parsing each VTT file into clean text
-/// 3. Embedding text into Qdrant via embed_text_with_metadata
-pub async fn ingest_youtube(_cfg: &Config, _url: &str) -> Result<usize, Box<dyn Error>> {
-    todo!("implement YouTube ingestion")
+/// 1. Running yt-dlp to download VTT subtitle files into a temp directory
+/// 2. Parsing each VTT file into clean text via parse_vtt_to_text
+/// 3. Embedding each transcript into Qdrant via embed_text_with_metadata
+///
+/// Requires `yt-dlp` to be installed and on PATH.
+pub async fn ingest_youtube(cfg: &Config, url: &str) -> Result<usize, Box<dyn Error>> {
+    // Create a temp directory; cleaned up automatically when `tmp` is dropped
+    let tmp = tempfile::tempdir()?;
+    let tmp_path = tmp.path().to_string_lossy().to_string();
+
+    // Run yt-dlp: download English auto-generated subtitles only, skip video download
+    let output = tokio::process::Command::new("yt-dlp")
+        .args([
+            "--write-auto-sub",
+            "--skip-download",
+            "--sub-format",
+            "vtt",
+            "--convert-subs",
+            "vtt",
+            "--sub-langs",
+            "en",
+            "-o",
+            &format!("{tmp_path}/%(id)s"),
+            url,
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("yt-dlp not found or failed to start: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("yt-dlp exited non-zero: {stderr}").into());
+    }
+
+    // Collect all .vtt files produced by yt-dlp
+    let mut vtt_files: Vec<std::path::PathBuf> = Vec::new();
+    let mut dir = tokio::fs::read_dir(&tmp_path).await?;
+    while let Some(entry) = dir.next_entry().await? {
+        let path: std::path::PathBuf = entry.path();
+        if path.extension().is_some_and(|e| e == "vtt") {
+            vtt_files.push(path);
+        }
+    }
+
+    if vtt_files.is_empty() {
+        return Err(
+            "yt-dlp produced no VTT subtitle files — video may have no captions, \
+             or yt-dlp needs updating"
+                .into(),
+        );
+    }
+
+    let mut count = 0usize;
+
+    for vtt_path in &vtt_files {
+        let vtt_text = tokio::fs::read_to_string(vtt_path).await?;
+        let text = parse_vtt_to_text(&vtt_text);
+
+        if text.trim().is_empty() {
+            continue;
+        }
+
+        // yt-dlp output template is "%(id)s" so the stem before the first "." is the video ID
+        let stem = vtt_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+        let video_id = stem.split('.').next().unwrap_or(stem);
+
+        let source_url = format!("https://www.youtube.com/watch?v={video_id}");
+        let title = format!("YouTube: {video_id}");
+
+        match embed_text_with_metadata(cfg, &text, &source_url, "youtube", Some(&title)).await {
+            Ok(n) => count += n,
+            Err(e) => log_warn(&format!(
+                "command=ingest_youtube embed_failed video_id={video_id} err={e}"
+            )),
+        }
+    }
+
+    Ok(count)
 }
 
 #[cfg(test)]

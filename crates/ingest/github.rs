@@ -1,4 +1,7 @@
 use crate::axon_cli::crates::core::config::Config;
+use crate::axon_cli::crates::core::logging::log_warn;
+use crate::axon_cli::crates::vector::ops_dispatch::embed_text_with_metadata;
+use reqwest::Client;
 use std::error::Error;
 
 /// Returns true if a file path should be indexed when --include-source is set.
@@ -55,16 +58,123 @@ pub fn parse_github_repo(input: &str) -> Option<(String, String)> {
     Some((owner.to_string(), repo.to_string()))
 }
 
+/// Build a reqwest::RequestBuilder with GitHub auth header applied if a token is available.
+fn github_request(
+    client: &Client,
+    url: &str,
+    auth_header: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let req = client
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28");
+    if let Some(auth) = auth_header {
+        req.header("Authorization", auth)
+    } else {
+        req
+    }
+}
+
 /// Ingest a GitHub repository:
-/// - Fetches markdown files + issues + PRs via GitHub REST API
-/// - Optionally fetches source files if include_source is true
+/// - Fetches all markdown/doc files unconditionally
+/// - Optionally fetches source files when `include_source` is true
 /// - Embeds all content into Qdrant via embed_text_with_metadata
 pub async fn ingest_github(
-    _cfg: &Config,
-    _repo: &str,
-    _include_source: bool,
+    cfg: &Config,
+    repo: &str,
+    include_source: bool,
 ) -> Result<usize, Box<dyn Error>> {
-    todo!("implement GitHub ingestion")
+    let (owner, name) =
+        parse_github_repo(repo).ok_or_else(|| format!("invalid GitHub repo: {repo}"))?;
+
+    let client = Client::builder()
+        .user_agent("axon-ingest/1.0 (https://github.com/jmagar/axon_rust)")
+        .build()?;
+
+    let auth: Option<String> = cfg.github_token.as_deref().map(|t| format!("Bearer {t}"));
+    let auth_ref = auth.as_deref();
+    let base = "https://api.github.com";
+
+    // 1. Fetch repo metadata to resolve the default branch
+    let repo_info: serde_json::Value =
+        github_request(&client, &format!("{base}/repos/{owner}/{name}"), auth_ref)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+    if let Some(msg) = repo_info["message"].as_str() {
+        return Err(format!("GitHub API error for {owner}/{name}: {msg}").into());
+    }
+
+    let default_branch = repo_info["default_branch"]
+        .as_str()
+        .unwrap_or("main")
+        .to_string();
+
+    // 2. Fetch the full recursive file tree
+    let tree_resp: serde_json::Value = github_request(
+        &client,
+        &format!("{base}/repos/{owner}/{name}/git/trees/{default_branch}?recursive=1"),
+        auth_ref,
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
+
+    if tree_resp["truncated"].as_bool().unwrap_or(false) {
+        log_warn(&format!(
+            "command=ingest_github repo={owner}/{name} tree_truncated=true \
+             — large repo, some files skipped"
+        ));
+    }
+
+    let items = tree_resp["tree"].as_array().cloned().unwrap_or_default();
+
+    let mut count = 0usize;
+
+    for item in &items {
+        let path = match item["path"].as_str() {
+            Some(p) => p,
+            None => continue,
+        };
+        if item["type"].as_str() != Some("blob") {
+            continue;
+        }
+
+        let should_index =
+            is_indexable_doc_path(path) || (include_source && is_indexable_source_path(path));
+        if !should_index {
+            continue;
+        }
+
+        // Fetch raw file content via raw.githubusercontent.com — avoids base64 decoding
+        let raw_url =
+            format!("https://raw.githubusercontent.com/{owner}/{name}/{default_branch}/{path}");
+        let resp = client.get(&raw_url).send().await;
+        let text = match resp {
+            Ok(r) if r.status().is_success() => match r.text().await {
+                Ok(t) => t,
+                Err(_) => continue,
+            },
+            _ => continue,
+        };
+
+        if text.trim().is_empty() {
+            continue;
+        }
+
+        let source_url = format!("https://github.com/{owner}/{name}/blob/{default_branch}/{path}");
+        match embed_text_with_metadata(cfg, &text, &source_url, "github", Some(path)).await {
+            Ok(n) => count += n,
+            Err(e) => log_warn(&format!(
+                "command=ingest_github embed_failed path={path} err={e}"
+            )),
+        }
+    }
+
+    Ok(count)
 }
 
 #[cfg(test)]
