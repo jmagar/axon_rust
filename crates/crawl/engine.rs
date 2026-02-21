@@ -131,8 +131,10 @@ fn build_exclude_blacklist_patterns(start_url: &str, excludes: &[String]) -> Vec
 /// chromiumoxide requires `http://host:port/json/version`, not bare `http://host:port`.
 fn normalize_cdp_url(url: &str) -> String {
     match Url::parse(url) {
-        Ok(parsed) if parsed.path() == "/" || parsed.path().is_empty() => {
-            format!("{}/json/version", url.trim_end_matches('/'))
+        Ok(mut parsed) if parsed.path() == "/" || parsed.path().is_empty() => {
+            parsed.set_path("/json/version");
+            parsed.set_query(None);
+            parsed.to_string()
         }
         _ => url.to_string(),
     }
@@ -377,8 +379,7 @@ pub async fn run_crawl_once(
             };
             let markdown = transform_content_input(input, transform_cfg);
             let trimmed = markdown.trim(); // &str borrow — zero allocation
-                                           // byte length; sitemap/doc content is ASCII-dominant so bytes ≈ chars
-            let chars = trimmed.len();
+            let chars = trimmed.chars().count();
 
             if chars < min_chars {
                 summary.thin_pages += 1;

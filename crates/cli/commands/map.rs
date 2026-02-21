@@ -52,12 +52,17 @@ pub async fn run_map(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>
         }
     }
 
+    let sitemap_url_count = final_urls
+        .len()
+        .saturating_sub(final_summary.pages_seen as usize);
+
     if cfg.json_output {
         println!(
             "{}",
             serde_json::json!({
                 "url": start_url,
                 "mapped_urls": final_urls.len(),
+                "sitemap_urls": sitemap_url_count,
                 "pages_seen": final_summary.pages_seen,
                 "thin_pages": final_summary.thin_pages,
                 "elapsed_ms": final_summary.elapsed_ms,
@@ -74,8 +79,9 @@ pub async fn run_map(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>
     }
 
     log_done(&format!(
-        "command=map mapped_urls={} pages_seen={} thin_pages={} elapsed_ms={}",
+        "command=map mapped_urls={} sitemap_urls={} pages_seen={} thin_pages={} elapsed_ms={}",
         final_urls.len(),
+        sitemap_url_count,
         final_summary.pages_seen,
         final_summary.thin_pages,
         final_summary.elapsed_ms
