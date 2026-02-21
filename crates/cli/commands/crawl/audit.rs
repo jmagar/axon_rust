@@ -1,13 +1,13 @@
 mod audit_diff;
 
 use super::manifest::read_manifest_urls;
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::{
+use crate::crates::core::config::Config;
+use crate::crates::core::content::{
     canonicalize_url, extract_loc_values, extract_robots_sitemaps, is_excluded_url_path,
     to_markdown, url_to_filename,
 };
-use crate::axon_cli::crates::core::http::validate_url;
-use crate::axon_cli::crates::core::ui::{muted, primary};
+use crate::crates::core::http::validate_url;
+use crate::crates::core::ui::{muted, primary};
 use serde::{Deserialize, Serialize};
 use spider::url::Url;
 use std::collections::{HashSet, VecDeque};
@@ -308,7 +308,7 @@ pub(super) async fn append_robots_backfill(
     start_url: &str,
     output_dir: &Path,
     seen_urls: &HashSet<String>,
-    summary: &mut crate::axon_cli::crates::crawl::engine::CrawlSummary,
+    summary: &mut crate::crates::crawl::engine::CrawlSummary,
 ) -> Result<RobotsBackfillStats, Box<dyn Error>> {
     let discovery = discover_sitemap_urls_with_robots(cfg, start_url).await?;
     let manifest_path = output_dir.join("manifest.jsonl");

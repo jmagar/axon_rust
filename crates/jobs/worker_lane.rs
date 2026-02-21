@@ -1,6 +1,6 @@
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::logging::{log_info, log_warn};
-use crate::axon_cli::crates::jobs::common::{
+use crate::crates::core::config::Config;
+use crate::crates::core::logging::{log_info, log_warn};
+use crate::crates::jobs::common::{
     claim_next_pending, claim_pending_by_id, open_amqp_connection_and_channel,
     reclaim_stale_running_jobs, JobTable,
 };

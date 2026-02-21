@@ -1,10 +1,10 @@
-use crate::axon_cli::crates::core::config::{Config, RenderMode};
-use crate::axon_cli::crates::core::logging::log_done;
-use crate::axon_cli::crates::core::ui::{accent, muted, Spinner};
-use crate::axon_cli::crates::crawl::engine::{
+use crate::crates::core::config::{Config, RenderMode};
+use crate::crates::core::logging::log_done;
+use crate::crates::core::ui::{accent, muted, Spinner};
+use crate::crates::crawl::engine::{
     append_sitemap_backfill, run_crawl_once, should_fallback_to_chrome,
 };
-use crate::axon_cli::crates::jobs::embed_jobs::start_embed_job;
+use crate::crates::jobs::embed_jobs::start_embed_job;
 use std::collections::HashSet;
 use std::error::Error;
 use std::time::SystemTime;

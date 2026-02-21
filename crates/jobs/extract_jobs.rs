@@ -1,10 +1,8 @@
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::{
-    run_extract_with_engine, DeterministicExtractionEngine,
-};
-use crate::axon_cli::crates::core::health::redis_healthy;
-use crate::axon_cli::crates::core::logging::{log_done, log_info, log_warn};
-use crate::axon_cli::crates::jobs::common::{
+use crate::crates::core::config::Config;
+use crate::crates::core::content::{run_extract_with_engine, DeterministicExtractionEngine};
+use crate::crates::core::health::redis_healthy;
+use crate::crates::core::logging::{log_done, log_info, log_warn};
+use crate::crates::jobs::common::{
     enqueue_job, make_pool, mark_job_failed, open_amqp_channel, reclaim_stale_running_jobs,
     JobTable,
 };

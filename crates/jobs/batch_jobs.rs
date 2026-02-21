@@ -1,14 +1,14 @@
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::{to_markdown, url_to_filename};
-use crate::axon_cli::crates::core::health::redis_healthy;
-use crate::axon_cli::crates::core::http::{build_client, fetch_html};
-use crate::axon_cli::crates::core::logging::{log_done, log_info, log_warn};
-use crate::axon_cli::crates::jobs::common::{
+use crate::crates::core::config::Config;
+use crate::crates::core::content::{to_markdown, url_to_filename};
+use crate::crates::core::health::redis_healthy;
+use crate::crates::core::http::{build_client, fetch_html};
+use crate::crates::core::logging::{log_done, log_info, log_warn};
+use crate::crates::jobs::common::{
     enqueue_job, make_pool, mark_job_failed, open_amqp_channel, reclaim_stale_running_jobs,
     JobTable,
 };
-use crate::axon_cli::crates::jobs::extract_jobs::start_extract_job;
-use crate::axon_cli::crates::vector::ops::embed_path_native;
+use crate::crates::jobs::extract_jobs::start_extract_job;
+use crate::crates::vector::ops::embed_path_native;
 use chrono::{DateTime, Utc};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};

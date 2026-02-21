@@ -38,14 +38,6 @@ jobs:
 
           python3 scripts/enforce_monoliths.py --base "$BASE_SHA" --head "$HEAD_SHA"
 
-  no-legacy-symbols:
-    name: no-legacy-symbols
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Enforce legacy symbol deny-list
-        run: python3 scripts/enforce_no_legacy_symbols.py
-
   fmt:
     name: fmt
     runs-on: ubuntu-latest

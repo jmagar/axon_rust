@@ -36,6 +36,7 @@ pub(super) enum CliCommand {
     Github(GithubArgs),
     Reddit(RedditArgs),
     Youtube(YoutubeArgs),
+    Sessions(SessionsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -135,24 +136,35 @@ pub(super) struct YoutubeArgs {
     pub(super) url: Option<String>,
 }
 
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub(super) struct SessionsArgs {
+    #[command(subcommand)]
+    pub(super) job: Option<JobSubcommand>,
+    /// Index Claude Code sessions
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub(super) claude: bool,
+    /// Index Codex sessions
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub(super) codex: bool,
+    /// Index Gemini sessions
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub(super) gemini: bool,
+    /// Filter sessions by project name (substring match)
+    #[arg(long, value_name = "NAME")]
+    pub(super) project: Option<String>,
+}
+
 #[derive(Debug, Subcommand)]
 pub(super) enum JobSubcommand {
-    Status {
-        job_id: String,
-    },
-    Cancel {
-        job_id: String,
-    },
-    Errors {
-        job_id: String,
-    },
+    Status { job_id: String },
+    Cancel { job_id: String },
+    Errors { job_id: String },
     List,
     Cleanup,
     Clear,
     Worker,
     Recover,
-    #[command(hide = true)]
-    Doctor,
 }
 
 #[derive(Debug, Args)]

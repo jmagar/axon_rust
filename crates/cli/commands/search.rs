@@ -1,8 +1,8 @@
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::extract_links;
-use crate::axon_cli::crates::core::http::{fetch_html, http_client};
-use crate::axon_cli::crates::core::logging::log_done;
-use crate::axon_cli::crates::core::ui::{muted, primary, print_option, print_phase};
+use crate::crates::core::config::Config;
+use crate::crates::core::content::extract_links;
+use crate::crates::core::http::{fetch_html, http_client};
+use crate::crates::core::logging::log_done;
+use crate::crates::core::ui::{muted, primary, print_option, print_phase};
 use std::error::Error;
 
 pub async fn run_search(cfg: &Config) -> Result<(), Box<dyn Error>> {

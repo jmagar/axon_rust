@@ -1,5 +1,5 @@
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::redact_url;
+use crate::crates::core::config::Config;
+use crate::crates::core::content::redact_url;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use lapin::options::QueueDeclareOptions;
@@ -47,9 +47,7 @@ impl JobTable {
 
 #[cfg(test)]
 pub(crate) fn test_config(pg_url: &str) -> Config {
-    use crate::axon_cli::crates::core::config::{
-        CommandKind, PerformanceProfile, RenderMode, ScrapeFormat,
-    };
+    use crate::crates::core::config::{CommandKind, PerformanceProfile, RenderMode, ScrapeFormat};
     use std::path::PathBuf;
 
     Config {
@@ -108,6 +106,9 @@ pub(crate) fn test_config(pg_url: &str) -> Config {
         extract_queue: "axon.test.extract".to_string(),
         embed_queue: "axon.test.embed".to_string(),
         ingest_queue: "axon.test.ingest".to_string(),
+        sessions_claude: false,
+        sessions_codex: false,
+        sessions_gemini: false,
         github_token: None,
         github_include_source: false,
         reddit_client_id: None,
@@ -227,7 +228,7 @@ pub async fn claim_pending_by_id(pool: &PgPool, table: JobTable, id: Uuid) -> Re
 
 /// Mark a running job as failed with an error message.
 pub async fn mark_job_failed(pool: &PgPool, table: JobTable, id: Uuid, error_text: &str) {
-    use crate::axon_cli::crates::core::logging::log_warn;
+    use crate::crates::core::logging::log_warn;
     let table_name = table.as_str();
     let query = format!(
         "UPDATE {table_name} SET status='failed', updated_at=NOW(), finished_at=NOW(), error_text=$2 WHERE id=$1 AND status='running'"

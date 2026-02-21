@@ -1,11 +1,11 @@
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::health::redis_healthy;
-use crate::axon_cli::crates::core::logging::{log_done, log_info, log_warn};
-use crate::axon_cli::crates::jobs::common::{
+use crate::crates::core::config::Config;
+use crate::crates::core::health::redis_healthy;
+use crate::crates::core::logging::{log_done, log_info, log_warn};
+use crate::crates::jobs::common::{
     enqueue_job, make_pool, mark_job_failed, open_amqp_channel, open_amqp_connection_and_channel,
     reclaim_stale_running_jobs, JobTable,
 };
-use crate::axon_cli::crates::vector::ops::{embed_path_native_with_progress, EmbedProgress};
+use crate::crates::vector::ops::{embed_path_native_with_progress, EmbedProgress};
 use chrono::{DateTime, Utc};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -294,7 +294,7 @@ async fn process_claimed_embed_job(cfg: Config, pool: PgPool, id: Uuid) {
 }
 
 pub async fn run_embed_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    use crate::axon_cli::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
+    use crate::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
 
     let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;

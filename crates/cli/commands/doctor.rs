@@ -1,15 +1,15 @@
-use crate::axon_cli::crates::cli::commands::probe::{probe_http, with_path};
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::redact_url;
-use crate::axon_cli::crates::core::health::{
+use crate::crates::cli::commands::probe::{probe_http, with_path};
+use crate::crates::core::config::Config;
+use crate::crates::core::content::redact_url;
+use crate::crates::core::health::{
     browser_backend_selection, browser_diagnostics_pattern, webdriver_url_from_env,
     BrowserBackendSelection,
 };
-use crate::axon_cli::crates::core::ui::{muted, primary, status_text, symbol_for_status};
-use crate::axon_cli::crates::jobs::batch_jobs::batch_doctor;
-use crate::axon_cli::crates::jobs::crawl_jobs_v2::doctor as crawl_doctor;
-use crate::axon_cli::crates::jobs::embed_jobs::embed_doctor;
-use crate::axon_cli::crates::jobs::extract_jobs::extract_doctor;
+use crate::crates::core::ui::{muted, primary, status_text, symbol_for_status};
+use crate::crates::jobs::batch_jobs::batch_doctor;
+use crate::crates::jobs::crawl_jobs::doctor as crawl_doctor;
+use crate::crates::jobs::embed_jobs::embed_doctor;
+use crate::crates::jobs::extract_jobs::extract_doctor;
 use serde_json::Value;
 use std::env;
 use std::error::Error;
@@ -181,7 +181,7 @@ fn browser_backend_label(selection: BrowserBackendSelection) -> &'static str {
 }
 
 fn build_browser_runtime(
-    diagnostics: &crate::axon_cli::crates::core::health::BrowserDiagnosticsPattern,
+    diagnostics: &crate::crates::core::health::BrowserDiagnosticsPattern,
     selection: BrowserBackendSelection,
     webdriver_configured: bool,
     webdriver_ok: bool,

@@ -1,6 +1,6 @@
 use super::{now_epoch_ms, CrawlAuditSnapshot, CrawlAuditSnapshotDiff};
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::ui::{muted, primary};
+use crate::crates::core::config::Config;
+use crate::crates::core::ui::{muted, primary};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::{Path, PathBuf};

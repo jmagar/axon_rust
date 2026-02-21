@@ -1,15 +1,15 @@
-use crate::axon_cli::crates::cli::commands::probe::probe_http;
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::redact_url;
-use crate::axon_cli::crates::core::health::{
-    browser_backend_selection, browser_diagnostics_pattern, do_not_port_guardrails,
-    webdriver_url_from_env, BrowserBackendSelection,
+use crate::crates::cli::commands::probe::probe_http;
+use crate::crates::core::config::Config;
+use crate::crates::core::content::redact_url;
+use crate::crates::core::health::{
+    browser_backend_selection, browser_diagnostics_pattern, webdriver_url_from_env,
+    BrowserBackendSelection,
 };
-use crate::axon_cli::crates::core::ui::{accent, muted, primary, status_text, symbol_for_status};
-use crate::axon_cli::crates::jobs::batch_jobs::{list_batch_jobs, BatchJob};
-use crate::axon_cli::crates::jobs::crawl_jobs_v2::{list_jobs, CrawlJob};
-use crate::axon_cli::crates::jobs::embed_jobs::{list_embed_jobs, EmbedJob};
-use crate::axon_cli::crates::jobs::extract_jobs::{list_extract_jobs, ExtractJob};
+use crate::crates::core::ui::{accent, muted, primary, status_text, symbol_for_status};
+use crate::crates::jobs::batch_jobs::{list_batch_jobs, BatchJob};
+use crate::crates::jobs::crawl_jobs::{list_jobs, CrawlJob};
+use crate::crates::jobs::embed_jobs::{list_embed_jobs, EmbedJob};
+use crate::crates::jobs::extract_jobs::{list_extract_jobs, ExtractJob};
 use console::style;
 use serde_json::Value;
 use std::env;
@@ -56,7 +56,7 @@ pub async fn run_status(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
 struct RuntimeStatus {
     webdriver_url: Option<String>,
-    diagnostics: crate::axon_cli::crates::core::health::BrowserDiagnosticsPattern,
+    diagnostics: crate::crates::core::health::BrowserDiagnosticsPattern,
     webdriver_probe: (bool, Option<String>),
     backend_selection_label: &'static str,
 }
@@ -164,8 +164,7 @@ fn emit_status_json(
                     "screenshot": runtime.diagnostics.screenshot,
                     "events": runtime.diagnostics.events,
                     "output_dir": runtime.diagnostics.output_dir,
-                },
-                "do_not_port_guardrails": do_not_port_guardrails(),
+                }
             }
         }))?
     );
@@ -230,10 +229,6 @@ fn print_runtime(runtime: &RuntimeStatus) {
         runtime.diagnostics.screenshot,
         runtime.diagnostics.events,
         runtime.diagnostics.output_dir
-    );
-    println!(
-        "  do-not-port guardrails: {}",
-        do_not_port_guardrails().len()
     );
     println!();
 }

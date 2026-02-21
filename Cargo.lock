@@ -435,6 +435,7 @@ dependencies = [
  "indicatif",
  "lapin",
  "octocrab",
+ "rand 0.8.5",
  "redis",
  "regex",
  "reqwest",

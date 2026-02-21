@@ -22,8 +22,8 @@ Axon is a single CLI for crawl/scrape/extract plus local vector retrieval and Q&
 - `crates/cli` — command routing and UX
 - `crates/core` — config, HTTP, health checks, logging, content transforms
 - `crates/crawl` — crawling engine and sitemap backfill
-- `crates/extract` — placeholder module (extraction logic lives in `vector/ops_v2`)
-- `crates/jobs` — queue workers for crawl/batch/extract/embed (v2 crawl pipeline)
+- `crates/extract` — placeholder module (extraction logic lives in `vector/ops`)
+- `crates/jobs` — queue workers for crawl/batch/extract/embed
 - `crates/vector` — embeddings + Qdrant operations (`query/retrieve/ask/evaluate/suggest/sources/domains/stats/dedupe`)
 
 ```
@@ -45,7 +45,6 @@ axon_rust/
 │   │       └── scrape.rs, map.rs, batch.rs, embed.rs, extract.rs,
 │   │           search.rs, status.rs, debug.rs, doctor/,
 │   │           github.rs, reddit.rs, youtube.rs
-│   │           # evaluate + dedupe dispatch through vector/ops_dispatch.rs
 │   ├── core/
 │   │   ├── config/         # CLI parsing (clap), Config struct, performance profiles
 │   │   │   ├── cli.rs      # clap arg definitions (GlobalArgs, subcommand args)
@@ -67,7 +66,7 @@ axon_rust/
 │   │       ├── sitemap.rs  # crawl_sitemap_urls(), append_sitemap_backfill()
 │   │       └── tests.rs
 │   ├── extract/
-│   │   └── mod.rs          # (placeholder; LLM extraction is in vector/ops_v2)
+│   │   └── mod.rs          # (placeholder; LLM extraction is in vector/ops)
 │   ├── jobs/               # AMQP-backed async job workers
 │   │   ├── mod.rs
 │   │   ├── common.rs       # Shared infrastructure: make_pool, open_amqp_channel,
@@ -80,7 +79,7 @@ axon_rust/
 │   │   │   └── tests.rs
 │   │   ├── extract_jobs/   # Extract worker
 │   │   │   ├── worker.rs, tests.rs
-│   │   └── crawl_jobs_v2/  # V2 crawl pipeline (modular)
+│   │   └── crawl_jobs/     # Crawl pipeline (modular)
 │   │       ├── mod.rs, manifest.rs, processor.rs, repo.rs,
 │   │       │   sitemap.rs, watchdog.rs, worker.rs
 │   │       └── runtime/
@@ -90,8 +89,7 @@ axon_rust/
 │   │               └── worker_process/
 │   └── vector/
 │       ├── mod.rs
-│       ├── ops_dispatch.rs  # Dispatcher: routes to v2 ops; chunk_text(), embed_path_native()
-│       └── ops_v2/          # V2 vector ops (modular)
+│       └── ops/            # Vector ops (modular)
 │           ├── input.rs, ranking.rs, tei.rs
 │           ├── commands/    # Per-command handlers
 │           │   ├── ask/, evaluate.rs, query.rs, streaming.rs, suggest.rs
@@ -543,7 +541,7 @@ When Chrome feature is compiled in, `crawl()` expects a Chrome instance. `crawl_
 - **Wrong:** `OPENAI_BASE_URL=http://host/v1/chat/completions` — double path
 
 ### TEI batch size / 413 handling
-`tei_embed()` in `vector/ops_v2/tei.rs` auto-splits batches on HTTP 413 (Payload Too Large). Set `TEI_MAX_CLIENT_BATCH_SIZE` env var to control default chunk size (default: 64, effective max: 128).
+`tei_embed()` in `vector/ops/tei.rs` auto-splits batches on HTTP 413 (Payload Too Large). Set `TEI_MAX_CLIENT_BATCH_SIZE` env var to control default chunk size (default: 64, effective max: 128).
 
 ### Text chunking
 `chunk_text()` splits at 2000 chars with 200-char overlap. Each chunk = one Qdrant point. Very long pages produce many points.

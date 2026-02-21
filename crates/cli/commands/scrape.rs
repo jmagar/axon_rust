@@ -1,11 +1,11 @@
-use crate::axon_cli::crates::core::config::{Config, ScrapeFormat};
-use crate::axon_cli::crates::core::content::{
+use crate::crates::core::config::{Config, ScrapeFormat};
+use crate::crates::core::content::{
     extract_meta_description, find_between, to_markdown, url_to_filename,
 };
-use crate::axon_cli::crates::core::http::{normalize_url, validate_url};
-use crate::axon_cli::crates::core::logging::log_done;
-use crate::axon_cli::crates::core::ui::{muted, primary, print_option, print_phase};
-use crate::axon_cli::crates::vector::ops::embed_path_native;
+use crate::crates::core::http::{normalize_url, validate_url};
+use crate::crates::core::logging::log_done;
+use crate::crates::core::ui::{muted, primary, print_option, print_phase};
+use crate::crates::vector::ops::embed_path_native;
 use std::error::Error;
 use std::time::Duration;
 

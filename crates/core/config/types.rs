@@ -26,6 +26,7 @@ pub enum CommandKind {
     Github,
     Reddit,
     Youtube,
+    Sessions,
 }
 
 impl CommandKind {
@@ -53,6 +54,7 @@ impl CommandKind {
             Self::Github => "github",
             Self::Reddit => "reddit",
             Self::Youtube => "youtube",
+            Self::Sessions => "sessions",
         }
     }
 }
@@ -161,6 +163,10 @@ pub struct Config {
     pub extract_queue: String,
     pub embed_queue: String,
     pub ingest_queue: String,
+    pub sessions_claude: bool,
+    pub sessions_codex: bool,
+    pub sessions_gemini: bool,
+    pub sessions_project: Option<String>,
     pub github_token: Option<String>,
     pub github_include_source: bool,
     pub reddit_client_id: Option<String>,

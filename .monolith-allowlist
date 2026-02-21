@@ -3,28 +3,28 @@
 # Add a ticket/date in comments when possible, then remove quickly.
 #
 # Example:
-# crates/legacy/massive_module.rs
+# crates/core/massive_module.rs
 
 # Pre-existing large files — tracked for future refactoring (2026-02-19)
 scripts/qdrant-quality.py
 
 # build_ask_context exceeds 80-line limit by design — context pipeline is atomic (2026-02-19)
-crates/vector/ops_v2/commands/ask.rs
+crates/vector/ops/commands/ask.rs
 # run_evaluate_native exceeds 80-line limit by design — sequential RAG+baseline orchestration is atomic (2026-02-19)
-crates/vector/ops_v2/commands/evaluate.rs
+crates/vector/ops/commands/evaluate.rs
 # Temporary CI unblock for existing long command handlers (2026-02-19)
 crates/cli/commands/extract.rs
 crates/jobs/common.rs
-crates/vector/ops_v2/commands/suggest.rs
-crates/vector/ops_v2/qdrant/commands.rs
+crates/vector/ops/commands/suggest.rs
+crates/vector/ops/qdrant/commands.rs
 
 # Jobs module split — functions carried over verbatim, tracked for refactoring (2026-02-19)
 # process_job() is 342 lines — primary refactor target, split by job-type dispatch
-crates/jobs/crawl_jobs_v2/runtime/worker/worker_process.rs
+crates/jobs/crawl_jobs/runtime/worker/worker_process.rs
 # reclaim_stale_running_jobs() 85 lines, run_amqp_worker_lane() 91 lines
-crates/jobs/crawl_jobs_v2/runtime/worker/worker_loops.rs
+crates/jobs/crawl_jobs/runtime/worker/worker_loops.rs
 # discover_sitemap_urls_with_robots() 111 lines
-crates/jobs/crawl_jobs_v2/runtime/robots.rs
+crates/jobs/crawl_jobs/runtime/robots.rs
 # test function claim_and_fail_lifecycle_transitions_are_state_guarded() 89 lines
 crates/jobs/common/tests.rs
 
@@ -34,8 +34,8 @@ crates/cli/commands/debug.rs
 crates/cli/commands/doctor.rs
 crates/cli/commands/embed.rs
 crates/cli/commands/status.rs
-crates/vector/ops_v2/stats.rs
-crates/vector/ops_v2/tei.rs
+crates/vector/ops/stats.rs
+crates/vector/ops/tei.rs
 
 # Module-split new files — functions carried over verbatim, tracked for refactoring (2026-02-19)
 

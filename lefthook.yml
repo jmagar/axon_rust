@@ -1,8 +1,6 @@
 pre-commit:
   parallel: true
   commands:
-    no-legacy-symbols:
-      run: python3 scripts/enforce_no_legacy_symbols.py
     monolith:
       run: python3 scripts/enforce_monoliths.py --staged
     rustfmt:

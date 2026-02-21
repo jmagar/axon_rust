@@ -5,10 +5,10 @@ mod tests;
 
 pub use sitemap::{append_sitemap_backfill, crawl_sitemap_urls};
 
-use crate::axon_cli::crates::core::config::{Config, RenderMode};
-use crate::axon_cli::crates::core::content::{build_transform_config, url_to_filename};
-use crate::axon_cli::crates::core::http::ssrf_blacklist_patterns;
-use crate::axon_cli::crates::core::logging::{log_info, log_warn};
+use crate::crates::core::config::{Config, RenderMode};
+use crate::crates::core::content::{build_transform_config, url_to_filename};
+use crate::crates::core::http::ssrf_blacklist_patterns;
+use crate::crates::core::logging::{log_info, log_warn};
 use spider::features::chrome_common::RequestInterceptConfiguration;
 use spider::tokio;
 use spider::url::Url;

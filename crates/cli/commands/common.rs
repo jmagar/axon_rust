@@ -1,5 +1,5 @@
-use crate::axon_cli::crates::core::config::{CommandKind, Config};
-use crate::axon_cli::crates::core::http::normalize_url;
+use crate::crates::core::config::{CommandKind, Config};
+use crate::crates::core::http::normalize_url;
 use std::collections::HashSet;
 
 fn expand_numeric_range(start: i64, end: i64, step: i64) -> Vec<String> {

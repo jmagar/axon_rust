@@ -1,10 +1,10 @@
 use super::{
     canonicalize_url_for_dedupe, is_excluded_url_path, CrawlSummary, SitemapBackfillStats,
 };
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::{extract_loc_values, to_markdown, url_to_filename};
-use crate::axon_cli::crates::core::http::validate_url;
-use crate::axon_cli::crates::core::logging::log_info;
+use crate::crates::core::config::Config;
+use crate::crates::core::content::{extract_loc_values, to_markdown, url_to_filename};
+use crate::crates::core::http::validate_url;
+use crate::crates::core::logging::log_info;
 use spider::tokio;
 use spider::url::Url;
 use std::collections::{HashSet, VecDeque};

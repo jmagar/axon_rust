@@ -1,6 +1,6 @@
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::logging::log_warn;
-use crate::axon_cli::crates::vector::ops_dispatch::embed_text_with_metadata;
+use crate::crates::core::config::Config;
+use crate::crates::core::logging::log_warn;
+use crate::crates::vector::ops::embed_text_with_metadata;
 use reqwest::Client;
 use std::error::Error;
 

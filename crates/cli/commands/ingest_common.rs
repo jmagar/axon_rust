@@ -1,8 +1,8 @@
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::logging::log_done;
-use crate::axon_cli::crates::core::ui::confirm_destructive;
-use crate::axon_cli::crates::core::ui::{accent, muted, primary, status_text, symbol_for_status};
-use crate::axon_cli::crates::jobs::ingest_jobs::{
+use crate::crates::core::config::Config;
+use crate::crates::core::logging::log_done;
+use crate::crates::core::ui::confirm_destructive;
+use crate::crates::core::ui::{accent, muted, primary, status_text, symbol_for_status};
+use crate::crates::jobs::ingest_jobs::{
     cancel_ingest_job, cleanup_ingest_jobs, clear_ingest_jobs, get_ingest_job, list_ingest_jobs,
     recover_stale_ingest_jobs, run_ingest_worker, start_ingest_job, IngestSource,
 };

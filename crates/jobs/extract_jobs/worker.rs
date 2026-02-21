@@ -1,6 +1,6 @@
 use super::*;
-use crate::axon_cli::crates::core::content::ExtractRun;
-use crate::axon_cli::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
+use crate::crates::core::content::ExtractRun;
+use crate::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
 
 struct ExtractAggregation {
     runs: Vec<serde_json::Value>,

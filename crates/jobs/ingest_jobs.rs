@@ -1,10 +1,10 @@
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::logging::{log_info, log_warn};
-use crate::axon_cli::crates::jobs::common::{
+use crate::crates::core::config::Config;
+use crate::crates::core::logging::{log_info, log_warn};
+use crate::crates::jobs::common::{
     enqueue_job, make_pool, mark_job_failed, open_amqp_channel, reclaim_stale_running_jobs,
     JobTable,
 };
-use crate::axon_cli::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
+use crate::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
@@ -200,7 +200,7 @@ pub async fn clear_ingest_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
 }
 
 async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
-    use crate::axon_cli::crates::ingest;
+    use crate::crates::ingest;
 
     let cfg_row = sqlx::query_scalar::<_, serde_json::Value>(
         "SELECT config_json FROM axon_ingest_jobs WHERE id=$1",

@@ -1,4 +1,4 @@
-use crate::axon_cli::crates::core::config::{Config, RenderMode};
+use crate::crates::core::config::{Config, RenderMode};
 use spider::url::Url;
 use std::time::Duration;
 

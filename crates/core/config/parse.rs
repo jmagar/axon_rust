@@ -104,7 +104,6 @@ fn positional_from_job(job: JobSubcommand) -> Vec<String> {
         JobSubcommand::Clear => vec!["clear".to_string()],
         JobSubcommand::Worker => vec!["worker".to_string()],
         JobSubcommand::Recover => vec!["recover".to_string()],
-        JobSubcommand::Doctor => vec!["doctor".to_string()],
     }
 }
 
@@ -172,6 +171,10 @@ fn into_config(cli: Cli) -> Config {
 
     let mut ask_diagnostics = false;
     let mut github_include_source = false;
+    let mut sessions_claude = false;
+    let mut sessions_codex = false;
+    let mut sessions_gemini = false;
+    let mut sessions_project = None;
     let (command, positional) = match cli.command {
         CliCommand::Scrape(args) => (
             CommandKind::Scrape,
@@ -262,13 +265,26 @@ fn into_config(cli: Cli) -> Config {
                 args.url.into_iter().collect()
             },
         ),
+        CliCommand::Sessions(args) => {
+            sessions_claude = args.claude;
+            sessions_codex = args.codex;
+            sessions_gemini = args.gemini;
+            sessions_project = args.project;
+            (
+                CommandKind::Sessions,
+                if let Some(job) = args.job {
+                    positional_from_job(job)
+                } else {
+                    Vec::new()
+                },
+            )
+        }
     };
 
     let pg_url = normalize_local_service_url(
         global
             .pg_url
             .or_else(|| env::var("AXON_PG_URL").ok())
-            .or_else(|| env::var("NUQ_DATABASE_URL").ok())
             .unwrap_or_else(|| {
                 eprintln!("warning: AXON_PG_URL not set — using default credentials; set it in .env for production");
                 "postgresql://axon:postgres@127.0.0.1:53432/axon".to_string()
@@ -279,7 +295,6 @@ fn into_config(cli: Cli) -> Config {
         global
             .redis_url
             .or_else(|| env::var("AXON_REDIS_URL").ok())
-            .or_else(|| env::var("REDIS_URL").ok())
             .unwrap_or_else(|| {
                 eprintln!("warning: AXON_REDIS_URL not set — using default; set it in .env for production");
                 "redis://127.0.0.1:53379".to_string()
@@ -290,7 +305,6 @@ fn into_config(cli: Cli) -> Config {
         global
             .amqp_url
             .or_else(|| env::var("AXON_AMQP_URL").ok())
-            .or_else(|| env::var("NUQ_RABBITMQ_URL").ok())
             .unwrap_or_else(|| {
                 eprintln!("warning: AXON_AMQP_URL not set — using default credentials; set it in .env for production");
                 "amqp://axon:axonrabbit@127.0.0.1:45535/%2f".to_string()
@@ -343,7 +357,6 @@ fn into_config(cli: Cli) -> Config {
         webdriver_url: global
             .webdriver_url
             .or_else(|| env::var("AXON_WEBDRIVER_URL").ok())
-            .or_else(|| env::var("WEBDRIVER_URL").ok())
             .map(normalize_local_service_url),
         respect_robots: global.respect_robots,
         min_markdown_chars: global.min_markdown_chars,
@@ -390,6 +403,10 @@ fn into_config(cli: Cli) -> Config {
             .ingest_queue
             .or_else(|| env::var("AXON_INGEST_QUEUE").ok())
             .unwrap_or_else(|| "axon.ingest.jobs".to_string()),
+        sessions_claude,
+        sessions_codex,
+        sessions_gemini,
+        sessions_project,
         github_token: env::var("GITHUB_TOKEN").ok(),
         github_include_source,
         reddit_client_id: env::var("REDDIT_CLIENT_ID").ok(),

@@ -1,4 +1,4 @@
-use crate::axon_cli::crates::core::config::Config;
+use crate::crates::core::config::Config;
 use console::{style, Style};
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use indicatif::{ProgressBar, ProgressStyle};

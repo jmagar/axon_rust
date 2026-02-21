@@ -1,6 +1,6 @@
-use crate::axon_cli::crates::cli::commands::ingest_common;
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::jobs::ingest_jobs::IngestSource;
+use crate::crates::cli::commands::ingest_common;
+use crate::crates::core::config::Config;
+use crate::crates::jobs::ingest_jobs::IngestSource;
 use std::error::Error;
 
 pub async fn run_github(cfg: &Config) -> Result<(), Box<dyn Error>> {
@@ -27,7 +27,7 @@ pub async fn run_github(cfg: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 async fn run_ingest_sync(cfg: &Config, source: IngestSource) -> Result<(), Box<dyn Error>> {
-    use crate::axon_cli::crates::ingest;
+    use crate::crates::ingest;
 
     let IngestSource::Github {
         ref repo,

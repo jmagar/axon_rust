@@ -1,5 +1,5 @@
 use super::*;
-use crate::axon_cli::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
+use crate::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
 use futures_util::stream::{self, StreamExt};
 use std::path::Path;
 

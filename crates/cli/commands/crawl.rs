@@ -5,14 +5,13 @@ mod sync_crawl;
 
 pub(crate) use audit::discover_sitemap_urls_with_robots;
 
-use crate::axon_cli::crates::cli::commands::run_doctor;
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::http::validate_url;
-use crate::axon_cli::crates::core::ui::{
+use crate::crates::core::config::Config;
+use crate::crates::core::http::validate_url;
+use crate::crates::core::ui::{
     accent, confirm_destructive, muted, primary, print_kv, print_option, print_phase, status_text,
     symbol_for_status,
 };
-use crate::axon_cli::crates::jobs::crawl_jobs_v2::{
+use crate::crates::jobs::crawl_jobs::{
     cancel_job, cleanup_jobs, clear_jobs, get_job, list_jobs, recover_stale_crawl_jobs, run_worker,
     start_crawl_job,
 };
@@ -47,7 +46,6 @@ async fn maybe_handle_subcommand(cfg: &Config, start_url: &str) -> Result<bool, 
         "clear" => handle_clear_subcommand(cfg).await?,
         "worker" => run_worker(cfg).await?,
         "recover" => handle_recover_subcommand(cfg).await?,
-        "doctor" => handle_doctor_subcommand(cfg).await?,
         "audit" => audit::run_crawl_audit(cfg, start_url).await?,
         "diff" => audit::run_crawl_audit_diff(cfg).await?,
         _ => return Ok(false),
@@ -293,11 +291,6 @@ async fn handle_recover_subcommand(cfg: &Config) -> Result<(), Box<dyn Error>> {
         );
     }
     Ok(())
-}
-
-async fn handle_doctor_subcommand(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    eprintln!("{}", muted("`crawl doctor` is deprecated; use `doctor`."));
-    run_doctor(cfg).await
 }
 
 fn print_async_options(

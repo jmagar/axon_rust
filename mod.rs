@@ -1,13 +1,11 @@
 pub mod crates;
-pub mod axon_cli {
-    pub use super::crates;
-}
 
 use self::crates::cli::commands::{
     run_ask_native, run_batch, run_crawl, run_debug, run_dedupe_native, run_doctor,
     run_domains_native, run_embed, run_evaluate_native, run_extract, run_github, run_map,
-    run_query_native, run_reddit, run_retrieve_native, run_scrape, run_search, run_sources_native,
-    run_stats_native, run_status, run_suggest_native, run_youtube, start_url_from_cfg,
+    run_query_native, run_reddit, run_retrieve_native, run_scrape, run_search, run_sessions,
+    run_sources_native, run_stats_native, run_status, run_suggest_native, run_youtube,
+    start_url_from_cfg,
 };
 use self::crates::core::config::{parse_args, CommandKind, Config};
 use self::crates::core::logging::{init_tracing, log_done, log_info, log_warn};
@@ -68,6 +66,7 @@ async fn run_once(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
         CommandKind::Github => run_github(cfg).await?,
         CommandKind::Reddit => run_reddit(cfg).await?,
         CommandKind::Youtube => run_youtube(cfg).await?,
+        CommandKind::Sessions => run_sessions(cfg).await?,
     }
     Ok(())
 }
@@ -75,17 +74,7 @@ async fn run_once(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
 fn is_job_subcommand(cfg: &self::crates::core::config::Config) -> bool {
     matches!(
         cfg.positional.first().map(|s| s.as_str()),
-        Some(
-            "status"
-                | "cancel"
-                | "errors"
-                | "list"
-                | "cleanup"
-                | "clear"
-                | "worker"
-                | "recover"
-                | "doctor"
-        )
+        Some("status" | "cancel" | "errors" | "list" | "cleanup" | "clear" | "worker" | "recover")
     )
 }
 
@@ -93,15 +82,7 @@ fn job_subcommand_name(cfg: &self::crates::core::config::Config) -> Option<&str>
     cfg.positional.first().map(|s| s.as_str()).filter(|s| {
         matches!(
             *s,
-            "status"
-                | "cancel"
-                | "errors"
-                | "list"
-                | "cleanup"
-                | "clear"
-                | "worker"
-                | "recover"
-                | "doctor"
+            "status" | "cancel" | "errors" | "list" | "cleanup" | "clear" | "worker" | "recover"
         )
     })
 }
