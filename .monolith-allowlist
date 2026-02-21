@@ -10,37 +10,17 @@ scripts/qdrant-quality.py
 
 # build_ask_context exceeds 80-line limit by design — context pipeline is atomic (2026-02-19)
 crates/vector/ops/commands/ask.rs
-# run_evaluate_native exceeds 80-line limit by design — sequential RAG+baseline orchestration is atomic (2026-02-19)
-crates/vector/ops/commands/evaluate.rs
-# Temporary CI unblock for existing long command handlers (2026-02-19)
-crates/cli/commands/extract.rs
-crates/jobs/common.rs
-crates/vector/ops/commands/suggest.rs
-crates/vector/ops/qdrant/commands.rs
 
-# Jobs module split — functions carried over verbatim, tracked for refactoring (2026-02-19)
-# process_job() is 342 lines — primary refactor target, split by job-type dispatch
+# Jobs module split — process_job() is 342 lines — primary refactor target (2026-02-19)
 crates/jobs/crawl_jobs/runtime/worker/worker_process.rs
-# reclaim_stale_running_jobs() 85 lines, run_amqp_worker_lane() 91 lines
+# run_amqp_worker_lane() is 138 lines — tracked for refactoring (2026-02-19)
 crates/jobs/crawl_jobs/runtime/worker/worker_loops.rs
-# discover_sitemap_urls_with_robots() 111 lines
-crates/jobs/crawl_jobs/runtime/robots.rs
-# test function claim_and_fail_lifecycle_transitions_are_state_guarded() 89 lines
-crates/jobs/common/tests.rs
 
-# Temporary CI unblock for current branch monolith findings (2026-02-19)
-crates/cli/commands/batch.rs
-crates/cli/commands/debug.rs
-crates/cli/commands/doctor.rs
-crates/cli/commands/embed.rs
-crates/cli/commands/status.rs
-crates/vector/ops/stats.rs
-crates/vector/ops/tei.rs
-
-# Module-split new files — functions carried over verbatim, tracked for refactoring (2026-02-19)
-
-# engine.rs grew to 515 lines; run_crawl_once() 157 lines — tracked for sitemap/chrome split (2026-02-19)
+# engine.rs — run_crawl_once() is 157 lines — tracked for sitemap/chrome split (2026-02-19)
 crates/crawl/engine.rs
+
+# stats.rs 575 lines — grouped by query pattern, refactor tracked (2026-02-19)
+crates/vector/ops/stats.rs
 
 # audit.rs 502 lines — discover_sitemap_urls_with_robots() is the bulk (2026-02-20)
 crates/cli/commands/crawl/audit.rs
