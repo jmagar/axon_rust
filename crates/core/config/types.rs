@@ -372,6 +372,62 @@ pub struct Config {
     /// Deduplicate trailing-slash URL variants (e.g. `/about` and `/about/` treated as one).
     /// Spider: `with_normalize(bool)`. Default false. Flag: `--normalize`.
     pub normalize: bool,
+
+    // P2 — engine tuning (previously hardcoded in engine.rs)
+    /// Seconds to wait for Chrome network idle before capturing the page.
+    /// Used by `WaitForIdleNetwork`. Default: 15. Flag: `--chrome-network-idle-timeout`.
+    pub chrome_network_idle_timeout_secs: u64,
+
+    /// Thin-page ratio threshold for auto-switch from HTTP to Chrome mode (0.0–1.0).
+    /// If more than this fraction of crawled pages are thin, retry with Chrome.
+    /// Default: 0.60. Flag: `--auto-switch-thin-ratio`.
+    pub auto_switch_thin_ratio: f64,
+
+    /// Minimum pages crawled before auto-switch eligibility is evaluated.
+    /// Prevents triggering Chrome on tiny crawls. Default: 10. Flag: `--auto-switch-min-pages`.
+    pub auto_switch_min_pages: usize,
+
+    /// Minimum broadcast channel buffer for crawl page receiver (entries, not bytes).
+    /// Set by performance profile. Default (high-stable): 4096.
+    pub crawl_broadcast_buffer_min: usize,
+
+    /// Maximum broadcast channel buffer for crawl page receiver (entries, not bytes).
+    /// Set by performance profile. Default (high-stable): 16_384.
+    pub crawl_broadcast_buffer_max: usize,
+
+    // P3 — missing spider builder methods
+    /// URL allow-list: only crawl URLs matching at least one of these regex patterns.
+    /// Complement to the URL blacklist. Default: [] (no restriction). Flag: `--url-whitelist` (repeatable).
+    pub url_whitelist: Vec<String>,
+
+    /// Block asset downloads (images, CSS, fonts, JS) during crawl to reduce bandwidth.
+    /// Spider: `with_block_assets(true)`. Default: false. Flag: `--block-assets`.
+    pub block_assets: bool,
+
+    /// Maximum response size per page in bytes; pages exceeding this are skipped.
+    /// Spider: `with_max_page_bytes(u64)`. Default: None (unlimited). Flag: `--max-page-bytes`.
+    pub max_page_bytes: Option<u64>,
+
+    /// Use strict redirect policy — only follow same-origin redirects.
+    /// Spider: `with_redirect_policy(RedirectPolicy::Strict)`. Default: false. Flag: `--redirect-policy-strict`.
+    pub redirect_policy_strict: bool,
+
+    /// CSS selector to wait for before capturing a Chrome page.
+    /// Spider: `with_wait_for_selector`. Default: None. Flag: `--chrome-wait-for-selector`.
+    pub chrome_wait_for_selector: Option<String>,
+
+    /// Capture full-page PNG screenshots during Chrome crawl.
+    /// Spider: `with_screenshot`. Saved to `output_dir`. Default: false. Flag: `--chrome-screenshot`.
+    pub chrome_screenshot: bool,
+
+    // P4 — spider_agent improvements
+    /// Research crawl depth limit for the `research` command.
+    /// Passed to `ResearchOptions::with_depth` if available. Default: None. Flag: `--research-depth`.
+    pub research_depth: Option<usize>,
+
+    /// Time range filter for the `search` command (values: day, week, month, year).
+    /// Passed to `SearchOptions::with_time_range`. Default: None. Flag: `--search-time-range`.
+    pub search_time_range: Option<String>,
 }
 
 impl Default for Config {
@@ -461,6 +517,19 @@ impl Default for Config {
             json_output: false,
             crawl_from_result: false,
             normalize: false,
+            chrome_network_idle_timeout_secs: 15,
+            auto_switch_thin_ratio: 0.60,
+            auto_switch_min_pages: 10,
+            crawl_broadcast_buffer_min: 4096,
+            crawl_broadcast_buffer_max: 16_384,
+            url_whitelist: vec![],
+            block_assets: false,
+            max_page_bytes: None,
+            redirect_policy_strict: false,
+            chrome_wait_for_selector: None,
+            chrome_screenshot: false,
+            research_depth: None,
+            search_time_range: None,
         }
     }
 }
@@ -561,6 +630,28 @@ impl fmt::Debug for Config {
             .field("json_output", &self.json_output)
             .field("crawl_from_result", &self.crawl_from_result)
             .field("normalize", &self.normalize)
+            .field(
+                "chrome_network_idle_timeout_secs",
+                &self.chrome_network_idle_timeout_secs,
+            )
+            .field("auto_switch_thin_ratio", &self.auto_switch_thin_ratio)
+            .field("auto_switch_min_pages", &self.auto_switch_min_pages)
+            .field(
+                "crawl_broadcast_buffer_min",
+                &self.crawl_broadcast_buffer_min,
+            )
+            .field(
+                "crawl_broadcast_buffer_max",
+                &self.crawl_broadcast_buffer_max,
+            )
+            .field("url_whitelist", &self.url_whitelist)
+            .field("block_assets", &self.block_assets)
+            .field("max_page_bytes", &self.max_page_bytes)
+            .field("redirect_policy_strict", &self.redirect_policy_strict)
+            .field("chrome_wait_for_selector", &self.chrome_wait_for_selector)
+            .field("chrome_screenshot", &self.chrome_screenshot)
+            .field("research_depth", &self.research_depth)
+            .field("search_time_range", &self.search_time_range)
             .finish()
     }
 }
@@ -804,5 +895,33 @@ mod tests {
             max_crawl > extreme_crawl,
             "max crawl concurrency ({max_crawl}) should exceed extreme ({extreme_crawl})"
         );
+    }
+
+    #[test]
+    fn new_engine_tuning_defaults() {
+        let cfg = Config::default();
+        assert_eq!(cfg.chrome_network_idle_timeout_secs, 15);
+        assert!((cfg.auto_switch_thin_ratio - 0.60).abs() < f64::EPSILON);
+        assert_eq!(cfg.auto_switch_min_pages, 10);
+        assert_eq!(cfg.crawl_broadcast_buffer_min, 4096);
+        assert_eq!(cfg.crawl_broadcast_buffer_max, 16_384);
+    }
+
+    #[test]
+    fn new_spider_builder_defaults() {
+        let cfg = Config::default();
+        assert!(cfg.url_whitelist.is_empty());
+        assert!(!cfg.block_assets);
+        assert!(cfg.max_page_bytes.is_none());
+        assert!(!cfg.redirect_policy_strict);
+        assert!(cfg.chrome_wait_for_selector.is_none());
+        assert!(!cfg.chrome_screenshot);
+    }
+
+    #[test]
+    fn new_spider_agent_defaults() {
+        let cfg = Config::default();
+        assert!(cfg.research_depth.is_none());
+        assert!(cfg.search_time_range.is_none());
     }
 }

@@ -219,7 +219,17 @@ pub fn is_excluded_url_path(url: &str, prefixes: &[String]) -> bool {
 
 pub fn canonicalize_url(url: &str) -> Option<String> {
     let mut parsed = Url::parse(url).ok()?;
+    // Strip fragment
     parsed.set_fragment(None);
+    // Strip default ports to prevent duplicate entries
+    // (http://x:80/p and http://x/p must deduplicate)
+    match (parsed.scheme(), parsed.port()) {
+        ("http", Some(80)) | ("https", Some(443)) => {
+            let _ = parsed.set_port(None);
+        }
+        _ => {}
+    }
+    // Strip trailing slashes from all paths (not just root)
     let path = parsed.path().to_string();
     if path.len() > 1 && path.ends_with('/') {
         parsed.set_path(path.trim_end_matches('/'));

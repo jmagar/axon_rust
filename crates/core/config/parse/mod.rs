@@ -366,30 +366,48 @@ fn into_config(cli: Cli) -> Result<Config, String> {
         json_output: global.json,
         crawl_from_result: global.crawl_from_result,
         normalize: global.normalize,
+        chrome_network_idle_timeout_secs: global.chrome_network_idle_timeout,
+        auto_switch_thin_ratio: global.auto_switch_thin_ratio,
+        auto_switch_min_pages: global.auto_switch_min_pages,
+        crawl_broadcast_buffer_min: 4096, // placeholder — overwritten below from profile
+        crawl_broadcast_buffer_max: 16_384, // placeholder — overwritten below from profile
+        url_whitelist: global.url_whitelist,
+        block_assets: global.block_assets,
+        max_page_bytes: if global.max_page_bytes == 0 {
+            None
+        } else {
+            Some(global.max_page_bytes)
+        },
+        redirect_policy_strict: global.redirect_policy_strict,
+        chrome_wait_for_selector: global.chrome_wait_for_selector,
+        chrome_screenshot: global.chrome_screenshot,
+        research_depth: global.research_depth,
+        search_time_range: global.search_time_range,
     };
 
     if cfg.exclude_path_prefix.is_empty() && !normalized_excludes.disable_defaults {
         cfg.exclude_path_prefix = excludes::default_exclude_prefixes();
     }
 
-    let (crawl_default, backfill_default, timeout_default, retries_default, backoff_default) =
-        performance::performance_defaults(cfg.performance_profile);
+    let ps = performance::profile_settings(cfg.performance_profile);
 
     if cfg.crawl_concurrency_limit.is_none() {
-        cfg.crawl_concurrency_limit = Some(crawl_default);
+        cfg.crawl_concurrency_limit = Some(ps.crawl_concurrency);
     }
     if cfg.backfill_concurrency_limit.is_none() {
-        cfg.backfill_concurrency_limit = Some(backfill_default);
+        cfg.backfill_concurrency_limit = Some(ps.backfill_concurrency);
     }
     if cfg.request_timeout_ms.is_none() {
-        cfg.request_timeout_ms = Some(timeout_default);
+        cfg.request_timeout_ms = Some(ps.request_timeout_ms);
     }
     if !fetch_retries_was_set {
-        cfg.fetch_retries = retries_default;
+        cfg.fetch_retries = ps.fetch_retries;
     }
     if !retry_backoff_was_set {
-        cfg.retry_backoff_ms = backoff_default;
+        cfg.retry_backoff_ms = ps.retry_backoff_ms;
     }
+    cfg.crawl_broadcast_buffer_min = ps.broadcast_buffer_min;
+    cfg.crawl_broadcast_buffer_max = ps.broadcast_buffer_max;
 
     Ok(cfg)
 }

@@ -381,4 +381,48 @@ pub(super) struct GlobalArgs {
     /// Deduplicate trailing-slash URL variants during crawl. Disable with `--normalize false`.
     #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
     pub(super) normalize: bool,
+
+    /// Seconds to wait for Chrome network idle before page capture. Default: 15.
+    #[arg(global = true, long, default_value_t = 15)]
+    pub(super) chrome_network_idle_timeout: u64,
+
+    /// Thin-page ratio to trigger auto-switch to Chrome (0.0–1.0). Default: 0.60.
+    #[arg(global = true, long, default_value_t = 0.60)]
+    pub(super) auto_switch_thin_ratio: f64,
+
+    /// Minimum pages before auto-switch eligibility check. Default: 10.
+    #[arg(global = true, long, default_value_t = 10)]
+    pub(super) auto_switch_min_pages: usize,
+
+    /// Only crawl URLs matching these regex patterns (repeatable). Default: none.
+    #[arg(global = true, long)]
+    pub(super) url_whitelist: Vec<String>,
+
+    /// Block asset downloads (images/CSS/fonts) during crawl.
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
+    pub(super) block_assets: bool,
+
+    /// Maximum response size per page in bytes (0 = unlimited). Default: 0.
+    #[arg(global = true, long, default_value_t = 0)]
+    pub(super) max_page_bytes: u64,
+
+    /// Only follow same-origin redirects (strict redirect policy).
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
+    pub(super) redirect_policy_strict: bool,
+
+    /// CSS selector to wait for before Chrome captures the page. Default: none.
+    #[arg(global = true, long)]
+    pub(super) chrome_wait_for_selector: Option<String>,
+
+    /// Capture full-page PNG screenshots during Chrome crawl.
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
+    pub(super) chrome_screenshot: bool,
+
+    /// Research crawl depth limit for the research command. Default: none.
+    #[arg(global = true, long)]
+    pub(super) research_depth: Option<usize>,
+
+    /// Time range filter for search (day|week|month|year). Default: none.
+    #[arg(global = true, long)]
+    pub(super) search_time_range: Option<String>,
 }

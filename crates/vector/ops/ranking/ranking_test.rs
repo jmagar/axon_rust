@@ -262,10 +262,18 @@ fn select_diverse_candidates_caps_at_two_per_url() {
         })
         .collect();
     let indices = select_diverse_candidates(&candidates, 4, 2);
-    assert!(
-        indices.len() <= 2,
-        "max_per_url=2 should cap same-URL candidates at 2; got {}",
+    assert_eq!(
+        indices.len(),
+        2,
+        "max_per_url=2 should cap same-URL candidates at exactly 2; got {}",
         indices.len()
+    );
+    // Indices must be distinct (no duplicate selection).
+    let unique: HashSet<usize> = indices.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        indices.len(),
+        "selected indices must be unique — no duplicate entries"
     );
 }
 

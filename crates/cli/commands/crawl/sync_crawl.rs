@@ -75,7 +75,7 @@ async fn maybe_chrome_fallback(
     http_seen_urls: HashSet<String>,
 ) -> (CrawlSummary, HashSet<String>) {
     if !matches!(cfg.render_mode, RenderMode::AutoSwitch)
-        || !should_fallback_to_chrome(&http_summary, cfg.max_pages)
+        || !should_fallback_to_chrome(&http_summary, cfg.max_pages, cfg)
     {
         return (http_summary, http_seen_urls);
     }

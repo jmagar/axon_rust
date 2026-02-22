@@ -7,14 +7,3 @@
 
 # Pre-existing large files — tracked for future refactoring (2026-02-19)
 scripts/qdrant-quality.py
-
-# build_ask_context exceeds 80-line limit by design — context pipeline is atomic (2026-02-19)
-crates/vector/ops/commands/ask.rs
-
-# batch_jobs.rs: 557 non-test lines — production code genuinely over limit (2026-02-22).
-# Candidate for moving bulk public API delegates into a batch_jobs/api.rs submodule.
-crates/jobs/batch_jobs.rs
-
-# ranking.rs: 508 lines — 8 over limit after select_diverse_candidates bug fix (2026-02-22).
-# Candidate for splitting strip_markdown_inline / get_meaningful_snippet into ranking/text.rs.
-crates/vector/ops/ranking.rs

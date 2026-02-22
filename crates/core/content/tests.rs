@@ -249,3 +249,37 @@ fn deterministic_engine_deduplicates_identical_json_ld_across_scripts() {
         "identical items must be deduplicated"
     );
 }
+
+// --- canonicalize_url tests ---
+
+#[test]
+fn canonicalize_url_strips_default_http_port() {
+    assert_eq!(
+        canonicalize_url("http://example.com:80/path"),
+        Some("http://example.com/path".to_string())
+    );
+}
+
+#[test]
+fn canonicalize_url_strips_default_https_port() {
+    assert_eq!(
+        canonicalize_url("https://example.com:443/page/"),
+        Some("https://example.com/page".to_string())
+    );
+}
+
+#[test]
+fn canonicalize_url_keeps_non_default_port() {
+    assert_eq!(
+        canonicalize_url("https://example.com:8443/path"),
+        Some("https://example.com:8443/path".to_string())
+    );
+}
+
+#[test]
+fn canonicalize_url_strips_fragment_and_trailing_slash() {
+    assert_eq!(
+        canonicalize_url("https://example.com/docs/#section"),
+        Some("https://example.com/docs".to_string())
+    );
+}

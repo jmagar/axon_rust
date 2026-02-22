@@ -45,6 +45,7 @@ pub async fn run_research(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let extraction_prompt =
         format!("Extract key facts, details, and insights relevant to: {query}");
 
+    // TODO: cfg.research_depth — ResearchOptions::with_depth not available in current spider_agent version
     let research = agent
         .research(
             &query,
@@ -188,6 +189,15 @@ mod tests {
         assert!(
             err.to_string().contains("invalid OPENAI_BASE_URL"),
             "expected URL parse error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn research_cfg_depth_defaults_to_none() {
+        let cfg = make_research_cfg("tvly-key", "http://localhost/v1", "gpt-4o-mini");
+        assert!(
+            cfg.research_depth.is_none(),
+            "research_depth should default to None"
         );
     }
 }

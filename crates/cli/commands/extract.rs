@@ -295,6 +295,11 @@ async fn run_extract_sync(
     Ok(())
 }
 
+// Design note: axon_rust uses its own DeterministicExtractionEngine rather than
+// spider_agent::Agent::extract() for performance reasons — deterministic parsing
+// is O(1) in LLM calls and works offline, while spider_agent's extraction requires
+// an LLM API call per page. For complex visual layouts, spider_agent's multimodal
+// extraction is more powerful; use it by replacing this function with Agent::extract().
 async fn execute_extract_runs(
     cfg: &Config,
     urls: &[String],

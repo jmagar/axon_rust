@@ -1,42 +1,60 @@
 use super::super::types::PerformanceProfile;
 use std::env;
 
-/// Returns (crawl_concurrency, backfill_concurrency,
-///          request_timeout_ms, fetch_retries, retry_backoff_ms)
-pub(super) fn performance_defaults(profile: PerformanceProfile) -> (usize, usize, u64, usize, u64) {
+/// Profile-derived settings returned by [`profile_settings`].
+pub(super) struct ProfileSettings {
+    pub crawl_concurrency: usize,
+    pub backfill_concurrency: usize,
+    pub request_timeout_ms: u64,
+    pub fetch_retries: usize,
+    pub retry_backoff_ms: u64,
+    pub broadcast_buffer_min: usize,
+    pub broadcast_buffer_max: usize,
+}
+
+/// Returns full profile settings including broadcast buffer sizes.
+pub(super) fn profile_settings(profile: PerformanceProfile) -> ProfileSettings {
     let logical_cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(8);
 
     match profile {
-        PerformanceProfile::HighStable => (
-            (logical_cpus.saturating_mul(8)).clamp(64, 192),
-            (logical_cpus.saturating_mul(6)).clamp(32, 128),
-            20_000,
-            2,
-            250,
-        ),
-        PerformanceProfile::Extreme => (
-            (logical_cpus.saturating_mul(16)).clamp(128, 384),
-            (logical_cpus.saturating_mul(10)).clamp(64, 256),
-            15_000,
-            1,
-            100,
-        ),
-        PerformanceProfile::Balanced => (
-            (logical_cpus.saturating_mul(4)).clamp(32, 96),
-            (logical_cpus.saturating_mul(3)).clamp(16, 64),
-            30_000,
-            2,
-            300,
-        ),
-        PerformanceProfile::Max => (
-            (logical_cpus.saturating_mul(24)).clamp(256, 1024),
-            (logical_cpus.saturating_mul(20)).clamp(128, 1024),
-            12_000,
-            1,
-            50,
-        ),
+        PerformanceProfile::HighStable => ProfileSettings {
+            crawl_concurrency: (logical_cpus.saturating_mul(8)).clamp(64, 192),
+            backfill_concurrency: (logical_cpus.saturating_mul(6)).clamp(32, 128),
+            request_timeout_ms: 20_000,
+            fetch_retries: 2,
+            retry_backoff_ms: 250,
+            broadcast_buffer_min: 4096,
+            broadcast_buffer_max: 16_384,
+        },
+        PerformanceProfile::Extreme => ProfileSettings {
+            crawl_concurrency: (logical_cpus.saturating_mul(16)).clamp(128, 384),
+            backfill_concurrency: (logical_cpus.saturating_mul(10)).clamp(64, 256),
+            request_timeout_ms: 15_000,
+            fetch_retries: 1,
+            retry_backoff_ms: 100,
+            broadcast_buffer_min: 8_192,
+            broadcast_buffer_max: 32_768,
+        },
+        PerformanceProfile::Balanced => ProfileSettings {
+            crawl_concurrency: (logical_cpus.saturating_mul(4)).clamp(32, 96),
+            backfill_concurrency: (logical_cpus.saturating_mul(3)).clamp(16, 64),
+            request_timeout_ms: 30_000,
+            fetch_retries: 2,
+            retry_backoff_ms: 300,
+            broadcast_buffer_min: 4096,
+            broadcast_buffer_max: 8_192,
+        },
+        PerformanceProfile::Max => ProfileSettings {
+            crawl_concurrency: (logical_cpus.saturating_mul(24)).clamp(256, 1024),
+            backfill_concurrency: (logical_cpus.saturating_mul(20)).clamp(128, 1024),
+            request_timeout_ms: 12_000,
+            fetch_retries: 1,
+            retry_backoff_ms: 50,
+            broadcast_buffer_min: 16_384,
+            broadcast_buffer_max: 65_536,
+        },
     }
 }
 
