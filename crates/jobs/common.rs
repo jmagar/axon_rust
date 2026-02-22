@@ -324,7 +324,6 @@ pub async fn batch_enqueue_jobs(cfg: &Config, queue_name: &str, job_ids: &[Uuid]
 ///
 /// This is the correct way to purge a queue — unlike [`open_amqp_channel`], it
 /// keeps the `Connection` alive for the full duration of the operation.
-#[allow(dead_code)] // Callers migrating in follow-up (batch/extract/embed/crawl clear commands).
 pub(crate) async fn purge_queue_safe(cfg: &Config, queue_name: &str) -> Result<()> {
     use lapin::options::QueuePurgeOptions;
 

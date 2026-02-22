@@ -2,7 +2,10 @@ use super::*;
 
 pub(super) async fn cancel_batch_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let rows = sqlx::query("UPDATE axon_batch_jobs SET status='canceled',updated_at=NOW(),finished_at=NOW() WHERE id=$1 AND status IN ('pending','running')")
         .bind(id)
         .execute(&pool)
@@ -18,36 +21,50 @@ pub(super) async fn cancel_batch_job(cfg: &Config, id: Uuid) -> Result<bool, Box
 
 pub(super) async fn cleanup_batch_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
-    Ok(
-        sqlx::query("DELETE FROM axon_batch_jobs WHERE status IN ('failed','canceled')")
-            .execute(&pool)
-            .await?
-            .rows_affected(),
-    )
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
+    let mut total = 0u64;
+    loop {
+        let deleted = sqlx::query(
+            "DELETE FROM axon_batch_jobs WHERE id IN (
+                SELECT id FROM axon_batch_jobs
+                WHERE status IN ('failed','canceled')
+                LIMIT 1000
+            )",
+        )
+        .execute(&pool)
+        .await?
+        .rows_affected();
+        total += deleted;
+        if deleted == 0 {
+            break;
+        }
+    }
+    Ok(total)
 }
 
 pub(super) async fn clear_batch_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let rows = sqlx::query("DELETE FROM axon_batch_jobs")
         .execute(&pool)
         .await?
         .rows_affected();
-    if let Ok(ch) = open_amqp_channel(cfg, &cfg.batch_queue).await {
-        let _ = ch
-            .queue_purge(
-                &cfg.batch_queue,
-                lapin::options::QueuePurgeOptions::default(),
-            )
-            .await;
-    }
+    let _ = purge_queue_safe(cfg, &cfg.batch_queue).await;
     Ok(rows)
 }
 
 pub(super) async fn recover_stale_batch_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let stats = reclaim_stale_running_jobs(
         &pool,
         TABLE,

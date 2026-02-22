@@ -2,9 +2,9 @@ use crate::crates::core::config::Config;
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::jobs::common::{
     claim_next_pending, claim_pending_by_id, make_pool, mark_job_failed,
-    open_amqp_connection_and_channel, stale_watchdog_confirmed, stale_watchdog_payload,
+    open_amqp_connection_and_channel, reclaim_stale_running_jobs as generic_reclaim,
+    WatchdogSweepStats,
 };
-use chrono::Utc;
 use futures_util::StreamExt;
 use lapin::options::{BasicAckOptions, BasicConsumeOptions, BasicNackOptions};
 use lapin::types::FieldTable;
@@ -15,95 +15,27 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use super::super::{
-    ensure_schema, CrawlWatchdogSweepStats, StaleRunningJob, STALE_SWEEP_INTERVAL_SECS, TABLE,
-    WORKER_CONCURRENCY,
+    ensure_schema, CrawlWatchdogSweepStats, STALE_SWEEP_INTERVAL_SECS, TABLE, WORKER_CONCURRENCY,
 };
 use super::worker_process::process_job;
 
+/// Thin wrapper around the generic watchdog that delegates all logic to
+/// `common::reclaim_stale_running_jobs` while mapping the result to the
+/// crawl-specific stats type.
 pub(crate) async fn reclaim_stale_running_jobs(
     pool: &PgPool,
     lane: usize,
     idle_timeout_secs: i64,
     confirm_secs: i64,
 ) -> Result<CrawlWatchdogSweepStats, Box<dyn Error>> {
-    let stale_jobs = sqlx::query_as::<_, StaleRunningJob>(
-        r#"
-        SELECT id, url, started_at, updated_at, result_json
-        FROM axon_crawl_jobs
-        WHERE status = 'running'
-          AND updated_at < NOW() - make_interval(secs => $1::int)
-        ORDER BY updated_at ASC
-        LIMIT 50
-        "#,
-    )
-    .bind(idle_timeout_secs as i32)
-    .fetch_all(pool)
-    .await?;
-
-    let mut stats = CrawlWatchdogSweepStats {
-        stale_candidates: stale_jobs.len() as u64,
-        ..Default::default()
-    };
-    for job in stale_jobs {
-        let idle_seconds = Utc::now()
-            .signed_duration_since(job.updated_at)
-            .num_seconds();
-        let result_json = job
-            .result_json
-            .clone()
-            .unwrap_or_else(|| serde_json::json!({}));
-
-        if stale_watchdog_confirmed(&result_json, job.updated_at, confirm_secs) {
-            let pages_crawled = result_json
-                .get("pages_crawled")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(0);
-            let phase = result_json
-                .get("phase")
-                .and_then(|value| value.as_str())
-                .unwrap_or("unknown");
-            let msg = format!(
-                "watchdog reclaimed stale running crawl job (idle={}s phase={} pages_crawled={} lane={})",
-                idle_seconds, phase, pages_crawled, lane
-            );
-            let rows = sqlx::query(
-                "UPDATE axon_crawl_jobs SET status='failed', updated_at=NOW(), finished_at=NOW(), error_text=$2 WHERE id=$1 AND status='running'",
-            )
-            .bind(job.id)
-            .bind(msg.clone())
-            .execute(pool)
-            .await?
-            .rows_affected();
-            if rows > 0 {
-                stats.reclaimed_jobs += rows;
-                log_warn(&format!(
-                    "watchdog marked crawl job {} as failed: {}",
-                    job.id, msg
-                ));
-            }
-            continue;
-        }
-
-        let marked_json = stale_watchdog_payload(result_json, job.updated_at);
-        let _ = sqlx::query(
-            "UPDATE axon_crawl_jobs SET result_json=$2 WHERE id=$1 AND status='running'",
-        )
-        .bind(job.id)
-        .bind(marked_json)
-        .execute(pool)
-        .await?;
-        let started = job
-            .started_at
-            .map(|value| value.to_rfc3339())
-            .unwrap_or_else(|| "unknown".to_string());
-        log_warn(&format!(
-            "watchdog marked crawl job {} as stale candidate (lane={} idle={}s started_at={} url={})",
-            job.id, lane, idle_seconds, started, job.url
-        ));
-        stats.marked_candidates += 1;
-    }
-
-    Ok(stats)
+    let marker = format!("lane={lane}");
+    let stats: WatchdogSweepStats =
+        generic_reclaim(pool, TABLE, "crawl", idle_timeout_secs, confirm_secs, &marker).await?;
+    Ok(CrawlWatchdogSweepStats {
+        stale_candidates: stats.stale_candidates,
+        marked_candidates: stats.marked_candidates,
+        reclaimed_jobs: stats.reclaimed_jobs,
+    })
 }
 
 async fn run_worker_polling_loop(cfg: &Config, pool: &PgPool) -> Result<(), Box<dyn Error>> {

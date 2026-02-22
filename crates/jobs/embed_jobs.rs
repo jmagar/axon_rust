@@ -2,7 +2,7 @@ use crate::crates::core::config::Config;
 use crate::crates::core::health::redis_healthy;
 use crate::crates::core::logging::{log_done, log_info, log_warn};
 use crate::crates::jobs::common::{
-    enqueue_job, make_pool, mark_job_failed, open_amqp_channel, open_amqp_connection_and_channel,
+    enqueue_job, make_pool, mark_job_failed, open_amqp_connection_and_channel, purge_queue_safe,
     reclaim_stale_running_jobs, JobTable,
 };
 use crate::crates::vector::ops::{embed_path_native_with_progress, EmbedProgress};
@@ -13,6 +13,8 @@ use spider::tokio;
 use sqlx::{FromRow, PgPool};
 use std::error::Error;
 use uuid::Uuid;
+
+static SCHEMA_INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 const TABLE: JobTable = JobTable::Embed;
 const WORKER_CONCURRENCY: usize = 2;
@@ -40,7 +42,7 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
         r#"
         CREATE TABLE IF NOT EXISTS axon_embed_jobs (
             id UUID PRIMARY KEY,
-            status TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled')),
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             started_at TIMESTAMPTZ,
@@ -62,12 +64,26 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
     .execute(pool)
     .await?;
 
+    // Add CHECK constraint to existing tables (idempotent via IF NOT EXISTS pattern).
+    sqlx::query(
+        r#"DO $$ BEGIN
+            ALTER TABLE axon_embed_jobs ADD CONSTRAINT axon_embed_jobs_status_check
+                CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled'));
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$"#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
 pub async fn start_embed_job(cfg: &Config, input: &str) -> Result<Uuid, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
 
     let cfg_json = serde_json::to_value(EmbedJobConfig {
         collection: cfg.collection.clone(),
@@ -115,7 +131,10 @@ pub async fn start_embed_job(cfg: &Config, input: &str) -> Result<Uuid, Box<dyn 
 
 pub async fn get_embed_job(cfg: &Config, id: Uuid) -> Result<Option<EmbedJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     Ok(sqlx::query_as::<_, EmbedJob>(
         r#"SELECT id,status,created_at,updated_at,started_at,finished_at,error_text,input_text,result_json FROM axon_embed_jobs WHERE id=$1"#,
     )
@@ -126,7 +145,10 @@ pub async fn get_embed_job(cfg: &Config, id: Uuid) -> Result<Option<EmbedJob>, B
 
 pub async fn list_embed_jobs(cfg: &Config, limit: i64) -> Result<Vec<EmbedJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     Ok(sqlx::query_as::<_, EmbedJob>(
         r#"SELECT id,status,created_at,updated_at,started_at,finished_at,error_text,input_text,result_json FROM axon_embed_jobs ORDER BY created_at DESC LIMIT $1"#,
     )
@@ -137,7 +159,10 @@ pub async fn list_embed_jobs(cfg: &Config, limit: i64) -> Result<Vec<EmbedJob>, 
 
 pub async fn cancel_embed_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let rows = sqlx::query("UPDATE axon_embed_jobs SET status='canceled',updated_at=NOW(),finished_at=NOW() WHERE id=$1 AND status IN ('pending','running')")
         .bind(id)
         .execute(&pool)
@@ -153,30 +178,41 @@ pub async fn cancel_embed_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Er
 
 pub async fn cleanup_embed_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
-    Ok(
-        sqlx::query("DELETE FROM axon_embed_jobs WHERE status IN ('failed','canceled')")
-            .execute(&pool)
-            .await?
-            .rows_affected(),
-    )
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
+    let mut total = 0u64;
+    loop {
+        let deleted = sqlx::query(
+            "DELETE FROM axon_embed_jobs WHERE id IN (
+                SELECT id FROM axon_embed_jobs
+                WHERE status IN ('failed','canceled')
+                LIMIT 1000
+            )",
+        )
+        .execute(&pool)
+        .await?
+        .rows_affected();
+        total += deleted;
+        if deleted == 0 {
+            break;
+        }
+    }
+    Ok(total)
 }
 
 pub async fn clear_embed_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let rows = sqlx::query("DELETE FROM axon_embed_jobs")
         .execute(&pool)
         .await?
         .rows_affected();
-    if let Ok(ch) = open_amqp_channel(cfg, &cfg.embed_queue).await {
-        let _ = ch
-            .queue_purge(
-                &cfg.embed_queue,
-                lapin::options::QueuePurgeOptions::default(),
-            )
-            .await;
-    }
+    let _ = purge_queue_safe(cfg, &cfg.embed_queue).await;
     Ok(rows)
 }
 
@@ -194,13 +230,30 @@ async fn process_embed_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
         let input_preview: String = input_text.chars().take(80).collect();
         log_info(&format!("embed worker started job {id} input={input_preview}"));
 
-        let redis_client = redis::Client::open(cfg.redis_url.clone())?;
-        let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
         let cancel_key = format!("axon:embed:cancel:{id}");
-        let cancel_before: Option<String> = redis_conn
-            .get(&cancel_key)
-            .await
-            .map_err(|e| format!("failed to check embed cancellation key {cancel_key}: {e}"))?;
+        let cancel_before: Option<String> = match redis::Client::open(cfg.redis_url.clone()) {
+            Err(e) => {
+                log_warn(&format!("embed cancel redis client failed for {id}: {e}"));
+                None
+            }
+            Ok(redis_client) => {
+                match redis_client.get_multiplexed_async_connection().await {
+                    Err(e) => {
+                        log_warn(&format!(
+                            "embed cancel redis connect failed for {id}: {e}"
+                        ));
+                        None
+                    }
+                    Ok(mut conn) => match conn.get::<_, Option<String>>(&cancel_key).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log_warn(&format!("embed cancel check failed for {id}: {e}"));
+                            None
+                        }
+                    },
+                }
+            }
+        };
         if cancel_before.is_some() {
             sqlx::query("UPDATE axon_embed_jobs SET status='canceled',updated_at=NOW(),finished_at=NOW() WHERE id=$1")
                 .bind(id)
@@ -212,6 +265,7 @@ async fn process_embed_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
         let job_cfg: EmbedJobConfig = serde_json::from_value(cfg_json)?;
         let mut embed_cfg = cfg.clone();
         embed_cfg.collection = job_cfg.collection.clone();
+        // TODO: Switch to bounded channel(64) once vector/ops API accepts Sender.
         let (progress_tx, mut progress_rx) =
             tokio::sync::mpsc::unbounded_channel::<EmbedProgress>();
         let progress_pool = pool.clone();
@@ -297,7 +351,10 @@ pub async fn run_embed_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     use crate::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
 
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
 
     let wc = WorkerConfig {
         table: TABLE,
@@ -315,7 +372,10 @@ pub async fn run_embed_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
 pub async fn recover_stale_embed_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let stats = reclaim_stale_running_jobs(
         &pool,
         TABLE,

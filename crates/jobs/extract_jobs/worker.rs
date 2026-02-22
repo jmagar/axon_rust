@@ -247,7 +247,10 @@ async fn process_claimed_extract_job(cfg: Config, pool: PgPool, id: Uuid) {
 
 pub async fn run_extract_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
 
     let wc = WorkerConfig {
         table: TABLE,

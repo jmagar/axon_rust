@@ -145,6 +145,9 @@ async fn process_batch_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
     tokio::fs::create_dir_all(&out_dir).await?;
 
     let (results, candidates) = fetch_batch_results(&urls, &out_dir).await?;
+    if mark_batch_canceled(cfg, pool, id).await? {
+        return Ok(());
+    }
     let queue_injection = apply_queue_injection(
         cfg,
         &candidates,
@@ -184,7 +187,10 @@ async fn process_claimed_batch_job(cfg: Config, pool: PgPool, id: Uuid) {
 
 pub async fn run_batch_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
 
     let wc = WorkerConfig {
         table: TABLE,

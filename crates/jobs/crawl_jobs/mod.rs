@@ -21,6 +21,23 @@ pub async fn start_crawl_job(cfg: &Config, start_url: &str) -> Result<Uuid, Box<
     repo::start_crawl_job(cfg, &plan.start_url).await
 }
 
+/// Batch variant: inserts and enqueues N crawl jobs over a single Postgres pool
+/// and a single AMQP connection. Returns `(url, job_id)` pairs in input order.
+pub async fn start_crawl_jobs_batch(
+    cfg: &Config,
+    start_urls: &[&str],
+) -> Result<Vec<(String, Uuid)>, Box<dyn Error>> {
+    // Apply the same URL normalisation (exclude_path_prefix, trailing-slash) that
+    // start_crawl_job would produce for each URL individually.
+    let mut normalised: Vec<String> = Vec::with_capacity(start_urls.len());
+    for &url in start_urls {
+        let plan = processor::build_start_plan(url, &cfg.exclude_path_prefix)?;
+        normalised.push(plan.start_url);
+    }
+    let refs: Vec<&str> = normalised.iter().map(|s| s.as_str()).collect();
+    runtime::start_crawl_jobs_batch(cfg, &refs).await
+}
+
 pub async fn get_job(cfg: &Config, id: Uuid) -> Result<Option<CrawlJob>, Box<dyn Error>> {
     repo::get_job(cfg, id).await
 }

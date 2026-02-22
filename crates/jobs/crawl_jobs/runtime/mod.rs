@@ -2,7 +2,9 @@ use crate::crates::core::config::{Config, RenderMode};
 use crate::crates::core::health::redis_healthy;
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::jobs::batch_jobs::InjectionCandidate;
-use crate::crates::jobs::common::{enqueue_job, make_pool, open_amqp_channel, JobTable};
+use crate::crates::jobs::common::{
+    batch_enqueue_jobs, enqueue_job, make_pool, open_amqp_channel, purge_queue_safe, JobTable,
+};
 use chrono::{DateTime, Utc};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
@@ -11,7 +13,10 @@ use sqlx::{FromRow, PgPool};
 use std::collections::HashSet;
 use std::error::Error;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use uuid::Uuid;
+
+static SCHEMA_INIT: OnceLock<()> = OnceLock::new();
 
 const TABLE: JobTable = JobTable::Crawl;
 const MID_CRAWL_INJECTION_TRIGGER_PAGES: u32 = 25;
@@ -62,15 +67,6 @@ pub struct CrawlJob {
     pub finished_at: Option<DateTime<Utc>>,
     pub error_text: Option<String>,
     pub result_json: Option<serde_json::Value>,
-}
-
-#[derive(Debug, FromRow)]
-struct StaleRunningJob {
-    id: Uuid,
-    url: String,
-    started_at: Option<DateTime<Utc>>,
-    updated_at: DateTime<Utc>,
-    result_json: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -239,12 +235,16 @@ async fn latest_completed_result_for_url(
 }
 
 async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
+    if SCHEMA_INIT.get().is_some() {
+        return Ok(());
+    }
+
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS axon_crawl_jobs (
             id UUID PRIMARY KEY,
             url TEXT NOT NULL,
-            status TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('pending','running','completed','failed','canceled')),
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             started_at TIMESTAMPTZ,
@@ -269,6 +269,26 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
     .execute(pool)
     .await?;
 
+    // Add CHECK constraint to existing tables that were created before this constraint was added.
+    // This is a no-op if the constraint already exists (catches the 42710 duplicate_object error).
+    let add_check = sqlx::query(
+        r#"
+        ALTER TABLE axon_crawl_jobs
+        ADD CONSTRAINT axon_crawl_jobs_status_check
+        CHECK (status IN ('pending','running','completed','failed','canceled'))
+        "#,
+    )
+    .execute(pool)
+    .await;
+    match add_check {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(ref db_err)) if db_err.code().as_deref() == Some("42710") => {
+            // Constraint already exists — expected for tables created with inline CHECK.
+        }
+        Err(err) => return Err(err.into()),
+    }
+
+    let _ = SCHEMA_INIT.set(());
     Ok(())
 }
 
@@ -342,6 +362,113 @@ pub async fn start_crawl_job(cfg: &Config, start_url: &str) -> Result<Uuid, Box<
     Ok(id)
 }
 
+/// Insert and AMQP-enqueue multiple crawl jobs using a single Postgres pool and
+/// a single AMQP connection (one TCP handshake for N publishes).
+///
+/// Returns a `Vec<(url, job_id)>` in the same order as `start_urls`.
+/// Duplicate-active jobs reuse the existing ID without a new AMQP publish.
+pub async fn start_crawl_jobs_batch(
+    cfg: &Config,
+    start_urls: &[&str],
+) -> Result<Vec<(String, Uuid)>, Box<dyn Error>> {
+    if start_urls.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let pool = make_pool(cfg).await?;
+    ensure_schema(&pool).await?;
+
+    let cfg_json = serde_json::to_value(to_job_config(cfg))?;
+    let url_strings: Vec<String> = start_urls.iter().map(|u| u.to_string()).collect();
+
+    // 1. Find existing active jobs for all URLs in a single query.
+    let existing_rows = sqlx::query_as::<_, (String, Uuid)>(
+        r#"
+        SELECT DISTINCT ON (url) url, id
+        FROM axon_crawl_jobs
+        WHERE status IN ('pending','running')
+          AND url = ANY($1)
+          AND config_json = $2
+        ORDER BY url, created_at DESC
+        "#,
+    )
+    .bind(&url_strings)
+    .bind(cfg_json.clone())
+    .fetch_all(&pool)
+    .await?;
+
+    let existing_map: std::collections::HashMap<String, Uuid> = existing_rows.into_iter().collect();
+
+    // 2. Collect URLs that need new jobs (not already active).
+    let new_urls: Vec<String> = url_strings
+        .iter()
+        .filter(|u| !existing_map.contains_key(*u))
+        .cloned()
+        .collect();
+
+    // 3. Bulk INSERT new jobs using unnest, skipping any that acquired an active
+    //    status between step 1 and now (race guard).
+    let mut new_map: std::collections::HashMap<String, Uuid> = std::collections::HashMap::new();
+    if !new_urls.is_empty() {
+        let inserted_rows = sqlx::query_as::<_, (Uuid, String)>(
+            r#"
+            WITH new_urls AS (
+                SELECT u FROM unnest($1::text[]) AS u
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM axon_crawl_jobs
+                    WHERE url = u AND status IN ('pending','running')
+                )
+            )
+            INSERT INTO axon_crawl_jobs (id, url, status, config_json, created_at, updated_at)
+            SELECT gen_random_uuid(), u, 'pending', $2::jsonb, now(), now()
+            FROM new_urls
+            RETURNING id, url
+            "#,
+        )
+        .bind(&new_urls)
+        .bind(cfg_json)
+        .fetch_all(&pool)
+        .await?;
+
+        for (id, url) in &inserted_rows {
+            new_map.insert(url.clone(), *id);
+        }
+    }
+
+    // Log dedupe hits.
+    for (url, id) in &existing_map {
+        log_info(&format!(
+            "crawl dedupe hit: reusing active job {} for {}",
+            id, url
+        ));
+    }
+
+    // 4. Build results in original input order.
+    let mut results: Vec<(String, Uuid)> = Vec::with_capacity(start_urls.len());
+    for url in &url_strings {
+        if let Some(&id) = existing_map.get(url) {
+            results.push((url.clone(), id));
+        } else if let Some(&id) = new_map.get(url) {
+            results.push((url.clone(), id));
+        }
+        // URLs that were filtered by the race guard in the CTE are silently
+        // dropped — they are now active via another concurrent insert.
+    }
+
+    // 5. Enqueue only newly inserted jobs.
+    let new_ids: Vec<Uuid> = new_map.values().copied().collect();
+    if !new_ids.is_empty() {
+        if let Err(err) = batch_enqueue_jobs(cfg, &cfg.crawl_queue, &new_ids).await {
+            log_warn(&format!(
+                "amqp batch enqueue failed; worker fallback polling will pick up {} jobs: {err}",
+                new_ids.len()
+            ));
+        }
+    }
+
+    Ok(results)
+}
+
 pub async fn get_job(cfg: &Config, id: Uuid) -> Result<Option<CrawlJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
@@ -410,13 +537,25 @@ pub async fn cancel_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Error>> 
 pub async fn cleanup_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
-    let rows = sqlx::query(
-        "DELETE FROM axon_crawl_jobs WHERE status IN ('failed','canceled') OR (status='pending' AND created_at < NOW() - INTERVAL '1 day')",
-    )
-    .execute(&pool)
-    .await?
-    .rows_affected();
-    Ok(rows)
+    let mut total = 0u64;
+    loop {
+        let deleted = sqlx::query(
+            "DELETE FROM axon_crawl_jobs WHERE id IN (
+                SELECT id FROM axon_crawl_jobs
+                WHERE status IN ('failed','canceled')
+                   OR (status='pending' AND created_at < NOW() - INTERVAL '1 day')
+                LIMIT 1000
+            )",
+        )
+        .execute(&pool)
+        .await?
+        .rows_affected();
+        total += deleted;
+        if deleted == 0 {
+            break;
+        }
+    }
+    Ok(total)
 }
 
 pub async fn clear_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
@@ -427,13 +566,8 @@ pub async fn clear_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
         .await?
         .rows_affected();
 
-    if let Ok(ch) = open_amqp_channel(cfg, &cfg.crawl_queue).await {
-        let _ = ch
-            .queue_purge(
-                &cfg.crawl_queue,
-                lapin::options::QueuePurgeOptions::default(),
-            )
-            .await;
+    if let Err(err) = purge_queue_safe(cfg, &cfg.crawl_queue).await {
+        log_warn(&format!("crawl clear: queue purge failed: {err}"));
     }
 
     Ok(rows)

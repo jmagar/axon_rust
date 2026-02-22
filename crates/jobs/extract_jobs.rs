@@ -3,8 +3,8 @@ use crate::crates::core::content::{run_extract_with_engine, DeterministicExtract
 use crate::crates::core::health::redis_healthy;
 use crate::crates::core::logging::{log_done, log_info, log_warn};
 use crate::crates::jobs::common::{
-    enqueue_job, make_pool, mark_job_failed, open_amqp_channel, reclaim_stale_running_jobs,
-    JobTable,
+    enqueue_job, make_pool, mark_job_failed, open_amqp_channel, purge_queue_safe,
+    reclaim_stale_running_jobs, JobTable,
 };
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
@@ -14,6 +14,8 @@ use sqlx::{FromRow, PgPool};
 use std::error::Error;
 use std::sync::Arc;
 use uuid::Uuid;
+
+static SCHEMA_INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 const TABLE: JobTable = JobTable::Extract;
 const WORKER_CONCURRENCY: usize = 2;
@@ -42,7 +44,7 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
         r#"
         CREATE TABLE IF NOT EXISTS axon_extract_jobs (
             id UUID PRIMARY KEY,
-            status TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled')),
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             started_at TIMESTAMPTZ,
@@ -64,6 +66,17 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
     .execute(pool)
     .await?;
 
+    // Add CHECK constraint to existing tables (idempotent via IF NOT EXISTS pattern).
+    sqlx::query(
+        r#"DO $$ BEGIN
+            ALTER TABLE axon_extract_jobs ADD CONSTRAINT axon_extract_jobs_status_check
+                CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled'));
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$"#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -73,7 +86,10 @@ pub async fn start_extract_job(
     prompt: Option<String>,
 ) -> Result<Uuid, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
 
     let urls_json = serde_json::to_value(urls)?;
     let cfg_json = serde_json::to_value(ExtractJobConfig {
@@ -125,7 +141,10 @@ pub async fn start_extract_job(
 
 pub async fn get_extract_job(cfg: &Config, id: Uuid) -> Result<Option<ExtractJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     Ok(sqlx::query_as::<_, ExtractJob>(
         r#"SELECT id,status,created_at,updated_at,started_at,finished_at,error_text,urls_json,result_json FROM axon_extract_jobs WHERE id=$1"#,
     )
@@ -139,7 +158,10 @@ pub async fn list_extract_jobs(
     limit: i64,
 ) -> Result<Vec<ExtractJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     Ok(sqlx::query_as::<_, ExtractJob>(
         r#"SELECT id,status,created_at,updated_at,started_at,finished_at,error_text,urls_json,result_json FROM axon_extract_jobs ORDER BY created_at DESC LIMIT $1"#,
     )
@@ -150,7 +172,10 @@ pub async fn list_extract_jobs(
 
 pub async fn cancel_extract_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let rows = sqlx::query("UPDATE axon_extract_jobs SET status='canceled',updated_at=NOW(),finished_at=NOW() WHERE id=$1 AND status IN ('pending','running')")
         .bind(id)
         .execute(&pool)
@@ -166,30 +191,41 @@ pub async fn cancel_extract_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn 
 
 pub async fn cleanup_extract_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
-    Ok(
-        sqlx::query("DELETE FROM axon_extract_jobs WHERE status IN ('failed','canceled')")
-            .execute(&pool)
-            .await?
-            .rows_affected(),
-    )
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
+    let mut total = 0u64;
+    loop {
+        let deleted = sqlx::query(
+            "DELETE FROM axon_extract_jobs WHERE id IN (
+                SELECT id FROM axon_extract_jobs
+                WHERE status IN ('failed','canceled')
+                LIMIT 1000
+            )",
+        )
+        .execute(&pool)
+        .await?
+        .rows_affected();
+        total += deleted;
+        if deleted == 0 {
+            break;
+        }
+    }
+    Ok(total)
 }
 
 pub async fn clear_extract_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let rows = sqlx::query("DELETE FROM axon_extract_jobs")
         .execute(&pool)
         .await?
         .rows_affected();
-    if let Ok(ch) = open_amqp_channel(cfg, &cfg.extract_queue).await {
-        let _ = ch
-            .queue_purge(
-                &cfg.extract_queue,
-                lapin::options::QueuePurgeOptions::default(),
-            )
-            .await;
-    }
+    let _ = purge_queue_safe(cfg, &cfg.extract_queue).await;
     Ok(rows)
 }
 
@@ -201,7 +237,10 @@ pub async fn run_extract_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
 pub async fn recover_stale_extract_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let stats = reclaim_stale_running_jobs(
         &pool,
         TABLE,

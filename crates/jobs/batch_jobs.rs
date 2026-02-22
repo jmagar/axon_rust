@@ -4,8 +4,8 @@ use crate::crates::core::health::redis_healthy;
 use crate::crates::core::http::{build_client, fetch_html};
 use crate::crates::core::logging::{log_done, log_info, log_warn};
 use crate::crates::jobs::common::{
-    enqueue_job, make_pool, mark_job_failed, open_amqp_channel, reclaim_stale_running_jobs,
-    JobTable,
+    enqueue_job, make_pool, mark_job_failed, open_amqp_channel, purge_queue_safe,
+    reclaim_stale_running_jobs, JobTable,
 };
 use crate::crates::jobs::extract_jobs::start_extract_job;
 use crate::crates::vector::ops::embed_path_native;
@@ -18,6 +18,8 @@ use std::error::Error;
 use std::fmt::Write;
 use std::path::PathBuf;
 use uuid::Uuid;
+
+static SCHEMA_INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 const TABLE: JobTable = JobTable::Batch;
 const WORKER_CONCURRENCY: usize = 2;
@@ -347,7 +349,7 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
         r#"
         CREATE TABLE IF NOT EXISTS axon_batch_jobs (
             id UUID PRIMARY KEY,
-            status TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled')),
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             started_at TIMESTAMPTZ,
@@ -369,12 +371,26 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
     .execute(pool)
     .await?;
 
+    // Add CHECK constraint to existing tables (idempotent via IF NOT EXISTS pattern).
+    sqlx::query(
+        r#"DO $$ BEGIN
+            ALTER TABLE axon_batch_jobs ADD CONSTRAINT axon_batch_jobs_status_check
+                CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled'));
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$"#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
 pub async fn start_batch_job(cfg: &Config, urls: &[String]) -> Result<Uuid, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
 
     let urls_json = serde_json::to_value(urls)?;
     let cfg_json = serde_json::to_value(BatchJobConfig {
@@ -428,7 +444,10 @@ pub async fn start_batch_job(cfg: &Config, urls: &[String]) -> Result<Uuid, Box<
 
 pub async fn get_batch_job(cfg: &Config, id: Uuid) -> Result<Option<BatchJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     Ok(sqlx::query_as::<_, BatchJob>(
         r#"SELECT id,status,created_at,updated_at,started_at,finished_at,error_text,urls_json,result_json FROM axon_batch_jobs WHERE id=$1"#,
     )
@@ -439,7 +458,10 @@ pub async fn get_batch_job(cfg: &Config, id: Uuid) -> Result<Option<BatchJob>, B
 
 pub async fn list_batch_jobs(cfg: &Config, limit: i64) -> Result<Vec<BatchJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     Ok(sqlx::query_as::<_, BatchJob>(
         r#"SELECT id,status,created_at,updated_at,started_at,finished_at,error_text,urls_json,result_json FROM axon_batch_jobs ORDER BY created_at DESC LIMIT $1"#,
     )
@@ -474,6 +496,5 @@ pub async fn recover_stale_batch_jobs(cfg: &Config) -> Result<u64, Box<dyn Error
 pub async fn batch_doctor(cfg: &Config) -> Result<serde_json::Value, Box<dyn Error>> {
     maintenance::batch_doctor(cfg).await
 }
-
 #[cfg(test)]
 mod tests;

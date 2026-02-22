@@ -3,7 +3,7 @@ use crate::crates::core::content::{
     canonicalize_url, extract_loc_values, extract_robots_sitemaps, is_excluded_url_path,
     to_markdown, url_to_filename,
 };
-use crate::crates::core::http::validate_url;
+use crate::crates::core::http::{http_client, validate_url};
 use crate::crates::crawl::engine::CrawlSummary;
 use spider::tokio;
 use spider::url::Url;
@@ -76,8 +76,7 @@ async fn discover_sitemap_urls_with_robots(
     let host = parsed.host_str().ok_or("missing host")?.to_string();
     let root_path = parsed.path().trim_end_matches('/').to_string();
     let scoped_to_root = root_path.is_empty();
-    let timeout = Duration::from_millis(cfg.request_timeout_ms.unwrap_or(30_000));
-    let client = reqwest::Client::builder().timeout(timeout).build()?;
+    let client = http_client()?;
 
     let mut queue: VecDeque<String> = VecDeque::from(vec![
         format!("{scheme}://{host}/sitemap.xml"),
@@ -87,7 +86,7 @@ async fn discover_sitemap_urls_with_robots(
     let mut stats = RobotsDiscoveryStats::default();
     let robots_url = format!("{scheme}://{host}/robots.txt");
     if let Some(robots_txt) = fetch_text_with_retry(
-        &client,
+        client,
         &robots_url,
         cfg.fetch_retries,
         cfg.retry_backoff_ms,
@@ -120,7 +119,7 @@ async fn discover_sitemap_urls_with_robots(
             continue;
         }
         let Some(xml) = fetch_text_with_retry(
-            &client,
+            client,
             &canonical_sitemap,
             cfg.fetch_retries,
             cfg.retry_backoff_ms,
@@ -208,8 +207,7 @@ pub(super) async fn append_robots_backfill(
     }
 
     let markdown_dir = output_dir.join("markdown");
-    let timeout = Duration::from_millis(cfg.request_timeout_ms.unwrap_or(30_000));
-    let client = reqwest::Client::builder().timeout(timeout).build()?;
+    let client = http_client()?;
     let mut manifest = BufWriter::new(
         tokio::fs::OpenOptions::new()
             .append(true)
@@ -227,7 +225,7 @@ pub(super) async fn append_robots_backfill(
 
     for url in candidates {
         let Some(html) =
-            fetch_text_with_retry(&client, &url, cfg.fetch_retries, cfg.retry_backoff_ms).await
+            fetch_text_with_retry(client, &url, cfg.fetch_retries, cfg.retry_backoff_ms).await
         else {
             stats.failed += 1;
             continue;
