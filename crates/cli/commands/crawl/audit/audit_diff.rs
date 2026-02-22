@@ -58,14 +58,19 @@ fn build_snapshot_diff(
         }
     }
 
-    let prev_sitemap_urls = previous.discovered_url_count;
-    let curr_sitemap_urls = current.discovered_url_count;
+    let prev_discovered: HashSet<&str> = previous
+        .discovered_urls
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+    let curr_discovered: HashSet<&str> =
+        current.discovered_urls.iter().map(|s| s.as_str()).collect();
     CrawlAuditSnapshotDiff {
         generated_at_epoch_ms: now_epoch_ms(),
         previous_report: previous_report.to_string_lossy().to_string(),
         current_report: current_report.to_string_lossy().to_string(),
-        discovered_added: curr_sitemap_urls.saturating_sub(prev_sitemap_urls),
-        discovered_removed: prev_sitemap_urls.saturating_sub(curr_sitemap_urls),
+        discovered_added: curr_discovered.difference(&prev_discovered).count(),
+        discovered_removed: prev_discovered.difference(&curr_discovered).count(),
         manifest_added,
         manifest_removed,
         manifest_changed,
@@ -93,7 +98,7 @@ pub(super) async fn run_crawl_audit_diff(cfg: &Config) -> Result<(), Box<dyn Err
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "diff_report_path": diff_path,
+                "diff_report_path": diff_path.to_string_lossy(),
                 "diff": diff,
             }))?
         );

@@ -39,6 +39,7 @@ pub fn classify_target(target: &str) -> RedditTarget {
     }
 
     // Handle full subreddit URLs like https://www.reddit.com/r/rust/
+    // Take only the first path segment after /r/ to ignore sub-paths like /hot/, /new/, etc.
     if let Some(rest) = target
         .strip_prefix("https://www.reddit.com/r/")
         .or_else(|| target.strip_prefix("http://www.reddit.com/r/"))
@@ -47,7 +48,7 @@ pub fn classify_target(target: &str) -> RedditTarget {
         .or_else(|| target.strip_prefix("https://old.reddit.com/r/"))
         .or_else(|| target.strip_prefix("http://old.reddit.com/r/"))
     {
-        let name = rest.trim_end_matches('/');
+        let name = rest.split('/').next().unwrap_or("").trim();
         if !name.is_empty() {
             return RedditTarget::Subreddit(name.to_string());
         }
@@ -205,6 +206,8 @@ async fn ingest_thread(
         .or_else(|| url.strip_prefix("https://old.reddit.com"))
         .or_else(|| url.strip_prefix("https://reddit.com"))
         .or_else(|| url.strip_prefix("http://www.reddit.com"))
+        .or_else(|| url.strip_prefix("http://old.reddit.com"))
+        .or_else(|| url.strip_prefix("http://reddit.com"))
         .unwrap_or(url);
 
     let json_url = format!(
@@ -280,7 +283,7 @@ pub async fn ingest_reddit(cfg: &Config, target: &str) -> Result<usize, Box<dyn 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{classify_target, validate_subreddit, RedditTarget};
 
     // --- classify_target ---
 

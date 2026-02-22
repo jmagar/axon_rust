@@ -1,4 +1,5 @@
 use super::*;
+use crate::crates::jobs::common::make_pool;
 use crate::crates::jobs::common::test_config;
 use crate::crates::jobs::common::{stale_watchdog_confirmed, stale_watchdog_payload};
 use chrono::Duration;

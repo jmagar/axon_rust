@@ -85,13 +85,8 @@ async fn discover_sitemap_urls_with_robots(
     ]);
     let mut stats = RobotsDiscoveryStats::default();
     let robots_url = format!("{scheme}://{host}/robots.txt");
-    if let Some(robots_txt) = fetch_text_with_retry(
-        client,
-        &robots_url,
-        cfg.fetch_retries,
-        cfg.retry_backoff_ms,
-    )
-    .await
+    if let Some(robots_txt) =
+        fetch_text_with_retry(client, &robots_url, cfg.fetch_retries, cfg.retry_backoff_ms).await
     {
         let robots_sitemaps = extract_robots_sitemaps(&robots_txt);
         stats.robots_declared_sitemaps = robots_sitemaps.len();

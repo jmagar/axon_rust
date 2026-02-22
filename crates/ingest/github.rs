@@ -56,6 +56,10 @@ pub fn parse_github_repo(input: &str) -> Option<(String, String)> {
     // Strip .git suffix commonly found in clone URLs
     let repo = repo.strip_suffix(".git").unwrap_or(repo);
 
+    if repo.is_empty() {
+        return None;
+    }
+
     Some((owner.to_string(), repo.to_string()))
 }
 
@@ -177,11 +181,24 @@ pub async fn ingest_github(
             let owner = owner.clone();
             let name = name.clone();
             let default_branch = default_branch.clone();
+            let auth_clone = auth.clone();
             async move {
-                let raw_url = format!(
-                    "https://raw.githubusercontent.com/{owner}/{name}/{default_branch}/{path}"
-                );
-                let resp = client.get(&raw_url).send().await;
+                let raw_url = {
+                    let mut url = reqwest::Url::parse("https://raw.githubusercontent.com")
+                        .expect("static base URL is valid");
+                    url.path_segments_mut()
+                        .expect("base URL can be a base")
+                        .push(&owner)
+                        .push(&name)
+                        .push(&default_branch)
+                        .extend(path.split('/'));
+                    url
+                };
+                let mut req = client.get(raw_url);
+                if let Some(ref a) = auth_clone {
+                    req = req.header("Authorization", a.as_str());
+                }
+                let resp = req.send().await;
                 let text = match resp {
                     Ok(r) if r.status().is_success() => match r.text().await {
                         Ok(t) => t,
@@ -327,6 +344,13 @@ mod tests {
     fn parse_repo_strips_git_suffix_bare() {
         let result = parse_github_repo("rust-lang/rust.git");
         assert_eq!(result, Some(("rust-lang".to_string(), "rust".to_string())));
+    }
+
+    #[test]
+    fn parse_repo_rejects_empty_after_git_strip() {
+        // ".git" is the entire repo component — stripping it yields an empty repo
+        assert_eq!(parse_github_repo("owner/.git"), None);
+        assert_eq!(parse_github_repo("https://github.com/owner/.git"), None);
     }
 
     // --- expanded extensions ---

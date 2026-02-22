@@ -283,6 +283,9 @@ pub(super) struct GlobalArgs {
     #[arg(global = true, long, action = ArgAction::SetTrue)]
     pub(super) json: bool,
 
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
+    pub(super) crawl_from_result: bool,
+
     #[arg(global = true, long, value_enum, default_value_t = PerformanceProfile::HighStable)]
     pub(super) performance_profile: PerformanceProfile,
 
@@ -374,4 +377,8 @@ pub(super) struct GlobalArgs {
 
     #[arg(global = true, long)]
     pub(super) cron_max_runs: Option<usize>,
+
+    /// Deduplicate trailing-slash URL variants during crawl. Disable with `--normalize false`.
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
+    pub(super) normalize: bool,
 }

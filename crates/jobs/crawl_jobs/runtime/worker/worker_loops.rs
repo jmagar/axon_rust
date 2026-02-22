@@ -29,8 +29,15 @@ pub(crate) async fn reclaim_stale_running_jobs(
     confirm_secs: i64,
 ) -> Result<CrawlWatchdogSweepStats, Box<dyn Error>> {
     let marker = format!("lane={lane}");
-    let stats: WatchdogSweepStats =
-        generic_reclaim(pool, TABLE, "crawl", idle_timeout_secs, confirm_secs, &marker).await?;
+    let stats: WatchdogSweepStats = generic_reclaim(
+        pool,
+        TABLE,
+        "crawl",
+        idle_timeout_secs,
+        confirm_secs,
+        &marker,
+    )
+    .await?;
     Ok(CrawlWatchdogSweepStats {
         stale_candidates: stats.stale_candidates,
         marked_candidates: stats.marked_candidates,
@@ -159,6 +166,9 @@ async fn handle_crawl_delivery(
             log_warn(&format!(
                 "failed to claim crawl job {job_id} (lane={lane}); nacking for retry: {err}"
             ));
+            // Brief pause before requeuing so a persistent DB failure (e.g. PG
+            // restart) doesn't spin-loop at full speed consuming CPU and flooding logs.
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             if let Err(nack_err) = delivery
                 .nack(BasicNackOptions {
                     requeue: true,

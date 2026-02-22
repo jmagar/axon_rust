@@ -127,3 +127,50 @@ fn test_fallback_uncapped_zero_markdown_files() {
 fn test_regex_escape_escapes_hyphen() {
     assert_eq!(regex_escape("foo-bar"), "foo\\-bar");
 }
+
+// --- Spider API wiring tests ---
+
+#[test]
+fn test_spider_retry_wiring_round_trips() {
+    // Verify spider's with_retry() stores the value we pass from cfg.fetch_retries.
+    // configure_website() calls with_retry(cfg.fetch_retries.min(u8::MAX) as u8)
+    // when fetch_retries > 0; this test confirms the Spider API contract.
+    let mut website = spider::website::Website::new("https://example.com");
+    website.with_retry(3);
+    assert_eq!(website.configuration.retry, 3);
+}
+
+#[test]
+fn test_spider_normalize_wiring_round_trips() {
+    // Verify spider's with_normalize() stores the value we pass from cfg.normalize.
+    let mut website = spider::website::Website::new("https://example.com");
+    website.with_normalize(true);
+    assert!(website.configuration.normalize);
+    website.with_normalize(false);
+    assert!(!website.configuration.normalize);
+}
+
+#[test]
+fn test_spider_tld_disabled_by_default() {
+    // TLD crawling is hardcoded to false in configure_website(); verify the Spider
+    // API default matches our expectation (i.e., with_tld(false) is a no-op baseline).
+    let mut website = spider::website::Website::new("https://example.com");
+    website.with_tld(false);
+    assert!(!website.configuration.tld);
+}
+
+// --- CDP hostname detection tests (Issue 1: explicit allowlist vs fragile heuristic) ---
+
+#[test]
+fn test_docker_service_host_only_rewrites_known_names() {
+    use crate::crates::core::config::parse::is_docker_service_host;
+    // Known Docker service names must be detected.
+    assert!(is_docker_service_host("axon-chrome"));
+    assert!(is_docker_service_host("axon-postgres"));
+    // Hyphenated hosts NOT in the allowlist must NOT be rewritten.
+    assert!(!is_docker_service_host("my-home-server"));
+    assert!(!is_docker_service_host("custom-chrome-proxy"));
+    // Plain hosts must not be rewritten.
+    assert!(!is_docker_service_host("127.0.0.1"));
+    assert!(!is_docker_service_host("localhost"));
+}

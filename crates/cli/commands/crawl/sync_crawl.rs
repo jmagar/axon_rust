@@ -98,7 +98,9 @@ async fn maybe_chrome_fallback(
             (chrome_summary, chrome_urls)
         }
         Err(err) => {
-            spinner.finish(&format!("Chrome fallback failed ({err}), using HTTP result"));
+            spinner.finish(&format!(
+                "Chrome fallback failed ({err}), using HTTP result"
+            ));
             (http_summary, http_seen_urls)
         }
     }
@@ -153,13 +155,8 @@ pub(super) async fn run_sync_crawl(cfg: &Config, start_url: &str) -> Result<(), 
         http_summary.pages_seen, http_summary.markdown_files
     ));
 
-    let (summary, seen_urls) = maybe_chrome_fallback(
-        effective_cfg,
-        start_url,
-        http_summary,
-        http_seen_urls,
-    )
-    .await;
+    let (summary, seen_urls) =
+        maybe_chrome_fallback(effective_cfg, start_url, http_summary, http_seen_urls).await;
 
     let mut final_summary = summary;
 
@@ -167,12 +164,26 @@ pub(super) async fn run_sync_crawl(cfg: &Config, start_url: &str) -> Result<(), 
         // Spider-native sitemap already ran inside run_crawl_once() when run_sitemap=true.
         // append_robots_backfill() supplements that by parsing robots.txt Sitemap: directives,
         // which spider does not handle natively.
+        //
+        // Re-read the manifest to merge any URLs that were written to disk by run_crawl_once
+        // but not surfaced in `seen_urls` (e.g. URLs discovered via Spider's own sitemap pass).
+        // This prevents double-fetching pages that were already crawled.
+        let merged_seen = {
+            let manifest_urls = super::manifest::read_manifest_urls(&manifest_path)
+                .await
+                .unwrap_or_default();
+            seen_urls
+                .iter()
+                .cloned()
+                .chain(manifest_urls)
+                .collect::<HashSet<String>>()
+        };
         let spinner = Spinner::new("running robots.txt sitemap supplement");
         let robots_stats = super::audit::append_robots_backfill(
             cfg,
             start_url,
             &cfg.output_dir,
-            &seen_urls,
+            &merged_seen,
             &mut final_summary,
         )
         .await?;

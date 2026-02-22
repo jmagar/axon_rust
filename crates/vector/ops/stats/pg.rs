@@ -7,19 +7,19 @@ use std::time::Duration;
 /// Prevents SQL injection by ensuring only known table names are interpolated.
 #[derive(Clone, Copy)]
 pub(super) enum StatsTable {
-    CrawlJobs,
-    BatchJobs,
-    ExtractJobs,
-    EmbedJobs,
+    Crawl,
+    Batch,
+    Extract,
+    Embed,
 }
 
 impl StatsTable {
     fn as_str(self) -> &'static str {
         match self {
-            Self::CrawlJobs => "axon_crawl_jobs",
-            Self::BatchJobs => "axon_batch_jobs",
-            Self::ExtractJobs => "axon_extract_jobs",
-            Self::EmbedJobs => "axon_embed_jobs",
+            Self::Crawl => "axon_crawl_jobs",
+            Self::Batch => "axon_batch_jobs",
+            Self::Extract => "axon_extract_jobs",
+            Self::Embed => "axon_embed_jobs",
         }
     }
 }
@@ -93,10 +93,10 @@ pub(super) async fn collect_postgres_metrics(cfg: &Config) -> PostgresMetrics {
 
     // Check all table existence in parallel.
     let (crawl_exists, batch_exists, extract_exists, embed_exists, runs_exists) = tokio::join!(
-        table_exists(&pool, StatsTable::CrawlJobs),
-        table_exists(&pool, StatsTable::BatchJobs),
-        table_exists(&pool, StatsTable::ExtractJobs),
-        table_exists(&pool, StatsTable::EmbedJobs),
+        table_exists(&pool, StatsTable::Crawl),
+        table_exists(&pool, StatsTable::Batch),
+        table_exists(&pool, StatsTable::Extract),
+        table_exists(&pool, StatsTable::Embed),
         // axon_command_runs is not a job table — use parameterized query directly.
         sqlx::query_scalar::<_, bool>("SELECT to_regclass('axon_command_runs') IS NOT NULL")
             .fetch_one(&pool),
@@ -170,7 +170,7 @@ pub(super) async fn collect_postgres_metrics(cfg: &Config) -> PostgresMetrics {
 
 async fn collect_crawl_metrics(pool: &sqlx::PgPool) -> PostgresMetrics {
     let (count, base_urls, pages_per_sec, crawl_dur, overall_dur, longest) = tokio::join!(
-        count_table_rows(pool, StatsTable::CrawlJobs),
+        count_table_rows(pool, StatsTable::Crawl),
         sqlx::query_scalar::<_, i64>("SELECT COUNT(DISTINCT url) FROM axon_crawl_jobs")
             .fetch_one(pool),
         sqlx::query_scalar::<_, Option<f64>>(
@@ -240,14 +240,14 @@ async fn collect_crawl_metrics(pool: &sqlx::PgPool) -> PostgresMetrics {
 
 async fn collect_batch_metrics(pool: &sqlx::PgPool) -> PostgresMetrics {
     PostgresMetrics {
-        batch_count: count_table_rows(pool, StatsTable::BatchJobs).await,
+        batch_count: count_table_rows(pool, StatsTable::Batch).await,
         ..Default::default()
     }
 }
 
 async fn collect_extract_metrics(pool: &sqlx::PgPool) -> PostgresMetrics {
     PostgresMetrics {
-        extract_count: count_table_rows(pool, StatsTable::ExtractJobs).await,
+        extract_count: count_table_rows(pool, StatsTable::Extract).await,
         ..Default::default()
     }
 }
@@ -266,7 +266,7 @@ async fn collect_embed_metrics(pool: &sqlx::PgPool) -> PostgresMetrics {
             "SELECT SUM(COALESCE((result_json->>'docs_embedded')::bigint, 0))::bigint FROM axon_embed_jobs WHERE status='completed'",
         )
         .fetch_one(pool),
-        count_table_rows(pool, StatsTable::EmbedJobs),
+        count_table_rows(pool, StatsTable::Embed),
         sqlx::query(
             r#"
             SELECT id::text AS id,

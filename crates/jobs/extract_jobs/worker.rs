@@ -216,13 +216,32 @@ async fn process_extract_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<()
 
     match run_result {
         Ok(Some(result_json)) => {
-            sqlx::query(
-                "UPDATE axon_extract_jobs SET status='completed',updated_at=NOW(),finished_at=NOW(),result_json=$2,error_text=NULL WHERE id=$1 AND status='running'",
-            )
-            .bind(id)
-            .bind(result_json)
-            .execute(pool)
-            .await?;
+            // Retry the completion UPDATE to guard against transient DB errors
+            // (e.g. PG restart mid-job). A lost UPDATE would leave the job stuck
+            // in 'running' until the watchdog reclaims it.
+            let mut last_err = None;
+            for attempt in 1u32..=3 {
+                match sqlx::query(
+                    "UPDATE axon_extract_jobs SET status='completed',updated_at=NOW(),finished_at=NOW(),result_json=$2,error_text=NULL WHERE id=$1 AND status='running'",
+                )
+                .bind(id)
+                .bind(&result_json)
+                .execute(pool)
+                .await
+                {
+                    Ok(_) => { last_err = None; break; }
+                    Err(e) => {
+                        log_warn(&format!(
+                            "worker extract job {id} completion UPDATE attempt {attempt} failed: {e}"
+                        ));
+                        last_err = Some(e);
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                }
+            }
+            if let Some(e) = last_err {
+                return Err(e.into());
+            }
             log_done(&format!("worker completed extract job {id}"));
         }
         Ok(None) => {}

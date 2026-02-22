@@ -264,6 +264,24 @@ mod tests {
     }
 
     #[test]
+    fn writer_guard_write_all_updates_size_counter() {
+        use super::{SizeRotateMakeWriter, SizeRotatingFile};
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("axon.log");
+        let rotating = SizeRotatingFile::new(path.clone(), 1024, 3).expect("init");
+        let make_writer = SizeRotateMakeWriter {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(rotating)),
+        };
+        use tracing_subscriber::fmt::writer::MakeWriter;
+        let mut guard = make_writer.make_writer();
+        let payload = b"hello-guard\n";
+        guard.write_all(payload).expect("write_all should succeed");
+        guard.flush().expect("flush should succeed");
+        let content = std::fs::read_to_string(&path).expect("read file");
+        assert_eq!(content, "hello-guard\n");
+    }
+
+    #[test]
     fn size_rotation_preserves_newest_in_primary_file() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("axon.log");

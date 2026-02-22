@@ -23,6 +23,9 @@ pub(super) struct CrawlAuditSnapshot {
     pub(super) exclude_path_prefix: Vec<String>,
     pub(super) sitemap: SitemapDiscoveryStats,
     pub(super) discovered_url_count: usize,
+    /// Full list of URLs discovered via sitemap/robots — used for accurate set-based diff.
+    #[serde(default)]
+    pub(super) discovered_urls: Vec<String>,
     pub(super) manifest_entry_count: usize,
     pub(super) manifest_entries: Vec<ManifestAuditEntry>,
 }
@@ -102,6 +105,7 @@ pub(super) async fn persist_audit_snapshot(
         exclude_path_prefix: cfg.exclude_path_prefix.clone(),
         sitemap: discovery.stats,
         discovered_url_count: discovery.urls.len(),
+        discovered_urls: discovery.urls.into_iter().collect(),
         manifest_entry_count: manifest_entries.len(),
         manifest_entries,
     };

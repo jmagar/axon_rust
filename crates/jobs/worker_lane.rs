@@ -186,6 +186,11 @@ async fn run_amqp_lane(
     // Drain any remaining in-flight jobs before exiting.
     while inflight.next().await.is_some() {}
 
+    // Explicitly close channel and connection so RabbitMQ cleans up immediately
+    // rather than waiting for the TCP timeout.
+    let _ = ch.close(200, "lane exit").await;
+    let _ = _conn.close(200, "lane exit").await;
+
     Err(format!(
         "{} worker lane={lane} AMQP consumer stream ended unexpectedly",
         wc.job_kind
@@ -258,6 +263,10 @@ pub(crate) async fn run_job_worker(
     wc: &WorkerConfig,
     process_fn: ProcessFn,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if wc.lane_count == 0 {
+        return Err(format!("{} worker: lane_count must be >= 1", wc.job_kind).into());
+    }
+
     sweep_stale_jobs(cfg, &pool, wc, "startup", 0).await;
 
     let semaphore = Arc::new(tokio::sync::Semaphore::new(wc.lane_count));
@@ -286,18 +295,13 @@ pub(crate) async fn run_job_worker(
                 })
                 .collect();
             let results = futures_util::future::join_all(futs).await;
-            let mut all_ok = true;
             for result in results {
                 if let Err(err) = result {
                     log_warn(&format!(
                         "{} worker lane terminated unexpectedly: {err}",
                         wc.job_kind
                     ));
-                    all_ok = false;
                 }
-            }
-            if all_ok {
-                return Ok(());
             }
             log_warn(&format!(
                 "{} worker restarting AMQP lanes in 2s",
