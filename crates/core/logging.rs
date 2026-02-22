@@ -277,8 +277,13 @@ mod tests {
         let payload = b"hello-guard\n";
         guard.write_all(payload).expect("write_all should succeed");
         guard.flush().expect("flush should succeed");
+        // Verify write reached the file.
         let content = std::fs::read_to_string(&path).expect("read file");
         assert_eq!(content, "hello-guard\n");
+        // Verify the size counter was incremented — drives the rotation trigger.
+        drop(guard);
+        let inner = make_writer.inner.lock().unwrap();
+        assert_eq!(inner.current_size, payload.len() as u64);
     }
 
     #[test]

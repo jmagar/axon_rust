@@ -37,12 +37,12 @@ fn build_snapshot_diff(
     previous: &CrawlAuditSnapshot,
     current: &CrawlAuditSnapshot,
 ) -> CrawlAuditSnapshotDiff {
-    let previous_discovered: HashSet<&String> =
+    let manifest_prev_urls: HashSet<&String> =
         previous.manifest_entries.iter().map(|e| &e.url).collect();
-    let current_discovered: HashSet<&String> =
+    let manifest_curr_urls: HashSet<&String> =
         current.manifest_entries.iter().map(|e| &e.url).collect();
-    let manifest_added = current_discovered.difference(&previous_discovered).count();
-    let manifest_removed = previous_discovered.difference(&current_discovered).count();
+    let manifest_added = manifest_curr_urls.difference(&manifest_prev_urls).count();
+    let manifest_removed = manifest_prev_urls.difference(&manifest_curr_urls).count();
 
     let prev_map: HashMap<&str, &str> = previous
         .manifest_entries

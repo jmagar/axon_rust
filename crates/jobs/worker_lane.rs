@@ -86,7 +86,7 @@ async fn run_amqp_lane(
     process_fn: &ProcessFn,
     semaphore: Arc<tokio::sync::Semaphore>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (_conn, ch) = open_amqp_connection_and_channel(cfg, &wc.queue_name).await?;
+    let (conn, ch) = open_amqp_connection_and_channel(cfg, &wc.queue_name).await?;
 
     // Tell the broker to only push one unacked message at a time per consumer,
     // preventing a single lane from buffering more work than it can process.
@@ -189,7 +189,7 @@ async fn run_amqp_lane(
     // Explicitly close channel and connection so RabbitMQ cleans up immediately
     // rather than waiting for the TCP timeout.
     let _ = ch.close(200, "lane exit").await;
-    let _ = _conn.close(200, "lane exit").await;
+    let _ = conn.close(200, "lane exit").await;
 
     Err(format!(
         "{} worker lane={lane} AMQP consumer stream ended unexpectedly",

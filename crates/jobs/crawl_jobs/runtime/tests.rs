@@ -1,7 +1,7 @@
 use super::*;
-use crate::crates::jobs::common::make_pool;
-use crate::crates::jobs::common::test_config;
-use crate::crates::jobs::common::{stale_watchdog_confirmed, stale_watchdog_payload};
+use crate::crates::jobs::common::{
+    make_pool, stale_watchdog_confirmed, stale_watchdog_payload, test_config,
+};
 use chrono::Duration;
 use std::env;
 use tokio::time::{sleep, timeout, Duration as TokioDuration};

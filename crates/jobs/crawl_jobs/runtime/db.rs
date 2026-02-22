@@ -276,7 +276,7 @@ pub async fn cleanup_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
 
     // Also prune completed jobs older than 30 days to prevent unbounded table growth.
     let completed_rows = sqlx::query(
-        "DELETE FROM axon_crawl_jobs WHERE status = 'completed' AND finished_at < NOW() - INTERVAL '30 days'"
+        "DELETE FROM axon_crawl_jobs WHERE status = 'completed' AND (finished_at IS NULL OR finished_at < NOW() - INTERVAL '30 days')"
     )
     .execute(&pool)
     .await?

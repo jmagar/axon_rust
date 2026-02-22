@@ -235,7 +235,9 @@ async fn process_extract_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<()
                             "worker extract job {id} completion UPDATE attempt {attempt} failed: {e}"
                         ));
                         last_err = Some(e);
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        if attempt < 3 {
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        }
                     }
                 }
             }
