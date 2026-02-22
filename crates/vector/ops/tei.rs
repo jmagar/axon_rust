@@ -10,10 +10,26 @@ use chrono::Utc;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use reqwest::StatusCode;
 use spider::url::Url;
+use std::collections::HashSet;
 use std::error::Error;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use uuid::Uuid;
+
+/// Track which collections have already been initialized this process lifetime.
+/// Avoids redundant GET+PUT to Qdrant on every document upsert.
+static INITIALIZED_COLLECTIONS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn collection_needs_init(name: &str) -> bool {
+    let map = INITIALIZED_COLLECTIONS.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut set = map.lock().expect("INITIALIZED_COLLECTIONS mutex poisoned");
+    if set.contains(name) {
+        return false;
+    }
+    set.insert(name.to_owned());
+    true
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct EmbedSummary {
@@ -185,6 +201,10 @@ async fn embed_prepared_doc(
     cfg: &Config,
     doc: PreparedDoc,
 ) -> Result<(usize, Vec<serde_json::Value>), Box<dyn Error>> {
+    // Delete-before-upsert is intentional: although point IDs are deterministic
+    // (Uuid::new_v5 on url:chunk_index), re-embedding may produce *fewer* chunks
+    // than the previous version, leaving orphan points with stale chunk indices.
+    // The filter delete removes ALL points for this URL before upserting the fresh set.
     qdrant_delete_by_url_filter(cfg, &doc.url).await?;
     let vectors = tei_embed(cfg, &doc.chunks).await?;
     if vectors.is_empty() {
@@ -258,7 +278,9 @@ pub async fn embed_text_with_metadata(
         .into());
     }
     let dim = vectors[0].len();
-    ensure_collection(cfg, dim).await?;
+    if collection_needs_init(&cfg.collection) {
+        ensure_collection(cfg, dim).await?;
+    }
     let domain = spider::url::Url::parse(url)
         .ok()
         .and_then(|u| u.host_str().map(|s| s.to_string()))
@@ -406,7 +428,9 @@ async fn run_embed_pipeline(
         let (dim, mut points) = result?;
         match collection_dim {
             None => {
-                ensure_collection(cfg, dim).await?;
+                if collection_needs_init(&cfg.collection) {
+                    ensure_collection(cfg, dim).await?;
+                }
                 collection_dim = Some(dim);
             }
             Some(existing) if existing != dim => {

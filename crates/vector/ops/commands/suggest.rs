@@ -102,10 +102,12 @@ async fn build_suggest_prompt_context(
         qdrant::env_usize_clamped("AXON_SUGGEST_BASE_URL_LIMIT", 250, 10, 5_000);
     let existing_url_context_limit =
         qdrant::env_usize_clamped("AXON_SUGGEST_EXISTING_URL_LIMIT", 500, 0, 5_000);
+    let index_dedup_limit =
+        qdrant::env_usize_clamped("AXON_SUGGEST_INDEX_LIMIT", 50_000, 100, 500_000);
 
-    // Fetch all indexed URLs for duplicate filtering, then trim only the prompt context view.
+    // Fetch indexed URLs for duplicate filtering (capped to avoid full-collection scan).
     let (indexed_urls, mut ranked_base_urls) = spider::tokio::try_join!(
-        qdrant::qdrant_indexed_urls(cfg, None),
+        qdrant::qdrant_indexed_urls(cfg, Some(index_dedup_limit)),
         qdrant::qdrant_domain_facets(cfg, base_url_context_limit),
     )?;
 

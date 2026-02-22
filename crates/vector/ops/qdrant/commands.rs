@@ -8,6 +8,7 @@ use std::error::Error;
 
 use super::client::{
     qdrant_delete_points, qdrant_domain_facets, qdrant_retrieve_by_url, qdrant_scroll_pages,
+    qdrant_url_facets,
 };
 use super::utils::{
     env_usize_clamped, payload_domain, payload_url, render_full_doc_from_points,
@@ -77,29 +78,26 @@ pub async fn run_retrieve_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 pub async fn run_sources_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let mut by_url: BTreeMap<String, usize> = BTreeMap::new();
-    qdrant_scroll_pages(cfg, |points| {
-        for p in points {
-            let Some(payload) = p.get("payload") else {
-                continue;
-            };
-            let url = payload_url(payload);
-            if url.is_empty() {
-                continue;
-            }
-            *by_url.entry(url).or_insert(0) += 1;
-        }
-    })
-    .await?;
+    let facet_limit = env_usize_clamped("AXON_SOURCES_FACET_LIMIT", 100_000, 1, 1_000_000);
+    let sources = qdrant_url_facets(cfg, facet_limit).await?;
     if cfg.json_output {
+        let by_url: BTreeMap<String, usize> = sources.into_iter().collect();
         println!("{}", serde_json::to_string_pretty(&by_url)?);
     } else {
         println!("{}", primary("Sources"));
-        for (url, chunks) in by_url {
+        for (url, chunks) in &sources {
             println!(
                 "  • {} {}",
-                accent(&url),
+                accent(url),
                 muted(&format!("(chunks: {chunks})"))
+            );
+        }
+        if sources.len() == facet_limit {
+            println!(
+                "{}",
+                muted(&format!(
+                    "Showing top {facet_limit} sources. Set AXON_SOURCES_FACET_LIMIT to see more."
+                ))
             );
         }
     }

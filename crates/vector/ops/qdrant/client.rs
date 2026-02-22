@@ -156,6 +156,7 @@ pub(crate) async fn qdrant_delete_by_url_filter(
 }
 
 /// Delete all Qdrant points for URLs that belong to `domain` but are NOT in `current_urls`.
+/// Uses a single batch delete with a `should` filter instead of per-URL requests.
 /// Returns the number of stale URLs whose points were deleted.
 pub async fn qdrant_delete_stale_domain_urls(
     cfg: &Config,
@@ -167,8 +168,29 @@ pub async fn qdrant_delete_stale_domain_urls(
         .into_iter()
         .filter(|url| !current_urls.contains(url))
         .collect();
-    for url in &stale {
-        qdrant_delete_by_url_filter(cfg, url).await?;
+    if stale.is_empty() {
+        return Ok(0);
+    }
+    // Batch delete: build a single `should` filter matching all stale URLs at once.
+    let url_conditions: Vec<serde_json::Value> = stale
+        .iter()
+        .map(|url| serde_json::json!({"key": "url", "match": {"value": url}}))
+        .collect();
+    let client = http_client()?;
+    // Qdrant filter limit is generous but chunk at 500 to be safe with large stale sets.
+    for batch in url_conditions.chunks(500) {
+        client
+            .post(format!(
+                "{}/collections/{}/points/delete?wait=true",
+                qdrant_base(cfg),
+                cfg.collection
+            ))
+            .json(&serde_json::json!({
+                "filter": {"should": batch}
+            }))
+            .send()
+            .await?
+            .error_for_status()?;
     }
     Ok(stale.len())
 }
@@ -225,6 +247,42 @@ pub(crate) async fn qdrant_domain_facets(
                 .to_string();
             let vectors = hit.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
             out.push((domain, vectors));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
+pub(crate) async fn qdrant_url_facets(
+    cfg: &Config,
+    limit: usize,
+) -> Result<Vec<(String, usize)>, Box<dyn Error>> {
+    let client = http_client()?;
+    let url = format!("{}/collections/{}/facet", qdrant_base(cfg), cfg.collection);
+    let value = client
+        .post(url)
+        .json(&serde_json::json!({
+            "key": "url",
+            "limit": limit,
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<serde_json::Value>()
+        .await?;
+
+    let mut out = Vec::new();
+    if let Some(hits) = value["result"]["hits"].as_array() {
+        for hit in hits {
+            let source_url = hit
+                .get("value")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let chunks = hit.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            if !source_url.is_empty() {
+                out.push((source_url, chunks));
+            }
         }
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
