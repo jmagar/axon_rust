@@ -60,8 +60,9 @@ pub(super) async fn collect_crawl_pages(
             ignore_tags: None,
         };
         let markdown = transform_content_input(input, transform_cfg);
-        let trimmed = markdown.trim(); // &str borrow — zero allocation
-        let chars = trimmed.chars().count();
+        let trimmed = markdown.trim();
+        // Byte length (O(1)) — sufficient for thin-page threshold (~200 chars).
+        let chars = trimmed.len();
 
         if chars < min_chars {
             summary.thin_pages += 1;

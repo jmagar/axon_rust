@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::path::Path;
-use std::time::Duration;
 use tokio::io::{AsyncWriteExt, BufWriter};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -44,8 +43,7 @@ pub async fn append_robots_backfill(
 
     let markdown_dir = output_dir.join("markdown");
     tokio::fs::create_dir_all(&markdown_dir).await?;
-    let timeout = Duration::from_millis(cfg.request_timeout_ms.unwrap_or(30_000));
-    let client = reqwest::Client::builder().timeout(timeout).build()?;
+    let client = crate::crates::core::http::http_client()?;
     let mut manifest = BufWriter::new(
         tokio::fs::OpenOptions::new()
             .append(true)
@@ -66,7 +64,7 @@ pub async fn append_robots_backfill(
             continue;
         }
         let Some(html) =
-            super::fetch_text_with_retry(&client, &url, cfg.fetch_retries, cfg.retry_backoff_ms)
+            super::fetch_text_with_retry(client, &url, cfg.fetch_retries, cfg.retry_backoff_ms)
                 .await
         else {
             stats.failed += 1;

@@ -2,9 +2,10 @@ mod collector;
 #[cfg(test)]
 mod tests;
 
+use crate::crates::core::config::parse::is_docker_service_host;
 use crate::crates::core::config::{Config, RenderMode};
 use crate::crates::core::content::build_transform_config;
-use crate::crates::core::http::ssrf_blacklist_patterns;
+use crate::crates::core::http::{cdp_discovery_url, ssrf_blacklist_patterns};
 use crate::crates::core::logging::{log_info, log_warn};
 use collector::collect_crawl_pages;
 use spider::features::chrome_common::RequestInterceptConfiguration;
@@ -60,17 +61,17 @@ pub(crate) fn is_excluded_url_path(url: &str, excludes: &[String]) -> bool {
 
 fn is_path_prefix_excluded(path: &str, prefix: &str) -> bool {
     let normalized = if prefix.starts_with('/') {
-        prefix
+        prefix.to_owned()
     } else {
-        return is_path_prefix_excluded(path, &format!("/{prefix}"));
+        format!("/{prefix}")
     };
-    let boundary_prefix = normalized.trim_end_matches('/');
-    if boundary_prefix.is_empty() {
+    let boundary = normalized.trim_end_matches('/');
+    if boundary.is_empty() {
         return false;
     }
-    path == boundary_prefix
+    path == boundary
         || path
-            .strip_prefix(boundary_prefix)
+            .strip_prefix(boundary)
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
@@ -112,20 +113,58 @@ fn build_exclude_blacklist_patterns(start_url: &str, excludes: &[String]) -> Vec
         .collect()
 }
 
-/// Ensure the Chrome DevTools Protocol URL includes the `/json/version` discovery path.
-/// chromiumoxide requires `http://host:port/json/version`, not bare `http://host:port`.
-fn normalize_cdp_url(url: &str) -> String {
-    match Url::parse(url) {
-        Ok(mut parsed) if parsed.path() == "/" || parsed.path().is_empty() => {
-            parsed.set_path("/json/version");
-            parsed.set_query(None);
-            parsed.to_string()
-        }
-        _ => url.to_string(),
+/// Pre-resolve the Chrome DevTools WebSocket URL from the CDP discovery endpoint.
+///
+/// If `remote_url` is already a `ws://` / `wss://` URL (pre-resolved by the
+/// bootstrap probe), return it directly without a second fetch — eliminating
+/// the redundant `/json/version` round-trip when bootstrap succeeded.
+///
+/// Otherwise, fetch `/json/version`, extract `webSocketDebuggerUrl`, and rewrite
+/// any known Docker service hostname (from the explicit allowlist) to `127.0.0.1`
+/// so the host CLI can reach the Chrome proxy.
+///
+/// Returns `None` inside Docker (container hostnames resolve on the bridge
+/// network) or when the fetch/parse fails.
+async fn resolve_cdp_ws_url(remote_url: &str) -> Option<String> {
+    // ws:// shortcut: bootstrap already resolved the URL — use it directly.
+    if remote_url.starts_with("ws://") || remote_url.starts_with("wss://") {
+        return Some(remote_url.to_string());
     }
+
+    // Inside Docker the container hostname resolves on the Docker network.
+    if Path::new("/.dockerenv").exists() {
+        return None;
+    }
+
+    // Build the discovery URL (appends /json/version, converts ws→http).
+    let discovery_url = cdp_discovery_url(remote_url)?;
+
+    let client = crate::crates::core::http::http_client().ok()?;
+
+    let body: serde_json::Value = client
+        .get(&discovery_url)
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+
+    let ws_url = body.get("webSocketDebuggerUrl")?.as_str()?;
+
+    // Rewrite known Docker service hostnames to 127.0.0.1, preserving the port.
+    let mut parsed = Url::parse(ws_url).ok()?;
+    if let Some(host) = parsed.host_str() {
+        let host = host.to_string();
+        if is_docker_service_host(&host) {
+            let _ = parsed.set_host(Some("127.0.0.1"));
+        }
+    }
+
+    Some(parsed.to_string())
 }
 
-fn configure_website(
+async fn configure_website(
     cfg: &Config,
     start_url: &str,
     mode: RenderMode,
@@ -133,7 +172,10 @@ fn configure_website(
     let mut website = Website::new(start_url);
     website.with_depth(cfg.max_depth);
     website.with_subdomains(cfg.include_subdomains);
-    website.with_tld(cfg.include_subdomains);
+    // Disable TLD crawling unconditionally — we don't want to silently expand
+    // example.com into example.co.uk, example.de, etc.  If TLD-scope crawling
+    // is ever needed, add an explicit --include-tld flag.
+    website.with_tld(false);
 
     if cfg.max_pages > 0 {
         website.with_limit(cfg.max_pages);
@@ -167,6 +209,13 @@ fn configure_website(
     if let Some(timeout_ms) = cfg.request_timeout_ms {
         website.with_request_timeout(Some(Duration::from_millis(timeout_ms)));
     }
+    // Wire retry count from config / performance profile.
+    // with_retry takes u8; cfg.fetch_retries is usize — clamp to u8::MAX.
+    if cfg.fetch_retries > 0 {
+        website.with_retry(cfg.fetch_retries.min(u8::MAX as usize) as u8);
+    }
+    // Deduplicate trailing-slash URL variants when requested.
+    website.with_normalize(cfg.normalize);
 
     if let Some(ref proxy) = cfg.chrome_proxy {
         website.with_proxies(Some(vec![proxy.clone()]));
@@ -183,8 +232,19 @@ fn configure_website(
             .with_stealth(cfg.chrome_stealth || cfg.chrome_anti_bot)
             .with_fingerprint(true);
         if let Some(ref remote_url) = cfg.chrome_remote_url {
-            // chromiumoxide requires the /json/version CDP discovery endpoint.
-            website.with_chrome_connection(Some(normalize_cdp_url(remote_url)));
+            // If remote_url is already a ws:// URL (threaded from the bootstrap
+            // probe), resolve_cdp_ws_url returns it directly with no second fetch.
+            // Otherwise it discovers via /json/version and normalises any Docker
+            // hostname to 127.0.0.1.  Inside Docker, resolve_cdp_ws_url returns None
+            // and we fall back to the discovery URL (spider.rs fetches it itself).
+            let chrome_url = match resolve_cdp_ws_url(remote_url).await {
+                Some(ws_url) => {
+                    log_info(&format!("[Chrome] CDP WebSocket resolved: {ws_url}"));
+                    ws_url
+                }
+                None => cdp_discovery_url(remote_url).unwrap_or_else(|| remote_url.to_string()),
+            };
+            website.with_chrome_connection(Some(chrome_url));
         }
         // `idle_network0` calls `wait_for_network_idle()` — waits until the network
         // has been fully quiet for 500 ms. This is essential for CSR frameworks
@@ -246,7 +306,7 @@ pub async fn crawl_and_collect_map(
     start_url: &str,
     mode: RenderMode,
 ) -> Result<(CrawlSummary, Vec<String>), Box<dyn Error>> {
-    let mut website = configure_website(cfg, start_url, mode)?;
+    let mut website = configure_website(cfg, start_url, mode).await?;
     let start = Instant::now();
 
     match mode {
@@ -311,7 +371,7 @@ pub async fn run_crawl_once(
     }
     tokio::fs::create_dir_all(output_dir.join("markdown")).await?;
 
-    let mut website = configure_website(cfg, start_url, mode)?;
+    let mut website = configure_website(cfg, start_url, mode).await?;
     // Buffer at least max_pages worth of messages to prevent silent page drops
     // under high-throughput crawls (extreme/max profiles). Clamp to 16 384 so
     // a large --max-pages value can't allocate an unbounded broadcast ring buffer.
@@ -370,7 +430,7 @@ pub async fn run_sitemap_only(
 ) -> Result<(CrawlSummary, HashSet<String>), Box<dyn Error>> {
     tokio::fs::create_dir_all(output_dir.join("markdown")).await?;
 
-    let mut website = configure_website(cfg, start_url, cfg.render_mode)?;
+    let mut website = configure_website(cfg, start_url, cfg.render_mode).await?;
     // Override the default set by configure_website: sitemap IS the crawl here.
     website.with_ignore_sitemap(false);
 
