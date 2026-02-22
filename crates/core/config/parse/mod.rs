@@ -65,7 +65,7 @@ fn positional_from_job(job: JobSubcommand) -> Vec<String> {
     }
 }
 
-fn into_config(cli: Cli) -> Config {
+fn into_config(cli: Cli) -> Result<Config, String> {
     let global = cli.global;
     let fetch_retries_was_set = global.fetch_retries.is_some();
     let retry_backoff_was_set = global.retry_backoff_ms.is_some();
@@ -187,30 +187,27 @@ fn into_config(cli: Cli) -> Config {
         global
             .pg_url
             .or_else(|| env::var("AXON_PG_URL").ok())
-            .unwrap_or_else(|| {
-                eprintln!("error: AXON_PG_URL environment variable is required (or pass --pg-url). Copy .env.example to .env and fill in credentials.");
-                std::process::exit(1);
-            }),
+            .ok_or_else(|| {
+                "AXON_PG_URL environment variable is required (or pass --pg-url). Copy .env.example to .env and fill in credentials.".to_string()
+            })?,
     );
 
     let redis_url = normalize_local_service_url(
         global
             .redis_url
             .or_else(|| env::var("AXON_REDIS_URL").ok())
-            .unwrap_or_else(|| {
-                eprintln!("error: AXON_REDIS_URL environment variable is required (or pass --redis-url). Copy .env.example to .env and fill in credentials.");
-                std::process::exit(1);
-            }),
+            .ok_or_else(|| {
+                "AXON_REDIS_URL environment variable is required (or pass --redis-url). Copy .env.example to .env and fill in credentials.".to_string()
+            })?,
     );
 
     let amqp_url = normalize_local_service_url(
         global
             .amqp_url
             .or_else(|| env::var("AXON_AMQP_URL").ok())
-            .unwrap_or_else(|| {
-                eprintln!("error: AXON_AMQP_URL environment variable is required (or pass --amqp-url). Copy .env.example to .env and fill in credentials.");
-                std::process::exit(1);
-            }),
+            .ok_or_else(|| {
+                "AXON_AMQP_URL environment variable is required (or pass --amqp-url). Copy .env.example to .env and fill in credentials.".to_string()
+            })?,
     );
 
     let mut crawl_concurrency_limit = global.crawl_concurrency_limit;
@@ -394,13 +391,19 @@ fn into_config(cli: Cli) -> Config {
         cfg.retry_backoff_ms = backoff_default;
     }
 
-    cfg
+    Ok(cfg)
 }
 
 pub fn parse_args() -> Config {
     maybe_print_top_level_help_and_exit();
     let cli = Cli::parse();
-    into_config(cli)
+    match into_config(cli) {
+        Ok(cfg) => cfg,
+        Err(msg) => {
+            eprintln!("error: {msg}");
+            std::process::exit(1);
+        }
+    }
 }
 
 #[cfg(test)]

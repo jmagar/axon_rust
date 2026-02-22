@@ -10,3 +10,8 @@ scripts/qdrant-quality.py
 
 # build_ask_context exceeds 80-line limit by design — context pipeline is atomic (2026-02-19)
 crates/vector/ops/commands/ask.rs
+
+# http.rs: exceeds 500-line limit because test module grew with normalize_url + SSRF tests (2026-02-22)
+# Production code is ~200 lines; tests account for the remainder. Consider splitting tests into
+# a separate tests.rs submodule if the file grows further.
+crates/core/http.rs

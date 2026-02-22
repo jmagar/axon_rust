@@ -249,3 +249,152 @@ async fn process_gemini_file(
         }
     }
 }
+
+/// Parse Gemini chat JSON into session text (pure, no I/O) for unit tests.
+#[cfg(test)]
+fn parse_gemini_json(content: &str) -> Result<String, String> {
+    let val: Value = serde_json::from_str(content).map_err(|e| e.to_string())?;
+    let mut session_text = String::new();
+    if let Some(messages) = val["messages"].as_array() {
+        for msg in messages {
+            let role = msg["type"].as_str().unwrap_or("unknown");
+            if let Some(content_arr) = msg["content"].as_array() {
+                let mut combined = String::new();
+                for item in content_arr {
+                    if let Some(t) = item["text"].as_str() {
+                        combined.push_str(t);
+                        combined.push('\n');
+                    }
+                }
+                if !combined.trim().is_empty() {
+                    session_text.push_str(&format!(
+                        "\n\n### {}:\n{}",
+                        role.to_uppercase(),
+                        combined
+                    ));
+                }
+            }
+        }
+    }
+    Ok(session_text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_gemini_projects, parse_gemini_json};
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    // --- parse_gemini_json ---
+
+    #[test]
+    fn parse_valid_gemini_json_happy_path() {
+        let json = r#"{"messages":[{"type":"human","content":[{"text":"What is the capital of France?"}]},{"type":"model","content":[{"text":"Paris."}]}]}"#;
+        let result = parse_gemini_json(json).expect("should parse");
+        assert!(result.contains("### HUMAN:"));
+        assert!(result.contains("What is the capital of France?"));
+        assert!(result.contains("### MODEL:"));
+        assert!(result.contains("Paris."));
+    }
+
+    #[test]
+    fn parse_gemini_json_multiple_text_items_concatenated() {
+        let json =
+            r#"{"messages":[{"type":"model","content":[{"text":"First. "},{"text":"Second."}]}]}"#;
+        let result = parse_gemini_json(json).expect("should parse");
+        assert!(result.contains("First."));
+        assert!(result.contains("Second."));
+    }
+
+    #[test]
+    fn parse_gemini_json_malformed_returns_err_not_panic() {
+        assert!(
+            parse_gemini_json("this is not json").is_err(),
+            "malformed JSON must return Err"
+        );
+    }
+
+    #[test]
+    fn parse_gemini_json_empty_messages_array() {
+        let json = r#"{"messages":[]}"#;
+        let result = parse_gemini_json(json).expect("should parse");
+        assert!(result.trim().is_empty());
+    }
+
+    #[test]
+    fn parse_gemini_json_no_messages_key() {
+        let json = r#"{"conversations":[]}"#;
+        let result = parse_gemini_json(json).expect("should parse");
+        assert!(result.trim().is_empty());
+    }
+
+    #[test]
+    fn parse_gemini_json_whitespace_only_content_skipped() {
+        let json = r#"{"messages":[{"type":"human","content":[{"text":"   "}]},{"type":"model","content":[{"text":"Real response"}]}]}"#;
+        let result = parse_gemini_json(json).expect("should parse");
+        assert!(!result.contains("### HUMAN:"));
+        assert!(result.contains("Real response"));
+    }
+
+    #[test]
+    fn parse_gemini_json_missing_type_falls_back_to_unknown() {
+        let json = r#"{"messages":[{"content":[{"text":"Mystery"}]}]}"#;
+        let result = parse_gemini_json(json).expect("should parse");
+        assert!(result.contains("### UNKNOWN:"));
+        assert!(result.contains("Mystery"));
+    }
+
+    // --- load_gemini_projects ---
+
+    #[tokio::test]
+    async fn load_gemini_projects_happy_path() {
+        let dir = TempDir::new().expect("temp dir");
+        let json = r#"{"projects":{"/home/user/workspace/my-project":"my-project","/home/user/workspace/axon-rust":"axon-rust"}}"#;
+        let p = dir.path().join("projects.json");
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(json.as_bytes()).unwrap();
+        drop(f);
+
+        let map = load_gemini_projects(dir.path()).await;
+        assert_eq!(
+            map.get("/home/user/workspace/my-project"),
+            Some(&"my-project".to_string())
+        );
+        // Last path segment is also inserted as a key
+        assert_eq!(map.get("my-project"), Some(&"my-project".to_string()));
+        assert_eq!(map.get("axon-rust"), Some(&"axon-rust".to_string()));
+    }
+
+    #[tokio::test]
+    async fn load_gemini_projects_missing_file_returns_empty_map() {
+        let dir = TempDir::new().expect("temp dir");
+        let map = load_gemini_projects(dir.path()).await;
+        assert!(map.is_empty(), "missing projects.json yields empty map");
+    }
+
+    #[tokio::test]
+    async fn load_gemini_projects_malformed_json_returns_empty_map() {
+        let dir = TempDir::new().expect("temp dir");
+        let p = dir.path().join("projects.json");
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(b"not json").unwrap();
+        drop(f);
+
+        let map = load_gemini_projects(dir.path()).await;
+        assert!(map.is_empty(), "malformed JSON yields empty map");
+    }
+
+    #[tokio::test]
+    async fn load_gemini_projects_non_string_name_ignored() {
+        let dir = TempDir::new().expect("temp dir");
+        let json = r#"{"projects":{"/home/user/good":"good-name","/home/user/bad":42}}"#;
+        let p = dir.path().join("projects.json");
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(json.as_bytes()).unwrap();
+        drop(f);
+
+        let map = load_gemini_projects(dir.path()).await;
+        assert!(map.contains_key("good"), "valid string entry present");
+        assert!(!map.contains_key("bad"), "non-string entry skipped");
+    }
+}

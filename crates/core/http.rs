@@ -204,6 +204,80 @@ pub async fn fetch_html(client: &reqwest::Client, url: &str) -> Result<String, B
 mod tests {
     use super::*;
 
+    // --- normalize_url tests ---
+
+    #[test]
+    fn normalize_url_adds_https_scheme_to_bare_host() {
+        assert_eq!(normalize_url("example.com"), "https://example.com");
+    }
+
+    #[test]
+    fn normalize_url_adds_https_scheme_to_host_with_path() {
+        assert_eq!(
+            normalize_url("example.com/docs/install"),
+            "https://example.com/docs/install"
+        );
+    }
+
+    #[test]
+    fn normalize_url_preserves_existing_https_scheme() {
+        assert_eq!(
+            normalize_url("https://example.com/page"),
+            "https://example.com/page"
+        );
+    }
+
+    #[test]
+    fn normalize_url_preserves_existing_http_scheme() {
+        assert_eq!(
+            normalize_url("http://example.com/page"),
+            "http://example.com/page"
+        );
+    }
+
+    #[test]
+    fn normalize_url_preserves_path_and_query() {
+        assert_eq!(
+            normalize_url("example.com/path?key=value"),
+            "https://example.com/path?key=value"
+        );
+    }
+
+    #[test]
+    fn normalize_url_preserves_fragment() {
+        assert_eq!(
+            normalize_url("example.com/page#section"),
+            "https://example.com/page#section"
+        );
+    }
+
+    #[test]
+    fn normalize_url_trims_whitespace() {
+        assert_eq!(normalize_url("  example.com  "), "https://example.com");
+    }
+
+    #[test]
+    fn normalize_url_returns_empty_for_empty_input() {
+        assert_eq!(normalize_url(""), "");
+    }
+
+    #[test]
+    fn normalize_url_handles_localhost() {
+        assert_eq!(normalize_url("localhost"), "https://localhost");
+    }
+
+    #[test]
+    fn normalize_url_handles_localhost_with_port() {
+        // localhost:8080 contains a '.'-free host but starts with "localhost"
+        assert_eq!(normalize_url("localhost:8080"), "https://localhost:8080");
+    }
+
+    #[test]
+    fn normalize_url_does_not_add_scheme_to_bare_text_with_spaces() {
+        // A string with spaces is not a valid URL host — normalize_url leaves it as-is
+        assert_eq!(normalize_url("not a url"), "not a url");
+    }
+
     // --- Public URLs should be allowed ---
 
     #[test]

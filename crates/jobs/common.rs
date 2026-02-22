@@ -6,10 +6,10 @@ use lapin::options::QueueDeclareOptions;
 use lapin::types::FieldTable;
 use lapin::{Channel, Connection, ConnectionProperties};
 use serde_json::Value;
-use spider::tokio;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use std::time::Duration;
+use tokio;
 use tokio_executor_trait::Tokio as TokioExecutor;
 use tokio_reactor_trait::Tokio as TokioReactor;
 use uuid::Uuid;
@@ -47,94 +47,39 @@ impl JobTable {
 
 #[cfg(test)]
 pub(crate) fn test_config(pg_url: &str) -> Config {
-    use crate::crates::core::config::{CommandKind, PerformanceProfile, RenderMode, ScrapeFormat};
     use std::path::PathBuf;
-
     Config {
-        command: CommandKind::Status,
-        start_url: "https://example.com".to_string(),
-        positional: Vec::new(),
-        urls_csv: None,
-        url_glob: Vec::new(),
-        query: None,
-        search_limit: 5,
-        max_pages: 10,
-        max_depth: 2,
-        include_subdomains: true,
-        exclude_path_prefix: Vec::new(),
-        output_dir: PathBuf::from(".cache/test-worker-jobs"),
-        output_path: None,
-        render_mode: RenderMode::AutoSwitch,
-        chrome_remote_url: None,
-        chrome_proxy: None,
-        chrome_user_agent: None,
-        chrome_headless: true,
-        chrome_anti_bot: true,
-        chrome_intercept: true,
-        chrome_stealth: true,
-        chrome_bootstrap: false,
-        chrome_bootstrap_timeout_ms: 45_000,
-        chrome_bootstrap_retries: 1,
-        webdriver_url: None,
-        respect_robots: false,
-        min_markdown_chars: 50,
-        drop_thin_markdown: false,
-        discover_sitemaps: true,
-        cache: true,
-        cache_skip_browser: false,
-        format: ScrapeFormat::Markdown,
-        collection: "test".to_string(),
-        embed: false,
-        batch_concurrency: 2,
-        wait: false,
-        yes: true,
-        performance_profile: PerformanceProfile::Balanced,
-        crawl_concurrency_limit: Some(2),
-        backfill_concurrency_limit: Some(2),
-        sitemap_only: false,
-        delay_ms: 0,
-        request_timeout_ms: Some(5_000),
-        fetch_retries: 0,
-        retry_backoff_ms: 0,
-        shared_queue: true,
         pg_url: pg_url.to_string(),
         redis_url: "redis://127.0.0.1:1".to_string(),
         amqp_url: "amqp://guest:guest@127.0.0.1:1/%2f".to_string(),
+        collection: "test".to_string(),
+        output_dir: PathBuf::from(".cache/test-worker-jobs"),
         crawl_queue: "axon.test.crawl".to_string(),
         batch_queue: "axon.test.batch".to_string(),
         extract_queue: "axon.test.extract".to_string(),
         embed_queue: "axon.test.embed".to_string(),
         ingest_queue: "axon.test.ingest".to_string(),
-        sessions_claude: false,
-        sessions_codex: false,
-        sessions_gemini: false,
-        sessions_project: None,
-        github_token: None,
-        github_include_source: false,
-        reddit_client_id: None,
-        reddit_client_secret: None,
         tei_url: "http://127.0.0.1:1".to_string(),
         qdrant_url: "http://127.0.0.1:1".to_string(),
         openai_base_url: "http://127.0.0.1:1/v1".to_string(),
         openai_api_key: "test".to_string(),
         openai_model: "test-model".to_string(),
-        tavily_api_key: String::new(),
+        // Test-specific overrides from the original literal
+        search_limit: 5,
+        max_pages: 10,
+        max_depth: 2,
+        min_markdown_chars: 50,
+        drop_thin_markdown: false,
+        embed: false,
+        batch_concurrency: 2,
+        yes: true,
+        crawl_concurrency_limit: Some(2),
+        backfill_concurrency_limit: Some(2),
+        request_timeout_ms: Some(5_000),
+        fetch_retries: 0,
+        retry_backoff_ms: 0,
         ask_max_context_chars: 12_000,
-        ask_candidate_limit: 64,
-        ask_chunk_limit: 10,
-        ask_full_docs: 4,
-        ask_backfill_chunks: 3,
-        ask_doc_fetch_concurrency: 4,
-        ask_doc_chunk_limit: 192,
-        ask_min_relevance_score: 0.45,
-        ask_diagnostics: false,
-        cron_every_seconds: None,
-        cron_max_runs: None,
-        watchdog_stale_timeout_secs: 300,
-        watchdog_confirm_secs: 60,
-        json_output: false,
-        crawl_from_result: false,
-        normalize: false,
+        ..Config::default()
     }
 }
 

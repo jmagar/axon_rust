@@ -1,7 +1,16 @@
+use axon::crates::vector::ops::ranking::{
+    rerank_ask_candidates, tokenize_path_set, tokenize_query, tokenize_text_set, AskCandidate,
+};
 use axon::crates::vector::ops::{chunk_text, url_lookup_candidates};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use serde::Deserialize;
 use std::collections::HashSet;
+
+// ---------------------------------------------------------------------------
+// Old rerank implementation (kept as-is for comparison baseline).
+// This represents the pre-production algorithm; the production version is
+// `rerank_ask_candidates` imported above.
+// ---------------------------------------------------------------------------
 
 #[derive(Clone)]
 struct CandidateOld {
@@ -10,16 +19,7 @@ struct CandidateOld {
     chunk_text: String,
 }
 
-#[derive(Clone)]
-struct CandidateNew {
-    score: f64,
-    url: String,
-    url_tokens: HashSet<String>,
-    chunk_tokens: HashSet<String>,
-    rerank_score: f64,
-}
-
-fn tokenize_query(text: &str) -> Vec<String> {
+fn tokenize_query_old(text: &str) -> Vec<String> {
     let stop = [
         "the", "and", "for", "with", "that", "this", "from", "into", "how", "what", "where",
         "when", "you", "your", "are", "can", "does", "create", "make",
@@ -32,11 +32,11 @@ fn tokenize_query(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn tokenize_text_set(text: &str) -> HashSet<String> {
-    tokenize_query(text).into_iter().collect()
+fn tokenize_text_set_old(text: &str) -> HashSet<String> {
+    tokenize_query_old(text).into_iter().collect()
 }
 
-fn tokenize_path_set(path_or_url: &str) -> HashSet<String> {
+fn tokenize_path_set_old(path_or_url: &str) -> HashSet<String> {
     path_or_url
         .to_ascii_lowercase()
         .split(|c: char| !c.is_ascii_alphanumeric())
@@ -46,13 +46,13 @@ fn tokenize_path_set(path_or_url: &str) -> HashSet<String> {
 }
 
 fn rerank_old(candidates: &[CandidateOld], query: &str) -> Vec<CandidateOld> {
-    let tokens: Vec<String> = tokenize_query(query);
+    let tokens: Vec<String> = tokenize_query_old(query);
     let mut reranked = candidates.to_vec();
     reranked.sort_by(|a, b| {
         let adjusted = |candidate: &CandidateOld| -> f64 {
             let mut lexical_boost = 0.0f64;
-            let url_tokens = tokenize_path_set(&candidate.url);
-            let chunk_tokens = tokenize_text_set(&candidate.chunk_text);
+            let url_tokens = tokenize_path_set_old(&candidate.url);
+            let chunk_tokens = tokenize_text_set_old(&candidate.chunk_text);
             for token in &tokens {
                 if url_tokens.contains(token) {
                     lexical_boost += 0.045;
@@ -80,42 +80,10 @@ fn rerank_old(candidates: &[CandidateOld], query: &str) -> Vec<CandidateOld> {
     reranked
 }
 
-fn rerank_new(candidates: &[CandidateNew], query: &str) -> Vec<CandidateNew> {
-    let tokens: Vec<String> = tokenize_query(query);
-    let mut reranked = candidates
-        .iter()
-        .cloned()
-        .map(|mut candidate| {
-            let mut lexical_boost = 0.0f64;
-            for token in &tokens {
-                if candidate.url_tokens.contains(token) {
-                    lexical_boost += 0.045;
-                }
-                if candidate.chunk_tokens.contains(token) {
-                    lexical_boost += 0.015;
-                }
-            }
-            lexical_boost = lexical_boost.min(0.30);
-            let docs_boost = if candidate.url.contains("/docs/")
-                || candidate.url.contains("/guides/")
-                || candidate.url.contains("/api/")
-                || candidate.url.contains("/reference/")
-            {
-                0.04
-            } else {
-                0.0
-            };
-            candidate.rerank_score = candidate.score + lexical_boost + docs_boost;
-            candidate
-        })
-        .collect::<Vec<_>>();
-    reranked.sort_by(|a, b| {
-        b.rerank_score
-            .partial_cmp(&a.rerank_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    reranked
-}
+// ---------------------------------------------------------------------------
+// Old context builder (kept for baseline comparison; production equivalent is
+// pub(crate) in vector/ops/commands/ask.rs and cannot be called from benches).
+// ---------------------------------------------------------------------------
 
 fn build_old_context(
     full_docs_context: Vec<String>,
@@ -171,9 +139,15 @@ fn build_new_context(all_entries: Vec<String>, separator: &str, max_chars: usize
     )
 }
 
+// ---------------------------------------------------------------------------
+// Benchmarks
+// ---------------------------------------------------------------------------
+
 fn bench_rerank_old_vs_new(c: &mut Criterion) {
     let query = "install api auth token configuration with docs";
-    let old = (0..256)
+
+    // Build the old-style candidates (no pre-tokenisation).
+    let old: Vec<CandidateOld> = (0..256)
         .map(|i| CandidateOld {
             score: 0.2 + ((i % 100) as f64 / 500.0),
             url: format!("https://example.dev/docs/{i}/install/api/reference"),
@@ -182,17 +156,26 @@ fn bench_rerank_old_vs_new(c: &mut Criterion) {
                 "x".repeat(256)
             ),
         })
-        .collect::<Vec<_>>();
-    let new = old
+        .collect();
+
+    // Build the new-style AskCandidate (pre-tokenised, uses production types).
+    let new: Vec<AskCandidate> = old
         .iter()
-        .map(|c| CandidateNew {
-            score: c.score,
-            url: c.url.clone(),
-            url_tokens: tokenize_path_set(&c.url),
-            chunk_tokens: tokenize_text_set(&c.chunk_text),
-            rerank_score: c.score,
+        .map(|c| {
+            let path = c.url.clone();
+            AskCandidate {
+                score: c.score,
+                url: c.url.clone(),
+                path: path.clone(),
+                chunk_text: c.chunk_text.clone(),
+                url_tokens: tokenize_path_set(&path),
+                chunk_tokens: tokenize_text_set(&c.chunk_text),
+                rerank_score: c.score,
+            }
         })
-        .collect::<Vec<_>>();
+        .collect();
+
+    let query_tokens = tokenize_query(query);
 
     c.bench_function("rerank_old_256", |b| {
         b.iter(|| {
@@ -203,7 +186,8 @@ fn bench_rerank_old_vs_new(c: &mut Criterion) {
 
     c.bench_function("rerank_new_256", |b| {
         b.iter(|| {
-            let out = rerank_new(black_box(&new), black_box(query));
+            // Uses the real production `rerank_ask_candidates` function.
+            let out = rerank_ask_candidates(black_box(&new), black_box(&query_tokens));
             black_box(out);
         })
     });
@@ -261,6 +245,7 @@ fn bench_context_old_vs_new(c: &mut Criterion) {
 }
 
 fn bench_retrieve_url_normalization(c: &mut Criterion) {
+    // Uses the real production `url_lookup_candidates` function.
     c.bench_function("url_lookup_candidates", |b| {
         b.iter(|| {
             let out = url_lookup_candidates(black_box("example.com/docs/install"));
@@ -271,6 +256,7 @@ fn bench_retrieve_url_normalization(c: &mut Criterion) {
 
 fn bench_ask_chunking(c: &mut Criterion) {
     let text = "x".repeat(128_000);
+    // Uses the real production `chunk_text` function.
     c.bench_function("chunk_text_128k", |b| {
         b.iter(|| {
             let out = chunk_text(black_box(&text));

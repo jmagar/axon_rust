@@ -12,7 +12,6 @@ use crate::crates::jobs::batch_jobs::{
 };
 use crate::crates::vector::ops::embed_path_native;
 use indicatif::{ProgressBar, ProgressStyle};
-use spider::tokio;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;

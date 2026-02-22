@@ -406,4 +406,60 @@ mod tests {
         assert!(validate_subreddit("rust lang").is_err()); // spaces not allowed
         assert!(validate_subreddit("rust%20lang").is_err()); // URL encoding
     }
+
+    // --- boundary condition tests ---
+
+    #[test]
+    fn test_min_length_boundary() {
+        // 1-char is below the minimum of 2; 2-char is the exact minimum
+        assert!(validate_subreddit("a").is_err());
+        assert!(validate_subreddit("ab").is_ok());
+    }
+
+    #[test]
+    fn test_max_length_boundary() {
+        // 21-char is the exact maximum; 22-char is one over
+        let at_max = "a".repeat(21);
+        let over_max = "a".repeat(22);
+        assert!(validate_subreddit(&at_max).is_ok());
+        assert!(validate_subreddit(&over_max).is_err());
+    }
+
+    #[test]
+    fn test_valid_names() {
+        assert!(validate_subreddit("rust").is_ok());
+        assert!(validate_subreddit("programming").is_ok());
+        assert!(validate_subreddit("linux").is_ok());
+        assert!(validate_subreddit("AskReddit").is_ok());
+        assert!(validate_subreddit("rust_gamedev").is_ok());
+    }
+
+    #[test]
+    fn test_rejects_hyphen() {
+        assert!(validate_subreddit("rust-lang").is_err());
+        assert!(validate_subreddit("machine-learning").is_err());
+        assert!(validate_subreddit("-rust").is_err());
+    }
+
+    #[test]
+    fn test_rejects_path_traversal() {
+        assert!(validate_subreddit("../etc/passwd").is_err());
+        assert!(validate_subreddit("../../root").is_err());
+        assert!(validate_subreddit("valid/../injected").is_err());
+    }
+
+    #[test]
+    fn test_rejects_null_byte() {
+        assert!(validate_subreddit("rust\0hack").is_err());
+        assert!(validate_subreddit("\0").is_err());
+    }
+
+    #[test]
+    fn test_rejects_unicode() {
+        // Non-ASCII chars are rejected by is_ascii_alphanumeric
+        assert!(validate_subreddit("r\u{fc}st").is_err()); // ü
+        assert!(validate_subreddit("\u{9508}\u{8bed}\u{8a00}").is_err()); // CJK
+        assert!(validate_subreddit("caf\u{e9}").is_err()); // é
+        assert!(validate_subreddit("\u{1f980}").is_err()); // 🦀
+    }
 }

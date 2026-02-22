@@ -162,3 +162,110 @@ async fn process_codex_file(
         }
     }
 }
+
+/// Extract session text from Codex JSONL (pure, no I/O) for unit tests.
+#[cfg(test)]
+fn parse_codex_jsonl(content: &str) -> String {
+    let mut session_text = String::new();
+    for line in content.lines() {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if val["type"] != "response_item" {
+            continue;
+        }
+        let role = val["payload"]["role"].as_str().unwrap_or("unknown");
+        if let Some(arr) = val["payload"]["content"].as_array() {
+            let mut combined = String::new();
+            for item in arr {
+                if let Some(t) = item["text"].as_str() {
+                    combined.push_str(t);
+                    combined.push('\n');
+                } else if let Some(t) = item["input_text"].as_str() {
+                    combined.push_str(t);
+                    combined.push('\n');
+                }
+            }
+            if !combined.trim().is_empty() {
+                session_text.push_str(&format!("\n\n### {}:\n{}", role.to_uppercase(), combined));
+            }
+        }
+    }
+    session_text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_codex_jsonl;
+
+    // --- parse_codex_jsonl ---
+
+    #[test]
+    fn parse_valid_codex_jsonl_text_field() {
+        let jsonl = "{\"type\":\"response_item\",\"payload\":{\"role\":\"user\",\"content\":[{\"text\":\"How do I use async/await?\"}]}}\n\
+                     {\"type\":\"response_item\",\"payload\":{\"role\":\"assistant\",\"content\":[{\"text\":\"Use the async keyword.\"}]}}";
+        let result = parse_codex_jsonl(jsonl);
+        assert!(result.contains("### USER:"));
+        assert!(result.contains("How do I use async/await?"));
+        assert!(result.contains("### ASSISTANT:"));
+        assert!(result.contains("Use the async keyword."));
+    }
+
+    #[test]
+    fn parse_valid_codex_jsonl_input_text_field() {
+        // input_text is the alternate key name for user input blocks
+        let jsonl = "{\"type\":\"response_item\",\"payload\":{\"role\":\"user\",\"content\":[{\"input_text\":\"Explain ownership\"}]}}";
+        let result = parse_codex_jsonl(jsonl);
+        assert!(result.contains("Explain ownership"));
+    }
+
+    #[test]
+    fn parse_codex_jsonl_skips_non_response_item_types() {
+        let jsonl = "{\"type\":\"session_start\",\"payload\":{\"id\":\"sess-abc\"}}\n\
+                     {\"type\":\"response_item\",\"payload\":{\"role\":\"assistant\",\"content\":[{\"text\":\"Hello!\"}]}}\n\
+                     {\"type\":\"session_end\",\"payload\":{}}";
+        let result = parse_codex_jsonl(jsonl);
+        assert!(!result.contains("sess-abc"));
+        assert!(result.contains("Hello!"));
+    }
+
+    #[test]
+    fn parse_codex_jsonl_malformed_lines_no_panic() {
+        let jsonl = "this is not json\n\
+                     {\"incomplete\":\n\
+                     {\"type\":\"response_item\",\"payload\":{\"role\":\"user\",\"content\":[{\"text\":\"Valid\"}]}}";
+        let result = parse_codex_jsonl(jsonl);
+        assert!(result.contains("Valid"));
+    }
+
+    #[test]
+    fn parse_codex_jsonl_empty_input_returns_empty() {
+        assert!(parse_codex_jsonl("").trim().is_empty());
+    }
+
+    #[test]
+    fn parse_codex_jsonl_multiple_blocks_concatenated() {
+        let jsonl = "{\"type\":\"response_item\",\"payload\":{\"role\":\"assistant\",\"content\":[{\"text\":\"Part A. \"},{\"text\":\"Part B.\"}]}}";
+        let result = parse_codex_jsonl(jsonl);
+        assert!(result.contains("Part A."));
+        assert!(result.contains("Part B."));
+    }
+
+    #[test]
+    fn parse_codex_jsonl_whitespace_only_content_skipped() {
+        let jsonl = "{\"type\":\"response_item\",\"payload\":{\"role\":\"user\",\"content\":[{\"text\":\"   \"}]}}\n\
+                     {\"type\":\"response_item\",\"payload\":{\"role\":\"assistant\",\"content\":[{\"text\":\"Answer\"}]}}";
+        let result = parse_codex_jsonl(jsonl);
+        assert!(!result.contains("### USER:"));
+        assert!(result.contains("Answer"));
+    }
+
+    #[test]
+    fn parse_codex_jsonl_unknown_role_falls_back_to_unknown() {
+        let jsonl =
+            "{\"type\":\"response_item\",\"payload\":{\"content\":[{\"text\":\"Mystery\"}]}}";
+        let result = parse_codex_jsonl(jsonl);
+        assert!(result.contains("### UNKNOWN:"));
+        assert!(result.contains("Mystery"));
+    }
+}

@@ -1,7 +1,7 @@
 use super::config::parse::normalize_local_service_url;
-use spider::tokio;
 use std::env;
 use std::time::Duration;
+use tokio;
 
 const DIAGNOSTICS_DIR_DEFAULT: &str = ".cache/chrome-diagnostics";
 

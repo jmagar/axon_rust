@@ -9,7 +9,6 @@ use crate::crates::core::http::{cdp_discovery_url, ssrf_blacklist_patterns};
 use crate::crates::core::logging::{log_info, log_warn};
 use collector::collect_crawl_pages;
 use spider::features::chrome_common::RequestInterceptConfiguration;
-use spider::tokio;
 use spider::url::Url;
 use spider::website::Website;
 use std::collections::HashSet;
