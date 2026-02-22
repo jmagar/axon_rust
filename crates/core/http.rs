@@ -75,48 +75,6 @@ pub fn validate_url(url: &str) -> Result<(), Box<dyn Error>> {
         return Err(format!("blocked host '{host}': .internal/.local domains not allowed").into());
     }
 
-    // Use Url::host() for typed IP extraction — avoids string-parsing edge cases
-    // with IPv6 bracket notation that host_str().parse::<IpAddr>() may miss.
-    let check_ip = |ip: IpAddr| -> Result<(), Box<dyn Error>> {
-        if ip.is_loopback() {
-            return Err(format!("blocked IP '{ip}': loopback address not allowed").into());
-        }
-        match ip {
-            IpAddr::V4(v4) => {
-                let [a, b, ..] = v4.octets();
-                let octets = v4.octets();
-                let is_link_local = octets[0] == 169 && octets[1] == 254;
-                let is_private = octets[0] == 10
-                    || (a == 172 && (16..=31).contains(&b))
-                    || octets[0..2] == [192, 168];
-                if is_link_local {
-                    return Err(format!(
-                        "blocked IP '{v4}': link-local address (169.254.x.x) not allowed"
-                    )
-                    .into());
-                }
-                if is_private {
-                    return Err(
-                        format!("blocked IP '{v4}': private/RFC-1918 address not allowed").into(),
-                    );
-                }
-            }
-            IpAddr::V6(v6) => {
-                // Block unique-local (fc00::/7) and link-local (fe80::/10)
-                let segs = v6.segments();
-                let is_unique_local = segs[0] & 0xfe00 == 0xfc00;
-                let is_link_local_v6 = segs[0] & 0xffc0 == 0xfe80;
-                if is_unique_local || is_link_local_v6 {
-                    return Err(format!(
-                        "blocked IPv6 '{v6}': private/link-local address not allowed"
-                    )
-                    .into());
-                }
-            }
-        }
-        Ok(())
-    };
-
     // Use parsed.host() for typed extraction — host_str().parse::<IpAddr>()
     // silently fails for IPv6 because spider::url::Url returns zone-scoped or
     // bracket-ambiguous representations. The Host enum gives us the parsed addr directly.
@@ -126,6 +84,55 @@ pub fn validate_url(url: &str) -> Result<(), Box<dyn Error>> {
         _ => {}
     }
 
+    Ok(())
+}
+
+/// SSRF IP validation — checks loopback, link-local, RFC-1918 private, and
+/// IPv4-mapped IPv6 addresses. Extracted as a named function (not a closure)
+/// so the IPv4-mapped branch can recurse into the IPv4 checks.
+fn check_ip(ip: IpAddr) -> Result<(), Box<dyn Error>> {
+    if ip.is_loopback() {
+        return Err(format!("blocked IP '{ip}': loopback address not allowed").into());
+    }
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            let octets = v4.octets();
+            let is_link_local = octets[0] == 169 && octets[1] == 254;
+            let is_private = octets[0] == 10
+                || (a == 172 && (16..=31).contains(&b))
+                || octets[0..2] == [192, 168];
+            if is_link_local {
+                return Err(format!(
+                    "blocked IP '{v4}': link-local address (169.254.x.x) not allowed"
+                )
+                .into());
+            }
+            if is_private {
+                return Err(
+                    format!("blocked IP '{v4}': private/RFC-1918 address not allowed").into(),
+                );
+            }
+        }
+        IpAddr::V6(v6) => {
+            // IPv4-mapped IPv6 (::ffff:x.x.x.x) — extract the embedded IPv4
+            // and apply the same private/loopback/link-local checks. Without this,
+            // ::ffff:127.0.0.1 bypasses the V4 branch entirely.
+            if let Some(mapped_v4) = v6.to_ipv4_mapped() {
+                return check_ip(IpAddr::V4(mapped_v4));
+            }
+
+            // Block unique-local (fc00::/7) and link-local (fe80::/10)
+            let segs = v6.segments();
+            let is_unique_local = segs[0] & 0xfe00 == 0xfc00;
+            let is_link_local_v6 = segs[0] & 0xffc0 == 0xfe80;
+            if is_unique_local || is_link_local_v6 {
+                return Err(
+                    format!("blocked IPv6 '{v6}': private/link-local address not allowed").into(),
+                );
+            }
+        }
+    }
     Ok(())
 }
 
@@ -435,6 +442,99 @@ mod tests {
         assert!(
             validate_url("http://[::1]/").is_err(),
             "direct loopback IPv6 must still be blocked"
+        );
+    }
+
+    /// Verifies that a public IP passes validation — documents the TOCTOU window.
+    /// Between validation (public IP) and connection, DNS could rebind to private.
+    #[test]
+    fn test_validate_url_accepts_public_ip_but_documents_rebinding_risk() {
+        // 93.184.216.34 is example.com's public IP. This passes validation correctly.
+        // The TOCTOU risk: an attacker-controlled domain could resolve to this IP during
+        // validation, then rebind to 127.0.0.1 before reqwest connects. We cannot
+        // prevent this at the URL validation layer — requires DNS pre-resolution.
+        assert!(
+            validate_url("http://93.184.216.34/").is_ok(),
+            "public IP should pass validation"
+        );
+        // Confirm the inverse: direct private IPs are always blocked
+        assert!(validate_url("http://10.0.0.1/").is_err());
+        assert!(validate_url("http://192.168.1.1/").is_err());
+    }
+
+    /// Verifies the LazyLock SSRF pattern compilation works and all patterns are valid.
+    #[test]
+    fn test_ssrf_blacklist_patterns_compile_once() {
+        // Accessing COMPILED_SSRF_PATTERNS forces the LazyLock to initialize.
+        // If any pattern fails to compile, the .expect() inside the LazyLock panics.
+        let patterns = &*COMPILED_SSRF_PATTERNS;
+        assert!(
+            !patterns.is_empty(),
+            "SSRF blacklist should have at least one pattern"
+        );
+        // Verify the count matches the raw pattern list
+        assert_eq!(
+            patterns.len(),
+            ssrf_blacklist_patterns().len(),
+            "compiled pattern count must match raw pattern count"
+        );
+        // Smoke-test: a known-bad URL should match at least one pattern
+        assert!(
+            patterns
+                .iter()
+                .any(|re| re.is_match("http://127.0.0.1/admin")),
+            "loopback URL should match at least one SSRF pattern"
+        );
+    }
+
+    // --- IPv4-mapped IPv6 bypass tests ---
+
+    /// IPv4-mapped IPv6 addresses (::ffff:x.x.x.x) embed an IPv4 address inside
+    /// an IPv6 representation. Without explicit handling, these bypass the IPv4
+    /// private/loopback checks because they arrive in the V6 branch of check_ip.
+    #[test]
+    fn test_validate_url_rejects_ipv4_mapped_ipv6_loopback() {
+        // ::ffff:127.0.0.1 is loopback via IPv4-mapped IPv6
+        assert!(
+            validate_url("http://[::ffff:127.0.0.1]/").is_err(),
+            "::ffff:127.0.0.1 must be blocked as loopback"
+        );
+    }
+
+    #[test]
+    fn test_validate_url_rejects_ipv4_mapped_ipv6_link_local() {
+        // ::ffff:169.254.0.1 is link-local via IPv4-mapped IPv6
+        assert!(
+            validate_url("http://[::ffff:169.254.0.1]/").is_err(),
+            "::ffff:169.254.0.1 must be blocked as link-local"
+        );
+    }
+
+    #[test]
+    fn test_validate_url_rejects_ipv4_mapped_ipv6_private() {
+        // ::ffff:10.0.0.1 is RFC-1918 private via IPv4-mapped IPv6
+        assert!(
+            validate_url("http://[::ffff:10.0.0.1]/").is_err(),
+            "::ffff:10.0.0.1 must be blocked as private"
+        );
+        // ::ffff:192.168.1.1
+        assert!(
+            validate_url("http://[::ffff:192.168.1.1]/").is_err(),
+            "::ffff:192.168.1.1 must be blocked as private"
+        );
+        // ::ffff:172.16.0.1
+        assert!(
+            validate_url("http://[::ffff:172.16.0.1]/").is_err(),
+            "::ffff:172.16.0.1 must be blocked as private"
+        );
+    }
+
+    #[test]
+    fn test_validate_url_allows_ipv4_mapped_ipv6_public() {
+        // ::ffff:93.184.216.34 (example.com) should be allowed — it's a public IP
+        assert!(
+            validate_url("http://[::ffff:93.184.216.34]/").is_ok(),
+            "::ffff: with public IPv4 should be allowed"
         );
     }
 }
