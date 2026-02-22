@@ -1,4 +1,6 @@
 [advisories]
+vulnerability = "deny"
+unmaintained = "warn"
 ignore = []
 
 [licenses]

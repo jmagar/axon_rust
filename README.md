@@ -122,7 +122,7 @@ axon_rust/
 - `axon-redis` -> `localhost:53379`
 - `axon-rabbitmq` -> `localhost:45535`
 - `axon-qdrant` -> `localhost:53333` (HTTP), `53334` (gRPC)
-- `axon-webdriver` -> `localhost:4444` (WebDriver), `localhost:7900` (VNC)
+- `axon-chrome` -> `localhost:6000` (management API), `localhost:9222` (CDP proxy)
 - `axon-workers` (s6-supervised worker container; depends on all infra being healthy)
 
 Services run on the `axon` bridge network with persistent volumes under `/home/jmagar/appdata/axon-*`.
@@ -428,7 +428,7 @@ Concurrency tuned relative to available CPU cores:
   - `axon embed recover`
 - `ask`/`extract` failures: verify `OPENAI_BASE_URL` is a base URL (e.g. `http://host/v1`, not `/chat/completions`)
 - `embed`/`query` failures: verify `TEI_URL` and `QDRANT_URL`
-- Browser fallback failures: verify `AXON_WEBDRIVER_URL` points to a live WebDriver endpoint (e.g. `http://127.0.0.1:4444`). The `axon-webdriver` compose service exposes this at `127.0.0.1:4444` when running.
+- Browser fallback failures: verify `AXON_CHROME_REMOTE_URL` points to a live Chrome management endpoint (e.g. `http://127.0.0.1:6000`). The `axon-chrome` compose service exposes this at `127.0.0.1:6000` (management) and `127.0.0.1:9222` (CDP proxy) when running.
 
 ## Monolith Guardrails
 
@@ -530,7 +530,7 @@ Tables are auto-created on first worker/command start via `CREATE TABLE IF NOT E
 By default, `crawl`, `batch`, `extract`, and `embed` enqueue jobs and return immediately. Use `--wait true` to block until completion. Without workers running, enqueued jobs will pend forever.
 
 ### `render-mode auto-switch`
-The default mode. Runs an HTTP crawl first; if >60% of pages are thin (<200 chars) or total coverage is too low, automatically retries with Chrome. Chrome requires `axon-webdriver` running — if unreachable, the HTTP result is kept.
+The default mode. Runs an HTTP crawl first; if >60% of pages are thin (<200 chars) or total coverage is too low, automatically retries with Chrome. Chrome requires `axon-chrome` running — if unreachable, the HTTP result is kept.
 
 ### `crawl_raw()` vs `crawl()`
 When Chrome feature is compiled in, `crawl()` expects a Chrome instance. `crawl_raw()` is pure HTTP and always works. `engine.rs` calls `crawl_raw()` for `RenderMode::Http` and `crawl()` for Chrome/AutoSwitch.
