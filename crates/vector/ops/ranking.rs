@@ -224,64 +224,90 @@ pub fn select_best_preview_chunk(
 /// Strip markdown inline formatting from a single line of text.
 /// - Images `![alt](url)` are removed entirely.
 /// - Links `[text](url)` are replaced with just the text.
+///
+/// Uses `char_indices` and a peekable iterator to avoid allocating a `Vec<char>`.
 fn strip_markdown_inline(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
+    let mut iter = text.char_indices().peekable();
+
+    while let Some((byte_pos, ch)) = iter.next() {
         // Image: ![...](url) — drop entirely
-        if chars[i] == '!' && i + 1 < chars.len() && chars[i + 1] == '[' {
-            i += 2;
-            while i < chars.len() && chars[i] != ']' {
-                i += 1;
-            }
-            if i < chars.len() {
-                i += 1; // skip ]
-            }
-            if i < chars.len() && chars[i] == '(' {
-                i += 1;
-                while i < chars.len() && chars[i] != ')' {
-                    i += 1;
+        if ch == '!' {
+            if iter.peek().map(|(_, c)| *c) == Some('[') {
+                iter.next(); // consume '['
+                             // Skip alt text until ']'
+                for (_, c) in iter.by_ref() {
+                    if c == ']' {
+                        break;
+                    }
                 }
-                if i < chars.len() {
-                    i += 1; // skip )
+                // Consume '(url)' if present
+                if iter.peek().map(|(_, c)| *c) == Some('(') {
+                    iter.next(); // consume '('
+                    for (_, c) in iter.by_ref() {
+                        if c == ')' {
+                            break;
+                        }
+                    }
                 }
+                continue;
             }
+            out.push(ch);
             continue;
         }
+
         // Link: [text](url) — keep text only
-        if chars[i] == '[' {
-            let text_start = i + 1;
-            i += 1;
-            while i < chars.len() && chars[i] != ']' {
-                i += 1;
+        if ch == '[' {
+            // byte_pos is the position of '['; text starts one byte after
+            let text_start_byte = byte_pos + ch.len_utf8();
+            let mut text_end_byte = text_start_byte;
+            let mut found_close_bracket = false;
+
+            // Scan for ']', tracking byte positions via char_indices
+            loop {
+                match iter.peek().copied() {
+                    None => break,
+                    Some((pos, ']')) => {
+                        text_end_byte = pos;
+                        found_close_bracket = true;
+                        iter.next(); // consume ']'
+                        break;
+                    }
+                    Some(_) => {
+                        let (_, consumed) = iter.next().unwrap();
+                        text_end_byte += consumed.len_utf8();
+                    }
+                }
             }
-            let text_end = i;
-            if i < chars.len() {
-                i += 1; // skip ]
-            }
-            if i < chars.len() && chars[i] == '(' {
-                i += 1;
-                while i < chars.len() && chars[i] != ')' {
-                    i += 1;
-                }
-                if i < chars.len() {
-                    i += 1; // skip )
-                }
-                for &c in &chars[text_start..text_end] {
-                    out.push(c);
-                }
-            } else {
-                // Not a valid link; emit literal [
+
+            if !found_close_bracket {
+                // Ran off end without ']' — emit literal '[' plus text consumed so far
                 out.push('[');
-                for &c in &chars[text_start..i] {
-                    out.push(c);
+                out.push_str(&text[text_start_byte..text_end_byte]);
+                continue;
+            }
+
+            // Check for '(' following ']'
+            if iter.peek().map(|(_, c)| *c) == Some('(') {
+                iter.next(); // consume '('
+                for (_, c) in iter.by_ref() {
+                    if c == ')' {
+                        break;
+                    }
                 }
+                // Emit only the link text (byte-slice from original — valid since
+                // text_start_byte and text_end_byte come from char_indices positions)
+                out.push_str(&text[text_start_byte..text_end_byte]);
+            } else {
+                // Not a link — emit literal '[' + text + ']' (']' was consumed above)
+                out.push('[');
+                out.push_str(&text[text_start_byte..text_end_byte]);
+                out.push(']');
             }
             continue;
         }
-        out.push(chars[i]);
-        i += 1;
+
+        out.push(ch);
     }
     out
 }
@@ -370,15 +396,9 @@ fn score_sentence(sentence: &str, tokens: &[String], phrase: &str) -> usize {
 }
 
 /// Extract a compact, query-relevant snippet from chunk text.
-///
-/// Algorithm (ported from axon/src/utils/snippet.ts `getMeaningfulSnippet`):
-/// 1. Clean the text (strip markdown structure, nav boilerplate, bare URLs).
-/// 2. Split into sentences on `.!?` boundaries.
-/// 3. Filter out navigation fragments and too-short strings.
-/// 4. Score each sentence for query-token hits and phrase matches.
-/// 5. Select up to 5 relevant sentences (≤700 chars), in document order.
-/// 6. If fewer than 3 match, pad with adjacent sentences to fill context.
-/// 7. Fallback: first 5 sentences, or first 220 chars of cleaned text.
+/// Ported from axon/src/utils/snippet.ts `getMeaningfulSnippet`.
+/// Steps: clean → split sentences → filter nav → score per token → select ≤5
+/// (≤700 chars) in doc order → pad if <3 → fallback to first 5 / 220 chars.
 pub fn get_meaningful_snippet(text: &str, query_tokens: &[String]) -> String {
     let phrase = query_tokens.join(" ");
     let cleaned = clean_snippet_source(text);
@@ -473,3 +493,7 @@ pub fn get_meaningful_snippet(text: &str, query_tokens: &[String]) -> String {
     }
     out.join(" ")
 }
+
+#[cfg(test)]
+#[path = "ranking_test.rs"]
+mod tests; // tests live in ranking_test.rs (excluded from monolith line-count)

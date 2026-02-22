@@ -8,6 +8,7 @@ use crate::crates::vector::ops::qdrant::{
 };
 use chrono::Utc;
 use futures_util::stream::{FuturesUnordered, StreamExt};
+use rand::Rng as _;
 use reqwest::StatusCode;
 use spider::url::Url;
 use std::collections::HashSet;
@@ -102,7 +103,7 @@ pub(crate) async fn tei_embed(
                 attempt += 1;
                 // Jittered exponential backoff: 200ms, 400ms, 800ms...
                 let delay = Duration::from_millis(200 * (2u64.pow(attempt as u32)));
-                let jitter = Duration::from_millis(rand::random::<u64>() % 100);
+                let jitter = Duration::from_millis(rand::rng().random_range(0..100));
                 tokio::time::sleep(delay + jitter).await;
                 continue;
             }
