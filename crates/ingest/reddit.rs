@@ -8,6 +8,21 @@ use std::error::Error;
 // Format: <platform>:<app id>:<version> (by /u/<username>)
 const REDDIT_USER_AGENT: &str = "axon-ingest/1.0 by /u/axon_bot";
 
+/// Validate a subreddit name to prevent path traversal and injection attacks.
+/// Reddit subreddit names are 2-21 characters, alphanumeric and underscores only.
+fn validate_subreddit(name: &str) -> Result<(), Box<dyn Error>> {
+    let len = name.len();
+    let valid =
+        (2..=21).contains(&len) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid {
+        return Err(format!(
+            "invalid subreddit name '{name}': must be 2-21 chars, alphanumeric and underscore only"
+        )
+        .into());
+    }
+    Ok(())
+}
+
 /// Discriminates between a subreddit name and a specific thread URL.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RedditTarget {
@@ -50,7 +65,11 @@ pub async fn get_access_token(
     client_id: &str,
     client_secret: &str,
 ) -> Result<String, Box<dyn Error>> {
-    let client = Client::builder().user_agent(REDDIT_USER_AGENT).build()?;
+    let client = Client::builder()
+        .user_agent(REDDIT_USER_AGENT)
+        .https_only(true)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
 
     let resp: serde_json::Value = client
         .post("https://www.reddit.com/api/v1/access_token")
@@ -112,6 +131,8 @@ async fn ingest_subreddit(
     token: &str,
     name: &str,
 ) -> Result<usize, Box<dyn Error>> {
+    validate_subreddit(name)?;
+
     let resp: serde_json::Value = client
         .get(format!(
             "https://oauth.reddit.com/r/{name}/hot?limit=25&raw_json=1"
@@ -245,7 +266,11 @@ pub async fn ingest_reddit(cfg: &Config, target: &str) -> Result<usize, Box<dyn 
         .ok_or("REDDIT_CLIENT_SECRET not configured (--reddit-client-secret or env var)")?;
 
     let token = get_access_token(client_id, client_secret).await?;
-    let client = Client::builder().user_agent(REDDIT_USER_AGENT).build()?;
+    let client = Client::builder()
+        .user_agent(REDDIT_USER_AGENT)
+        .https_only(true)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
 
     match classify_target(target) {
         RedditTarget::Subreddit(name) => ingest_subreddit(cfg, &client, &token, &name).await,
@@ -341,5 +366,41 @@ mod tests {
             classify_target("https://old.reddit.com/r/rust/"),
             RedditTarget::Subreddit("rust".to_string())
         );
+    }
+
+    // --- validate_subreddit ---
+
+    #[test]
+    fn validate_subreddit_accepts_valid_names() {
+        assert!(validate_subreddit("rust").is_ok());
+        assert!(validate_subreddit("rust_gamedev").is_ok());
+        assert!(validate_subreddit("AskReddit").is_ok());
+        assert!(validate_subreddit("web_dev").is_ok());
+        assert!(validate_subreddit("ab").is_ok()); // minimum 2 chars
+    }
+
+    #[test]
+    fn validate_subreddit_rejects_path_traversal() {
+        assert!(validate_subreddit("../../../etc/passwd").is_err());
+        assert!(validate_subreddit("rust/../../admin").is_err());
+    }
+
+    #[test]
+    fn validate_subreddit_rejects_too_short() {
+        assert!(validate_subreddit("a").is_err());
+        assert!(validate_subreddit("").is_err());
+    }
+
+    #[test]
+    fn validate_subreddit_rejects_too_long() {
+        assert!(validate_subreddit("abcdefghijklmnopqrstuv").is_err()); // 22 chars
+    }
+
+    #[test]
+    fn validate_subreddit_rejects_special_chars() {
+        assert!(validate_subreddit("rust-lang").is_err()); // hyphens not allowed
+        assert!(validate_subreddit("rust.lang").is_err()); // dots not allowed
+        assert!(validate_subreddit("rust lang").is_err()); // spaces not allowed
+        assert!(validate_subreddit("rust%20lang").is_err()); // URL encoding
     }
 }

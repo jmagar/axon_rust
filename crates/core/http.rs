@@ -40,6 +40,21 @@ pub fn normalize_url(url: &str) -> String {
 /// - Link-local addresses (169.254.0.0/16, fe80::/10)
 /// - RFC-1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
 /// - `.internal` and `.local` TLDs
+///
+/// # DNS Rebinding (TOCTOU residual risk)
+///
+/// This validation is TOCTOU — it checks the resolved IP at parse time, but
+/// `reqwest` resolves DNS independently at connect time. An attacker with a
+/// TTL-0 DNS record can pass validation (first resolution → public IP) then
+/// rebind before the connection is established (second resolution → 127.0.0.1).
+///
+/// Full mitigation requires DNS pre-resolution and connection pinning, which
+/// `reqwest` does not support natively. Consider adding a reverse-DNS check or
+/// using `hickory-resolver` for pre-resolution if the threat model includes
+/// attacker-controlled domains with short-TTL records.
+///
+/// As defence-in-depth, `ssrf_blacklist_patterns()` is also applied to
+/// discovered URLs during crawl via spider's `with_blacklist_url()`.
 pub fn validate_url(url: &str) -> Result<(), Box<dyn Error>> {
     let normalized = normalize_url(url);
     let parsed = Url::parse(&normalized).map_err(|_| format!("invalid URL: {url}"))?;
@@ -139,6 +154,30 @@ pub fn build_client(timeout_secs: u64) -> Result<reqwest::Client, Box<dyn Error>
     Ok(reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .build()?)
+}
+
+/// Build the CDP `/json/version` discovery URL from a Chrome remote URL.
+///
+/// Handles `ws://` / `wss://` → `http://` / `https://` conversion (reqwest cannot
+/// make requests to `ws://` scheme URLs) and appends `/json/version` when the path
+/// is absent or root.  Returns `None` if the URL cannot be parsed or uses an
+/// unsupported scheme (`ftp://`, `file://`, etc.).
+pub(crate) fn cdp_discovery_url(remote_url: &str) -> Option<String> {
+    let parsed = Url::parse(remote_url).ok()?;
+    let http_scheme = match parsed.scheme() {
+        "ws" | "http" => "http",
+        "wss" | "https" => "https",
+        _ => return None,
+    };
+    let host = parsed.host_str()?;
+    let port = parsed.port_or_known_default()?;
+    let path = parsed.path();
+    let path = if path == "/" || path.is_empty() {
+        "/json/version"
+    } else {
+        path
+    };
+    Some(format!("{http_scheme}://{host}:{port}{path}"))
 }
 
 pub async fn fetch_html(client: &reqwest::Client, url: &str) -> Result<String, Box<dyn Error>> {
@@ -289,29 +328,113 @@ mod tests {
         assert!(validate_url("http://[fe80::1]/").is_err());
     }
 
+    /// Compiled SSRF blacklist regexes — built once, reused across tests.
+    static COMPILED_SSRF_PATTERNS: LazyLock<Vec<regex::Regex>> = LazyLock::new(|| {
+        ssrf_blacklist_patterns()
+            .into_iter()
+            .map(|p| regex::Regex::new(&p).expect("ssrf blacklist pattern must compile"))
+            .collect()
+    });
+
     #[test]
     fn test_ssrf_blacklist_blocks_localhost_with_query() {
-        let patterns = ssrf_blacklist_patterns();
         let url = "http://localhost?admin=true";
-        let blocked = patterns
-            .iter()
-            .any(|p| regex::Regex::new(p).unwrap().is_match(url));
+        let blocked = COMPILED_SSRF_PATTERNS.iter().any(|re| re.is_match(url));
         assert!(
             blocked,
             "localhost with query string should be blocked by blacklist"
         );
     }
 
+    // --- cdp_discovery_url tests ---
+
+    #[test]
+    fn test_cdp_discovery_url_http_appends_json_version() {
+        assert_eq!(
+            cdp_discovery_url("http://127.0.0.1:6000"),
+            Some("http://127.0.0.1:6000/json/version".to_string())
+        );
+    }
+
+    #[test]
+    fn test_cdp_discovery_url_ws_converts_to_http_and_appends() {
+        assert_eq!(
+            cdp_discovery_url("ws://axon-chrome:9222"),
+            Some("http://axon-chrome:9222/json/version".to_string())
+        );
+    }
+
+    #[test]
+    fn test_cdp_discovery_url_preserves_non_root_path() {
+        // Already has /json/version — must not double-append.
+        assert_eq!(
+            cdp_discovery_url("http://127.0.0.1:6000/json/version"),
+            Some("http://127.0.0.1:6000/json/version".to_string())
+        );
+    }
+
+    #[test]
+    fn test_cdp_discovery_url_rejects_unsupported_scheme() {
+        assert_eq!(cdp_discovery_url("ftp://host:21/"), None);
+        assert_eq!(cdp_discovery_url("file:///etc/hosts"), None);
+    }
+
+    #[test]
+    fn test_cdp_discovery_url_wss_converts_to_https() {
+        assert_eq!(
+            cdp_discovery_url("wss://secure-host:443"),
+            Some("https://secure-host:443/json/version".to_string())
+        );
+    }
+
+    #[test]
+    fn test_cdp_discovery_url_ws_with_existing_path_preserved() {
+        // Pre-resolved ws:// URL with browser UUID path: path must not be clobbered.
+        let ws = "ws://127.0.0.1:9222/devtools/browser/abc-123";
+        let result = cdp_discovery_url(ws);
+        assert_eq!(
+            result,
+            Some("http://127.0.0.1:9222/devtools/browser/abc-123".to_string())
+        );
+    }
+
     #[test]
     fn test_ssrf_blacklist_blocks_localhost_with_fragment() {
-        let patterns = ssrf_blacklist_patterns();
         let url = "https://localhost#secret";
-        let blocked = patterns
-            .iter()
-            .any(|p| regex::Regex::new(p).unwrap().is_match(url));
+        let blocked = COMPILED_SSRF_PATTERNS.iter().any(|re| re.is_match(url));
         assert!(
             blocked,
             "localhost with fragment should be blocked by blacklist"
+        );
+    }
+
+    /// Documents the DNS rebinding TOCTOU residual risk in `validate_url()`.
+    ///
+    /// An attacker-controlled domain can initially resolve to a public IP (passing
+    /// validation) then rebind via TTL-0 to a private IP before `reqwest` connects.
+    /// This test verifies that `validate_url()` correctly allows a public-looking
+    /// hostname — it cannot detect the rebind because DNS resolution happens again
+    /// at connect time inside `reqwest`, which is outside our control.
+    ///
+    /// Full mitigation would require DNS pre-resolution + connection pinning (e.g.
+    /// `hickory-resolver`), which `reqwest` does not natively support.
+    #[test]
+    fn test_dns_rebinding_toctou_documents_residual_risk() {
+        // A hostname that resolves to a public IP passes validation — this is correct
+        // behavior. The risk is that between validation and connection, the DNS record
+        // could change to 127.0.0.1. We cannot test the actual rebind in a unit test,
+        // but we document the expected behavior: public hostnames pass, private IPs fail.
+        assert!(
+            validate_url("https://attacker-controlled.example.com/").is_ok(),
+            "public hostname should pass — DNS rebinding cannot be caught at parse time"
+        );
+        assert!(
+            validate_url("http://127.0.0.1/").is_err(),
+            "direct private IP must still be blocked"
+        );
+        assert!(
+            validate_url("http://[::1]/").is_err(),
+            "direct loopback IPv6 must still be blocked"
         );
     }
 }

@@ -39,6 +39,11 @@ impl SizeRotatingFile {
         std::path::PathBuf::from(s)
     }
 
+    // TODO(PERF-MED-4): rotate_if_needed performs blocking fs::rename and File::create.
+    // These run inside Mutex<SizeRotatingFile> via tracing's sync Write trait — NOT in an
+    // async task. If tracing ever moves to an async writer, wrap these in spawn_blocking.
+    // Risk: on slow NFS mounts, rotation could briefly block the async runtime thread that
+    // happens to be logging. Mitigation: keep log files on local disk (the default).
     fn rotate_if_needed(&mut self, incoming_len: usize) -> io::Result<()> {
         if self.max_bytes == 0 {
             return Ok(());

@@ -202,6 +202,10 @@ pub struct Config {
     pub watchdog_stale_timeout_secs: i64,
     pub watchdog_confirm_secs: i64,
     pub json_output: bool,
+    pub crawl_from_result: bool,
+    /// Deduplicate trailing-slash URL variants (e.g. /about and /about/ treated as one).
+    /// Spider: with_normalize(bool). Default false.
+    pub normalize: bool,
 }
 
 impl fmt::Debug for Config {
@@ -269,7 +273,7 @@ impl fmt::Debug for Config {
             .field("ingest_queue", &self.ingest_queue)
             .field("github_token", &"[REDACTED]")
             .field("github_include_source", &self.github_include_source)
-            .field("reddit_client_id", &self.reddit_client_id)
+            .field("reddit_client_id", &"[REDACTED]")
             .field("reddit_client_secret", &"[REDACTED]")
             .field("tei_url", &self.tei_url)
             .field("qdrant_url", &self.qdrant_url)
@@ -294,6 +298,8 @@ impl fmt::Debug for Config {
             )
             .field("watchdog_confirm_secs", &self.watchdog_confirm_secs)
             .field("json_output", &self.json_output)
+            .field("crawl_from_result", &self.crawl_from_result)
+            .field("normalize", &self.normalize)
             .finish()
     }
 }

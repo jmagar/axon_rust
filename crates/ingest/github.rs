@@ -1,6 +1,7 @@
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::log_warn;
 use crate::crates::vector::ops::embed_text_with_metadata;
+use futures_util::stream::{self, StreamExt};
 use reqwest::Client;
 use std::error::Error;
 
@@ -75,6 +76,48 @@ fn github_request(
     }
 }
 
+/// Fetch the repo's recursive file tree and return indexable file paths.
+async fn fetch_indexable_files(
+    client: &Client,
+    owner: &str,
+    name: &str,
+    default_branch: &str,
+    include_source: bool,
+    auth_header: Option<&str>,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    let base = "https://api.github.com";
+    let tree_resp: serde_json::Value = github_request(
+        client,
+        &format!("{base}/repos/{owner}/{name}/git/trees/{default_branch}?recursive=1"),
+        auth_header,
+    )
+    .send()
+    .await?
+    .json()
+    .await?;
+
+    if tree_resp["truncated"].as_bool().unwrap_or(false) {
+        log_warn(&format!(
+            "command=ingest_github repo={owner}/{name} tree_truncated=true \
+             — large repo, some files skipped"
+        ));
+    }
+
+    let items = tree_resp["tree"].as_array().cloned().unwrap_or_default();
+    Ok(items
+        .iter()
+        .filter_map(|item| {
+            let path = item["path"].as_str()?;
+            if item["type"].as_str() != Some("blob") {
+                return None;
+            }
+            let should_index =
+                is_indexable_doc_path(path) || (include_source && is_indexable_source_path(path));
+            should_index.then(|| path.to_string())
+        })
+        .collect())
+}
+
 /// Ingest a GitHub repository:
 /// - Fetches all markdown/doc files unconditionally
 /// - Optionally fetches source files when `include_source` is true
@@ -89,6 +132,8 @@ pub async fn ingest_github(
 
     let client = Client::builder()
         .user_agent("axon-ingest/1.0 (https://github.com/jmagar/axon_rust)")
+        .https_only(true)
+        .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
     let auth: Option<String> = cfg.github_token.as_deref().map(|t| format!("Bearer {t}"));
@@ -112,68 +157,63 @@ pub async fn ingest_github(
         .unwrap_or("main")
         .to_string();
 
-    // 2. Fetch the full recursive file tree
-    let tree_resp: serde_json::Value = github_request(
+    // 2. Fetch the full recursive file tree, filtered to indexable paths
+    let file_items = fetch_indexable_files(
         &client,
-        &format!("{base}/repos/{owner}/{name}/git/trees/{default_branch}?recursive=1"),
+        &owner,
+        &name,
+        &default_branch,
+        include_source,
         auth_ref,
     )
-    .send()
-    .await?
-    .json()
     .await?;
 
-    if tree_resp["truncated"].as_bool().unwrap_or(false) {
-        log_warn(&format!(
-            "command=ingest_github repo={owner}/{name} tree_truncated=true \
-             — large repo, some files skipped"
-        ));
-    }
+    // 3. Fetch and embed files concurrently (cap at batch_concurrency or 16)
+    let concurrency = std::cmp::min(cfg.batch_concurrency, 16);
+    let results: Vec<Result<usize, String>> = stream::iter(file_items)
+        .map(|path| {
+            let client = client.clone();
+            let cfg = cfg.clone();
+            let owner = owner.clone();
+            let name = name.clone();
+            let default_branch = default_branch.clone();
+            async move {
+                let raw_url = format!(
+                    "https://raw.githubusercontent.com/{owner}/{name}/{default_branch}/{path}"
+                );
+                let resp = client.get(&raw_url).send().await;
+                let text = match resp {
+                    Ok(r) if r.status().is_success() => match r.text().await {
+                        Ok(t) => t,
+                        Err(_) => return Ok(0),
+                    },
+                    _ => return Ok(0),
+                };
 
-    let items = tree_resp["tree"].as_array().cloned().unwrap_or_default();
+                if text.trim().is_empty() {
+                    return Ok(0);
+                }
 
-    let mut count = 0usize;
+                let source_url =
+                    format!("https://github.com/{owner}/{name}/blob/{default_branch}/{path}");
+                match embed_text_with_metadata(&cfg, &text, &source_url, "github", Some(&path))
+                    .await
+                {
+                    Ok(n) => Ok(n),
+                    Err(e) => {
+                        log_warn(&format!(
+                            "command=ingest_github embed_failed path={path} err={e}"
+                        ));
+                        Ok(0)
+                    }
+                }
+            }
+        })
+        .buffer_unordered(concurrency)
+        .collect()
+        .await;
 
-    for item in &items {
-        let path = match item["path"].as_str() {
-            Some(p) => p,
-            None => continue,
-        };
-        if item["type"].as_str() != Some("blob") {
-            continue;
-        }
-
-        let should_index =
-            is_indexable_doc_path(path) || (include_source && is_indexable_source_path(path));
-        if !should_index {
-            continue;
-        }
-
-        // Fetch raw file content via raw.githubusercontent.com — avoids base64 decoding
-        let raw_url =
-            format!("https://raw.githubusercontent.com/{owner}/{name}/{default_branch}/{path}");
-        let resp = client.get(&raw_url).send().await;
-        let text = match resp {
-            Ok(r) if r.status().is_success() => match r.text().await {
-                Ok(t) => t,
-                Err(_) => continue,
-            },
-            _ => continue,
-        };
-
-        if text.trim().is_empty() {
-            continue;
-        }
-
-        let source_url = format!("https://github.com/{owner}/{name}/blob/{default_branch}/{path}");
-        match embed_text_with_metadata(cfg, &text, &source_url, "github", Some(path)).await {
-            Ok(n) => count += n,
-            Err(e) => log_warn(&format!(
-                "command=ingest_github embed_failed path={path} err={e}"
-            )),
-        }
-    }
-
+    let count: usize = results.into_iter().filter_map(|r| r.ok()).sum();
     Ok(count)
 }
 

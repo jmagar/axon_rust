@@ -8,18 +8,32 @@ use clap::Parser;
 use spider::url::Url;
 use std::env;
 
+/// Mapping from Docker-internal service hostnames to their host-side addresses.
+///
+/// These names only resolve within the Docker container network.  Outside Docker
+/// (i.e. when `/.dockerenv` does not exist) each entry is rewritten to the
+/// corresponding `localhost:PORT` so the host CLI can reach the service.
+const HOST_MAP: &[(&str, &str, u16)] = &[
+    ("axon-postgres", "127.0.0.1", 53432),
+    ("axon-redis", "127.0.0.1", 53379),
+    ("axon-rabbitmq", "127.0.0.1", 45535),
+    ("axon-qdrant", "127.0.0.1", 53333),
+    ("axon-chrome", "127.0.0.1", 6000),
+];
+
+/// Returns `true` if `host` is a known Docker-internal service hostname.
+///
+/// These hostnames only resolve inside the Docker container network; outside
+/// Docker they must be mapped to `127.0.0.1`.  Used by CDP URL normalisation
+/// to rewrite WebSocket connection URLs returned by `headless_browser`.
+pub(crate) fn is_docker_service_host(host: &str) -> bool {
+    HOST_MAP.iter().any(|(h, _, _)| *h == host)
+}
+
 pub(crate) fn normalize_local_service_url(url: String) -> String {
     if std::path::Path::new("/.dockerenv").exists() {
         return url;
     }
-
-    const HOST_MAP: &[(&str, &str, u16)] = &[
-        ("axon-postgres", "127.0.0.1", 53432),
-        ("axon-redis", "127.0.0.1", 53379),
-        ("axon-rabbitmq", "127.0.0.1", 45535),
-        ("axon-qdrant", "127.0.0.1", 53333),
-        ("axon-chrome", "127.0.0.1", 6000),
-    ];
 
     let Ok(mut parsed) = Url::parse(&url) else {
         return url;
@@ -174,8 +188,8 @@ fn into_config(cli: Cli) -> Config {
             .pg_url
             .or_else(|| env::var("AXON_PG_URL").ok())
             .unwrap_or_else(|| {
-                eprintln!("warning: AXON_PG_URL not set — using default credentials; set it in .env for production");
-                "postgresql://axon:postgres@127.0.0.1:53432/axon".to_string()
+                eprintln!("error: AXON_PG_URL environment variable is required (or pass --pg-url). Copy .env.example to .env and fill in credentials.");
+                std::process::exit(1);
             }),
     );
 
@@ -184,8 +198,8 @@ fn into_config(cli: Cli) -> Config {
             .redis_url
             .or_else(|| env::var("AXON_REDIS_URL").ok())
             .unwrap_or_else(|| {
-                eprintln!("warning: AXON_REDIS_URL not set — using default; set it in .env for production");
-                "redis://127.0.0.1:53379".to_string()
+                eprintln!("error: AXON_REDIS_URL environment variable is required (or pass --redis-url). Copy .env.example to .env and fill in credentials.");
+                std::process::exit(1);
             }),
     );
 
@@ -194,8 +208,8 @@ fn into_config(cli: Cli) -> Config {
             .amqp_url
             .or_else(|| env::var("AXON_AMQP_URL").ok())
             .unwrap_or_else(|| {
-                eprintln!("warning: AXON_AMQP_URL not set — using default credentials; set it in .env for production");
-                "amqp://axon:axonrabbit@127.0.0.1:45535/%2f".to_string()
+                eprintln!("error: AXON_AMQP_URL environment variable is required (or pass --amqp-url). Copy .env.example to .env and fill in credentials.");
+                std::process::exit(1);
             }),
     );
 
@@ -226,7 +240,8 @@ fn into_config(cli: Cli) -> Config {
         render_mode: global.render_mode,
         chrome_remote_url: global
             .chrome_remote_url
-            .or_else(|| env::var("AXON_CHROME_REMOTE_URL").ok()),
+            .or_else(|| env::var("AXON_CHROME_REMOTE_URL").ok())
+            .map(normalize_local_service_url),
         chrome_proxy: global
             .chrome_proxy
             .or_else(|| env::var("AXON_CHROME_PROXY").ok()),
@@ -352,6 +367,8 @@ fn into_config(cli: Cli) -> Config {
         watchdog_stale_timeout_secs: global.watchdog_stale_timeout_secs.max(30),
         watchdog_confirm_secs: global.watchdog_confirm_secs.max(10),
         json_output: global.json,
+        crawl_from_result: global.crawl_from_result,
+        normalize: global.normalize,
     };
 
     if cfg.exclude_path_prefix.is_empty() && !normalized_excludes.disable_defaults {
@@ -388,13 +405,47 @@ pub fn parse_args() -> Config {
 
 #[cfg(test)]
 mod tests {
+    use super::is_docker_service_host;
     use std::env;
+    use std::sync::Mutex;
 
-    // Use a unique env var name per test to avoid parallel-test races.
+    /// Serializes tests that mutate process-wide environment variables.
+    /// Prevents parallel test data races on `std::env::set_var` / `remove_var`.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    // --- is_docker_service_host tests ---
+
+    #[test]
+    fn test_is_docker_service_host_recognizes_all_known_services() {
+        assert!(is_docker_service_host("axon-postgres"));
+        assert!(is_docker_service_host("axon-redis"));
+        assert!(is_docker_service_host("axon-rabbitmq"));
+        assert!(is_docker_service_host("axon-qdrant"));
+        assert!(is_docker_service_host("axon-chrome"));
+    }
+
+    #[test]
+    fn test_is_docker_service_host_rejects_unknown_hyphenated_hosts() {
+        // These look like Docker-style names but are NOT in HOST_MAP.
+        assert!(!is_docker_service_host("my-home-server"));
+        assert!(!is_docker_service_host("custom-chrome-host"));
+        assert!(!is_docker_service_host("prod-infra"));
+        assert!(!is_docker_service_host("axon-unknown"));
+    }
+
+    #[test]
+    fn test_is_docker_service_host_rejects_plain_hosts() {
+        assert!(!is_docker_service_host("localhost"));
+        assert!(!is_docker_service_host("127.0.0.1"));
+        assert!(!is_docker_service_host("example.com"));
+        assert!(!is_docker_service_host(""));
+    }
+
     #[test]
     fn test_tavily_api_key_read_from_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         const VAR: &str = "AXON_TEST_TAVILY_KEY_PRESENT";
-        // SAFETY: unique var name; no other test reads/writes AXON_TEST_TAVILY_KEY_PRESENT.
+        // SAFETY: guarded by ENV_LOCK; no other test mutates this var concurrently.
         unsafe { env::set_var(VAR, "test-key-123") };
         let key = env::var(VAR).ok().unwrap_or_default();
         assert_eq!(key, "test-key-123");
@@ -403,9 +454,41 @@ mod tests {
 
     #[test]
     fn test_tavily_api_key_defaults_to_empty_when_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
         const VAR: &str = "AXON_TEST_TAVILY_KEY_ABSENT";
         // This var is never set anywhere, so it should always be absent.
         let key = env::var(VAR).ok().unwrap_or_default();
         assert_eq!(key, "");
+    }
+
+    // --- exclude prefix disable-by-empty tests ---
+
+    #[test]
+    fn test_empty_string_disables_default_exclude_prefixes() {
+        // Passing "" should set `disable_defaults = true`, suppressing the
+        // built-in locale-prefix exclusions without adding any custom prefixes.
+        let normalized = super::excludes::normalize_exclude_prefixes(vec!["".to_string()]);
+        assert!(
+            normalized.disable_defaults,
+            "empty string should set disable_defaults = true"
+        );
+        assert!(
+            normalized.prefixes.is_empty(),
+            "empty string should not produce any prefix entries"
+        );
+    }
+
+    #[test]
+    fn test_slash_disables_default_exclude_prefixes() {
+        // "/" is treated identically to "" — it disables default exclusions.
+        let normalized = super::excludes::normalize_exclude_prefixes(vec!["/".to_string()]);
+        assert!(
+            normalized.disable_defaults,
+            "bare slash should set disable_defaults = true"
+        );
+        assert!(
+            normalized.prefixes.is_empty(),
+            "bare slash should not produce any prefix entries"
+        );
     }
 }

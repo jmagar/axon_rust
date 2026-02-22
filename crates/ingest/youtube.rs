@@ -1,4 +1,5 @@
 use crate::crates::core::config::Config;
+use crate::crates::core::http::validate_url;
 use crate::crates::core::logging::log_warn;
 use crate::crates::vector::ops::embed_text_with_metadata;
 use spider::url::Url;
@@ -120,11 +121,20 @@ pub fn extract_video_id(input: &str) -> Option<String> {
 ///
 /// Requires `yt-dlp` to be installed and on PATH.
 pub async fn ingest_youtube(cfg: &Config, url: &str) -> Result<usize, Box<dyn Error>> {
+    // SSRF guard: validate the URL against private IP ranges before any processing
+    validate_url(url)?;
+
+    // Extract and validate YouTube video ID to prevent argument injection
+    let video_id = extract_video_id(url).ok_or("URL does not appear to be a YouTube video URL")?;
+    let safe_url = format!("https://www.youtube.com/watch?v={video_id}");
+
     // Create a temp directory; cleaned up automatically when `tmp` is dropped
     let tmp = tempfile::tempdir()?;
     let tmp_path = tmp.path().to_string_lossy().to_string();
 
     // Run yt-dlp: download English auto-generated subtitles only, skip video download
+    // --no-exec prevents execution of post-processing commands
+    // "--" separates flags from the URL argument to prevent argument injection
     let output = tokio::process::Command::new("yt-dlp")
         .args([
             "--write-auto-sub",
@@ -135,9 +145,11 @@ pub async fn ingest_youtube(cfg: &Config, url: &str) -> Result<usize, Box<dyn Er
             "vtt",
             "--sub-langs",
             "en",
+            "--no-exec",
             "-o",
             &format!("{tmp_path}/%(id)s"),
-            url,
+            "--",
+            &safe_url,
         ])
         .output()
         .await
