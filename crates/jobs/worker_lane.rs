@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(POLL_BACKOFF_INIT_MS, 100);
         assert_eq!(POLL_BACKOFF_MAX_MS, 6400);
         // Cap should be a power-of-two multiple of init.
-        assert!(POLL_BACKOFF_MAX_MS >= POLL_BACKOFF_INIT_MS);
+        const { assert!(POLL_BACKOFF_MAX_MS >= POLL_BACKOFF_INIT_MS) };
         assert_eq!(POLL_BACKOFF_MAX_MS, POLL_BACKOFF_INIT_MS * 64);
     }
 }
