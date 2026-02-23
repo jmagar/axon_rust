@@ -3,7 +3,7 @@ mod performance;
 
 use super::cli::{Cli, CliCommand, JobSubcommand};
 use super::help::maybe_print_top_level_help_and_exit;
-use super::types::{CommandKind, Config};
+use super::types::{CommandKind, Config, RedditSort, RedditTime};
 use clap::Parser;
 use spider::url::Url;
 use std::env;
@@ -19,6 +19,7 @@ const HOST_MAP: &[(&str, &str, u16)] = &[
     ("axon-rabbitmq", "127.0.0.1", 45535),
     ("axon-qdrant", "127.0.0.1", 53333),
     ("axon-chrome", "127.0.0.1", 6000),
+    ("axon-webdriver", "127.0.0.1", 4444),
 ];
 
 /// Returns `true` if `host` is a known Docker-internal service hostname.
@@ -72,6 +73,12 @@ fn into_config(cli: Cli) -> Result<Config, String> {
 
     let mut ask_diagnostics = false;
     let mut github_include_source = false;
+    let mut reddit_sort = RedditSort::Hot;
+    let mut reddit_time = RedditTime::Day;
+    let mut reddit_max_posts = 25usize;
+    let mut reddit_min_score = 0i32;
+    let mut reddit_depth = 2usize;
+    let mut reddit_scrape_links = false;
     let mut sessions_claude = false;
     let mut sessions_codex = false;
     let mut sessions_gemini = false;
@@ -151,14 +158,22 @@ fn into_config(cli: Cli) -> Result<Config, String> {
                 },
             )
         }
-        CliCommand::Reddit(args) => (
-            CommandKind::Reddit,
-            if let Some(job) = args.job {
-                positional_from_job(job)
-            } else {
-                args.target.into_iter().collect()
-            },
-        ),
+        CliCommand::Reddit(args) => {
+            reddit_sort = args.sort;
+            reddit_time = args.time;
+            reddit_max_posts = args.max_posts;
+            reddit_min_score = args.min_score;
+            reddit_depth = args.depth;
+            reddit_scrape_links = args.scrape_links;
+            (
+                CommandKind::Reddit,
+                if let Some(job) = args.job {
+                    positional_from_job(job)
+                } else {
+                    args.target.into_iter().collect()
+                },
+            )
+        }
         CliCommand::Youtube(args) => (
             CommandKind::Youtube,
             if let Some(job) = args.job {
@@ -308,6 +323,12 @@ fn into_config(cli: Cli) -> Result<Config, String> {
         github_include_source,
         reddit_client_id: env::var("REDDIT_CLIENT_ID").ok(),
         reddit_client_secret: env::var("REDDIT_CLIENT_SECRET").ok(),
+        reddit_sort,
+        reddit_time,
+        reddit_max_posts,
+        reddit_min_score,
+        reddit_depth,
+        reddit_scrape_links,
         tei_url: global
             .tei_url
             .or_else(|| env::var("TEI_URL").ok())
@@ -443,6 +464,7 @@ mod tests {
         assert!(is_docker_service_host("axon-rabbitmq"));
         assert!(is_docker_service_host("axon-qdrant"));
         assert!(is_docker_service_host("axon-chrome"));
+        assert!(is_docker_service_host("axon-webdriver"));
     }
 
     #[test]

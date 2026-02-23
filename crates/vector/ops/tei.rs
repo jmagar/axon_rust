@@ -18,6 +18,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use uuid::Uuid;
 
+mod tei_manifest;
+use tei_manifest::read_manifest_url_map;
+
 /// Track which collections have already been initialized this process lifetime.
 /// Avoids redundant GET+PUT to Qdrant on every document upsert.
 static INITIALIZED_COLLECTIONS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -178,6 +181,7 @@ async fn read_inputs(input: &str) -> Result<Vec<(String, String)>, Box<dyn Error
             tokio::fs::read_to_string(&path).await?,
         )]),
         Ok(meta) if meta.is_dir() => {
+            let manifest_urls = read_manifest_url_map(&path);
             let mut dir = tokio::fs::read_dir(&path).await?;
             let mut files = Vec::new();
             while let Some(entry) = dir.next_entry().await? {
@@ -190,7 +194,12 @@ async fn read_inputs(input: &str) -> Result<Vec<(String, String)>, Box<dyn Error
             let mut out = Vec::new();
             for p in files {
                 let content = tokio::fs::read_to_string(&p).await?;
-                out.push((p.to_string_lossy().to_string(), content));
+                let canonical = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+                let source = manifest_urls
+                    .get(&canonical)
+                    .cloned()
+                    .unwrap_or_else(|| p.to_string_lossy().to_string());
+                out.push((source, content));
             }
             Ok(out)
         }
@@ -202,10 +211,7 @@ async fn embed_prepared_doc(
     cfg: &Config,
     doc: PreparedDoc,
 ) -> Result<(usize, Vec<serde_json::Value>), Box<dyn Error>> {
-    // Delete-before-upsert is intentional: although point IDs are deterministic
-    // (Uuid::new_v5 on url:chunk_index), re-embedding may produce *fewer* chunks
-    // than the previous version, leaving orphan points with stale chunk indices.
-    // The filter delete removes ALL points for this URL before upserting the fresh set.
+    // Re-embedding can yield fewer chunks; delete stale points before upsert.
     qdrant_delete_by_url_filter(cfg, &doc.url).await?;
     let vectors = tei_embed(cfg, &doc.chunks).await?;
     if vectors.is_empty() {
@@ -246,12 +252,6 @@ async fn embed_prepared_doc(
 }
 
 /// Embed arbitrary text content with explicit source metadata into Qdrant.
-///
-/// Unlike `embed_path_native` which takes file/URL inputs, this function accepts
-/// pre-fetched text and attaches `source_type` and `title` to every Qdrant point
-/// payload — enabling filtered queries like "search only GitHub content".
-///
-/// Returns the number of chunks embedded.
 pub async fn embed_text_with_metadata(
     cfg: &Config,
     content: &str,

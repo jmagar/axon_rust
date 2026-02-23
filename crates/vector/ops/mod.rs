@@ -2,6 +2,7 @@ pub mod commands;
 pub mod input;
 pub mod qdrant;
 pub mod ranking;
+pub mod source_display;
 pub mod stats;
 pub mod tei;
 

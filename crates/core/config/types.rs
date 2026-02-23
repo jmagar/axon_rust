@@ -98,6 +98,52 @@ pub enum ScrapeFormat {
     Json,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RedditSort {
+    Hot,
+    Top,
+    New,
+    Rising,
+}
+
+impl fmt::Display for RedditSort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Hot => "hot",
+            Self::Top => "top",
+            Self::New => "new",
+            Self::Rising => "rising",
+        };
+        f.write_str(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RedditTime {
+    Hour,
+    Day,
+    Week,
+    Month,
+    Year,
+    All,
+}
+
+impl fmt::Display for RedditTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Hour => "hour",
+            Self::Day => "day",
+            Self::Week => "week",
+            Self::Month => "month",
+            Self::Year => "year",
+            Self::All => "all",
+        };
+        f.write_str(value)
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PerformanceProfile {
@@ -295,6 +341,24 @@ pub struct Config {
 
     /// Reddit OAuth2 client secret. Env: `REDDIT_CLIENT_SECRET`. **Secret.**
     pub reddit_client_secret: Option<String>,
+
+    /// Sort order for subreddit posts. Flag: `--reddit-sort`.
+    pub reddit_sort: RedditSort,
+
+    /// Time range for top posts. Flag: `--reddit-time`.
+    pub reddit_time: RedditTime,
+
+    /// Max posts to fetch per subreddit (0 = unlimited). Flag: `--reddit-max-posts`.
+    pub reddit_max_posts: usize,
+
+    /// Minimum score for posts/comments to be indexed. Flag: `--reddit-min-score`.
+    pub reddit_min_score: i32,
+
+    /// Max comment tree depth to traverse. Flag: `--reddit-depth`.
+    pub reddit_depth: usize,
+
+    /// Scrape external links in posts and include their content. Flag: `--reddit-scrape-links`.
+    pub reddit_scrape_links: bool,
 
     /// Base URL of the TEI (Text Embeddings Inference) service. Env: `TEI_URL`. Flag: `--tei-url`.
     pub tei_url: String,
@@ -495,6 +559,12 @@ impl Default for Config {
             github_include_source: false,
             reddit_client_id: None,
             reddit_client_secret: None,
+            reddit_sort: RedditSort::Hot,
+            reddit_time: RedditTime::Day,
+            reddit_max_posts: 25,
+            reddit_min_score: 0,
+            reddit_depth: 2,
+            reddit_scrape_links: false,
             tei_url: String::new(),
             qdrant_url: "http://127.0.0.1:53333".to_string(),
             openai_base_url: String::new(),
@@ -605,6 +675,12 @@ impl fmt::Debug for Config {
             .field("github_include_source", &self.github_include_source)
             .field("reddit_client_id", &"[REDACTED]")
             .field("reddit_client_secret", &"[REDACTED]")
+            .field("reddit_sort", &self.reddit_sort)
+            .field("reddit_time", &self.reddit_time)
+            .field("reddit_max_posts", &self.reddit_max_posts)
+            .field("reddit_min_score", &self.reddit_min_score)
+            .field("reddit_depth", &self.reddit_depth)
+            .field("reddit_scrape_links", &self.reddit_scrape_links)
             .field("tei_url", &self.tei_url)
             .field("qdrant_url", &self.qdrant_url)
             .field("openai_base_url", &self.openai_base_url)

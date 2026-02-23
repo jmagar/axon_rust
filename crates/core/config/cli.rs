@@ -1,4 +1,4 @@
-use super::types::{PerformanceProfile, RenderMode, ScrapeFormat};
+use super::types::{PerformanceProfile, RedditSort, RedditTime, RenderMode, ScrapeFormat};
 use clap::{ArgAction, Args, Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -125,6 +125,24 @@ pub(super) struct RedditArgs {
     /// Subreddit name (e.g. "rust") or full thread URL
     #[arg(value_name = "TARGET")]
     pub(super) target: Option<String>,
+    /// Subreddit sorting (hot, top, new, rising)
+    #[arg(long, value_enum, default_value_t = RedditSort::Hot)]
+    pub(super) sort: RedditSort,
+    /// Time range for top sort (hour, day, week, month, year, all)
+    #[arg(long, value_enum, default_value_t = RedditTime::Day)]
+    pub(super) time: RedditTime,
+    /// Maximum posts to fetch (0 for unlimited)
+    #[arg(long, default_value_t = 25)]
+    pub(super) max_posts: usize,
+    /// Minimum score threshold for posts and comments
+    #[arg(long, default_value_t = 0)]
+    pub(super) min_score: i32,
+    /// Comment traversal depth
+    #[arg(long, default_value_t = 2)]
+    pub(super) depth: usize,
+    /// Scrape content of linked URLs in link posts
+    #[arg(long, action = ArgAction::Set, default_value_t = false)]
+    pub(super) scrape_links: bool,
 }
 
 #[derive(Debug, Args)]

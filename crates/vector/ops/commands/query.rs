@@ -1,5 +1,6 @@
 use crate::crates::core::config::Config;
 use crate::crates::core::ui::{muted, primary};
+use crate::crates::vector::ops::source_display::display_source;
 use crate::crates::vector::ops::{qdrant, ranking, tei};
 use std::error::Error;
 
@@ -61,6 +62,7 @@ pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     for (i, &hit_idx) in selected_indices.iter().enumerate() {
         let h = &reranked[hit_idx];
         let url = &h.url;
+        let source = display_source(url);
         // Pick the chunk with the best preview score for this URL (may differ from
         // the top-ranked chunk). Keeps score/URL from the vector-ranked hit while
         // showing the most readable prose chunk as the snippet.
@@ -76,6 +78,7 @@ pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
                     "score": h.score,
                     "rerank_score": h.rerank_score,
                     "url": url,
+                    "source": source,
                     "snippet": snippet,
                 })
             );
@@ -85,7 +88,7 @@ pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
                 i + 1,
                 crate::crates::core::ui::status_text("completed"),
                 h.rerank_score,
-                crate::crates::core::ui::accent(url)
+                crate::crates::core::ui::accent(&source)
             );
             println!("    {}", snippet);
         }

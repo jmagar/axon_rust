@@ -1,5 +1,6 @@
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::log_warn;
+use crate::crates::vector::ops::source_display::display_source;
 use crate::crates::vector::ops::{qdrant, ranking, tei};
 use futures_util::stream::{self, StreamExt};
 use std::collections::HashSet;
@@ -239,9 +240,10 @@ fn append_top_chunks_to_context(
     let mut top_chunks_selected = 0usize;
     for &chunk_idx in top_chunk_indices {
         let chunk = &reranked[chunk_idx];
+        let source = display_source(&chunk.url);
         let entry = format!(
             "## Top Chunk [S{}]: {}\n\n{}",
-            *source_idx, chunk.url, chunk.chunk_text
+            *source_idx, source, chunk.chunk_text
         );
         if !push_context_entry(
             context_entries,
@@ -326,7 +328,11 @@ fn append_full_docs_to_context(
         if text.is_empty() {
             continue;
         }
-        let entry = format!("## Source Document [S{}]: {}\n\n{}", source_idx, url, text);
+        let source = display_source(&url);
+        let entry = format!(
+            "## Source Document [S{}]: {}\n\n{}",
+            source_idx, source, text
+        );
         if !push_context_entry(
             context_entries,
             context_char_count,
@@ -355,9 +361,10 @@ fn append_supplemental_chunks(
     let mut supplemental_count = 0usize;
     for &chunk_idx in supplemental {
         let chunk = &reranked[chunk_idx];
+        let source = display_source(&chunk.url);
         let entry = format!(
             "## Supplemental Chunk [S{}]: {}\n\n{}",
-            *source_idx, chunk.url, chunk.chunk_text
+            *source_idx, source, chunk.chunk_text
         );
         if !push_context_entry(
             context_entries,
@@ -388,20 +395,26 @@ fn build_diagnostic_sources(
             .iter()
             .take(top_chunks_selected)
             .map(|&idx| &reranked[idx])
-            .map(|c| format!("chunk score={:.3} url={}", c.score, c.url)),
+            .map(|c| format!("chunk score={:.3} url={}", c.score, display_source(&c.url))),
     );
     diagnostic_sources.extend(
         top_full_doc_indices
             .iter()
             .map(|&idx| &reranked[idx])
-            .map(|c| format!("full-doc score={:.3} url={}", c.score, c.url)),
+            .map(|c| {
+                format!(
+                    "full-doc score={:.3} url={}",
+                    c.score,
+                    display_source(&c.url)
+                )
+            }),
     );
     diagnostic_sources.extend(
         supplemental
             .iter()
             .map(|&idx| &reranked[idx])
             .take(supplemental_count)
-            .map(|c| format!("chunk score={:.3} url={}", c.score, c.url)),
+            .map(|c| format!("chunk score={:.3} url={}", c.score, display_source(&c.url))),
     );
     diagnostic_sources
 }

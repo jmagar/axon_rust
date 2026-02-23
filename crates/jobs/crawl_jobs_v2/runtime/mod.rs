@@ -36,6 +36,7 @@ struct CrawlJobConfig {
     crawl_concurrency_limit: Option<usize>,
     sitemap_concurrency_limit: Option<usize>,
     backfill_concurrency_limit: Option<usize>,
+    #[serde(default = "default_max_sitemaps")]
     max_sitemaps: usize,
     delay_ms: u64,
     request_timeout_ms: Option<u64>,
@@ -51,6 +52,10 @@ struct CrawlJobConfig {
 
 fn default_cache_enabled() -> bool {
     true
+}
+
+fn default_max_sitemaps() -> usize {
+    512
 }
 
 #[derive(Debug, FromRow, Serialize)]

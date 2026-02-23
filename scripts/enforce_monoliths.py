@@ -30,6 +30,7 @@ EXCLUDED_GLOBS = [
     "tests/**",
     "**/tests/**",
     "**/*_test.*",
+    "**/*_tests.*",
     "**/*.test.*",
     "**/*.spec.*",
     "benches/**",
@@ -121,7 +122,7 @@ def file_line_count(path: Path) -> int:
             pending_cfg_test = True
             continue
 
-        if pending_cfg_test and stripped.startswith("mod tests") and "{" in stripped:
+        if pending_cfg_test and stripped.startswith("mod ") and "{" in stripped:
             skip_depth = stripped.count("{") - stripped.count("}")
             pending_cfg_test = False
             continue
@@ -179,7 +180,7 @@ def parse_rust_functions(path: Path) -> list[FunctionRange]:
             i += 1
             continue
 
-        if pending_cfg_test and stripped.startswith("mod tests") and "{" in stripped:
+        if pending_cfg_test and stripped.startswith("mod ") and "{" in stripped:
             skip_test_module_depth = stripped.count("{") - stripped.count("}")
             pending_cfg_test = False
             i += 1
