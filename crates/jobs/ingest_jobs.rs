@@ -19,9 +19,22 @@ const TABLE: JobTable = JobTable::Ingest;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "source_type", rename_all = "lowercase")]
 pub enum IngestSource {
-    Github { repo: String, include_source: bool },
-    Reddit { target: String },
-    Youtube { target: String },
+    Github {
+        repo: String,
+        include_source: bool,
+    },
+    Reddit {
+        target: String,
+    },
+    Youtube {
+        target: String,
+    },
+    Sessions {
+        sessions_claude: bool,
+        sessions_codex: bool,
+        sessions_gemini: bool,
+        sessions_project: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +104,7 @@ fn source_type_label(source: &IngestSource) -> &'static str {
         IngestSource::Github { .. } => "github",
         IngestSource::Reddit { .. } => "reddit",
         IngestSource::Youtube { .. } => "youtube",
+        IngestSource::Sessions { .. } => "sessions",
     }
 }
 
@@ -99,6 +113,33 @@ fn target_label(source: &IngestSource) -> String {
         IngestSource::Github { repo, .. } => repo.clone(),
         IngestSource::Reddit { target } => target.clone(),
         IngestSource::Youtube { target } => target.clone(),
+        IngestSource::Sessions {
+            sessions_claude,
+            sessions_codex,
+            sessions_gemini,
+            sessions_project,
+        } => {
+            let all = !sessions_claude && !sessions_codex && !sessions_gemini;
+            let label = if all {
+                "all".to_string()
+            } else {
+                let mut parts = vec![];
+                if *sessions_claude {
+                    parts.push("claude");
+                }
+                if *sessions_codex {
+                    parts.push("codex");
+                }
+                if *sessions_gemini {
+                    parts.push("gemini");
+                }
+                parts.join(",")
+            };
+            match sessions_project {
+                Some(proj) => format!("{label}:{proj}"),
+                None => label,
+            }
+        }
     }
 }
 
@@ -252,6 +293,19 @@ async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
         } => ingest::github::ingest_github(&cfg, repo, *include_source).await,
         IngestSource::Reddit { target } => ingest::reddit::ingest_reddit(&cfg, target).await,
         IngestSource::Youtube { target } => ingest::youtube::ingest_youtube(&cfg, target).await,
+        IngestSource::Sessions {
+            sessions_claude,
+            sessions_codex,
+            sessions_gemini,
+            sessions_project,
+        } => {
+            let mut sessions_cfg = cfg.clone();
+            sessions_cfg.sessions_claude = *sessions_claude;
+            sessions_cfg.sessions_codex = *sessions_codex;
+            sessions_cfg.sessions_gemini = *sessions_gemini;
+            sessions_cfg.sessions_project = sessions_project.clone();
+            ingest::sessions::ingest_sessions(&sessions_cfg).await
+        }
     };
 
     match result {

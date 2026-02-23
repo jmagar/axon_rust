@@ -1,18 +1,20 @@
 use crate::crates::core::config::Config;
+use crate::crates::crawl::manifest::{read_manifest_data, ManifestEntry};
 use redis::AsyncCommands;
 use sqlx::PgPool;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use super::super::{latest_completed_result_for_url, read_manifest_urls, CrawlJobConfig};
+use super::super::{latest_completed_result_for_url, CrawlJobConfig};
 
 pub(super) struct JobExecutionContext {
     pub(super) url: String,
     pub(super) job_cfg: Config,
     pub(super) extraction_prompt: Option<String>,
     pub(super) previous_urls: HashSet<String>,
+    pub(super) previous_manifest: HashMap<String, ManifestEntry>,
     pub(super) cache_source: Option<String>,
 }
 
@@ -52,7 +54,9 @@ async fn maybe_cancel_job_before_start(
     Ok(true)
 }
 
-fn build_job_config(cfg: &Config, parsed: &CrawlJobConfig, id: Uuid) -> Config {
+use crate::crates::core::content::url_to_domain;
+
+fn build_job_config(cfg: &Config, parsed: &CrawlJobConfig, id: Uuid, url: &str) -> Config {
     let mut job_cfg = cfg.clone();
     job_cfg.max_pages = parsed.max_pages;
     job_cfg.max_depth = parsed.max_depth;
@@ -82,8 +86,11 @@ fn build_job_config(cfg: &Config, parsed: &CrawlJobConfig, id: Uuid) -> Config {
     job_cfg.query = parsed.extraction_prompt.clone();
     job_cfg.cache = parsed.cache;
     job_cfg.cache_skip_browser = parsed.cache_skip_browser;
+
+    let domain = url_to_domain(url);
     job_cfg.output_dir = PathBuf::from(parsed.output_dir.clone())
-        .join("jobs")
+        .join("domains")
+        .join(domain)
         .join(id.to_string());
     job_cfg
 }
@@ -93,12 +100,20 @@ async fn load_previous_urls_for_cache(
     id: Uuid,
     url: &str,
     job_cfg: &Config,
-) -> Result<(HashSet<String>, Option<String>), Box<dyn Error>> {
+) -> Result<
+    (
+        HashSet<String>,
+        HashMap<String, ManifestEntry>,
+        Option<String>,
+    ),
+    Box<dyn Error>,
+> {
     let mut previous_urls = HashSet::new();
+    let mut previous_manifest = HashMap::new();
     let mut cache_source: Option<String> = None;
 
     if !job_cfg.cache {
-        return Ok((previous_urls, cache_source));
+        return Ok((previous_urls, previous_manifest, cache_source));
     }
 
     if let Some((previous_job_id, previous_result_json)) =
@@ -109,19 +124,20 @@ async fn load_previous_urls_for_cache(
             .and_then(|value| value.as_str())
             .map(PathBuf::from);
         if let Some(previous_output_dir) = previous_output_dir {
-            let previous_manifest = previous_output_dir.join("manifest.jsonl");
-            previous_urls = read_manifest_urls(&previous_manifest).await?;
+            let previous_manifest_path = previous_output_dir.join("manifest.jsonl");
+            previous_manifest = read_manifest_data(&previous_manifest_path).await?;
+            previous_urls = previous_manifest.keys().cloned().collect();
             if !previous_urls.is_empty() {
                 cache_source = Some(format!(
                     "job:{} manifest:{}",
                     previous_job_id,
-                    previous_manifest.to_string_lossy()
+                    previous_manifest_path.to_string_lossy()
                 ));
             }
         }
     }
 
-    Ok((previous_urls, cache_source))
+    Ok((previous_urls, previous_manifest, cache_source))
 }
 
 pub(super) async fn load_job_execution_context(
@@ -140,8 +156,8 @@ pub(super) async fn load_job_execution_context(
 
     let parsed: CrawlJobConfig = serde_json::from_value(cfg_json)?;
     let extraction_prompt = parsed.extraction_prompt.clone();
-    let job_cfg = build_job_config(cfg, &parsed, id);
-    let (previous_urls, cache_source) =
+    let job_cfg = build_job_config(cfg, &parsed, id, &url);
+    let (previous_urls, previous_manifest, cache_source) =
         load_previous_urls_for_cache(pool, id, &url, &job_cfg).await?;
 
     Ok(Some(JobExecutionContext {
@@ -149,6 +165,7 @@ pub(super) async fn load_job_execution_context(
         job_cfg,
         extraction_prompt,
         previous_urls,
+        previous_manifest,
         cache_source,
     }))
 }

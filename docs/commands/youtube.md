@@ -1,6 +1,6 @@
 # axon youtube
 
-Ingest a YouTube video, playlist, or channel into Qdrant. Uses `yt-dlp` to download auto-generated or manual transcripts (VTT format), chunks the transcript text, and embeds it into the configured Qdrant collection.
+Ingest a YouTube video into Qdrant. Uses `yt-dlp` to download auto-generated or manual transcripts (VTT format), chunks the transcript text, and embeds it into the configured Qdrant collection.
 
 ## Synopsis
 
@@ -13,30 +13,15 @@ axon youtube <SUBCOMMAND> [ARGS]
 
 | Argument | Description |
 |----------|-------------|
-| `<url>` | YouTube video, playlist, or channel URL |
+| `<url>` | YouTube video URL (`watch?v=<ID>`, `youtu.be/<ID>`, or bare ID) |
+
+**Note:** Only single-video URLs are supported. The video ID is extracted from the `v=` query parameter; `list=` (playlist) parameters are stripped. Pure playlist/channel URLs (no `v=`) fail immediately.
 
 ## Required External Dependency
 
-`yt-dlp` must be installed and accessible in `$PATH`:
-
-```bash
-# Install
-pip install yt-dlp
-# or
-brew install yt-dlp
-
-# Verify
-yt-dlp --version
-```
+`yt-dlp` must be on `$PATH`. In Docker (axon-workers) it is installed automatically. For local dev install instructions see [`docs/ingest/youtube.md`](../ingest/youtube.md).
 
 If `yt-dlp` is not found, the command fails immediately with a clear error.
-
-## Optional Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `OPENAI_BASE_URL` | LLM endpoint used for optional transcript post-processing or summarization. Not required for basic transcript ingestion. |
-| `OPENAI_MODEL` | Model name for optional LLM step. |
 
 ## Flags
 
@@ -71,8 +56,11 @@ axon youtube "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 # Synchronous — blocks until complete
 axon youtube "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --wait true
 
-# Playlist
-axon youtube "https://www.youtube.com/playlist?list=PLxxxxxx" --wait true
+# Short URL form
+axon youtube "https://youtu.be/dQw4w9WgXcQ" --wait true
+
+# Video URL with playlist context (playlist param is stripped, only the video is ingested)
+axon youtube "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLxxxxxx" --wait true
 
 # Specific collection
 axon youtube "https://www.youtube.com/watch?v=rust_talk" --collection rust-talks
@@ -81,21 +69,9 @@ axon youtube "https://www.youtube.com/watch?v=rust_talk" --collection rust-talks
 axon youtube status 550e8400-e29b-41d4-a716-446655440000
 ```
 
-## Ingest Scope
-
-The ingest pipeline:
-
-1. Invokes `yt-dlp` to download the VTT subtitle file (auto-generated or manual)
-2. Parses VTT format into plain text, stripping timestamps and cue metadata
-3. Chunks the transcript text (2000 chars, 200-char overlap)
-4. Embeds each chunk via TEI and upserts into Qdrant
-
-Video title, channel name, and URL are stored as point metadata.
-
 ## Notes
 
-- Videos without transcripts or subtitles (no auto-generated captions) will fail. `yt-dlp` must be able to extract a VTT file.
+- Videos without transcripts or subtitles (no auto-generated captions) will fail with a clear error.
 - Age-restricted or private videos may not be accessible without authentication. See `yt-dlp` documentation for cookie-based auth.
-- Playlists are processed sequentially. Large playlists (100+ videos) can take a long time.
-- The ingest job records are stored in the `axon_ingest_jobs` Postgres table with `source_type='youtube'` and `target` set to the video/playlist/channel URL.
-- `yt-dlp` writes a temporary `.vtt` file; the ingest pipeline cleans it up after processing.
+- The ingest job record is stored in `axon_ingest_jobs` with `source_type='youtube'` and `target` set to the canonical `watch?v=<ID>` URL.
+- `yt-dlp` writes a temporary `.vtt` file; the pipeline cleans it up after processing.

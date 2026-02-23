@@ -14,10 +14,9 @@ pub(super) struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub(super) enum CliCommand {
-    Scrape(UrlArg),
+    Scrape(ScrapeArgs),
     Crawl(CrawlArgs),
     Map(UrlArg),
-    Batch(BatchArgs),
     Extract(ExtractArgs),
     Search(TextArg),
     Research(TextArg),
@@ -39,6 +38,12 @@ pub(super) enum CliCommand {
     Reddit(RedditArgs),
     Youtube(YoutubeArgs),
     Sessions(SessionsArgs),
+}
+
+#[derive(Debug, Args)]
+pub(super) struct ScrapeArgs {
+    #[arg(value_name = "URL")]
+    pub(super) positional_urls: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -75,16 +80,7 @@ pub(super) struct CrawlArgs {
     #[command(subcommand)]
     pub(super) job: Option<JobSubcommand>,
     #[arg(value_name = "URL")]
-    pub(super) url: Option<String>,
-}
-
-#[derive(Debug, Args)]
-#[command(args_conflicts_with_subcommands = true)]
-pub(super) struct BatchArgs {
-    #[command(subcommand)]
-    pub(super) job: Option<JobSubcommand>,
-    #[arg(value_name = "URL")]
-    pub(super) urls: Vec<String>,
+    pub(super) positional_urls: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -93,7 +89,7 @@ pub(super) struct ExtractArgs {
     #[command(subcommand)]
     pub(super) job: Option<JobSubcommand>,
     #[arg(value_name = "URL")]
-    pub(super) urls: Vec<String>,
+    pub(super) positional_urls: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -211,7 +207,12 @@ pub(super) struct GlobalArgs {
     #[arg(global = true, long = "exclude-path-prefix", value_delimiter = ',')]
     pub(super) exclude_path_prefix: Vec<String>,
 
-    #[arg(global = true, long, default_value = ".cache/axon-rust/output")]
+    #[arg(
+        global = true,
+        long,
+        default_value = ".cache/axon-rust/output",
+        env = "AXON_OUTPUT_DIR"
+    )]
     pub(super) output_dir: PathBuf,
 
     #[arg(global = true, long)]

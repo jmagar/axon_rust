@@ -117,7 +117,7 @@ pub fn parse_urls(cfg: &Config) -> Vec<String> {
 pub fn start_url_from_cfg(cfg: &Config) -> String {
     if matches!(
         cfg.command,
-        CommandKind::Crawl | CommandKind::Batch | CommandKind::Extract | CommandKind::Embed
+        CommandKind::Crawl | CommandKind::Extract | CommandKind::Embed
     ) && matches!(
         cfg.positional.first().map(|s| s.as_str()),
         Some("status" | "cancel" | "errors" | "list" | "cleanup" | "clear" | "worker" | "doctor")
@@ -130,7 +130,6 @@ pub fn start_url_from_cfg(cfg: &Config) -> String {
         CommandKind::Scrape
             | CommandKind::Map
             | CommandKind::Crawl
-            | CommandKind::Batch
             | CommandKind::Extract
             | CommandKind::Embed
     ) {

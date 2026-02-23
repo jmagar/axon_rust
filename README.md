@@ -10,6 +10,7 @@ Axon is a single CLI for crawl/scrape/extract plus local vector retrieval and Q&
 
 - Commands: `scrape`, `crawl`, `map`, `search`, `batch`, `extract`, `embed`, `query`, `retrieve`, `ask`, `evaluate`, `suggest`, `github`, `ingest`, `reddit`, `youtube`, `sessions`, `sources`, `domains`, `stats`, `status`, `doctor`, `dedupe`, `debug`
 - Async queue-backed jobs for `crawl`/`batch`/`extract`/`embed`
+- **Surgical Incremental Crawling**: SHA-256 content hashing, Reflink/Hardlink storage reuse, and smart embedding skips for unchanged pages.
 - TEI embeddings + Qdrant vector storage
 - OpenAI-compatible extraction and answer generation
 - Browser fallback via Selenium WebDriver for dynamic sites
@@ -62,6 +63,7 @@ axon_rust/
 │   │   ├── mod.rs
 │   │   ├── engine.rs       # crawl_and_collect_map(), run_crawl_once(),
 │   │   │                   # try_auto_switch(), should_fallback_to_chrome()
+│   │   ├── manifest.rs     # Unified manifest: content hashing, relative pathing, change detection
 │   │   └── engine/
 │   │       ├── sitemap.rs  # crawl_sitemap_urls(), append_sitemap_backfill()
 │   │       └── tests.rs
@@ -80,7 +82,7 @@ axon_rust/
 │   │   ├── extract_jobs/   # Extract worker
 │   │   │   ├── worker.rs, tests.rs
 │   │   └── crawl_jobs/     # Crawl pipeline (modular)
-│   │       ├── mod.rs, manifest.rs, processor.rs, repo.rs,
+│   │       ├── mod.rs, processor.rs, repo.rs,
 │   │       │   sitemap.rs, watchdog.rs, worker.rs
 │   │       └── runtime/
 │   │           ├── mod.rs, robots.rs, tests.rs, worker.rs
@@ -269,6 +271,16 @@ Worker behavior notes:
 - Workers run startup stale-job reclaim sweeps plus periodic stale sweeps.
 - Stale timeout and confirmation window are tunable via `AXON_JOB_STALE_TIMEOUT_SECS` / `AXON_JOB_STALE_CONFIRM_SECS`.
 
+## Surgical Incremental Crawling
+
+Axon implements a multi-layered incremental crawl mechanism to minimize network traffic, disk I/O, and expensive AI embedding operations.
+
+1.  **Network Level**: Enabled via `--cache true`. Uses standard HTTP caching headers (`ETag`, `Last-Modified`) to perform conditional GET requests.
+2.  **Content Level**: Every crawled page is SHA-256 hashed. If the Markdown content hasn't changed since the last hunt, Axon identifies it as "unchanged."
+3.  **Storage Level**: Uses **Reflinks** (Copy-on-Write) on supported filesystems (XFS, Btrfs, APFS) or hardlinks to reuse previous Markdown files on disk without taking extra space.
+4.  **Intelligence Level**: The embedder reads the "changed" status from the manifest and automatically skips re-embedding unchanged pages in Qdrant, drastically reducing TEI/LLM load.
+5.  **Job Level**: A 24-hour TTL protects recently conquered domains. If a crawl was completed within the last 24 hours, the worker skips the traversal entirely and returns the cached result.
+
 ## Commands
 
 | Command | Purpose | Async? |
@@ -390,7 +402,7 @@ All flags are global (usable with any subcommand).
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--cache <bool>` | bool | `true` | Enable response caching. |
+| `--cache <bool>` | bool | `true` | Enable response caching, content hashing, and file reuse. |
 | `--cache-skip-browser <bool>` | bool | `false` | Skip cache for browser-rendered pages. |
 
 #### Output
@@ -606,6 +618,14 @@ Differs from the other four tables: uses `source_type` + `target` instead of `ur
 ### `--wait false` (default) = fire-and-forget
 By default, `crawl`, `batch`, `extract`, and `embed` enqueue jobs and return immediately. Use `--wait true` to block until completion. Without workers running, enqueued jobs will pend forever.
 
+### Armory Structure: Domain-Grouped
+Axon now organizes its spoils by domain to make the armory more browseable.
+- **Atomic Hunts**: Every job is isolated in `domains/<domain>/<job-id>/`.
+- **Latest View**: A zero-cost **Reflink** (or hardlink) provides a stable view of the most current successful hunt at `domains/<domain>/latest/`.
+
+### Incremental Crawl Synchronization
+When caching is enabled, Axon uses a "Recycling Bin" pattern. It moves existing markdown to a temporary location, surgically reflinks unchanged content during the crawl, and then purges any files that were not rediscovered. This ensures that the `domains/<domain>/latest/` directory is a perfect mirror of the live site.
+
 ### `render-mode auto-switch`
 The default mode. Runs an HTTP crawl first; if >60% of pages are thin (<200 chars) or total coverage is too low, automatically retries with Chrome. Chrome requires `axon-chrome` running — if unreachable, the HTTP result is kept.
 
@@ -619,6 +639,12 @@ When Chrome feature is compiled in, `crawl()` expects a Chrome instance. `crawl_
 
 ### TEI batch size / 413 handling
 `tei_embed()` in `vector/ops/tei.rs` auto-splits batches on HTTP 413 (Payload Too Large). Set `TEI_MAX_CLIENT_BATCH_SIZE` env var to control default chunk size (default: 64, effective max: 128).
+
+### TEI 429 / rate limiting
+On HTTP 429 or 503, `tei_embed()` retries up to 10 times with exponential backoff starting at 1s (1s, 2s, 4s … 512s) plus jitter. A saturated TEI queue will be retried for up to ~17 minutes before the job fails. No manual intervention needed for transient overload.
+
+### Locale path prefix matching
+`--exclude-path-prefix` treats both `/` and `-` as word boundaries. Specifying `/ja` blocks both `/ja/docs` and `/ja-jp/docs` (IETF BCP 47 region subtags). Pass `none` to disable all locale filtering.
 
 ### Text chunking
 `chunk_text()` splits at 2000 chars with 200-char overlap. Each chunk = one Qdrant point. Very long pages produce many points.

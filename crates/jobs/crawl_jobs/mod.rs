@@ -2,7 +2,6 @@ use crate::crates::core::config::Config;
 use std::error::Error;
 use uuid::Uuid;
 
-pub mod manifest;
 pub mod processor;
 pub mod repo;
 pub(crate) mod runtime;

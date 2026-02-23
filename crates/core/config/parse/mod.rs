@@ -84,36 +84,25 @@ fn into_config(cli: Cli) -> Result<Config, String> {
     let mut sessions_gemini = false;
     let mut sessions_project = None;
     let (command, positional) = match cli.command {
-        CliCommand::Scrape(args) => (
-            CommandKind::Scrape,
-            args.value.into_iter().collect::<Vec<String>>(),
-        ),
+        CliCommand::Scrape(args) => (CommandKind::Scrape, args.positional_urls),
         CliCommand::Crawl(args) => (
             CommandKind::Crawl,
             if let Some(job) = args.job {
                 positional_from_job(job)
             } else {
-                args.url.into_iter().collect()
+                args.positional_urls
             },
         ),
         CliCommand::Map(args) => (
             CommandKind::Map,
             args.value.into_iter().collect::<Vec<String>>(),
         ),
-        CliCommand::Batch(args) => (
-            CommandKind::Batch,
-            if let Some(job) = args.job {
-                positional_from_job(job)
-            } else {
-                args.urls
-            },
-        ),
         CliCommand::Extract(args) => (
             CommandKind::Extract,
             if let Some(job) = args.job {
                 positional_from_job(job)
             } else {
-                args.urls
+                args.positional_urls
             },
         ),
         CliCommand::Search(args) => (CommandKind::Search, args.value),

@@ -1,10 +1,10 @@
 mod audit;
-mod manifest;
 mod runtime;
 mod sync_crawl;
 
 pub(crate) use audit::discover_sitemap_urls_with_robots;
 
+use super::common::parse_urls;
 use crate::crates::core::config::Config;
 use crate::crates::core::http::validate_url;
 use crate::crates::core::ui::{
@@ -13,24 +13,33 @@ use crate::crates::core::ui::{
 };
 use crate::crates::jobs::crawl_jobs::{
     cancel_job, cleanup_jobs, clear_jobs, get_job, list_jobs, recover_stale_crawl_jobs, run_worker,
-    start_crawl_job,
+    start_crawl_jobs_batch,
 };
 use std::error::Error;
 use uuid::Uuid;
 
-pub async fn run_crawl(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
-    if maybe_handle_subcommand(cfg, start_url).await? {
+pub async fn run_crawl(cfg: &Config) -> Result<(), Box<dyn Error>> {
+    if maybe_handle_subcommand(cfg).await? {
         return Ok(());
     }
-    validate_url(start_url)?;
+    let urls = parse_urls(cfg);
+    if urls.is_empty() {
+        return Err("crawl requires at least one URL (positional or --urls)".into());
+    }
+    for url in &urls {
+        validate_url(url)?;
+    }
     if cfg.wait {
-        sync_crawl::run_sync_crawl(cfg, start_url).await
+        for url in &urls {
+            sync_crawl::run_sync_crawl(cfg, url).await?;
+        }
+        Ok(())
     } else {
-        run_async_enqueue(cfg, start_url).await
+        run_async_enqueue_multi(cfg, &urls).await
     }
 }
 
-async fn maybe_handle_subcommand(cfg: &Config, start_url: &str) -> Result<bool, Box<dyn Error>> {
+async fn maybe_handle_subcommand(cfg: &Config) -> Result<bool, Box<dyn Error>> {
     let Some(subcmd) = cfg.positional.first().map(|s| s.as_str()) else {
         return Ok(false);
     };
@@ -43,7 +52,10 @@ async fn maybe_handle_subcommand(cfg: &Config, start_url: &str) -> Result<bool, 
         "clear" => handle_clear_subcommand(cfg).await?,
         "worker" => run_worker(cfg).await?,
         "recover" => handle_recover_subcommand(cfg).await?,
-        "audit" => audit::run_crawl_audit(cfg, start_url).await?,
+        "audit" => {
+            let url = cfg.positional.get(1).map(|s| s.as_str()).unwrap_or("");
+            audit::run_crawl_audit(cfg, url).await?;
+        }
         "diff" => audit::run_crawl_audit_diff(cfg).await?,
         _ => return Ok(false),
     }
@@ -293,11 +305,38 @@ async fn handle_recover_subcommand(cfg: &Config) -> Result<(), Box<dyn Error>> {
 fn print_async_options(cfg: &Config, start_url: &str) {
     print_phase("◐", "Crawling", start_url);
     println!("  {}", primary("Options:"));
+    // Crawl scope
+    print_option(
+        "maxPages",
+        &if cfg.max_pages == 0 {
+            "uncapped".to_string()
+        } else {
+            cfg.max_pages.to_string()
+        },
+    );
     print_option("maxDepth", &cfg.max_depth.to_string());
     print_option("allowSubdomains", &cfg.include_subdomains.to_string());
     print_option("respectRobotsTxt", &cfg.respect_robots.to_string());
-    print_option("renderMode", &cfg.render_mode.to_string());
     print_option("discoverSitemaps", &cfg.discover_sitemaps.to_string());
+    // Content filtering
+    print_option("blockAssets", &cfg.block_assets.to_string());
+    print_option(
+        "redirectPolicyStrict",
+        &cfg.redirect_policy_strict.to_string(),
+    );
+    print_option(
+        "maxPageBytes",
+        &cfg.max_page_bytes
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "none".to_string()),
+    );
+    print_option("minMarkdownChars", &cfg.min_markdown_chars.to_string());
+    print_option("dropThinMarkdown", &cfg.drop_thin_markdown.to_string());
+    if !cfg.url_whitelist.is_empty() {
+        print_option("urlWhitelist", &cfg.url_whitelist.join(", "));
+    }
+    // Render / Chrome
+    print_option("renderMode", &cfg.render_mode.to_string());
     print_option("cache", &cfg.cache.to_string());
     print_option("cacheSkipBrowser", &cfg.cache_skip_browser.to_string());
     print_option(
@@ -315,20 +354,38 @@ fn print_async_options(cfg: &Config, start_url: &str) {
     print_option("chromeIntercept", &cfg.chrome_intercept.to_string());
     print_option("chromeBootstrap", &cfg.chrome_bootstrap.to_string());
     print_option(
+        "chromeNetworkIdleTimeoutSecs",
+        &cfg.chrome_network_idle_timeout_secs.to_string(),
+    );
+    print_option(
+        "chromeWaitForSelector",
+        cfg.chrome_wait_for_selector.as_deref().unwrap_or("none"),
+    );
+    print_option("chromeScreenshot", &cfg.chrome_screenshot.to_string());
+    print_option("bypassCsp", &cfg.bypass_csp.to_string());
+    print_option("acceptInvalidCerts", &cfg.accept_invalid_certs.to_string());
+    // WebDriver fallback
+    print_option(
         "webdriverFallbackUrl",
         cfg.webdriver_url.as_deref().unwrap_or("none"),
     );
+    // Output
     print_option("embed", &cfg.embed.to_string());
     print_option("wait", &cfg.wait.to_string());
 }
 
-async fn run_async_enqueue(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
+async fn run_async_enqueue_multi(cfg: &Config, urls: &[String]) -> Result<(), Box<dyn Error>> {
     // Chrome bootstrap probe belongs to sync crawl — the worker owns Chrome in async mode.
     // Skipping it here eliminates ~10s of failed probe retries on startup.
-    print_async_options(cfg, start_url);
+    let display = match urls {
+        [single] => single.clone(),
+        _ => format!("{} (+{} more)", urls[0], urls.len() - 1),
+    };
+    print_async_options(cfg, &display);
     println!();
 
-    let job_id = start_crawl_job(cfg, start_url).await?;
+    let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+    let jobs = start_crawl_jobs_batch(cfg, &url_refs).await?;
     println!(
         "  {}",
         muted(
@@ -341,12 +398,28 @@ async fn run_async_enqueue(cfg: &Config, start_url: &str) -> Result<(), Box<dyn 
             muted("Embedding job will be queued automatically after crawl completion.")
         );
     }
-    println!("  {} {}", primary("Crawl Job"), accent(&job_id.to_string()));
-    println!(
-        "  {}",
-        muted(&format!("Check status: axon crawl status {job_id}"))
-    );
+    for (url, job_id) in &jobs {
+        if cfg.json_output {
+            println!(
+                "{}",
+                serde_json::json!({"url": url, "job_id": job_id, "status": "pending"})
+            );
+        } else {
+            println!(
+                "  {} {} → {}",
+                primary("Crawl Job"),
+                accent(&job_id.to_string()),
+                muted(url)
+            );
+            println!(
+                "  {}",
+                muted(&format!("Check status: axon crawl status {job_id}"))
+            );
+        }
+    }
     println!();
-    println!("Job ID: {job_id}");
+    if let Some((_, first_id)) = jobs.first() {
+        println!("Job ID: {first_id}");
+    }
     Ok(())
 }

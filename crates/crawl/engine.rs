@@ -7,6 +7,7 @@ use crate::crates::core::config::{Config, RenderMode};
 use crate::crates::core::content::build_transform_config;
 use crate::crates::core::http::{cdp_discovery_url, ssrf_blacklist_patterns};
 use crate::crates::core::logging::{log_info, log_warn};
+use crate::crates::crawl::manifest::ManifestEntry;
 use collector::collect_crawl_pages;
 use spider::configuration::RedirectPolicy;
 use spider::features::chrome_common::{
@@ -14,7 +15,7 @@ use spider::features::chrome_common::{
 };
 use spider::url::Url;
 use spider::website::Website;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -25,6 +26,7 @@ pub struct CrawlSummary {
     pub pages_seen: u32,
     pub markdown_files: u32,
     pub thin_pages: u32,
+    pub reused_pages: u32,
     pub elapsed_ms: u128,
 }
 
@@ -308,8 +310,11 @@ async fn configure_website(
     // No control thread — we never pause/resume crawls externally; skip the overhead.
     website.with_no_control_thread(true);
 
-    if cfg.accept_invalid_certs {
-        website.with_danger_accept_invalid_certs(true);
+    if cfg.cache {
+        website.with_caching(true);
+        if cfg.cache_skip_browser {
+            website.with_cache_skip_browser(true);
+        }
     }
 
     website = apply_browser_settings(cfg, website, mode).await?;
@@ -397,6 +402,46 @@ pub async fn crawl_and_collect_map(
     Ok((summary, urls))
 }
 
+pub async fn update_latest_reflink(
+    source_dir: &Path,
+    latest_dir: &Path,
+) -> Result<(), Box<dyn Error>> {
+    // 1. Prepare clean slate
+    if latest_dir.exists() {
+        tokio::fs::remove_dir_all(latest_dir).await?;
+    }
+    tokio::fs::create_dir_all(latest_dir).await?;
+
+    // 2. Reflink files recursively (shallow for simplicity, we only have one level of markdown)
+    // We reflink manifest.jsonl and the markdown/ directory.
+    let manifest = "manifest.jsonl";
+    let source_manifest = source_dir.join(manifest);
+    if source_manifest.exists() {
+        reflink_copy::reflink_or_copy(&source_manifest, latest_dir.join(manifest))?;
+    }
+
+    let markdown = "markdown";
+    let source_md = source_dir.join(markdown);
+    let target_md = latest_dir.join(markdown);
+    if source_md.exists() {
+        tokio::fs::create_dir_all(&target_md).await?;
+        let mut entries = tokio::fs::read_dir(source_md).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.is_file() {
+                let filename = path.file_name().unwrap();
+                reflink_copy::reflink_or_copy(&path, target_md.join(filename))?;
+            }
+        }
+    }
+
+    log_info(&format!(
+        "Updated 'latest' armory view via reflink: {}",
+        latest_dir.display()
+    ));
+    Ok(())
+}
+
 pub async fn run_crawl_once(
     cfg: &Config,
     start_url: &str,
@@ -404,14 +449,25 @@ pub async fn run_crawl_once(
     output_dir: &Path,
     progress_tx: Option<Sender<CrawlSummary>>,
     run_sitemap: bool,
+    previous_manifest: HashMap<String, ManifestEntry>,
 ) -> Result<(CrawlSummary, HashSet<String>), Box<dyn Error>> {
+    let markdown_dir = output_dir.join("markdown");
+    let recycling_bin = output_dir.join("markdown.old");
+
     if output_dir.exists() {
-        if std::env::var("AXON_NO_WIPE").is_ok() {
-            log_info(&format!(
-                "AXON_NO_WIPE set — keeping existing output dir: {}",
-                output_dir.display()
-            ));
-        } else {
+        if cfg.cache {
+            // Recycling Bin Pattern: move existing markdown to .old for surgical reuse
+            if markdown_dir.exists() {
+                if recycling_bin.exists() {
+                    tokio::fs::remove_dir_all(&recycling_bin).await?;
+                }
+                tokio::fs::rename(&markdown_dir, &recycling_bin).await?;
+                log_info(&format!(
+                    "Archived existing spoils to recycling bin for incremental reuse: {}",
+                    recycling_bin.display()
+                ));
+            }
+        } else if std::env::var("AXON_NO_WIPE").is_err() {
             log_warn(&format!(
                 "Clearing output directory before crawl: {}",
                 output_dir.display()
@@ -428,9 +484,10 @@ pub async fn run_crawl_once(
             }
         }
     }
-    tokio::fs::create_dir_all(output_dir.join("markdown")).await?;
+    tokio::fs::create_dir_all(&markdown_dir).await?;
 
     let mut website = configure_website(cfg, start_url, mode).await?;
+    // ... rest of the setup ...
     // Buffer at least max_pages worth of messages to prevent silent page drops
     // under high-throughput crawls (extreme/max profiles). Clamp to 16 384 so
     // a large --max-pages value can't allocate an unbounded broadcast ring buffer.
@@ -456,6 +513,7 @@ pub async fn run_crawl_once(
         exclude_path_prefix,
         transform_cfg,
         progress_tx,
+        previous_manifest,
     ));
 
     // Spider-native sitemap phase: pages flow through the live subscription above.
@@ -477,6 +535,11 @@ pub async fn run_crawl_once(
         .map_err(|e| format!("collector failure: {e}"))?;
     summary.elapsed_ms = crawl_start.elapsed().as_millis();
 
+    if recycling_bin.exists() {
+        tokio::fs::remove_dir_all(&recycling_bin).await?;
+        log_info("Purged recycling bin — armory is now synchronized with battlefield.");
+    }
+
     Ok((summary, urls))
 }
 
@@ -486,6 +549,7 @@ pub async fn run_sitemap_only(
     cfg: &Config,
     start_url: &str,
     output_dir: &Path,
+    previous_manifest: HashMap<String, ManifestEntry>,
 ) -> Result<(CrawlSummary, HashSet<String>), Box<dyn Error>> {
     tokio::fs::create_dir_all(output_dir.join("markdown")).await?;
 
@@ -511,6 +575,7 @@ pub async fn run_sitemap_only(
         cfg.exclude_path_prefix.clone(),
         transform_cfg,
         None,
+        previous_manifest,
     ));
 
     website.crawl_sitemap().await;

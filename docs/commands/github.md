@@ -86,6 +86,8 @@ The ingest pipeline fetches:
 
 All content is chunked (2000 chars, 200-char overlap) and embedded via TEI before upsert into Qdrant.
 
+> For implementation details, rate limit guidance, and troubleshooting see [`docs/ingest/github.md`](../ingest/github.md).
+
 ## Notes
 
 - Private repositories require a `GITHUB_TOKEN` with at least `repo` scope.

@@ -65,6 +65,7 @@ RUN apt-get update \
         bash \
         ca-certificates \
         curl \
+        git \
         libssl3 \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
@@ -93,13 +94,25 @@ RUN set -eux; \
 
 WORKDIR /app
 
+# Install yt-dlp standalone binary (no Python required) for YouTube transcript ingestion
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) ytdlp_bin="yt-dlp_linux" ;; \
+      arm64) ytdlp_bin="yt-dlp_linux_aarch64" ;; \
+      *) echo "Unsupported arch: $arch"; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /usr/local/bin/yt-dlp \
+      "https://github.com/yt-dlp/yt-dlp/releases/latest/download/${ytdlp_bin}"; \
+    chmod +x /usr/local/bin/yt-dlp
+
 COPY --from=builder /src/axon_rust/target/release/axon /usr/local/bin/axon
 
 COPY docker/s6/cont-init.d/ /etc/cont-init.d/
 COPY docker/s6/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
 COPY docker/scripts/healthcheck-workers.sh /usr/local/bin/healthcheck-workers.sh
 
-RUN groupadd -r axon && useradd -r -g axon -u 1001 axon
+RUN groupadd -r axon && useradd -r -g axon -u 1001 -d /home/axon -m axon
 
 RUN chmod +x /etc/cont-init.d/* \
     && find /etc/s6-overlay/s6-rc.d -type f -name run -exec chmod +x {} + \

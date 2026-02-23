@@ -1,4 +1,3 @@
-pub mod batch;
 pub mod common;
 pub mod crawl;
 pub mod debug;
@@ -18,7 +17,6 @@ pub mod sessions;
 pub mod status;
 pub mod youtube;
 
-pub use batch::run_batch;
 pub use common::start_url_from_cfg;
 pub use crawl::run_crawl;
 pub use debug::run_debug;

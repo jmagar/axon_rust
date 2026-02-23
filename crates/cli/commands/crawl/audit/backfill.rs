@@ -1,5 +1,4 @@
 use super::sitemap::discover_sitemap_urls_with_robots;
-use crate::crates::cli::commands::crawl::manifest::read_manifest_urls;
 use crate::crates::core::config::Config;
 use crate::crates::core::content::{to_markdown, url_to_filename};
 use crate::crates::core::http::validate_url;
@@ -18,6 +17,9 @@ pub struct RobotsBackfillStats {
     pub failed: usize,
 }
 
+use crate::crates::crawl::manifest::ManifestEntry;
+use sha2::{Digest, Sha256};
+
 pub async fn append_robots_backfill(
     cfg: &Config,
     start_url: &str,
@@ -27,7 +29,12 @@ pub async fn append_robots_backfill(
 ) -> Result<RobotsBackfillStats, Box<dyn Error>> {
     let discovery = discover_sitemap_urls_with_robots(cfg, start_url).await?;
     let manifest_path = output_dir.join("manifest.jsonl");
-    let manifest_urls = read_manifest_urls(&manifest_path).await?;
+
+    // Use the comprehensive manifest reader to get hashes
+    let previous_manifest =
+        crate::crates::crawl::manifest::read_manifest_data(&manifest_path).await?;
+    let manifest_urls: HashSet<String> = previous_manifest.keys().cloned().collect();
+
     let candidates: Vec<String> = discovery
         .urls
         .iter()
@@ -72,7 +79,13 @@ pub async fn append_robots_backfill(
         };
         stats.fetched_ok += 1;
         let md = to_markdown(&html);
-        let markdown_chars = md.trim().len();
+        let trimmed = md.trim();
+        let markdown_chars = trimmed.len();
+
+        let mut hasher = Sha256::new();
+        hasher.update(trimmed.as_bytes());
+        let content_hash = hex::encode(hasher.finalize());
+
         if markdown_chars < cfg.min_markdown_chars {
             summary.thin_pages += 1;
         }
@@ -81,15 +94,18 @@ pub async fn append_robots_backfill(
         }
 
         idx += 1;
-        let file = markdown_dir.join(url_to_filename(&url, idx));
-        tokio::fs::write(&file, md).await?;
-        let rec = serde_json::json!({
-            "url": url,
-            "file_path": file.to_string_lossy(),
-            "markdown_chars": markdown_chars,
-            "source": "robots_sitemap_backfill"
-        });
-        let mut line = rec.to_string();
+        let filename = url_to_filename(&url, idx);
+        let file = markdown_dir.join(&filename);
+        tokio::fs::write(&file, trimmed.as_bytes()).await?;
+
+        let entry = ManifestEntry {
+            url: url.clone(),
+            relative_path: format!("markdown/{}", filename),
+            markdown_chars,
+            content_hash: Some(content_hash),
+            changed: true, // Backfill items are by definition new to this crawl session
+        };
+        let mut line = serde_json::to_string(&entry)?;
         line.push('\n');
         manifest.write_all(line.as_bytes()).await?;
         summary.markdown_files += 1;

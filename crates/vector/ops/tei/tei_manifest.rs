@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-pub(super) fn read_manifest_url_map(markdown_dir: &Path) -> HashMap<PathBuf, String> {
+pub(super) fn read_manifest_url_map(markdown_dir: &Path) -> HashMap<PathBuf, (String, bool)> {
     let Some(parent) = markdown_dir.parent() else {
         return HashMap::new();
     };
@@ -17,17 +17,23 @@ pub(super) fn read_manifest_url_map(markdown_dir: &Path) -> HashMap<PathBuf, Str
             Ok(v) => v,
             Err(_) => continue,
         };
-        let file_path = match parsed.get("file_path").and_then(|v| v.as_str()) {
-            Some(v) if !v.is_empty() => v,
-            _ => continue,
-        };
         let url = match parsed.get("url").and_then(|v| v.as_str()) {
             Some(v) if !v.is_empty() => v.to_string(),
             _ => continue,
         };
-        let normalized =
-            std::fs::canonicalize(file_path).unwrap_or_else(|_| PathBuf::from(file_path));
-        out.insert(normalized, url);
+        let changed = parsed
+            .get("changed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let normalized = if let Some(rel) = parsed.get("relative_path").and_then(|v| v.as_str()) {
+            parent.join(rel)
+        } else if let Some(abs) = parsed.get("file_path").and_then(|v| v.as_str()) {
+            std::fs::canonicalize(abs).unwrap_or_else(|_| PathBuf::from(abs))
+        } else {
+            continue;
+        };
+        out.insert(normalized, (url, changed));
     }
     out
 }
@@ -60,7 +66,7 @@ mod tests {
         let key =
             fs::canonicalize(&markdown_file).unwrap_or_else(|_| PathBuf::from(&markdown_file));
         assert_eq!(
-            mapped.get(&key).map(String::as_str),
+            mapped.get(&key).map(|(u, _)| u.as_str()),
             Some("https://example.com/docs")
         );
 

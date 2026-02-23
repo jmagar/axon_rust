@@ -1,9 +1,9 @@
 pub mod crates;
 
 use self::crates::cli::commands::{
-    run_batch, run_crawl, run_debug, run_doctor, run_embed, run_extract, run_github, run_ingest,
-    run_map, run_reddit, run_research, run_scrape, run_search, run_sessions, run_status,
-    run_youtube, start_url_from_cfg,
+    run_crawl, run_debug, run_doctor, run_embed, run_extract, run_github, run_ingest, run_map,
+    run_reddit, run_research, run_scrape, run_search, run_sessions, run_status, run_youtube,
+    start_url_from_cfg,
 };
 use self::crates::core::config::{parse_args, CommandKind, Config};
 use self::crates::core::logging::{init_tracing, log_done, log_info, log_warn};
@@ -62,10 +62,9 @@ async fn record_command_run(cfg: &Config) {
 
 async fn run_once(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
     match cfg.command {
-        CommandKind::Scrape => run_scrape(cfg, start_url).await?,
+        CommandKind::Scrape => run_scrape(cfg).await?,
         CommandKind::Map => run_map(cfg, start_url).await?,
-        CommandKind::Crawl => run_crawl(cfg, start_url).await?,
-        CommandKind::Batch => run_batch(cfg).await?,
+        CommandKind::Crawl => run_crawl(cfg).await?,
         CommandKind::Extract => run_extract(cfg).await?,
         CommandKind::Search => run_search(cfg).await?,
         CommandKind::Embed => run_embed(cfg).await?,
@@ -112,7 +111,6 @@ fn is_async_enqueue_mode(cfg: &self::crates::core::config::Config) -> bool {
         && matches!(
             cfg.command,
             CommandKind::Crawl
-                | CommandKind::Batch
                 | CommandKind::Extract
                 | CommandKind::Embed
                 | CommandKind::Github

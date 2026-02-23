@@ -28,7 +28,7 @@ serde_json = "1"
 tempfile = "3"
 # NOTE: In spider v2.45.x these are valid optional features and are required
 # for our crawl/render pipeline.
-spider = { version = "2", default-features = false, features = ["basic", "chrome", "regex", "webdriver", "sitemap", "adblock", "chrome_stealth", "chrome_screenshot", "simd"] }
+spider = { version = "2", default-features = false, features = ["basic", "chrome", "regex", "webdriver", "sitemap", "adblock", "chrome_stealth", "chrome_screenshot", "simd", "cache"] }
 # spider_agent is available on crates.io (v2.45.24) with "search_tavily" and "openai" features.
 # The path dep is kept for local development where ../spider/ is checked out alongside this repo.
 # In CI or environments without the sibling checkout, switch to the registry version:
@@ -42,6 +42,9 @@ tokio-reactor-trait = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
+sha2 = "0.10.9"
+hex = "0.4.3"
+reflink-copy = "0.1.28"
 
 [profile.release]
 opt-level = 3
@@ -58,6 +61,4 @@ regex = "1"
 # without requiring live services.
 httpmock = "0.7"
 
-[[bench]]
-name = "ask_query_retrieve"
-harness = false
+

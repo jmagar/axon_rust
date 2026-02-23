@@ -87,7 +87,7 @@ pub(crate) async fn tei_embed(
 
     while let Some(chunk) = stack.pop() {
         let mut attempt = 0;
-        let max_attempts = 5;
+        let max_attempts = 10;
 
         loop {
             let resp = client
@@ -116,9 +116,10 @@ pub(crate) async fn tei_embed(
                 && attempt < max_attempts
             {
                 attempt += 1;
-                // Jittered exponential backoff: 200ms, 400ms, 800ms...
-                let delay = Duration::from_millis(200 * (2u64.pow(attempt as u32)));
-                let jitter = Duration::from_millis(rand::rng().random_range(0..100));
+                // Jittered exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 512s
+                // TEI 429 means queue is saturated — give it real time to drain.
+                let delay = Duration::from_millis(1000 * (2u64.pow(attempt as u32 - 1)));
+                let jitter = Duration::from_millis(rand::rng().random_range(0..500));
                 tokio::time::sleep(delay + jitter).await;
                 continue;
             }
@@ -205,12 +206,17 @@ async fn read_inputs(input: &str) -> Result<Vec<(String, String)>, Box<dyn Error
             files.sort();
             let mut out = Vec::new();
             for p in files {
-                let content = tokio::fs::read_to_string(&p).await?;
                 let canonical = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
-                let source = manifest_urls
+                let (source, changed) = manifest_urls
                     .get(&canonical)
-                    .cloned()
-                    .unwrap_or_else(|| p.to_string_lossy().to_string());
+                    .map(|(u, c)| (u.clone(), *c))
+                    .unwrap_or_else(|| (p.to_string_lossy().to_string(), true));
+
+                if !changed {
+                    continue;
+                }
+
+                let content = tokio::fs::read_to_string(&p).await?;
                 out.push((source, content));
             }
             Ok(out)

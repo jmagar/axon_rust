@@ -40,6 +40,14 @@ static TRANSFORM_CONFIG: LazyLock<TransformConfig> = LazyLock::new(|| TransformC
 });
 const FALLBACK_CONCURRENCY_LIMIT: usize = 4;
 
+pub fn url_to_domain(url: &str) -> String {
+    spider::url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "unknown".to_string())
+        .replace(':', "_")
+}
+
 pub fn build_transform_config() -> &'static TransformConfig {
     &TRANSFORM_CONFIG
 }

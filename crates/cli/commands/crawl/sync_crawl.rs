@@ -1,27 +1,19 @@
 use crate::crates::core::config::{Config, RenderMode};
+use crate::crates::core::content::url_to_domain;
 use crate::crates::core::logging::log_done;
 use crate::crates::core::ui::{accent, muted, Spinner};
 use crate::crates::crawl::engine::{
-    run_crawl_once, run_sitemap_only, should_fallback_to_chrome, CrawlSummary,
+    run_crawl_once, run_sitemap_only, should_fallback_to_chrome, update_latest_reflink,
+    CrawlSummary,
+};
+use crate::crates::crawl::manifest::{
+    manifest_cache_is_stale, read_manifest_data, read_manifest_urls, write_audit_diff,
 };
 use crate::crates::jobs::embed_jobs::start_embed_job;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use std::time::SystemTime;
 
 const DEFAULT_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
-
-pub(super) async fn manifest_cache_is_stale(
-    manifest_path: &std::path::Path,
-    ttl_secs: u64,
-) -> bool {
-    tokio::fs::metadata(manifest_path)
-        .await
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|mtime| SystemTime::now().duration_since(mtime).ok())
-        .is_some_and(|age| age.as_secs() > ttl_secs)
-}
 
 pub(super) async fn maybe_return_cached_result(
     cfg: &Config,
@@ -33,7 +25,7 @@ pub(super) async fn maybe_return_cached_result(
     if !cfg.cache || previous_urls.is_empty() || cache_stale {
         return Ok(false);
     }
-    let report_path = super::manifest::write_audit_diff(
+    let (report_path, _) = write_audit_diff(
         &cfg.output_dir,
         start_url,
         previous_urls,
@@ -53,7 +45,7 @@ pub(super) async fn maybe_return_cached_result(
 
 async fn run_sitemap_only_crawl(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
     let spinner = Spinner::new("running sitemap-only crawl");
-    let (summary, _) = run_sitemap_only(cfg, start_url, &cfg.output_dir).await?;
+    let (summary, _) = run_sitemap_only(cfg, start_url, &cfg.output_dir, HashMap::new()).await?;
     spinner.finish(&format!(
         "sitemap-only complete (pages={}, markdown={})",
         summary.pages_seen, summary.markdown_files
@@ -73,6 +65,7 @@ async fn maybe_chrome_fallback(
     start_url: &str,
     http_summary: CrawlSummary,
     http_seen_urls: HashSet<String>,
+    previous_manifest: HashMap<String, crate::crates::crawl::manifest::ManifestEntry>,
 ) -> (CrawlSummary, HashSet<String>) {
     if !matches!(cfg.render_mode, RenderMode::AutoSwitch)
         || !should_fallback_to_chrome(&http_summary, cfg.max_pages, cfg)
@@ -87,6 +80,7 @@ async fn maybe_chrome_fallback(
         &cfg.output_dir,
         None,
         cfg.discover_sitemaps,
+        previous_manifest,
     )
     .await
     {
@@ -111,12 +105,19 @@ pub(super) async fn run_sync_crawl(cfg: &Config, start_url: &str) -> Result<(), 
         return run_sitemap_only_crawl(cfg, start_url).await;
     }
 
+    let domain = url_to_domain(start_url);
+    let mut sync_cfg = cfg.clone();
+    sync_cfg.output_dir = cfg.output_dir.join("domains").join(&domain).join("sync");
+    let cfg = &sync_cfg;
+
     let manifest_path = cfg.output_dir.join("manifest.jsonl");
-    let previous_urls = if cfg.cache {
-        super::manifest::read_manifest_urls(&manifest_path).await?
+    let previous_manifest = if cfg.cache {
+        read_manifest_data(&manifest_path).await?
     } else {
-        HashSet::new()
+        HashMap::new()
     };
+    let previous_urls: HashSet<String> = previous_manifest.keys().cloned().collect();
+
     if maybe_return_cached_result(cfg, start_url, &manifest_path, &previous_urls).await? {
         return Ok(());
     }
@@ -148,6 +149,7 @@ pub(super) async fn run_sync_crawl(cfg: &Config, start_url: &str) -> Result<(), 
         &cfg.output_dir,
         None,
         false,
+        previous_manifest.clone(),
     )
     .await?;
     spinner.finish(&format!(
@@ -155,8 +157,14 @@ pub(super) async fn run_sync_crawl(cfg: &Config, start_url: &str) -> Result<(), 
         http_summary.pages_seen, http_summary.markdown_files
     ));
 
-    let (summary, seen_urls) =
-        maybe_chrome_fallback(effective_cfg, start_url, http_summary, http_seen_urls).await;
+    let (summary, seen_urls) = maybe_chrome_fallback(
+        effective_cfg,
+        start_url,
+        http_summary,
+        http_seen_urls,
+        previous_manifest,
+    )
+    .await;
 
     let mut final_summary = summary;
 
@@ -169,9 +177,7 @@ pub(super) async fn run_sync_crawl(cfg: &Config, start_url: &str) -> Result<(), 
         // but not surfaced in `seen_urls` (e.g. URLs discovered via Spider's own sitemap pass).
         // This prevents double-fetching pages that were already crawled.
         let merged_seen = {
-            let manifest_urls = super::manifest::read_manifest_urls(&manifest_path)
-                .await
-                .unwrap_or_default();
+            let manifest_urls = read_manifest_urls(&manifest_path).await.unwrap_or_default();
             seen_urls
                 .iter()
                 .cloned()
@@ -203,8 +209,18 @@ pub(super) async fn run_sync_crawl(cfg: &Config, start_url: &str) -> Result<(), 
         );
     }
 
-    let current_urls = super::manifest::read_manifest_urls(&manifest_path).await?;
-    let report_path = super::manifest::write_audit_diff(
+    let current_urls = read_manifest_urls(&manifest_path).await?;
+
+    let latest_dir = cfg.output_dir.parent().unwrap().join("latest");
+    if let Err(err) = update_latest_reflink(&cfg.output_dir, &latest_dir).await {
+        println!(
+            "{} failed to update 'latest' reflink for domain {}: {err}",
+            muted("[Warning]"),
+            domain
+        );
+    }
+
+    let (report_path, _) = write_audit_diff(
         &cfg.output_dir,
         start_url,
         &previous_urls,

@@ -151,7 +151,7 @@ All flags are `--global` (usable with any subcommand).
 axon_rust/
 ├── mod.rs                  # Library root — run() dispatch (parse_args() is in crates/core/config.rs)
 ├── crates/
-│   ├── mod.rs              # pub mod cli, core, crawl, extract, jobs, vector
+│   ├── mod.rs              # pub mod cli, core, crawl, ingest, jobs, vector
 │   ├── cli/
 │   │   ├── mod.rs
 │   │   └── commands/       # One file per command (scrape, crawl, map, batch, …)
@@ -164,22 +164,33 @@ axon_rust/
 │   │   ├── http.rs         # build_client(), fetch_html(), validate_url() (SSRF guard — blocks private IPs/ports)
 │   │   ├── logging.rs      # log_info(), log_warn(), log_done() structured output
 │   │   └── ui.rs           # ANSI color helpers (primary, accent, muted, status_text)
-    ├── crawl/
+│   ├── crawl/
 │   │   ├── mod.rs
 │   │   └── engine.rs       # crawl_and_collect_map(), run_crawl_once(),
 │   │                       # crawl_sitemap_urls(), append_sitemap_backfill(),
 │   │                       # try_auto_switch(), should_fallback_to_chrome()
+│   ├── ingest/             # Source ingestion handlers
+│   │   ├── mod.rs
+│   │   ├── github.rs       # GitHub repo ingestion (code, issues, PRs, wiki)
+│   │   ├── reddit.rs       # Subreddit post/comment ingestion
+│   │   ├── youtube.rs      # YouTube transcript ingestion via yt-dlp
+│   │   └── sessions/       # AI session export parsers (Claude/Codex/Gemini)
 │   ├── jobs/               # AMQP-backed async job workers
-│   │   ├── common.rs       # Shared infra: make_pool, open_amqp_channel, claim_next_pending
+│   │   ├── common/         # Shared infra: make_pool, open_amqp_channel, claim_next_pending
 │   │   ├── crawl_jobs/     # Crawl pipeline (manifest, processor, repo, sitemap, watchdog, worker, runtime)
-│   │   ├── batch_jobs.rs, extract_jobs.rs, embed_jobs.rs
+│   │   ├── batch_jobs/     # Batch worker + queue_injection rule engine + maintenance
+│   │   ├── extract_jobs/   # Extract worker
+│   │   ├── embed_jobs/     # Embed worker
+│   │   ├── ingest_jobs.rs  # Ingest job schema + worker (github/reddit/youtube)
+│   │   ├── status.rs       # JobStatus enum (pending/running/completed/failed/canceled)
+│   │   └── worker_lane.rs  # Multi-lane worker coordination for ingest
 │   └── vector/
 │       ├── mod.rs, ops/    # Vector ops: commands, input, qdrant, ranking, stats, tei
 ├── docker/
 │   ├── Dockerfile          # Multi-stage build; s6-overlay for service supervision
 │   └── s6/
 │       ├── cont-init.d/    # 10-load-axon-env: loads .env on container startup
-│       └── s6-rc.d/        # crawl-worker, batch-worker, extract-worker, embed-worker (+ user bundle)
+│       └── s6-rc.d/        # crawl-worker, batch-worker, extract-worker, embed-worker, ingest-worker (+ user bundle)
 ├── docker-compose.yaml     # Full stack: postgres, redis, rabbitmq, qdrant, axon-workers
 ├── .env                    # Secrets (gitignored)
 └── .env.example            # Template — copy to .env and fill in
@@ -196,9 +207,9 @@ axon_rust/
 | `axon-rabbitmq` | rabbitmq:4.0-management | `45535` | AMQP job queue |
 | `axon-qdrant` | qdrant/qdrant:v1.13.1 | `53333`, `53334` (gRPC) | Vector store |
 | `axon-chrome` | built from Dockerfile.chrome | `6000` (management), `9222` (CDP proxy) | headless_browser + chrome-headless-shell |
-| `axon-workers` | built from Dockerfile | — | 4 workers (crawl/batch/extract/embed) |
+| `axon-workers` | built from Dockerfile | — | 5 workers (crawl/batch/extract/embed/ingest) |
 
-All services live on the `axon` bridge network. Data persisted to `/home/jmagar/appdata/axon-*`.
+All services live on the `axon` bridge network. Data volumes use `${AXON_DATA_DIR:-./data}/axon/...` (override with `AXON_DATA_DIR` in `.env`).
 
 ```bash
 # Start all services
@@ -268,6 +279,14 @@ TAVILY_API_KEY=your-tavily-api-key
 GITHUB_TOKEN=                       # optional — raises GitHub rate limits
 REDDIT_CLIENT_ID=                   # required for reddit command
 REDDIT_CLIENT_SECRET=               # required for reddit command
+
+# Worker tuning (optional, defaults shown)
+AXON_INGEST_LANES=2                 # parallel ingest worker lanes
+AXON_EMBED_DOC_TIMEOUT_SECS=300     # per-document embed timeout
+AXON_EMBED_STRICT_PREDELETE=true    # delete existing points before re-embedding
+AXON_JOB_STALE_TIMEOUT_SECS=300    # seconds before a running job is considered stale
+AXON_JOB_STALE_CONFIRM_SECS=60     # additional grace period before stale reclaim
+AXON_QUEUE_INJECTION_RULES_JSON=    # JSON rules for batch→extract queue injection (empty = disabled)
 ```
 
 ### Dev vs Container URL Resolution
@@ -297,6 +316,12 @@ When Chrome feature is compiled in, `crawl()` expects a Chrome instance. `crawl_
 ### TEI batch size / 413 handling
 `tei_embed()` in `vector/ops/tei.rs` auto-splits batches on HTTP 413 (Payload Too Large). Set `TEI_MAX_CLIENT_BATCH_SIZE` env var to control default chunk size (default: 64, max: 128).
 
+### TEI 429 / rate limiting
+On HTTP 429 or 503, `tei_embed()` retries up to 10 times with exponential backoff starting at 1s (1s, 2s, 4s … 512s) plus jitter. This means a saturated TEI queue will be retried for up to ~17 minutes before failing. No manual intervention needed for transient overload.
+
+### Locale path prefix matching
+`--exclude-path-prefix` (and the default locale list) treats both `/` and `-` as word boundaries. This means `/ja` blocks both `/ja/docs` and `/ja-jp/docs`. Pass `none` to disable all locale filtering.
+
 ### Text chunking
 `chunk_text()` splits at 2000 chars with 200-char overlap. Each chunk = one Qdrant point. Very long pages produce many points.
 
@@ -304,7 +329,7 @@ When Chrome feature is compiled in, `crawl()` expects a Chrome instance. `crawl_
 Pages with fewer than `--min-markdown-chars` (default: 200) are flagged as thin. If `--drop-thin-markdown true` (default), thin pages are skipped — not saved to disk or embedded.
 
 ### Collection must exist before upsert
-`ensure_collection()` issues a PUT to Qdrant to create or update the collection with the correct vector dimension. This is idempotent — safe to call on every embed.
+`ensure_collection()` does a GET first; only issues PUT on 404 (collection not found). This means it's safe on existing collections — no 409 Conflict. Safe to call on every embed.
 
 ### Sitemap backfill
 After a crawl, `append_sitemap_backfill()` discovers URLs via sitemap.xml that the crawler missed and fetches them individually. Respects `--max-sitemaps` (default: 512) and `--include-subdomains`.
@@ -315,6 +340,20 @@ The `Dockerfile` builds from `docker/Dockerfile`. The build command inside the c
 cargo build --release --bin axon
 ```
 `docker-compose.yaml` sets `context: .` — run `docker compose build` from this directory, not from a parent workspace.
+
+### `spider_agent` path dep (CI / fresh environments)
+`Cargo.toml` uses `spider_agent = { path = "../spider/spider_agent", ... }` for local dev with a sibling `spider/` checkout. In CI or any environment without that sibling repo, switch to the registry version:
+```toml
+spider_agent = { version = "2.45", default-features = false, features = ["search_tavily", "openai"] }
+```
+
+### Adding fields to `Config` struct
+When adding a new non-`Option` field to `Config` in `crates/core/config.rs`, you **must** also update the inline `Config { .. }` struct literals used in test helpers:
+- `crates/cli/commands/research.rs`
+- `crates/cli/commands/search.rs`
+- Any `make_test_config()` helpers in `crates/jobs/common/`
+
+These are struct literals — the compiler will fail if a new field is missing, but only at test compilation time, not `cargo check`.
 
 ## Performance Profiles
 
@@ -352,6 +391,18 @@ cargo test -- --nocapture     # show println! output
 ```bash
 cargo clippy
 cargo fmt --check
+```
+
+### just (Recommended)
+
+```bash
+just verify      # fmt-check + clippy + check + test (pre-PR gate)
+just fix         # cargo fmt + clippy --fix (auto-repair)
+just precommit   # full pre-commit: monolith check + verify
+just watch-check # cargo watch: check + test-lib on every file save
+just rebuild     # check + test + docker-build (pre-deploy gate)
+just up          # docker compose up -d --build
+just down        # docker compose down
 ```
 
 ### Run directly

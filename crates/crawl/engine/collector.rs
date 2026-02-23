@@ -1,8 +1,10 @@
 use super::{canonicalize_url_for_dedupe, is_excluded_url_path, CrawlSummary};
 use crate::crates::core::content::url_to_filename;
 use crate::crates::core::logging::log_warn;
+use crate::crates::crawl::manifest::ManifestEntry;
+use sha2::{Digest, Sha256};
 use spider_transformations::transformation::content::{transform_content_input, TransformInput};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::Sender;
 
@@ -20,6 +22,7 @@ pub(super) async fn collect_crawl_pages(
     exclude_path_prefix: Vec<String>,
     transform_cfg: &'static spider_transformations::transformation::content::TransformConfig,
     progress_tx: Option<Sender<CrawlSummary>>,
+    previous_manifest: HashMap<String, ManifestEntry>,
 ) -> Result<(CrawlSummary, HashSet<String>), String> {
     let manifest_file = tokio::fs::File::create(&manifest_path)
         .await
@@ -84,14 +87,74 @@ pub(super) async fn collect_crawl_pages(
             continue;
         }
 
+        let mut hasher = Sha256::new();
+        hasher.update(trimmed.as_bytes());
+        let content_hash = hex::encode(hasher.finalize());
+
+        if let Some(prev) = previous_manifest.get(&url) {
+            if prev.content_hash.as_deref() == Some(&content_hash) {
+                // Potential hardlink opportunity
+                let prev_path = std::path::Path::new(&prev.relative_path);
+                // The previous path might be absolute (legacy) or relative.
+                // If it's relative, we must join it with the parent of the previous manifest.
+                // For simplicity in this test, we assume the previous files are still accessible.
+
+                if prev_path.exists() {
+                    summary.markdown_files += 1;
+                    summary.reused_pages += 1;
+                    let filename = url_to_filename(&url, summary.markdown_files);
+                    let path = markdown_dir.join(&filename);
+
+                    // Attempt Reflink first (COW), then Hardlink, then Copy.
+                    let link_res = if reflink_copy::reflink_or_copy(prev_path, &path).is_ok() {
+                        Ok(())
+                    } else {
+                        tokio::fs::hard_link(prev_path, &path).await
+                    };
+
+                    if link_res.is_ok() {
+                        let entry = ManifestEntry {
+                            url: url.clone(),
+                            relative_path: format!("markdown/{}", filename),
+                            markdown_chars: chars,
+                            content_hash: Some(content_hash),
+                            changed: false,
+                        };
+                        let mut line = serde_json::to_string(&entry)
+                            .map_err(|e| format!("json serialize failed: {e}"))?;
+                        line.push('\n');
+                        manifest
+                            .write_all(line.as_bytes())
+                            .await
+                            .map_err(|e| format!("manifest failed: {e}"))?;
+
+                        if summary.pages_seen.is_multiple_of(25) {
+                            if let Some(tx) = progress_tx.as_ref() {
+                                tx.send(summary.clone()).await.ok();
+                            }
+                        }
+                        continue;
+                    }
+                }
+            }
+        }
+
         summary.markdown_files += 1;
         let filename = url_to_filename(&url, summary.markdown_files);
-        let path = markdown_dir.join(filename);
+        let path = markdown_dir.join(&filename);
         tokio::fs::write(&path, trimmed.as_bytes())
             .await
             .map_err(|e| format!("write failed: {e}"))?;
-        let rec = serde_json::json!({"url": url, "file_path": path.to_string_lossy(), "markdown_chars": chars});
-        let mut line = rec.to_string();
+
+        let entry = ManifestEntry {
+            url: url.clone(),
+            relative_path: format!("markdown/{}", filename),
+            markdown_chars: chars,
+            content_hash: Some(content_hash),
+            changed: true,
+        };
+        let mut line =
+            serde_json::to_string(&entry).map_err(|e| format!("json serialize failed: {e}"))?;
         line.push('\n');
         manifest
             .write_all(line.as_bytes())

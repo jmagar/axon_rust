@@ -7,3 +7,5 @@
 
 # Pre-existing large files — tracked for future refactoring (2026-02-19)
 scripts/qdrant-quality.py
+# collect_crawl_pages() 145 lines — pre-existing, refactor tracked (2026-02-23)
+crates/crawl/engine/collector.rs

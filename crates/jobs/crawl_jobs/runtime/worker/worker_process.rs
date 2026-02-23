@@ -1,6 +1,9 @@
 use crate::crates::core::config::{Config, RenderMode};
+use crate::crates::core::content::url_to_domain;
 use crate::crates::core::logging::{log_done, log_info, log_warn};
-use crate::crates::crawl::engine::{run_crawl_once, should_fallback_to_chrome, CrawlSummary};
+use crate::crates::crawl::engine::{
+    run_crawl_once, should_fallback_to_chrome, update_latest_reflink, CrawlSummary,
+};
 use crate::crates::jobs::batch_jobs::apply_queue_injection_with_pool;
 use crate::crates::jobs::embed_jobs::start_embed_job_with_pool;
 use crate::crates::jobs::status::JobStatus;
@@ -71,6 +74,8 @@ async fn process_job_impl(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), B
     Ok(())
 }
 
+const DEFAULT_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
+
 async fn maybe_complete_cache_hit(
     pool: &PgPool,
     id: Uuid,
@@ -79,6 +84,32 @@ async fn maybe_complete_cache_hit(
     if !ctx.job_cfg.cache || ctx.previous_urls.is_empty() {
         return Ok(false);
     }
+
+    // Check TTL of previous job result
+    if let Some((_, previous_result_json)) =
+        super::super::latest_completed_result_for_url(pool, &ctx.url, id).await?
+    {
+        let previous_manifest_path = previous_result_json
+            .get("output_dir")
+            .and_then(|v| v.as_str())
+            .map(|d| std::path::PathBuf::from(d).join("manifest.jsonl"));
+
+        if let Some(manifest_path) = previous_manifest_path {
+            if crate::crates::crawl::manifest::manifest_cache_is_stale(
+                &manifest_path,
+                DEFAULT_CACHE_TTL_SECS,
+            )
+            .await
+            {
+                log_info(&format!(
+                    "crawl job {id} cache source is stale (TTL {}s) — starting fresh crawl",
+                    DEFAULT_CACHE_TTL_SECS
+                ));
+                return Ok(false);
+            }
+        }
+    }
+
     let (report_path, diff_report) = write_audit_diff(
         &ctx.job_cfg.output_dir,
         &ctx.url,
@@ -210,6 +241,7 @@ async fn run_primary_with_optional_chrome_fallback(
         &ctx.job_cfg.output_dir,
         Some(progress_tx),
         false, // HTTP probe: sitemap runs in the final pass only
+        ctx.previous_manifest.clone(),
     )
     .await?;
 
@@ -230,6 +262,7 @@ async fn run_primary_with_optional_chrome_fallback(
         &ctx.job_cfg.output_dir,
         None,
         ctx.job_cfg.discover_sitemaps, // Chrome final pass: run sitemap if enabled
+        ctx.previous_manifest.clone(),
     )
     .await
     {
@@ -357,6 +390,14 @@ async fn run_active_crawl_job(
             });
 
         maybe_enqueue_embed_job(pool, ctx, id).await?;
+
+        let latest_dir = ctx.job_cfg.output_dir.parent().unwrap().join("latest");
+        if let Err(err) = update_latest_reflink(&ctx.job_cfg.output_dir, &latest_dir).await {
+            log_warn(&format!(
+                "failed to update 'latest' reflink for domain {}: {err}",
+                url_to_domain(&ctx.url)
+            ));
+        }
 
         let mut result_json = build_completed_result(
             ctx,

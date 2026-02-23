@@ -1,6 +1,6 @@
 # axon reddit
 
-Ingest a subreddit or Reddit thread into Qdrant. Authenticates via Reddit OAuth2, fetches posts and top-level comments, chunks the content, and embeds it into the configured Qdrant collection.
+Ingest a subreddit or Reddit thread into Qdrant. Authenticates via Reddit OAuth2 client credentials, fetches posts and comment threads, and embeds the content into the configured Qdrant collection.
 
 ## Synopsis
 
@@ -33,16 +33,21 @@ REDDIT_CLIENT_SECRET=your_client_secret
 
 1. Go to `https://www.reddit.com/prefs/apps`
 2. Click "create another app..."
-3. Choose "script" type
+3. Choose **"script"** type
 4. Set redirect URI to `http://localhost:8080` (not used, but required)
 5. Copy the client ID (shown under the app name) and secret
 
 ## Flags
 
-All global flags apply. Key flags for this command:
+All global flags apply. Reddit-specific flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--sort` | `hot` | Post sort order: `hot`, `top`, `new`, `rising` |
+| `--time` | `day` | Time range for `top` sort: `hour`, `day`, `week`, `month`, `year`, `all` |
+| `--max-posts` | `25` | Maximum posts to fetch (`0` for unlimited) |
+| `--min-score` | `0` | Minimum score threshold for posts and comments |
+| `--depth` | `2` | Comment thread traversal depth |
 | `--wait <bool>` | `false` | Block until the ingest job completes. |
 | `--collection <name>` | `cortex` | Qdrant collection to embed into. |
 | `--json` | `false` | Machine-readable JSON output. |
@@ -70,29 +75,23 @@ axon reddit rust
 # Synchronous — blocks until complete
 axon reddit rust --wait true
 
+# Top posts from the last month
+axon reddit rust --sort top --time month --max-posts 50 --wait true
+
 # Specific thread
 axon reddit "https://reddit.com/r/rust/comments/abc123/announcing_tokio_1_0"
 
-# Specific collection
-axon reddit MachineLearning --collection ml-discussions --wait true
+# Specific collection, higher comment depth
+axon reddit MachineLearning --collection ml-discussions --depth 5 --wait true
 
 # List all ingest jobs
 axon reddit list
 ```
 
-## Ingest Scope
-
-The ingest pipeline fetches:
-
-- Post titles and selftext (for text posts) or link content (for link posts)
-- Top-level comments and their top replies
-- Post scores, comment counts, and metadata (flair, author, timestamp)
-
-All content is chunked and embedded via TEI before upsert into Qdrant.
+> For authentication setup, pipeline internals, rate limits, and troubleshooting see [`docs/ingest/reddit.md`](../ingest/reddit.md).
 
 ## Notes
 
 - Reddit API uses OAuth2 client credentials flow (no user login required).
-- Rate limit: 60 requests/minute for OAuth2 apps.
-- The ingest job records are stored in the `axon_ingest_jobs` Postgres table with `source_type='reddit'` and `target` set to the subreddit name or URL.
-- Very active subreddits (e.g. `r/programming`) may have many posts; the ingest pipeline fetches the top/hot/new posts within a configurable window.
+- The command respects Reddit's 429 Retry-After responses automatically.
+- The ingest job record is stored in `axon_ingest_jobs` with `source_type='reddit'` and `target` set to the subreddit name or URL.

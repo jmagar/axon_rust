@@ -6,6 +6,7 @@ fn summary(pages_seen: u32, thin: u32, markdown_files: u32) -> CrawlSummary {
         thin_pages: thin,
         markdown_files,
         elapsed_ms: 0,
+        reused_pages: 0,
     }
 }
 

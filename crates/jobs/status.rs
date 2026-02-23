@@ -9,14 +9,16 @@ use std::fmt;
 ///
 /// # Usage in SQL
 ///
-/// ```rust
-/// use crate::crates::jobs::status::JobStatus;
-///
+/// ```rust,no_run
+/// # use axon::crates::jobs::status::JobStatus;
+/// # async fn example(pool: &sqlx::PgPool, id: uuid::Uuid) -> Result<(), sqlx::Error> {
 /// sqlx::query("UPDATE axon_embed_jobs SET status=$1 WHERE id=$2")
 ///     .bind(JobStatus::Completed.as_str())
 ///     .bind(id)
 ///     .execute(pool)
 ///     .await?;
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JobStatus {

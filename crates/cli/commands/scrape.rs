@@ -1,3 +1,4 @@
+use super::common::parse_urls;
 use crate::crates::core::config::{Config, RenderMode, ScrapeFormat};
 use crate::crates::core::content::{
     extract_meta_description, find_between, to_markdown, url_to_filename,
@@ -90,7 +91,18 @@ pub(crate) fn select_output(
     }
 }
 
-pub async fn run_scrape(cfg: &Config, url: &str) -> Result<(), Box<dyn Error>> {
+pub async fn run_scrape(cfg: &Config) -> Result<(), Box<dyn Error>> {
+    let urls = parse_urls(cfg);
+    if urls.is_empty() {
+        return Err("scrape requires at least one URL (positional or --urls)".into());
+    }
+    for url in &urls {
+        scrape_one(cfg, url).await?;
+    }
+    Ok(())
+}
+
+async fn scrape_one(cfg: &Config, url: &str) -> Result<(), Box<dyn Error>> {
     let normalized = normalize_url(url);
 
     print_phase("◐", "Scraping", &normalized);

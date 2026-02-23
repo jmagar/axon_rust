@@ -1,14 +1,13 @@
 use crate::crates::core::config::{Config, RenderMode};
-use crate::crates::jobs::batch_jobs::InjectionCandidate;
+pub(crate) use crate::crates::crawl::manifest::{
+    read_manifest_candidates, read_manifest_urls, write_audit_diff,
+};
 use crate::crates::jobs::common::JobTable;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
-use std::collections::HashSet;
 use std::error::Error;
-use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use tokio;
 use uuid::Uuid;
 
 static SCHEMA_INIT: OnceLock<()> = OnceLock::new();
@@ -99,18 +98,6 @@ fn to_job_config(cfg: &Config) -> CrawlJobConfig {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct CrawlAuditDiff {
-    start_url: String,
-    previous_count: usize,
-    current_count: usize,
-    added_count: usize,
-    removed_count: usize,
-    unchanged_count: usize,
-    cache_hit: bool,
-    cache_source: Option<String>,
-}
-
 fn resolve_initial_mode(render_mode: RenderMode, cache_skip_browser: bool) -> RenderMode {
     if cache_skip_browser {
         return RenderMode::Http;
@@ -119,87 +106,6 @@ fn resolve_initial_mode(render_mode: RenderMode, cache_skip_browser: bool) -> Re
         RenderMode::AutoSwitch => RenderMode::Http,
         mode => mode,
     }
-}
-
-async fn read_manifest_urls(path: &Path) -> Result<HashSet<String>, Box<dyn Error>> {
-    if !tokio::fs::try_exists(path).await? {
-        return Ok(HashSet::new());
-    }
-    let content = tokio::fs::read_to_string(path).await?;
-    let mut out = HashSet::new();
-    for line in content
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        let Some(url) = json.get("url").and_then(|value| value.as_str()) else {
-            continue;
-        };
-        out.insert(url.to_string());
-    }
-    Ok(out)
-}
-
-async fn read_manifest_candidates(path: &Path) -> std::io::Result<Vec<InjectionCandidate>> {
-    if !tokio::fs::try_exists(path).await? {
-        return Ok(Vec::new());
-    }
-    let content = tokio::fs::read_to_string(path).await?;
-    let mut out = Vec::new();
-    for line in content
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        let Some(url) = json.get("url").and_then(|value| value.as_str()) else {
-            continue;
-        };
-        let Some(markdown_chars) = json.get("markdown_chars").and_then(|value| value.as_u64())
-        else {
-            continue;
-        };
-        out.push(InjectionCandidate {
-            url: url.to_string(),
-            markdown_chars: markdown_chars as usize,
-        });
-    }
-    Ok(out)
-}
-
-async fn write_audit_diff(
-    output_dir: &Path,
-    start_url: &str,
-    previous: &HashSet<String>,
-    current: &HashSet<String>,
-    cache_hit: bool,
-    cache_source: Option<String>,
-) -> Result<(PathBuf, CrawlAuditDiff), Box<dyn Error>> {
-    let unchanged_count = previous.intersection(current).count();
-    let added_count = current.difference(previous).count();
-    let removed_count = previous.difference(current).count();
-    let report = CrawlAuditDiff {
-        start_url: start_url.to_string(),
-        previous_count: previous.len(),
-        current_count: current.len(),
-        added_count,
-        removed_count,
-        unchanged_count,
-        cache_hit,
-        cache_source,
-    };
-
-    let audit_dir = output_dir.join("audit");
-    tokio::fs::create_dir_all(&audit_dir).await?;
-    let report_path = audit_dir.join("diff-report.json");
-    let payload = serde_json::to_string_pretty(&report)?;
-    tokio::fs::write(&report_path, payload).await?;
-    Ok((report_path, report))
 }
 
 mod db;
