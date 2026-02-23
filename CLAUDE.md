@@ -1,6 +1,6 @@
 # axon_cli — Axon CLI (Rust + Spider.rs)
 
-Web crawl, scrape, batch, extract, embed, and query — all in one binary backed by a self-hosted RAG stack.
+Web crawl, scrape, extract, embed, and query — all in one binary backed by a self-hosted RAG stack.
 
 ## Quick Start
 
@@ -26,10 +26,9 @@ cargo run --bin axon -- scrape https://example.com --wait true
 
 | Command | Purpose | Async? |
 |---------|---------|--------|
-| `scrape <url>` | Single-page scrape to markdown | No |
-| `crawl <url>` | Full site crawl, saves markdown files | Yes (default) |
+| `scrape <url>...` | Scrape one or more URLs to markdown | No |
+| `crawl <url>...` | Full site crawl for one or more start URLs | Yes (default) |
 | `map <url>` | Discover all URLs without scraping | No |
-| `batch <urls...>` | Bulk scrape multiple URLs | Yes (default) |
 | `extract <urls...>` | LLM-powered structured data extraction | Yes (default) |
 | `search <query>` | Web search via Tavily, auto-queues crawl jobs for results | No |
 | `research <query>` | Web research via Tavily AI search with LLM synthesis | No |
@@ -50,7 +49,7 @@ cargo run --bin axon -- scrape https://example.com --wait true
 | `doctor` | Diagnose service connectivity | No |
 | `debug` | Run doctor + LLM-assisted troubleshooting | No |
 
-### Job Subcommands (for crawl / batch / extract / embed)
+### Job Subcommands (for crawl / extract / embed)
 
 ```bash
 axon crawl status <job_id>
@@ -154,7 +153,7 @@ axon_rust/
 │   ├── mod.rs              # pub mod cli, core, crawl, ingest, jobs, vector
 │   ├── cli/
 │   │   ├── mod.rs
-│   │   └── commands/       # One file per command (scrape, crawl, map, batch, …)
+│   │   └── commands/       # One file per command (scrape, crawl, map, extract, …)
 │   │       ├── common.rs   # URL parsing utilities: parse_urls, expand_url_glob_seed
 │   │       └── probe.rs    # HTTP probe helpers used by doctor
 │   ├── core/
@@ -300,7 +299,7 @@ The CLI auto-detects whether it's running inside Docker:
 ## Gotchas
 
 ### `--wait false` (default) = fire-and-forget
-By default, `crawl`, `batch`, `extract`, and `embed` enqueue jobs and return immediately. Use `--wait true` to block until completion. Without workers running, enqueued jobs will pend forever.
+By default, `crawl`, `extract`, and `embed` enqueue jobs and return immediately. Use `--wait true` to block until completion. Without workers running, enqueued jobs will pend forever.
 
 ### `render-mode auto-switch`
 The default mode. Runs an HTTP crawl first; if >60% of pages are thin (<200 chars) or total coverage is too low, automatically retries with Chrome. Chrome requires a running Chrome instance — if none is available, the HTTP result is kept.

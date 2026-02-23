@@ -285,10 +285,9 @@ Axon implements a multi-layered incremental crawl mechanism to minimize network 
 
 | Command | Purpose | Async? |
 |---------|---------|--------|
-| `scrape <url>` | Single-page scrape to markdown | No |
-| `crawl <url>` | Full site crawl, saves markdown files | Yes (default) |
+| `scrape <url>...` | Scrape one or more URLs to markdown | No |
+| `crawl <url>...` | Full site crawl for one or more start URLs | Yes (default) |
 | `map <url>` | Discover all URLs without scraping | No |
-| `batch <urls...>` | Bulk scrape multiple URLs | Yes (default) |
 | `extract <urls...>` | LLM-powered structured data extraction | Yes (default) |
 | `search <query>` | Web search via Tavily, auto-queues crawl jobs for results | No |
 | `research <query>` | Web research via Tavily AI search with LLM synthesis | No |
@@ -311,7 +310,7 @@ Axon implements a multi-layered incremental crawl mechanism to minimize network 
 | `debug` | Run doctor + LLM-assisted troubleshooting | No |
 | `dedupe` | Remove duplicate vectors from Qdrant collection | No |
 
-### Job Subcommands (for crawl / batch / extract / embed)
+### Job Subcommands (for crawl / extract / embed)
 
 ```bash
 axon crawl status <job_id>
@@ -616,7 +615,7 @@ Differs from the other four tables: uses `source_type` + `target` instead of `ur
 ## Gotchas
 
 ### `--wait false` (default) = fire-and-forget
-By default, `crawl`, `batch`, `extract`, and `embed` enqueue jobs and return immediately. Use `--wait true` to block until completion. Without workers running, enqueued jobs will pend forever.
+By default, `crawl`, `extract`, and `embed` enqueue jobs and return immediately. Use `--wait true` to block until completion. Without workers running, enqueued jobs will pend forever.
 
 ### Armory Structure: Domain-Grouped
 Axon now organizes its spoils by domain to make the armory more browseable.
