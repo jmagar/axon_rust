@@ -31,13 +31,18 @@ cargo run --bin axon -- scrape https://example.com --wait true
 | `map <url>` | Discover all URLs without scraping | No |
 | `batch <urls...>` | Bulk scrape multiple URLs | Yes (default) |
 | `extract <urls...>` | LLM-powered structured data extraction | Yes (default) |
-| `search <query>` | Web search (requires search provider) | No |
+| `search <query>` | Web search via Tavily, auto-queues crawl jobs for results | No |
+| `research <query>` | Web research via Tavily AI search with LLM synthesis | No |
 | `embed [input]` | Embed file/dir/URL into Qdrant | Yes (default) |
 | `query <text>` | Semantic vector search | No |
 | `retrieve <url>` | Fetch stored document chunks from Qdrant | No |
 | `ask <question>` | RAG: search + LLM answer | No |
 | `evaluate <question>` | RAG vs baseline + independent LLM judge (accuracy, relevance, completeness, specificity, verdict) | No |
 | `suggest [focus]` | Suggest new docs URLs to crawl | No |
+| `github <repo>` | Ingest GitHub repo (code, issues, PRs, wiki) into Qdrant | Yes (default) |
+| `reddit <target>` | Ingest subreddit posts/comments into Qdrant | Yes (default) |
+| `youtube <url>` | Ingest YouTube video transcript via yt-dlp into Qdrant | Yes (default) |
+| `sessions [format]` | Ingest AI session exports (Claude/Codex/Gemini) into Qdrant | No |
 | `sources` | List all indexed URLs + chunk counts | No |
 | `domains` | List indexed domains + stats | No |
 | `stats` | Qdrant collection stats | No |
@@ -159,20 +164,17 @@ axon_rust/
 │   │   ├── http.rs         # build_client(), fetch_html(), validate_url() (SSRF guard — blocks private IPs/ports)
 │   │   ├── logging.rs      # log_info(), log_warn(), log_done() structured output
 │   │   └── ui.rs           # ANSI color helpers (primary, accent, muted, status_text)
-│   ├── crawl/
+    ├── crawl/
 │   │   ├── mod.rs
 │   │   └── engine.rs       # crawl_and_collect_map(), run_crawl_once(),
 │   │                       # crawl_sitemap_urls(), append_sitemap_backfill(),
 │   │                       # try_auto_switch(), should_fallback_to_chrome()
-│   # (extract module removed — LLM extraction is in vector/ops_v2/commands/)
 │   ├── jobs/               # AMQP-backed async job workers
 │   │   ├── common.rs       # Shared infra: make_pool, open_amqp_channel, claim_next_pending
-│   │   ├── crawl_jobs_v2/  # V2 crawl pipeline (config, manifest, processor, repo, sitemap, watchdog, worker, runtime)
+│   │   ├── crawl_jobs/     # Crawl pipeline (manifest, processor, repo, sitemap, watchdog, worker, runtime)
 │   │   ├── batch_jobs.rs, extract_jobs.rs, embed_jobs.rs
 │   └── vector/
-│       ├── mod.rs, ops_dispatch.rs
-│       │   # ops_dispatch.rs: re-exports all v2 ops (embed, query, retrieve, ask, evaluate, suggest, sources, domains, stats, dedupe)
-│       └── ops_v2/         # V2 ops: commands, input, qdrant, ranking, stats, tei
+│       ├── mod.rs, ops/    # Vector ops: commands, input, qdrant, ranking, stats, tei
 ├── docker/
 │   ├── Dockerfile          # Multi-stage build; s6-overlay for service supervision
 │   └── s6/
@@ -193,7 +195,7 @@ axon_rust/
 | `axon-redis` | redis:8.2-alpine | `53379` | Queue state / caching |
 | `axon-rabbitmq` | rabbitmq:4.0-management | `45535` | AMQP job queue |
 | `axon-qdrant` | qdrant/qdrant:v1.13.1 | `53333`, `53334` (gRPC) | Vector store |
-| `axon-webdriver` | selenium/standalone-chrome:4.34.0 | `4444` (WebDriver), `7900` (VNC) | Browser fallback |
+| `axon-chrome` | built from Dockerfile.chrome | `6000` (management), `9222` (CDP proxy) | headless_browser + chrome-headless-shell |
 | `axon-workers` | built from Dockerfile | — | 4 workers (crawl/batch/extract/embed) |
 
 All services live on the `axon` bridge network. Data persisted to `/home/jmagar/appdata/axon-*`.
@@ -245,15 +247,24 @@ OPENAI_BASE_URL=http://YOUR_LLM_HOST/v1
 OPENAI_API_KEY=your-key-or-empty
 OPENAI_MODEL=your-model-name
 
-# WebDriver for browser fallback (axon-webdriver runs at localhost:4444)
-AXON_WEBDRIVER_URL=http://127.0.0.1:4444
+# CDP endpoint for headless_browser (axon-chrome management API)
+AXON_CHROME_REMOTE_URL=http://axon-chrome:6000
 
 # Optional queue name overrides
 AXON_CRAWL_QUEUE=axon.crawl.jobs
 AXON_BATCH_QUEUE=axon.batch.jobs
 AXON_EXTRACT_QUEUE=axon.extract.jobs
 AXON_EMBED_QUEUE=axon.embed.jobs
+AXON_INGEST_QUEUE=axon.ingest.jobs
 AXON_COLLECTION=cortex              # Qdrant collection (default: cortex)
+
+# Search and research (required for search/research commands)
+TAVILY_API_KEY=your-tavily-api-key
+
+# Ingest credentials (required for github/reddit/youtube commands)
+GITHUB_TOKEN=                       # optional — raises GitHub rate limits
+REDDIT_CLIENT_ID=                   # required for reddit command
+REDDIT_CLIENT_SECRET=               # required for reddit command
 ```
 
 ### Dev vs Container URL Resolution
@@ -281,7 +292,7 @@ When Chrome feature is compiled in, `crawl()` expects a Chrome instance. `crawl_
 - **Wrong:** `OPENAI_BASE_URL=http://host/v1/chat/completions` — double path
 
 ### TEI batch size / 413 handling
-`tei_embed()` in `vector/ops_v2/tei.rs` auto-splits batches on HTTP 413 (Payload Too Large). Set `TEI_MAX_CLIENT_BATCH_SIZE` env var to control default chunk size (default: 64, max: 128).
+`tei_embed()` in `vector/ops/tei.rs` auto-splits batches on HTTP 413 (Payload Too Large). Set `TEI_MAX_CLIENT_BATCH_SIZE` env var to control default chunk size (default: 64, max: 128).
 
 ### Text chunking
 `chunk_text()` splits at 2000 chars with 200-char overlap. Each chunk = one Qdrant point. Very long pages produce many points.
@@ -382,8 +393,11 @@ Tables are auto-created via `ensure_schema()` in each `*_jobs.rs`. Full column d
 | `axon_batch_jobs` | `id`, `status`, `urls_json`, `config_json`, `result_json` |
 | `axon_extract_jobs` | `id`, `status`, `urls_json`, `config_json`, `result_json` |
 | `axon_embed_jobs` | `id`, `status`, `input_text`, `config_json`, `result_json` |
+| `axon_ingest_jobs` | `id`, `source_type`, `target`, `status`, `config_json`, `result_json` — partial index on pending |
 
 All tables share: `created_at`, `updated_at`, `started_at`, `finished_at` (TIMESTAMPTZ), `error_text` (TEXT).
+
+`axon_ingest_jobs` differs from the others: it uses `source_type` (`github`/`reddit`/`youtube`) + `target` instead of `url` or `urls_json` to identify the ingest target.
 
 ## Code Style
 

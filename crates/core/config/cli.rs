@@ -20,6 +20,7 @@ pub(super) enum CliCommand {
     Batch(BatchArgs),
     Extract(ExtractArgs),
     Search(TextArg),
+    Research(TextArg),
     Embed(EmbedArgs),
     Debug(TextArg),
     Doctor,
@@ -36,6 +37,7 @@ pub(super) enum CliCommand {
     Github(GithubArgs),
     Reddit(RedditArgs),
     Youtube(YoutubeArgs),
+    Sessions(SessionsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -135,24 +137,35 @@ pub(super) struct YoutubeArgs {
     pub(super) url: Option<String>,
 }
 
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub(super) struct SessionsArgs {
+    #[command(subcommand)]
+    pub(super) job: Option<JobSubcommand>,
+    /// Index Claude Code sessions
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub(super) claude: bool,
+    /// Index Codex sessions
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub(super) codex: bool,
+    /// Index Gemini sessions
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub(super) gemini: bool,
+    /// Filter sessions by project name (substring match)
+    #[arg(long, value_name = "NAME")]
+    pub(super) project: Option<String>,
+}
+
 #[derive(Debug, Subcommand)]
 pub(super) enum JobSubcommand {
-    Status {
-        job_id: String,
-    },
-    Cancel {
-        job_id: String,
-    },
-    Errors {
-        job_id: String,
-    },
+    Status { job_id: String },
+    Cancel { job_id: String },
+    Errors { job_id: String },
     List,
     Cleanup,
     Clear,
     Worker,
     Recover,
-    #[command(hide = true)]
-    Doctor,
 }
 
 #[derive(Debug, Args)]
@@ -270,6 +283,9 @@ pub(super) struct GlobalArgs {
     #[arg(global = true, long, action = ArgAction::SetTrue)]
     pub(super) json: bool,
 
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
+    pub(super) crawl_from_result: bool,
+
     #[arg(global = true, long, value_enum, default_value_t = PerformanceProfile::HighStable)]
     pub(super) performance_profile: PerformanceProfile,
 
@@ -280,13 +296,10 @@ pub(super) struct GlobalArgs {
     pub(super) crawl_concurrency_limit: Option<usize>,
 
     #[arg(global = true, long)]
-    pub(super) sitemap_concurrency_limit: Option<usize>,
-
-    #[arg(global = true, long)]
     pub(super) backfill_concurrency_limit: Option<usize>,
 
-    #[arg(global = true, long, default_value_t = 512)]
-    pub(super) max_sitemaps: usize,
+    #[arg(global = true, long, action = ArgAction::SetTrue)]
+    pub(super) sitemap_only: bool,
 
     #[arg(global = true, long, default_value_t = 0)]
     pub(super) delay_ms: u64,
@@ -364,4 +377,52 @@ pub(super) struct GlobalArgs {
 
     #[arg(global = true, long)]
     pub(super) cron_max_runs: Option<usize>,
+
+    /// Deduplicate trailing-slash URL variants during crawl. Disable with `--normalize false`.
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
+    pub(super) normalize: bool,
+
+    /// Seconds to wait for Chrome network idle before page capture. Default: 15.
+    #[arg(global = true, long, default_value_t = 15)]
+    pub(super) chrome_network_idle_timeout: u64,
+
+    /// Thin-page ratio to trigger auto-switch to Chrome (0.0–1.0). Default: 0.60.
+    #[arg(global = true, long, default_value_t = 0.60)]
+    pub(super) auto_switch_thin_ratio: f64,
+
+    /// Minimum pages before auto-switch eligibility check. Default: 10.
+    #[arg(global = true, long, default_value_t = 10)]
+    pub(super) auto_switch_min_pages: usize,
+
+    /// Only crawl URLs matching these regex patterns (repeatable). Default: none.
+    #[arg(global = true, long)]
+    pub(super) url_whitelist: Vec<String>,
+
+    /// Block asset downloads (images/CSS/fonts) during crawl.
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
+    pub(super) block_assets: bool,
+
+    /// Maximum response size per page in bytes (0 = unlimited). Default: 0.
+    #[arg(global = true, long, default_value_t = 0)]
+    pub(super) max_page_bytes: u64,
+
+    /// Only follow same-origin redirects (strict redirect policy).
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
+    pub(super) redirect_policy_strict: bool,
+
+    /// CSS selector to wait for before Chrome captures the page. Default: none.
+    #[arg(global = true, long)]
+    pub(super) chrome_wait_for_selector: Option<String>,
+
+    /// Capture full-page PNG screenshots during Chrome crawl.
+    #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
+    pub(super) chrome_screenshot: bool,
+
+    /// Research crawl depth limit for the research command. Default: none.
+    #[arg(global = true, long)]
+    pub(super) research_depth: Option<usize>,
+
+    /// Time range filter for search (day|week|month|year). Default: none.
+    #[arg(global = true, long)]
+    pub(super) search_time_range: Option<String>,
 }

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use crate::crates::core::http::build_client;
 
 pub fn with_path(base: &str, path: &str) -> String {
     let trimmed = base.trim_end_matches('/');
@@ -14,10 +14,8 @@ pub async fn probe_http(url: &str, paths: &[&str]) -> (bool, Option<String>) {
         return (false, Some("not configured".to_string()));
     }
 
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(4))
-        .build()
-    {
+    // Short 4s timeout for health probes — intentionally not the global 30s client.
+    let client = match build_client(4) {
         Ok(c) => c,
         Err(err) => return (false, Some(err.to_string())),
     };

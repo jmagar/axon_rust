@@ -22,8 +22,8 @@ Axon is a single CLI for crawl/scrape/extract plus local vector retrieval and Q&
 - `crates/cli` — command routing and UX
 - `crates/core` — config, HTTP, health checks, logging, content transforms
 - `crates/crawl` — crawling engine and sitemap backfill
-- `crates/extract` — placeholder module (extraction logic lives in `vector/ops_v2`)
-- `crates/jobs` — queue workers for crawl/batch/extract/embed (v2 crawl pipeline)
+- `crates/extract` — placeholder module (extraction logic lives in `vector/ops`)
+- `crates/jobs` — queue workers for crawl/batch/extract/embed
 - `crates/vector` — embeddings + Qdrant operations (`query/retrieve/ask/evaluate/suggest/sources/domains/stats/dedupe`)
 
 ```
@@ -45,7 +45,6 @@ axon_rust/
 │   │       └── scrape.rs, map.rs, batch.rs, embed.rs, extract.rs,
 │   │           search.rs, status.rs, debug.rs, doctor/,
 │   │           github.rs, reddit.rs, youtube.rs
-│   │           # evaluate + dedupe dispatch through vector/ops_dispatch.rs
 │   ├── core/
 │   │   ├── config/         # CLI parsing (clap), Config struct, performance profiles
 │   │   │   ├── cli.rs      # clap arg definitions (GlobalArgs, subcommand args)
@@ -67,7 +66,7 @@ axon_rust/
 │   │       ├── sitemap.rs  # crawl_sitemap_urls(), append_sitemap_backfill()
 │   │       └── tests.rs
 │   ├── extract/
-│   │   └── mod.rs          # (placeholder; LLM extraction is in vector/ops_v2)
+│   │   └── mod.rs          # (placeholder; LLM extraction is in vector/ops)
 │   ├── jobs/               # AMQP-backed async job workers
 │   │   ├── mod.rs
 │   │   ├── common.rs       # Shared infrastructure: make_pool, open_amqp_channel,
@@ -80,7 +79,7 @@ axon_rust/
 │   │   │   └── tests.rs
 │   │   ├── extract_jobs/   # Extract worker
 │   │   │   ├── worker.rs, tests.rs
-│   │   └── crawl_jobs_v2/  # V2 crawl pipeline (modular)
+│   │   └── crawl_jobs/     # Crawl pipeline (modular)
 │   │       ├── mod.rs, manifest.rs, processor.rs, repo.rs,
 │   │       │   sitemap.rs, watchdog.rs, worker.rs
 │   │       └── runtime/
@@ -90,8 +89,7 @@ axon_rust/
 │   │               └── worker_process/
 │   └── vector/
 │       ├── mod.rs
-│       ├── ops_dispatch.rs  # Dispatcher: routes to v2 ops; chunk_text(), embed_path_native()
-│       └── ops_v2/          # V2 vector ops (modular)
+│       └── ops/            # Vector ops (modular)
 │           ├── input.rs, ranking.rs, tei.rs
 │           ├── commands/    # Per-command handlers
 │           │   ├── ask/, evaluate.rs, query.rs, streaming.rs, suggest.rs
@@ -124,7 +122,7 @@ axon_rust/
 - `axon-redis` -> `localhost:53379`
 - `axon-rabbitmq` -> `localhost:45535`
 - `axon-qdrant` -> `localhost:53333` (HTTP), `53334` (gRPC)
-- `axon-webdriver` -> `localhost:4444` (WebDriver), `localhost:7900` (VNC)
+- `axon-chrome` -> `localhost:6000` (management API), `localhost:9222` (CDP proxy)
 - `axon-workers` (s6-supervised worker container; depends on all infra being healthy)
 
 Services run on the `axon` bridge network with persistent volumes under `/home/jmagar/appdata/axon-*`.
@@ -186,8 +184,19 @@ Copy `.env.example` to `.env`. At minimum set the `[REQUIRED]` vars:
 | `AXON_BATCH_QUEUE` | `axon.batch.jobs` | Batch job queue name |
 | `AXON_EXTRACT_QUEUE` | `axon.extract.jobs` | Extract job queue name |
 | `AXON_EMBED_QUEUE` | `axon.embed.jobs` | Embed job queue name |
+| `AXON_INGEST_QUEUE` | `axon.ingest.jobs` | Ingest job queue name (github/reddit/youtube) |
+| `AXON_INGEST_LANES` | `2` | Number of parallel ingest worker lanes |
 | `AXON_COLLECTION` | `cortex` | Qdrant collection name |
-| `AXON_QUEUE_INJECTION_RULES_JSON` | — | JSON rules for queue routing overrides |
+| `AXON_QUEUE_INJECTION_RULES_JSON` | — | JSON array of `QueueInjectionRule` objects controlling which batch-scraped pages are forwarded to the extract queue. Each rule has `name`, `min_markdown_chars`, `min_quality_score`, `max_urls`, and `url_contains_any` fields. Defaults to three built-in rules (`docs-first`, `tutorial-longform`, `high-signal-catchall`). |
+
+### Optional Ingest Credentials
+
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_TOKEN` | Personal access token for private repos and higher GitHub API rate limits (optional — public repos work without it) |
+| `REDDIT_CLIENT_ID` | OAuth2 client ID from `https://www.reddit.com/prefs/apps` (required for `reddit` command) |
+| `REDDIT_CLIENT_SECRET` | OAuth2 client secret (required for `reddit` command) |
+| `TAVILY_API_KEY` | Tavily AI Search API key (required for `search` and `research` commands) |
 
 ### Optional Browser / WebDriver
 
@@ -223,6 +232,21 @@ Copy `.env.example` to `.env`. At minimum set the `[REQUIRED]` vars:
 | `AXON_LOG_MAX_BYTES` | `10485760` | Max bytes per log file before rotation (10MB) |
 | `AXON_LOG_MAX_FILES` | `3` | Total log files to keep (`axon.log`, `.1`, `.2`) |
 
+### ask RAG Tuning
+
+The `ask` command retrieves chunks from Qdrant, reranks them, and builds a context window before calling the LLM. The following env vars tune that pipeline:
+
+| Variable | Default | Clamp | Description |
+|----------|---------|-------|-------------|
+| `AXON_ASK_MIN_RELEVANCE_SCORE` | `0.45` | `-1.0`–`2.0` | Minimum Qdrant similarity score for a chunk to enter the context. Raise to tighten relevance; lower if you get "no candidates" errors on sparse collections. |
+| `AXON_ASK_CANDIDATE_LIMIT` | `64` | `8`–`200` | Chunks retrieved from Qdrant before reranking. Higher values improve recall at the cost of reranking time. |
+| `AXON_ASK_CHUNK_LIMIT` | `10` | `3`–`40` | Maximum chunks included in the LLM prompt after reranking. |
+| `AXON_ASK_FULL_DOCS` | `4` | `1`–`20` | Number of top-scoring documents for which a full-doc backfill is attempted (fetches more chunks from the same doc). |
+| `AXON_ASK_BACKFILL_CHUNKS` | `3` | `0`–`20` | Extra chunks added per full-doc backfill pass. Set to `0` to disable backfill. |
+| `AXON_ASK_DOC_FETCH_CONCURRENCY` | `4` | `1`–`16` | Concurrent Qdrant fetches during full-doc backfill. |
+| `AXON_ASK_DOC_CHUNK_LIMIT` | `192` | `8`–`2000` | Maximum chunks fetched per document during backfill. |
+| `AXON_ASK_MAX_CONTEXT_CHARS` | `120000` | `20000`–`400000` | Total characters of context passed to the LLM. Raise for large-context models; lower to reduce token cost. |
+
 ### Legacy Aliases
 
 `NUQ_DATABASE_URL`, `NUQ_RABBITMQ_URL`, `REDIS_URL` are accepted as fallbacks for `AXON_PG_URL`, `AXON_AMQP_URL`, `AXON_REDIS_URL` respectively. `WEBDRIVER_URL` is accepted as a fallback for `AXON_WEBDRIVER_URL`.
@@ -256,13 +280,18 @@ Worker behavior notes:
 | `map <url>` | Discover all URLs without scraping | No |
 | `batch <urls...>` | Bulk scrape multiple URLs | Yes (default) |
 | `extract <urls...>` | LLM-powered structured data extraction | Yes (default) |
-| `search <query>` | Web search (requires search provider) | No |
+| `search <query>` | Web search via Tavily, auto-queues crawl jobs for results | No |
+| `research <query>` | Web research via Tavily AI search with LLM synthesis | No |
 | `embed [input]` | Embed file/dir/URL into Qdrant | Yes (default) |
 | `query <text>` | Semantic vector search | No |
 | `retrieve <url>` | Fetch stored document chunks from Qdrant | No |
 | `ask <question>` | RAG: search + LLM answer | No |
 | `evaluate <question>` | RAG vs baseline + LLM judge (accuracy · relevance · completeness · verdict) | No |
 | `suggest [focus]` | Suggest complementary docs URLs not already indexed | No |
+| `github <repo>` | Ingest GitHub repo (code, issues, PRs, wiki) into Qdrant | Yes (default) |
+| `reddit <target>` | Ingest subreddit posts/comments into Qdrant | Yes (default) |
+| `youtube <url>` | Ingest YouTube video transcript via yt-dlp into Qdrant | Yes (default) |
+| `sessions [format]` | Ingest AI session exports (Claude/Codex/Gemini) into Qdrant | No |
 | `sources` | List all indexed URLs + chunk counts | No |
 | `domains` | List indexed domains + stats | No |
 | `stats` | Qdrant collection stats | No |
@@ -283,6 +312,22 @@ axon crawl clear
 axon crawl recover    # reclaim stale/interrupted jobs
 axon crawl worker     # run a worker inline
 ```
+
+### Job Subcommands (for github / reddit / youtube)
+
+The ingest commands share the same subcommand routing:
+
+```bash
+axon github status <job_id>
+axon github cancel <job_id>
+axon github list
+axon github cleanup
+axon github clear
+axon github recover    # reclaim stale/interrupted jobs
+axon github worker     # run an ingest worker inline
+```
+
+The same subcommands work with `axon reddit ...` and `axon youtube ...`.
 
 ### Global Flags Reference
 
@@ -430,7 +475,7 @@ Concurrency tuned relative to available CPU cores:
   - `axon embed recover`
 - `ask`/`extract` failures: verify `OPENAI_BASE_URL` is a base URL (e.g. `http://host/v1`, not `/chat/completions`)
 - `embed`/`query` failures: verify `TEI_URL` and `QDRANT_URL`
-- Browser fallback failures: verify `AXON_WEBDRIVER_URL` points to a live WebDriver endpoint (e.g. `http://127.0.0.1:4444`). The `axon-webdriver` compose service exposes this at `127.0.0.1:4444` when running.
+- Browser fallback failures: verify `AXON_CHROME_REMOTE_URL` points to a live Chrome management endpoint (e.g. `http://127.0.0.1:6000`). The `axon-chrome` compose service exposes this at `127.0.0.1:6000` (management) and `127.0.0.1:9222` (CDP proxy) when running.
 
 ## Monolith Guardrails
 
@@ -526,13 +571,33 @@ Tables are auto-created on first worker/command start via `CREATE TABLE IF NOT E
 | `result_json` | JSONB | NULL | — | Embedding results (chunk count, point IDs) |
 | `config_json` | JSONB | NOT NULL | — | Serialized job configuration |
 
+### axon_ingest_jobs
+
+Differs from the other four tables: uses `source_type` + `target` instead of `url` or `urls_json` to identify the ingest target, and has no `urls_json` or `input_text` column.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `id` | UUID | NOT NULL | — | Primary key |
+| `status` | TEXT | NOT NULL | — | `pending` / `running` / `completed` / `failed` / `canceled` |
+| `source_type` | TEXT | NOT NULL | — | Discriminator: `github`, `reddit`, or `youtube` |
+| `target` | TEXT | NOT NULL | — | Ingest target: repo name (`owner/repo`), subreddit, or YouTube URL |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Job creation timestamp |
+| `updated_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Last status change |
+| `started_at` | TIMESTAMPTZ | NULL | — | When worker began processing |
+| `finished_at` | TIMESTAMPTZ | NULL | — | When job completed/failed/canceled |
+| `error_text` | TEXT | NULL | — | Error message on failure |
+| `result_json` | JSONB | NULL | — | Ingest results (`{"chunks_embedded": N}`) |
+| `config_json` | JSONB | NOT NULL | — | Serialized `IngestJobConfig` (source variant + collection) |
+
+**Index:** `idx_axon_ingest_jobs_pending` — partial index on `created_at ASC WHERE status = 'pending'` for efficient FIFO queue polling.
+
 ## Gotchas
 
 ### `--wait false` (default) = fire-and-forget
 By default, `crawl`, `batch`, `extract`, and `embed` enqueue jobs and return immediately. Use `--wait true` to block until completion. Without workers running, enqueued jobs will pend forever.
 
 ### `render-mode auto-switch`
-The default mode. Runs an HTTP crawl first; if >60% of pages are thin (<200 chars) or total coverage is too low, automatically retries with Chrome. Chrome requires `axon-webdriver` running — if unreachable, the HTTP result is kept.
+The default mode. Runs an HTTP crawl first; if >60% of pages are thin (<200 chars) or total coverage is too low, automatically retries with Chrome. Chrome requires `axon-chrome` running — if unreachable, the HTTP result is kept.
 
 ### `crawl_raw()` vs `crawl()`
 When Chrome feature is compiled in, `crawl()` expects a Chrome instance. `crawl_raw()` is pure HTTP and always works. `engine.rs` calls `crawl_raw()` for `RenderMode::Http` and `crawl()` for Chrome/AutoSwitch.
@@ -543,7 +608,7 @@ When Chrome feature is compiled in, `crawl()` expects a Chrome instance. `crawl_
 - **Wrong:** `OPENAI_BASE_URL=http://host/v1/chat/completions` — double path
 
 ### TEI batch size / 413 handling
-`tei_embed()` in `vector/ops_v2/tei.rs` auto-splits batches on HTTP 413 (Payload Too Large). Set `TEI_MAX_CLIENT_BATCH_SIZE` env var to control default chunk size (default: 64, effective max: 128).
+`tei_embed()` in `vector/ops/tei.rs` auto-splits batches on HTTP 413 (Payload Too Large). Set `TEI_MAX_CLIENT_BATCH_SIZE` env var to control default chunk size (default: 64, effective max: 128).
 
 ### Text chunking
 `chunk_text()` splits at 2000 chars with 200-char overlap. Each chunk = one Qdrant point. Very long pages produce many points.
@@ -564,6 +629,22 @@ After a crawl, `append_sitemap_backfill()` discovers URLs via sitemap.xml that t
 The `Dockerfile` is at `docker/Dockerfile`. Run `docker compose build` from this directory (not a parent workspace). The binary built inside the container is `axon`.
 
 ## Development
+
+### Git Hooks (required)
+
+Install lefthook pre-commit hooks before making any commits. The hooks enforce the monolith policy (file size, function size, deny-list) that CI also checks:
+
+```bash
+# install lefthook once (choose one method)
+brew install lefthook
+# or
+cargo install --locked lefthook
+
+# install git hooks for this repo (required)
+./scripts/install-git-hooks.sh
+```
+
+Without this, you will not get local feedback before commits fail CI.
 
 ### Build
 

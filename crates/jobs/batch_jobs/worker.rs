@@ -1,5 +1,5 @@
 use super::*;
-use crate::axon_cli::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
+use crate::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
 use futures_util::stream::{self, StreamExt};
 use std::path::Path;
 
@@ -38,9 +38,10 @@ async fn mark_batch_canceled(
     if cancel_before.is_none() {
         return Ok(false);
     }
-    sqlx::query(
-        "UPDATE axon_batch_jobs SET status='canceled',updated_at=NOW(),finished_at=NOW() WHERE id=$1",
-    )
+    sqlx::query(&format!(
+        "UPDATE axon_batch_jobs SET status='{canceled}',updated_at=NOW(),finished_at=NOW() WHERE id=$1",
+        canceled = JobStatus::Canceled.as_str(),
+    ))
     .bind(id)
     .execute(pool)
     .await?;
@@ -145,7 +146,11 @@ async fn process_batch_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
     tokio::fs::create_dir_all(&out_dir).await?;
 
     let (results, candidates) = fetch_batch_results(&urls, &out_dir).await?;
-    let queue_injection = apply_queue_injection(
+    if mark_batch_canceled(cfg, pool, id).await? {
+        return Ok(());
+    }
+    let queue_injection = apply_queue_injection_with_pool(
+        pool,
         cfg,
         &candidates,
         job_cfg.extraction_prompt.as_deref(),
@@ -155,9 +160,11 @@ async fn process_batch_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
     .await?;
     maybe_embed_batch_output(cfg, &job_cfg, &out_dir, id).await;
 
-    sqlx::query(
-        "UPDATE axon_batch_jobs SET status='completed',updated_at=NOW(),finished_at=NOW(),result_json=$2,error_text=NULL WHERE id=$1 AND status='running'",
-    )
+    sqlx::query(&format!(
+        "UPDATE axon_batch_jobs SET status='{completed}',updated_at=NOW(),finished_at=NOW(),result_json=$2,error_text=NULL WHERE id=$1 AND status='{running}'",
+        completed = JobStatus::Completed.as_str(),
+        running = JobStatus::Running.as_str(),
+    ))
     .bind(id)
     .bind(serde_json::json!({
         "results": results,
@@ -183,8 +190,15 @@ async fn process_claimed_batch_job(cfg: Config, pool: PgPool, id: Uuid) {
 }
 
 pub async fn run_batch_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
+    // Validate required environment variables before attempting any connections.
+    // Exits with a clear error message if any are missing.
+    crate::crates::jobs::worker_lane::validate_worker_env_vars();
+
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
 
     let wc = WorkerConfig {
         table: TABLE,

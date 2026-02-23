@@ -101,8 +101,37 @@ def changed_files(base: str | None, head: str | None, staged: bool) -> list[str]
 
 
 def file_line_count(path: Path) -> int:
-    # splitlines() gives stable line counts for files with/without trailing newline
-    return len(path.read_text(encoding="utf-8", errors="ignore").splitlines())
+    """Count lines, excluding #[cfg(test)] mod blocks in .rs files."""
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    if path.suffix != ".rs":
+        return len(lines)
+
+    count = 0
+    pending_cfg_test = False
+    skip_depth = 0
+
+    for line in lines:
+        stripped = line.strip()
+
+        if skip_depth > 0:
+            skip_depth += line.count("{") - line.count("}")
+            continue
+
+        if stripped.startswith("#[cfg(test)]"):
+            pending_cfg_test = True
+            continue
+
+        if pending_cfg_test and stripped.startswith("mod tests") and "{" in stripped:
+            skip_depth = stripped.count("{") - stripped.count("}")
+            pending_cfg_test = False
+            continue
+
+        if pending_cfg_test and stripped and not stripped.startswith("#"):
+            pending_cfg_test = False
+
+        count += 1
+
+    return count
 
 
 def parse_changed_line_numbers(

@@ -39,6 +39,11 @@ impl SizeRotatingFile {
         std::path::PathBuf::from(s)
     }
 
+    // TODO(PERF-MED-4): rotate_if_needed performs blocking fs::rename and File::create.
+    // These run inside Mutex<SizeRotatingFile> via tracing's sync Write trait — NOT in an
+    // async task. If tracing ever moves to an async writer, wrap these in spawn_blocking.
+    // Risk: on slow NFS mounts, rotation could briefly block the async runtime thread that
+    // happens to be logging. Mitigation: keep log files on local disk (the default).
     fn rotate_if_needed(&mut self, incoming_len: usize) -> io::Result<()> {
         if self.max_bytes == 0 {
             return Ok(());
@@ -256,6 +261,29 @@ mod tests {
         assert!(dir.path().join("axon.log.1").exists());
         assert!(dir.path().join("axon.log.2").exists());
         assert!(!dir.path().join("axon.log.3").exists());
+    }
+
+    #[test]
+    fn writer_guard_write_all_updates_size_counter() {
+        use super::{SizeRotateMakeWriter, SizeRotatingFile};
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("axon.log");
+        let rotating = SizeRotatingFile::new(path.clone(), 1024, 3).expect("init");
+        let make_writer = SizeRotateMakeWriter {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(rotating)),
+        };
+        use tracing_subscriber::fmt::writer::MakeWriter;
+        let mut guard = make_writer.make_writer();
+        let payload = b"hello-guard\n";
+        guard.write_all(payload).expect("write_all should succeed");
+        guard.flush().expect("flush should succeed");
+        // Verify write reached the file.
+        let content = std::fs::read_to_string(&path).expect("read file");
+        assert_eq!(content, "hello-guard\n");
+        // Verify the size counter was incremented — drives the rotation trigger.
+        drop(guard);
+        let inner = make_writer.inner.lock().unwrap();
+        assert_eq!(inner.current_size, payload.len() as u64);
     }
 
     #[test]

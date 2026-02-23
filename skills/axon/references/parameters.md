@@ -289,7 +289,7 @@ Control embedding and vector database operations:
 
 - `--collection <name>`: Qdrant collection name
   - Default: From `QDRANT_COLLECTION` environment variable
-  - Example: `--collection docs_v2`
+  - Example: `--collection documentation`
 
 ### Chunking Control
 

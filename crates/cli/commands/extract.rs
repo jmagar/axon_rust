@@ -1,14 +1,11 @@
-use crate::axon_cli::crates::cli::commands::common::parse_urls;
-use crate::axon_cli::crates::cli::commands::run_doctor;
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::{
-    run_extract_with_engine, DeterministicExtractionEngine,
-};
-use crate::axon_cli::crates::core::logging::log_done;
-use crate::axon_cli::crates::core::ui::{
+use crate::crates::cli::commands::common::parse_urls;
+use crate::crates::core::config::Config;
+use crate::crates::core::content::{run_extract_with_engine, DeterministicExtractionEngine};
+use crate::crates::core::logging::log_done;
+use crate::crates::core::ui::{
     accent, confirm_destructive, muted, primary, status_text, symbol_for_status,
 };
-use crate::axon_cli::crates::jobs::extract_jobs::{
+use crate::crates::jobs::extract_jobs::{
     cancel_extract_job, cleanup_extract_jobs, clear_extract_jobs, get_extract_job,
     list_extract_jobs, recover_stale_extract_jobs, run_extract_worker, start_extract_job,
 };
@@ -50,10 +47,6 @@ async fn maybe_handle_extract_subcommand(cfg: &Config) -> Result<bool, Box<dyn E
         "clear" => handle_extract_clear(cfg).await?,
         "worker" => run_extract_worker(cfg).await?,
         "recover" => handle_extract_recover(cfg).await?,
-        "doctor" => {
-            eprintln!("{}", muted("`extract doctor` is deprecated; use `doctor`."));
-            run_doctor(cfg).await?;
-        }
         _ => return Ok(false),
     }
 
@@ -302,6 +295,11 @@ async fn run_extract_sync(
     Ok(())
 }
 
+// Design note: axon_rust uses its own DeterministicExtractionEngine rather than
+// spider_agent::Agent::extract() for performance reasons — deterministic parsing
+// is O(1) in LLM calls and works offline, while spider_agent's extraction requires
+// an LLM API call per page. For complex visual layouts, spider_agent's multimodal
+// extraction is more powerful; use it by replacing this function with Agent::extract().
 async fn execute_extract_runs(
     cfg: &Config,
     urls: &[String],

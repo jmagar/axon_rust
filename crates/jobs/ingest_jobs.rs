@@ -1,16 +1,17 @@
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::logging::{log_info, log_warn};
-use crate::axon_cli::crates::jobs::common::{
-    enqueue_job, make_pool, mark_job_failed, open_amqp_channel, reclaim_stale_running_jobs,
-    JobTable,
+use crate::crates::core::config::Config;
+use crate::crates::core::logging::{log_info, log_warn};
+use crate::crates::jobs::common::{
+    enqueue_job, make_pool, mark_job_failed, purge_queue_safe, reclaim_stale_running_jobs, JobTable,
 };
-use crate::axon_cli::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
+use crate::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use std::error::Error;
 use std::sync::Arc;
 use uuid::Uuid;
+
+static SCHEMA_INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 const TABLE: JobTable = JobTable::Ingest;
 
@@ -43,17 +44,12 @@ pub struct IngestJob {
     pub result_json: Option<serde_json::Value>,
 }
 
-/// Idempotent DDL: uses `CREATE TABLE/INDEX IF NOT EXISTS`. Called on every
-/// public entry point so the schema exists before any query runs. The DDL
-/// statements are no-ops when the table already exists, so the overhead is a
-/// single round-trip per call — acceptable for correctness without a global
-/// `OnceLock` guard.
 async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS axon_ingest_jobs (
             id          UUID PRIMARY KEY,
-            status      TEXT NOT NULL,
+            status      TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled')),
             source_type TEXT NOT NULL,
             target      TEXT NOT NULL,
             created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -72,6 +68,17 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_axon_ingest_jobs_pending \
          ON axon_ingest_jobs(created_at ASC) WHERE status = 'pending'",
+    )
+    .execute(pool)
+    .await?;
+
+    // Add CHECK constraint to existing tables (idempotent via IF NOT EXISTS pattern).
+    sqlx::query(
+        r#"DO $$ BEGIN
+            ALTER TABLE axon_ingest_jobs ADD CONSTRAINT axon_ingest_jobs_status_check
+                CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled'));
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$"#,
     )
     .execute(pool)
     .await?;
@@ -97,7 +104,10 @@ fn target_label(source: &IngestSource) -> String {
 
 pub async fn start_ingest_job(cfg: &Config, source: IngestSource) -> Result<Uuid, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
 
     let job_config = IngestJobConfig {
         source: source.clone(),
@@ -133,7 +143,10 @@ pub async fn start_ingest_job(cfg: &Config, source: IngestSource) -> Result<Uuid
 
 pub async fn get_ingest_job(cfg: &Config, id: Uuid) -> Result<Option<IngestJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     Ok(sqlx::query_as::<_, IngestJob>(
         "SELECT id,status,source_type,target,created_at,updated_at,started_at,finished_at,\
          error_text,result_json FROM axon_ingest_jobs WHERE id=$1",
@@ -145,7 +158,10 @@ pub async fn get_ingest_job(cfg: &Config, id: Uuid) -> Result<Option<IngestJob>,
 
 pub async fn list_ingest_jobs(cfg: &Config, limit: i64) -> Result<Vec<IngestJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     Ok(sqlx::query_as::<_, IngestJob>(
         "SELECT id,status,source_type,target,created_at,updated_at,started_at,finished_at,\
          error_text,result_json FROM axon_ingest_jobs ORDER BY created_at DESC LIMIT $1",
@@ -157,7 +173,10 @@ pub async fn list_ingest_jobs(cfg: &Config, limit: i64) -> Result<Vec<IngestJob>
 
 pub async fn cancel_ingest_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let rows = sqlx::query(
         "UPDATE axon_ingest_jobs SET status='canceled',updated_at=NOW(),finished_at=NOW() \
          WHERE id=$1 AND status IN ('pending','running')",
@@ -171,7 +190,10 @@ pub async fn cancel_ingest_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn E
 
 pub async fn cleanup_ingest_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     Ok(sqlx::query(
         "DELETE FROM axon_ingest_jobs WHERE status IN ('failed','canceled') \
          OR (status = 'completed' AND finished_at < NOW() - INTERVAL '30 days')",
@@ -183,24 +205,20 @@ pub async fn cleanup_ingest_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
 
 pub async fn clear_ingest_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let rows = sqlx::query("DELETE FROM axon_ingest_jobs")
         .execute(&pool)
         .await?
         .rows_affected();
-    if let Ok(ch) = open_amqp_channel(cfg, &cfg.ingest_queue).await {
-        let _ = ch
-            .queue_purge(
-                &cfg.ingest_queue,
-                lapin::options::QueuePurgeOptions::default(),
-            )
-            .await;
-    }
+    let _ = purge_queue_safe(cfg, &cfg.ingest_queue).await;
     Ok(rows)
 }
 
 async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
-    use crate::axon_cli::crates::ingest;
+    use crate::crates::ingest;
 
     let cfg_row = sqlx::query_scalar::<_, serde_json::Value>(
         "SELECT config_json FROM axon_ingest_jobs WHERE id=$1",
@@ -260,7 +278,10 @@ async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
 
 pub async fn run_ingest_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
 
     let wc = WorkerConfig {
         table: TABLE,
@@ -281,7 +302,10 @@ pub async fn run_ingest_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
 pub async fn recover_stale_ingest_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let stats = reclaim_stale_running_jobs(
         &pool,
         TABLE,

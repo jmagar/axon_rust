@@ -50,3 +50,4 @@ specs/
 # Local container/dev overrides
 container/*.local.yml
 container/*.local.yaml
+.claude/

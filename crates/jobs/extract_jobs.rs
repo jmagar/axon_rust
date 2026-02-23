@@ -1,13 +1,12 @@
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::{
-    run_extract_with_engine, DeterministicExtractionEngine,
+use crate::crates::core::config::Config;
+use crate::crates::core::content::{run_extract_with_engine, DeterministicExtractionEngine};
+use crate::crates::core::health::redis_healthy;
+use crate::crates::core::logging::{log_done, log_info, log_warn};
+use crate::crates::jobs::common::{
+    enqueue_job, make_pool, mark_job_failed, open_amqp_channel, purge_queue_safe,
+    reclaim_stale_running_jobs, JobTable,
 };
-use crate::axon_cli::crates::core::health::redis_healthy;
-use crate::axon_cli::crates::core::logging::{log_done, log_info, log_warn};
-use crate::axon_cli::crates::jobs::common::{
-    enqueue_job, make_pool, mark_job_failed, open_amqp_channel, reclaim_stale_running_jobs,
-    JobTable,
-};
+use crate::crates::jobs::status::JobStatus;
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use redis::AsyncCommands;
@@ -16,6 +15,8 @@ use sqlx::{FromRow, PgPool};
 use std::error::Error;
 use std::sync::Arc;
 use uuid::Uuid;
+
+static SCHEMA_INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 const TABLE: JobTable = JobTable::Extract;
 const WORKER_CONCURRENCY: usize = 2;
@@ -44,7 +45,7 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
         r#"
         CREATE TABLE IF NOT EXISTS axon_extract_jobs (
             id UUID PRIMARY KEY,
-            status TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled')),
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             started_at TIMESTAMPTZ,
@@ -66,36 +67,64 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
     .execute(pool)
     .await?;
 
+    // Add CHECK constraint to existing tables (idempotent via IF NOT EXISTS pattern).
+    sqlx::query(
+        r#"DO $$ BEGIN
+            ALTER TABLE axon_extract_jobs ADD CONSTRAINT axon_extract_jobs_status_check
+                CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled'));
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$"#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
+/// Start an extract job, creating a new pool for this call (CLI / one-shot use).
 pub async fn start_extract_job(
     cfg: &Config,
     urls: &[String],
     prompt: Option<String>,
 ) -> Result<Uuid, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    start_extract_job_with_pool(&pool, cfg, urls, prompt).await
+}
+
+/// Start an extract job using a pre-existing pool. Used by workers that already
+/// hold a long-lived pool to avoid per-call TCP connection churn.
+pub(crate) async fn start_extract_job_with_pool(
+    pool: &PgPool,
+    cfg: &Config,
+    urls: &[String],
+    prompt: Option<String>,
+) -> Result<Uuid, Box<dyn Error>> {
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
 
     let urls_json = serde_json::to_value(urls)?;
     let cfg_json = serde_json::to_value(ExtractJobConfig {
         prompt,
         max_pages: cfg.max_pages,
     })?;
-    if let Some(existing_id) = sqlx::query_scalar::<_, Uuid>(
+    if let Some(existing_id) = sqlx::query_scalar::<_, Uuid>(&format!(
         r#"
         SELECT id
         FROM axon_extract_jobs
-        WHERE status IN ('pending','running')
+        WHERE status IN ('{pending}','{running}')
           AND urls_json = $1
           AND config_json = $2
         ORDER BY created_at DESC
         LIMIT 1
         "#,
-    )
+        pending = JobStatus::Pending.as_str(),
+        running = JobStatus::Running.as_str(),
+    ))
     .bind(urls_json.clone())
     .bind(cfg_json.clone())
-    .fetch_optional(&pool)
+    .fetch_optional(pool)
     .await?
     {
         log_info(&format!(
@@ -107,13 +136,14 @@ pub async fn start_extract_job(
     }
     let id = Uuid::new_v4();
 
-    sqlx::query(
-        r#"INSERT INTO axon_extract_jobs (id, status, urls_json, config_json) VALUES ($1, 'pending', $2, $3)"#,
-    )
+    sqlx::query(&format!(
+        r#"INSERT INTO axon_extract_jobs (id, status, urls_json, config_json) VALUES ($1, '{pending}', $2, $3)"#,
+        pending = JobStatus::Pending.as_str(),
+    ))
     .bind(id)
     .bind(urls_json)
     .bind(cfg_json)
-    .execute(&pool)
+    .execute(pool)
     .await?;
 
     if let Err(err) = enqueue_job(cfg, &cfg.extract_queue, id).await {
@@ -127,7 +157,10 @@ pub async fn start_extract_job(
 
 pub async fn get_extract_job(cfg: &Config, id: Uuid) -> Result<Option<ExtractJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     Ok(sqlx::query_as::<_, ExtractJob>(
         r#"SELECT id,status,created_at,updated_at,started_at,finished_at,error_text,urls_json,result_json FROM axon_extract_jobs WHERE id=$1"#,
     )
@@ -141,7 +174,10 @@ pub async fn list_extract_jobs(
     limit: i64,
 ) -> Result<Vec<ExtractJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     Ok(sqlx::query_as::<_, ExtractJob>(
         r#"SELECT id,status,created_at,updated_at,started_at,finished_at,error_text,urls_json,result_json FROM axon_extract_jobs ORDER BY created_at DESC LIMIT $1"#,
     )
@@ -152,12 +188,20 @@ pub async fn list_extract_jobs(
 
 pub async fn cancel_extract_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
-    let rows = sqlx::query("UPDATE axon_extract_jobs SET status='canceled',updated_at=NOW(),finished_at=NOW() WHERE id=$1 AND status IN ('pending','running')")
-        .bind(id)
-        .execute(&pool)
-        .await?
-        .rows_affected();
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
+    let rows = sqlx::query(&format!(
+        "UPDATE axon_extract_jobs SET status='{canceled}',updated_at=NOW(),finished_at=NOW() WHERE id=$1 AND status IN ('{pending}','{running}')",
+        canceled = JobStatus::Canceled.as_str(),
+        pending = JobStatus::Pending.as_str(),
+        running = JobStatus::Running.as_str(),
+    ))
+    .bind(id)
+    .execute(&pool)
+    .await?
+    .rows_affected();
 
     let redis_client = redis::Client::open(cfg.redis_url.clone())?;
     let mut conn = redis_client.get_multiplexed_async_connection().await?;
@@ -168,30 +212,43 @@ pub async fn cancel_extract_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn 
 
 pub async fn cleanup_extract_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
-    Ok(
-        sqlx::query("DELETE FROM axon_extract_jobs WHERE status IN ('failed','canceled')")
-            .execute(&pool)
-            .await?
-            .rows_affected(),
-    )
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
+    let mut total = 0u64;
+    loop {
+        let deleted = sqlx::query(&format!(
+            "DELETE FROM axon_extract_jobs WHERE id IN (
+                SELECT id FROM axon_extract_jobs
+                WHERE status IN ('{failed}','{canceled}')
+                LIMIT 1000
+            )",
+            failed = JobStatus::Failed.as_str(),
+            canceled = JobStatus::Canceled.as_str(),
+        ))
+        .execute(&pool)
+        .await?
+        .rows_affected();
+        total += deleted;
+        if deleted == 0 {
+            break;
+        }
+    }
+    Ok(total)
 }
 
 pub async fn clear_extract_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let rows = sqlx::query("DELETE FROM axon_extract_jobs")
         .execute(&pool)
         .await?
         .rows_affected();
-    if let Ok(ch) = open_amqp_channel(cfg, &cfg.extract_queue).await {
-        let _ = ch
-            .queue_purge(
-                &cfg.extract_queue,
-                lapin::options::QueuePurgeOptions::default(),
-            )
-            .await;
-    }
+    let _ = purge_queue_safe(cfg, &cfg.extract_queue).await;
     Ok(rows)
 }
 
@@ -203,7 +260,10 @@ pub async fn run_extract_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
 pub async fn recover_stale_extract_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
     let stats = reclaim_stale_running_jobs(
         &pool,
         TABLE,

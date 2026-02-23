@@ -1,5 +1,5 @@
 use super::*;
-use crate::axon_cli::crates::jobs::common::test_config;
+use crate::crates::jobs::common::test_config;
 use chrono::{Duration, Utc};
 use std::env;
 use tokio::time::{sleep, timeout, Duration as TokioDuration};

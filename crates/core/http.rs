@@ -40,6 +40,21 @@ pub fn normalize_url(url: &str) -> String {
 /// - Link-local addresses (169.254.0.0/16, fe80::/10)
 /// - RFC-1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
 /// - `.internal` and `.local` TLDs
+///
+/// # DNS Rebinding (TOCTOU residual risk)
+///
+/// This validation is TOCTOU — it checks the resolved IP at parse time, but
+/// `reqwest` resolves DNS independently at connect time. An attacker with a
+/// TTL-0 DNS record can pass validation (first resolution → public IP) then
+/// rebind before the connection is established (second resolution → 127.0.0.1).
+///
+/// Full mitigation requires DNS pre-resolution and connection pinning, which
+/// `reqwest` does not support natively. Consider adding a reverse-DNS check or
+/// using `hickory-resolver` for pre-resolution if the threat model includes
+/// attacker-controlled domains with short-TTL records.
+///
+/// As defence-in-depth, `ssrf_blacklist_patterns()` is also applied to
+/// discovered URLs during crawl via spider's `with_blacklist_url()`.
 pub fn validate_url(url: &str) -> Result<(), Box<dyn Error>> {
     let normalized = normalize_url(url);
     let parsed = Url::parse(&normalized).map_err(|_| format!("invalid URL: {url}"))?;
@@ -60,48 +75,6 @@ pub fn validate_url(url: &str) -> Result<(), Box<dyn Error>> {
         return Err(format!("blocked host '{host}': .internal/.local domains not allowed").into());
     }
 
-    // Use Url::host() for typed IP extraction — avoids string-parsing edge cases
-    // with IPv6 bracket notation that host_str().parse::<IpAddr>() may miss.
-    let check_ip = |ip: IpAddr| -> Result<(), Box<dyn Error>> {
-        if ip.is_loopback() {
-            return Err(format!("blocked IP '{ip}': loopback address not allowed").into());
-        }
-        match ip {
-            IpAddr::V4(v4) => {
-                let [a, b, ..] = v4.octets();
-                let octets = v4.octets();
-                let is_link_local = octets[0] == 169 && octets[1] == 254;
-                let is_private = octets[0] == 10
-                    || (a == 172 && (16..=31).contains(&b))
-                    || octets[0..2] == [192, 168];
-                if is_link_local {
-                    return Err(format!(
-                        "blocked IP '{v4}': link-local address (169.254.x.x) not allowed"
-                    )
-                    .into());
-                }
-                if is_private {
-                    return Err(
-                        format!("blocked IP '{v4}': private/RFC-1918 address not allowed").into(),
-                    );
-                }
-            }
-            IpAddr::V6(v6) => {
-                // Block unique-local (fc00::/7) and link-local (fe80::/10)
-                let segs = v6.segments();
-                let is_unique_local = segs[0] & 0xfe00 == 0xfc00;
-                let is_link_local_v6 = segs[0] & 0xffc0 == 0xfe80;
-                if is_unique_local || is_link_local_v6 {
-                    return Err(format!(
-                        "blocked IPv6 '{v6}': private/link-local address not allowed"
-                    )
-                    .into());
-                }
-            }
-        }
-        Ok(())
-    };
-
     // Use parsed.host() for typed extraction — host_str().parse::<IpAddr>()
     // silently fails for IPv6 because spider::url::Url returns zone-scoped or
     // bracket-ambiguous representations. The Host enum gives us the parsed addr directly.
@@ -111,6 +84,55 @@ pub fn validate_url(url: &str) -> Result<(), Box<dyn Error>> {
         _ => {}
     }
 
+    Ok(())
+}
+
+/// SSRF IP validation — checks loopback, link-local, RFC-1918 private, and
+/// IPv4-mapped IPv6 addresses. Extracted as a named function (not a closure)
+/// so the IPv4-mapped branch can recurse into the IPv4 checks.
+fn check_ip(ip: IpAddr) -> Result<(), Box<dyn Error>> {
+    if ip.is_loopback() {
+        return Err(format!("blocked IP '{ip}': loopback address not allowed").into());
+    }
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            let octets = v4.octets();
+            let is_link_local = octets[0] == 169 && octets[1] == 254;
+            let is_private = octets[0] == 10
+                || (a == 172 && (16..=31).contains(&b))
+                || octets[0..2] == [192, 168];
+            if is_link_local {
+                return Err(format!(
+                    "blocked IP '{v4}': link-local address (169.254.x.x) not allowed"
+                )
+                .into());
+            }
+            if is_private {
+                return Err(
+                    format!("blocked IP '{v4}': private/RFC-1918 address not allowed").into(),
+                );
+            }
+        }
+        IpAddr::V6(v6) => {
+            // IPv4-mapped IPv6 (::ffff:x.x.x.x) — extract the embedded IPv4
+            // and apply the same private/loopback/link-local checks. Without this,
+            // ::ffff:127.0.0.1 bypasses the V4 branch entirely.
+            if let Some(mapped_v4) = v6.to_ipv4_mapped() {
+                return check_ip(IpAddr::V4(mapped_v4));
+            }
+
+            // Block unique-local (fc00::/7) and link-local (fe80::/10)
+            let segs = v6.segments();
+            let is_unique_local = segs[0] & 0xfe00 == 0xfc00;
+            let is_link_local_v6 = segs[0] & 0xffc0 == 0xfe80;
+            if is_unique_local || is_link_local_v6 {
+                return Err(
+                    format!("blocked IPv6 '{v6}': private/link-local address not allowed").into(),
+                );
+            }
+        }
+    }
     Ok(())
 }
 
@@ -141,6 +163,30 @@ pub fn build_client(timeout_secs: u64) -> Result<reqwest::Client, Box<dyn Error>
         .build()?)
 }
 
+/// Build the CDP `/json/version` discovery URL from a Chrome remote URL.
+///
+/// Handles `ws://` / `wss://` → `http://` / `https://` conversion (reqwest cannot
+/// make requests to `ws://` scheme URLs) and appends `/json/version` when the path
+/// is absent or root.  Returns `None` if the URL cannot be parsed or uses an
+/// unsupported scheme (`ftp://`, `file://`, etc.).
+pub(crate) fn cdp_discovery_url(remote_url: &str) -> Option<String> {
+    let parsed = Url::parse(remote_url).ok()?;
+    let http_scheme = match parsed.scheme() {
+        "ws" | "http" => "http",
+        "wss" | "https" => "https",
+        _ => return None,
+    };
+    let host = parsed.host_str()?;
+    let port = parsed.port_or_known_default()?;
+    let path = parsed.path();
+    let path = if path == "/" || path.is_empty() {
+        "/json/version"
+    } else {
+        path
+    };
+    Some(format!("{http_scheme}://{host}:{port}{path}"))
+}
+
 pub async fn fetch_html(client: &reqwest::Client, url: &str) -> Result<String, Box<dyn Error>> {
     let normalized = normalize_url(url);
     validate_url(&normalized)?;
@@ -157,6 +203,80 @@ pub async fn fetch_html(client: &reqwest::Client, url: &str) -> Result<String, B
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- normalize_url tests ---
+
+    #[test]
+    fn normalize_url_adds_https_scheme_to_bare_host() {
+        assert_eq!(normalize_url("example.com"), "https://example.com");
+    }
+
+    #[test]
+    fn normalize_url_adds_https_scheme_to_host_with_path() {
+        assert_eq!(
+            normalize_url("example.com/docs/install"),
+            "https://example.com/docs/install"
+        );
+    }
+
+    #[test]
+    fn normalize_url_preserves_existing_https_scheme() {
+        assert_eq!(
+            normalize_url("https://example.com/page"),
+            "https://example.com/page"
+        );
+    }
+
+    #[test]
+    fn normalize_url_preserves_existing_http_scheme() {
+        assert_eq!(
+            normalize_url("http://example.com/page"),
+            "http://example.com/page"
+        );
+    }
+
+    #[test]
+    fn normalize_url_preserves_path_and_query() {
+        assert_eq!(
+            normalize_url("example.com/path?key=value"),
+            "https://example.com/path?key=value"
+        );
+    }
+
+    #[test]
+    fn normalize_url_preserves_fragment() {
+        assert_eq!(
+            normalize_url("example.com/page#section"),
+            "https://example.com/page#section"
+        );
+    }
+
+    #[test]
+    fn normalize_url_trims_whitespace() {
+        assert_eq!(normalize_url("  example.com  "), "https://example.com");
+    }
+
+    #[test]
+    fn normalize_url_returns_empty_for_empty_input() {
+        assert_eq!(normalize_url(""), "");
+    }
+
+    #[test]
+    fn normalize_url_handles_localhost() {
+        assert_eq!(normalize_url("localhost"), "https://localhost");
+    }
+
+    #[test]
+    fn normalize_url_handles_localhost_with_port() {
+        // localhost:8080 contains a '.'-free host but starts with "localhost"
+        assert_eq!(normalize_url("localhost:8080"), "https://localhost:8080");
+    }
+
+    #[test]
+    fn normalize_url_does_not_add_scheme_to_bare_text_with_spaces() {
+        // A string with spaces is not a valid URL host — normalize_url leaves it as-is
+        assert_eq!(normalize_url("not a url"), "not a url");
+    }
 
     // --- Public URLs should be allowed ---
 
@@ -289,29 +409,206 @@ mod tests {
         assert!(validate_url("http://[fe80::1]/").is_err());
     }
 
+    /// Compiled SSRF blacklist regexes — built once, reused across tests.
+    static COMPILED_SSRF_PATTERNS: LazyLock<Vec<regex::Regex>> = LazyLock::new(|| {
+        ssrf_blacklist_patterns()
+            .into_iter()
+            .map(|p| regex::Regex::new(&p).expect("ssrf blacklist pattern must compile"))
+            .collect()
+    });
+
     #[test]
     fn test_ssrf_blacklist_blocks_localhost_with_query() {
-        let patterns = ssrf_blacklist_patterns();
         let url = "http://localhost?admin=true";
-        let blocked = patterns
-            .iter()
-            .any(|p| regex::Regex::new(p).unwrap().is_match(url));
+        let blocked = COMPILED_SSRF_PATTERNS.iter().any(|re| re.is_match(url));
         assert!(
             blocked,
             "localhost with query string should be blocked by blacklist"
         );
     }
 
+    // --- cdp_discovery_url tests ---
+
+    #[test]
+    fn test_cdp_discovery_url_http_appends_json_version() {
+        assert_eq!(
+            cdp_discovery_url("http://127.0.0.1:6000"),
+            Some("http://127.0.0.1:6000/json/version".to_string())
+        );
+    }
+
+    #[test]
+    fn test_cdp_discovery_url_ws_converts_to_http_and_appends() {
+        assert_eq!(
+            cdp_discovery_url("ws://axon-chrome:9222"),
+            Some("http://axon-chrome:9222/json/version".to_string())
+        );
+    }
+
+    #[test]
+    fn test_cdp_discovery_url_preserves_non_root_path() {
+        // Already has /json/version — must not double-append.
+        assert_eq!(
+            cdp_discovery_url("http://127.0.0.1:6000/json/version"),
+            Some("http://127.0.0.1:6000/json/version".to_string())
+        );
+    }
+
+    #[test]
+    fn test_cdp_discovery_url_rejects_unsupported_scheme() {
+        assert_eq!(cdp_discovery_url("ftp://host:21/"), None);
+        assert_eq!(cdp_discovery_url("file:///etc/hosts"), None);
+    }
+
+    #[test]
+    fn test_cdp_discovery_url_wss_converts_to_https() {
+        assert_eq!(
+            cdp_discovery_url("wss://secure-host:443"),
+            Some("https://secure-host:443/json/version".to_string())
+        );
+    }
+
+    #[test]
+    fn test_cdp_discovery_url_ws_with_existing_path_preserved() {
+        // Pre-resolved ws:// URL with browser UUID path: path must not be clobbered.
+        let ws = "ws://127.0.0.1:9222/devtools/browser/abc-123";
+        let result = cdp_discovery_url(ws);
+        assert_eq!(
+            result,
+            Some("http://127.0.0.1:9222/devtools/browser/abc-123".to_string())
+        );
+    }
+
     #[test]
     fn test_ssrf_blacklist_blocks_localhost_with_fragment() {
-        let patterns = ssrf_blacklist_patterns();
         let url = "https://localhost#secret";
-        let blocked = patterns
-            .iter()
-            .any(|p| regex::Regex::new(p).unwrap().is_match(url));
+        let blocked = COMPILED_SSRF_PATTERNS.iter().any(|re| re.is_match(url));
         assert!(
             blocked,
             "localhost with fragment should be blocked by blacklist"
+        );
+    }
+
+    /// Documents the DNS rebinding TOCTOU residual risk in `validate_url()`.
+    ///
+    /// An attacker-controlled domain can initially resolve to a public IP (passing
+    /// validation) then rebind via TTL-0 to a private IP before `reqwest` connects.
+    /// This test verifies that `validate_url()` correctly allows a public-looking
+    /// hostname — it cannot detect the rebind because DNS resolution happens again
+    /// at connect time inside `reqwest`, which is outside our control.
+    ///
+    /// Full mitigation would require DNS pre-resolution + connection pinning (e.g.
+    /// `hickory-resolver`), which `reqwest` does not natively support.
+    #[test]
+    fn test_dns_rebinding_toctou_documents_residual_risk() {
+        // A hostname that resolves to a public IP passes validation — this is correct
+        // behavior. The risk is that between validation and connection, the DNS record
+        // could change to 127.0.0.1. We cannot test the actual rebind in a unit test,
+        // but we document the expected behavior: public hostnames pass, private IPs fail.
+        assert!(
+            validate_url("https://attacker-controlled.example.com/").is_ok(),
+            "public hostname should pass — DNS rebinding cannot be caught at parse time"
+        );
+        assert!(
+            validate_url("http://127.0.0.1/").is_err(),
+            "direct private IP must still be blocked"
+        );
+        assert!(
+            validate_url("http://[::1]/").is_err(),
+            "direct loopback IPv6 must still be blocked"
+        );
+    }
+
+    /// Verifies that a public IP passes validation — documents the TOCTOU window.
+    /// Between validation (public IP) and connection, DNS could rebind to private.
+    #[test]
+    fn test_validate_url_accepts_public_ip_but_documents_rebinding_risk() {
+        // 93.184.216.34 is example.com's public IP. This passes validation correctly.
+        // The TOCTOU risk: an attacker-controlled domain could resolve to this IP during
+        // validation, then rebind to 127.0.0.1 before reqwest connects. We cannot
+        // prevent this at the URL validation layer — requires DNS pre-resolution.
+        assert!(
+            validate_url("http://93.184.216.34/").is_ok(),
+            "public IP should pass validation"
+        );
+        // Confirm the inverse: direct private IPs are always blocked
+        assert!(validate_url("http://10.0.0.1/").is_err());
+        assert!(validate_url("http://192.168.1.1/").is_err());
+    }
+
+    /// Verifies the LazyLock SSRF pattern compilation works and all patterns are valid.
+    #[test]
+    fn test_ssrf_blacklist_patterns_compile_once() {
+        // Accessing COMPILED_SSRF_PATTERNS forces the LazyLock to initialize.
+        // If any pattern fails to compile, the .expect() inside the LazyLock panics.
+        let patterns = &*COMPILED_SSRF_PATTERNS;
+        assert!(
+            !patterns.is_empty(),
+            "SSRF blacklist should have at least one pattern"
+        );
+        // Verify the count matches the raw pattern list
+        assert_eq!(
+            patterns.len(),
+            ssrf_blacklist_patterns().len(),
+            "compiled pattern count must match raw pattern count"
+        );
+        // Smoke-test: a known-bad URL should match at least one pattern
+        assert!(
+            patterns
+                .iter()
+                .any(|re| re.is_match("http://127.0.0.1/admin")),
+            "loopback URL should match at least one SSRF pattern"
+        );
+    }
+
+    // --- IPv4-mapped IPv6 bypass tests ---
+
+    /// IPv4-mapped IPv6 addresses (::ffff:x.x.x.x) embed an IPv4 address inside
+    /// an IPv6 representation. Without explicit handling, these bypass the IPv4
+    /// private/loopback checks because they arrive in the V6 branch of check_ip.
+    #[test]
+    fn test_validate_url_rejects_ipv4_mapped_ipv6_loopback() {
+        // ::ffff:127.0.0.1 is loopback via IPv4-mapped IPv6
+        assert!(
+            validate_url("http://[::ffff:127.0.0.1]/").is_err(),
+            "::ffff:127.0.0.1 must be blocked as loopback"
+        );
+    }
+
+    #[test]
+    fn test_validate_url_rejects_ipv4_mapped_ipv6_link_local() {
+        // ::ffff:169.254.0.1 is link-local via IPv4-mapped IPv6
+        assert!(
+            validate_url("http://[::ffff:169.254.0.1]/").is_err(),
+            "::ffff:169.254.0.1 must be blocked as link-local"
+        );
+    }
+
+    #[test]
+    fn test_validate_url_rejects_ipv4_mapped_ipv6_private() {
+        // ::ffff:10.0.0.1 is RFC-1918 private via IPv4-mapped IPv6
+        assert!(
+            validate_url("http://[::ffff:10.0.0.1]/").is_err(),
+            "::ffff:10.0.0.1 must be blocked as private"
+        );
+        // ::ffff:192.168.1.1
+        assert!(
+            validate_url("http://[::ffff:192.168.1.1]/").is_err(),
+            "::ffff:192.168.1.1 must be blocked as private"
+        );
+        // ::ffff:172.16.0.1
+        assert!(
+            validate_url("http://[::ffff:172.16.0.1]/").is_err(),
+            "::ffff:172.16.0.1 must be blocked as private"
+        );
+    }
+
+    #[test]
+    fn test_validate_url_allows_ipv4_mapped_ipv6_public() {
+        // ::ffff:93.184.216.34 (example.com) should be allowed — it's a public IP
+        assert!(
+            validate_url("http://[::ffff:93.184.216.34]/").is_ok(),
+            "::ffff: with public IPv4 should be allowed"
         );
     }
 }

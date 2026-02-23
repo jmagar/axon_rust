@@ -4,7 +4,7 @@ This repository enforces a ratcheting policy to prevent new monolithic files and
 
 ## Scope
 
-- Enforced on changed code, not the full legacy tree.
+- Enforced on changed code, not the full codebase.
 - Enforced locally via `lefthook` pre-commit.
 - Enforced in CI for pull requests and pushes.
 
@@ -65,8 +65,6 @@ CI runs:
 
 ```bash
 python3 scripts/enforce_monoliths.py --base "$BASE_SHA" --head "$HEAD_SHA"
-
-python3 scripts/enforce_no_legacy_symbols.py
 ```
 
 This keeps enforcement ratcheted to the change set under review.
@@ -74,7 +72,6 @@ This keeps enforcement ratcheted to the change set under review.
 ## Config Files
 
 - Policy logic: `scripts/enforce_monoliths.py`
-- Legacy deny-list: `scripts/enforce_no_legacy_symbols.py`
 - Local hooks: `lefthook.yml`
 - Hook installer: `scripts/install-git-hooks.sh`
 - CI job: `.github/workflows/ci.yml`

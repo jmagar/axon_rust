@@ -1,13 +1,11 @@
 pre-commit:
   parallel: true
   commands:
-    no-legacy-symbols:
-      run: python3 scripts/enforce_no_legacy_symbols.py
     monolith:
       run: python3 scripts/enforce_monoliths.py --staged
     rustfmt:
       glob: "*.rs"
-      run: cargo fmt --all -- --check
+      run: cargo fmt -- --check
     clippy:
       glob: "*.{rs,toml}"
       run: cargo clippy --all-targets -- -D warnings

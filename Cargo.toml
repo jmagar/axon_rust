@@ -22,12 +22,18 @@ octocrab = "0.44"
 redis = { version = "0.27", features = ["tokio-comp"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+rand = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 # NOTE: In spider v2.45.x these are valid optional features and are required
 # for our crawl/render pipeline.
-spider = { version = "2", default-features = false, features = ["basic", "chrome", "regex", "webdriver"] }
+spider = { version = "2", default-features = false, features = ["basic", "chrome", "regex", "webdriver", "sitemap"] }
+# spider_agent is available on crates.io (v2.45.24) with "search_tavily" and "openai" features.
+# The path dep is kept for local development where ../spider/ is checked out alongside this repo.
+# In CI or environments without the sibling checkout, switch to the registry version:
+#   spider_agent = { version = "2.45", default-features = false, features = ["search_tavily", "openai"] }
+spider_agent = { path = "../spider/spider_agent", default-features = false, features = ["search_tavily", "openai"] }
 spider_transformations = "2"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
 tokio = { version = "1", features = ["full"] }
@@ -47,6 +53,10 @@ strip = true
 tokio = { version = "1", features = ["full", "test-util"] }
 criterion = "0.5"
 regex = "1"
+# httpmock enables mock HTTP servers in unit tests, unlocking coverage for
+# tei_embed 413-retry logic, ensure_collection idempotency, and API clients
+# without requiring live services.
+httpmock = "0.7"
 
 [[bench]]
 name = "ask_query_retrieve"

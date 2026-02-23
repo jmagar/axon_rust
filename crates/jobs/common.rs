@@ -1,15 +1,15 @@
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::redact_url;
+use crate::crates::core::config::Config;
+use crate::crates::core::content::redact_url;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use lapin::options::QueueDeclareOptions;
 use lapin::types::FieldTable;
 use lapin::{Channel, Connection, ConnectionProperties};
 use serde_json::Value;
-use spider::tokio;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use std::time::Duration;
+use tokio;
 use tokio_executor_trait::Tokio as TokioExecutor;
 use tokio_reactor_trait::Tokio as TokioReactor;
 use uuid::Uuid;
@@ -47,90 +47,39 @@ impl JobTable {
 
 #[cfg(test)]
 pub(crate) fn test_config(pg_url: &str) -> Config {
-    use crate::axon_cli::crates::core::config::{
-        CommandKind, PerformanceProfile, RenderMode, ScrapeFormat,
-    };
     use std::path::PathBuf;
-
     Config {
-        command: CommandKind::Status,
-        start_url: "https://example.com".to_string(),
-        positional: Vec::new(),
-        urls_csv: None,
-        url_glob: Vec::new(),
-        query: None,
-        search_limit: 5,
-        max_pages: 10,
-        max_depth: 2,
-        include_subdomains: true,
-        exclude_path_prefix: Vec::new(),
-        output_dir: PathBuf::from(".cache/test-worker-jobs"),
-        output_path: None,
-        render_mode: RenderMode::AutoSwitch,
-        chrome_remote_url: None,
-        chrome_proxy: None,
-        chrome_user_agent: None,
-        chrome_headless: true,
-        chrome_anti_bot: true,
-        chrome_intercept: true,
-        chrome_stealth: true,
-        chrome_bootstrap: false,
-        chrome_bootstrap_timeout_ms: 45_000,
-        chrome_bootstrap_retries: 1,
-        webdriver_url: None,
-        respect_robots: false,
-        min_markdown_chars: 50,
-        drop_thin_markdown: false,
-        discover_sitemaps: true,
-        cache: true,
-        cache_skip_browser: false,
-        format: ScrapeFormat::Markdown,
-        collection: "test".to_string(),
-        embed: false,
-        batch_concurrency: 2,
-        wait: false,
-        yes: true,
-        performance_profile: PerformanceProfile::Balanced,
-        crawl_concurrency_limit: Some(2),
-        sitemap_concurrency_limit: Some(2),
-        backfill_concurrency_limit: Some(2),
-        max_sitemaps: 10,
-        delay_ms: 0,
-        request_timeout_ms: Some(5_000),
-        fetch_retries: 0,
-        retry_backoff_ms: 0,
-        shared_queue: true,
         pg_url: pg_url.to_string(),
         redis_url: "redis://127.0.0.1:1".to_string(),
         amqp_url: "amqp://guest:guest@127.0.0.1:1/%2f".to_string(),
+        collection: "test".to_string(),
+        output_dir: PathBuf::from(".cache/test-worker-jobs"),
         crawl_queue: "axon.test.crawl".to_string(),
         batch_queue: "axon.test.batch".to_string(),
         extract_queue: "axon.test.extract".to_string(),
         embed_queue: "axon.test.embed".to_string(),
         ingest_queue: "axon.test.ingest".to_string(),
-        github_token: None,
-        github_include_source: false,
-        reddit_client_id: None,
-        reddit_client_secret: None,
         tei_url: "http://127.0.0.1:1".to_string(),
         qdrant_url: "http://127.0.0.1:1".to_string(),
         openai_base_url: "http://127.0.0.1:1/v1".to_string(),
         openai_api_key: "test".to_string(),
         openai_model: "test-model".to_string(),
+        // Test-specific overrides from the original literal
+        search_limit: 5,
+        max_pages: 10,
+        max_depth: 2,
+        min_markdown_chars: 50,
+        drop_thin_markdown: false,
+        embed: false,
+        batch_concurrency: 2,
+        yes: true,
+        crawl_concurrency_limit: Some(2),
+        backfill_concurrency_limit: Some(2),
+        request_timeout_ms: Some(5_000),
+        fetch_retries: 0,
+        retry_backoff_ms: 0,
         ask_max_context_chars: 12_000,
-        ask_candidate_limit: 64,
-        ask_chunk_limit: 10,
-        ask_full_docs: 4,
-        ask_backfill_chunks: 3,
-        ask_doc_fetch_concurrency: 4,
-        ask_doc_chunk_limit: 192,
-        ask_min_relevance_score: 0.45,
-        ask_diagnostics: false,
-        cron_every_seconds: None,
-        cron_max_runs: None,
-        watchdog_stale_timeout_secs: 300,
-        watchdog_confirm_secs: 60,
-        json_output: false,
+        ..Config::default()
     }
 }
 
@@ -227,7 +176,7 @@ pub async fn claim_pending_by_id(pool: &PgPool, table: JobTable, id: Uuid) -> Re
 
 /// Mark a running job as failed with an error message.
 pub async fn mark_job_failed(pool: &PgPool, table: JobTable, id: Uuid, error_text: &str) {
-    use crate::axon_cli::crates::core::logging::log_warn;
+    use crate::crates::core::logging::log_warn;
     let table_name = table.as_str();
     let query = format!(
         "UPDATE {table_name} SET status='failed', updated_at=NOW(), finished_at=NOW(), error_text=$2 WHERE id=$1 AND status='running'"
@@ -270,6 +219,65 @@ pub async fn enqueue_job(cfg: &Config, queue_name: &str, job_id: Uuid) -> Result
     let _ = ch.close(0, "").await;
     let _ = conn.close(200, "").await;
 
+    Ok(())
+}
+
+/// Publish multiple job IDs to an AMQP queue over a single connection.
+///
+/// More efficient than calling [`enqueue_job`] in a loop — one TCP handshake,
+/// N publishes, one CLOSE. Uses publisher confirms so the broker acks every
+/// message before we close — follows the official lapin `publisher_confirms` example.
+pub async fn batch_enqueue_jobs(cfg: &Config, queue_name: &str, job_ids: &[Uuid]) -> Result<()> {
+    use lapin::options::{BasicPublishOptions, ConfirmSelectOptions};
+    use lapin::BasicProperties;
+
+    if job_ids.is_empty() {
+        return Ok(());
+    }
+
+    let (conn, ch) = open_amqp_connection_and_channel(cfg, queue_name).await?;
+
+    // Enable publisher confirms so wait_for_confirms actually tracks acks.
+    ch.confirm_select(ConfirmSelectOptions::default())
+        .await
+        .context("confirm_select failed")?;
+
+    for id in job_ids {
+        ch.basic_publish(
+            "",
+            queue_name,
+            BasicPublishOptions::default(),
+            id.to_string().as_bytes(),
+            BasicProperties::default(),
+        )
+        .await?;
+        // Don't await the confirm here — collect them all at once below.
+    }
+
+    // Wait for all broker acks in one pass instead of awaiting each publish individually.
+    ch.wait_for_confirms()
+        .await
+        .context("wait_for_confirms failed")?;
+    let _ = ch.close(0, "").await;
+    let _ = conn.close(200, "").await;
+
+    Ok(())
+}
+
+/// Purge all messages from the named AMQP queue, then explicitly close the
+/// channel and connection.
+///
+/// This is the correct way to purge a queue — unlike [`open_amqp_channel`], it
+/// keeps the `Connection` alive for the full duration of the operation.
+pub(crate) async fn purge_queue_safe(cfg: &Config, queue_name: &str) -> Result<()> {
+    use lapin::options::QueuePurgeOptions;
+
+    let (conn, ch) = open_amqp_connection_and_channel(cfg, queue_name).await?;
+    ch.queue_purge(queue_name, QueuePurgeOptions::default())
+        .await
+        .context("queue_purge failed")?;
+    let _ = ch.close(0, "").await;
+    let _ = conn.close(200, "").await;
     Ok(())
 }
 

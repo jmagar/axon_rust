@@ -5,14 +5,13 @@ mod sync_crawl;
 
 pub(crate) use audit::discover_sitemap_urls_with_robots;
 
-use crate::axon_cli::crates::cli::commands::run_doctor;
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::http::validate_url;
-use crate::axon_cli::crates::core::ui::{
+use crate::crates::core::config::Config;
+use crate::crates::core::http::validate_url;
+use crate::crates::core::ui::{
     accent, confirm_destructive, muted, primary, print_kv, print_option, print_phase, status_text,
     symbol_for_status,
 };
-use crate::axon_cli::crates::jobs::crawl_jobs_v2::{
+use crate::crates::jobs::crawl_jobs::{
     cancel_job, cleanup_jobs, clear_jobs, get_job, list_jobs, recover_stale_crawl_jobs, run_worker,
     start_crawl_job,
 };
@@ -22,9 +21,6 @@ use uuid::Uuid;
 pub async fn run_crawl(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
     if maybe_handle_subcommand(cfg, start_url).await? {
         return Ok(());
-    }
-    if let Some(subcmd) = cfg.positional.first() {
-        return Err(format!("unknown crawl subcommand: {subcmd}").into());
     }
     validate_url(start_url)?;
     if cfg.wait {
@@ -47,7 +43,6 @@ async fn maybe_handle_subcommand(cfg: &Config, start_url: &str) -> Result<bool, 
         "clear" => handle_clear_subcommand(cfg).await?,
         "worker" => run_worker(cfg).await?,
         "recover" => handle_recover_subcommand(cfg).await?,
-        "doctor" => handle_doctor_subcommand(cfg).await?,
         "audit" => audit::run_crawl_audit(cfg, start_url).await?,
         "diff" => audit::run_crawl_audit_diff(cfg).await?,
         _ => return Ok(false),
@@ -179,7 +174,7 @@ async fn handle_cancel_subcommand(cfg: &Config) -> Result<(), Box<dyn Error>> {
         println!("Job ID: {id}");
     } else {
         println!(
-            "{} no cancellable crawl job found for {}",
+            "{} no cancellable crawl job found for ID: {}",
             symbol_for_status("error"),
             accent(&id.to_string())
         );
@@ -295,16 +290,7 @@ async fn handle_recover_subcommand(cfg: &Config) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn handle_doctor_subcommand(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    eprintln!("{}", muted("`crawl doctor` is deprecated; use `doctor`."));
-    run_doctor(cfg).await
-}
-
-fn print_async_options(
-    cfg: &Config,
-    start_url: &str,
-    chrome_bootstrap: &runtime::ChromeBootstrapOutcome,
-) {
+fn print_async_options(cfg: &Config, start_url: &str) {
     print_phase("◐", "Crawling", start_url);
     println!("  {}", primary("Options:"));
     print_option("maxDepth", &cfg.max_depth.to_string());
@@ -334,28 +320,13 @@ fn print_async_options(
     );
     print_option("embed", &cfg.embed.to_string());
     print_option("wait", &cfg.wait.to_string());
-    if runtime::chrome_runtime_requested(cfg) {
-        print_option(
-            "chromeBootstrapReady",
-            &chrome_bootstrap.remote_ready.to_string(),
-        );
-        print_option(
-            "chromeRuntimeMode",
-            match chrome_bootstrap.mode {
-                runtime::ChromeRuntimeMode::Chrome => "chrome",
-                runtime::ChromeRuntimeMode::WebDriverFallback => "webdriver-fallback",
-            },
-        );
-    }
 }
 
 async fn run_async_enqueue(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
-    let chrome_bootstrap = runtime::bootstrap_chrome_runtime(cfg).await;
-    print_async_options(cfg, start_url, &chrome_bootstrap);
+    // Chrome bootstrap probe belongs to sync crawl — the worker owns Chrome in async mode.
+    // Skipping it here eliminates ~10s of failed probe retries on startup.
+    print_async_options(cfg, start_url);
     println!();
-    for warning in &chrome_bootstrap.warnings {
-        println!("{} {}", muted("[Chrome Bootstrap]"), warning);
-    }
 
     let job_id = start_crawl_job(cfg, start_url).await?;
     println!(

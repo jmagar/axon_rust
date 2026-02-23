@@ -1,16 +1,9 @@
 use super::config::parse::normalize_local_service_url;
-use spider::tokio;
 use std::env;
 use std::time::Duration;
+use tokio;
 
 const DIAGNOSTICS_DIR_DEFAULT: &str = ".cache/chrome-diagnostics";
-
-const DO_NOT_PORT_GUARDRAILS: &[&str] = &[
-    "captcha/solver-heavy anti-bot flows",
-    "provider-coupled dual-model orchestration",
-    "arbitrary browser automation from prompts",
-    "domain-specific THC pipeline as-is",
-];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserDiagnosticsPattern {
@@ -50,11 +43,6 @@ pub fn webdriver_url_from_env() -> Option<String> {
     env::var("AXON_WEBDRIVER_URL")
         .ok()
         .filter(|v| !v.trim().is_empty())
-        .or_else(|| {
-            env::var("WEBDRIVER_URL")
-                .ok()
-                .filter(|v| !v.trim().is_empty())
-        })
         .map(normalize_local_service_url)
 }
 
@@ -86,10 +74,6 @@ pub fn browser_diagnostics_pattern() -> BrowserDiagnosticsPattern {
         events,
         output_dir,
     }
-}
-
-pub fn do_not_port_guardrails() -> &'static [&'static str] {
-    DO_NOT_PORT_GUARDRAILS
 }
 
 fn env_flag(key: &str) -> bool {
@@ -141,24 +125,10 @@ mod tests {
     fn webdriver_url_prefers_axon_var() {
         with_env_lock(|| {
             reset_env();
-            std::env::set_var("WEBDRIVER_URL", "http://fallback.example");
             std::env::set_var("AXON_WEBDRIVER_URL", "http://preferred.example");
             assert_eq!(
                 webdriver_url_from_env().as_deref(),
                 Some("http://preferred.example")
-            );
-            reset_env();
-        });
-    }
-
-    #[test]
-    fn webdriver_url_uses_generic_fallback() {
-        with_env_lock(|| {
-            reset_env();
-            std::env::set_var("WEBDRIVER_URL", "http://fallback.example");
-            assert_eq!(
-                webdriver_url_from_env().as_deref(),
-                Some("http://fallback.example")
             );
             reset_env();
         });
@@ -224,22 +194,5 @@ mod tests {
             browser_backend_selection(false, true, false),
             BrowserBackendSelection::Chrome
         );
-    }
-
-    #[test]
-    fn guardrails_cover_risky_non_portable_items() {
-        let guardrails = do_not_port_guardrails();
-        assert!(guardrails
-            .iter()
-            .any(|line| line.contains("captcha/solver-heavy anti-bot flows")));
-        assert!(guardrails
-            .iter()
-            .any(|line| line.contains("provider-coupled dual-model orchestration")));
-        assert!(guardrails
-            .iter()
-            .any(|line| line.contains("arbitrary browser automation from prompts")));
-        assert!(guardrails
-            .iter()
-            .any(|line| line.contains("domain-specific THC pipeline as-is")));
     }
 }

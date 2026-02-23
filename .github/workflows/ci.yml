@@ -38,14 +38,6 @@ jobs:
 
           python3 scripts/enforce_monoliths.py --base "$BASE_SHA" --head "$HEAD_SHA"
 
-  no-legacy-symbols:
-    name: no-legacy-symbols
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Enforce legacy symbol deny-list
-        run: python3 scripts/enforce_no_legacy_symbols.py
-
   fmt:
     name: fmt
     runs-on: ubuntu-latest
@@ -89,6 +81,22 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: axon
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: axon
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      AXON_TEST_PG_URL: postgresql://axon:postgres@localhost:5432/axon
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

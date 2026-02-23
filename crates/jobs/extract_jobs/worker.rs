@@ -1,6 +1,6 @@
 use super::*;
-use crate::axon_cli::crates::core::content::ExtractRun;
-use crate::axon_cli::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
+use crate::crates::core::content::ExtractRun;
+use crate::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
 
 struct ExtractAggregation {
     runs: Vec<serde_json::Value>,
@@ -69,9 +69,10 @@ async fn mark_extract_canceled(
     if cancel_before.is_none() {
         return Ok(false);
     }
-    sqlx::query(
-        "UPDATE axon_extract_jobs SET status='canceled',updated_at=NOW(),finished_at=NOW() WHERE id=$1",
-    )
+    sqlx::query(&format!(
+        "UPDATE axon_extract_jobs SET status='{canceled}',updated_at=NOW(),finished_at=NOW() WHERE id=$1",
+        canceled = JobStatus::Canceled.as_str(),
+    ))
     .bind(id)
     .execute(pool)
     .await?;
@@ -216,13 +217,39 @@ async fn process_extract_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<()
 
     match run_result {
         Ok(Some(result_json)) => {
-            sqlx::query(
-                "UPDATE axon_extract_jobs SET status='completed',updated_at=NOW(),finished_at=NOW(),result_json=$2,error_text=NULL WHERE id=$1 AND status='running'",
-            )
-            .bind(id)
-            .bind(result_json)
-            .execute(pool)
-            .await?;
+            // Retry the completion UPDATE to guard against transient DB errors
+            // (e.g. PG restart mid-job). A lost UPDATE would leave the job stuck
+            // in 'running' until the watchdog reclaims it.
+            let mut last_err = None;
+            for attempt in 1u32..=3 {
+                match sqlx::query(&format!(
+                    "UPDATE axon_extract_jobs SET status='{completed}',updated_at=NOW(),finished_at=NOW(),result_json=$2,error_text=NULL WHERE id=$1 AND status='{running}'",
+                    completed = JobStatus::Completed.as_str(),
+                    running = JobStatus::Running.as_str(),
+                ))
+                .bind(id)
+                .bind(&result_json)
+                .execute(pool)
+                .await
+                {
+                    Ok(_) => {
+                        last_err = None;
+                        break;
+                    }
+                    Err(e) => {
+                        log_warn(&format!(
+                            "worker extract job {id} completion UPDATE attempt {attempt} failed: {e}"
+                        ));
+                        last_err = Some(e);
+                        if attempt < 3 {
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        }
+                    }
+                }
+            }
+            if let Some(e) = last_err {
+                return Err(e.into());
+            }
             log_done(&format!("worker completed extract job {id}"));
         }
         Ok(None) => {}
@@ -246,8 +273,15 @@ async fn process_claimed_extract_job(cfg: Config, pool: PgPool, id: Uuid) {
 }
 
 pub async fn run_extract_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
+    // Validate required environment variables before attempting any connections.
+    // Exits with a clear error message if any are missing.
+    crate::crates::jobs::worker_lane::validate_worker_env_vars();
+
     let pool = make_pool(cfg).await?;
-    ensure_schema(&pool).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
 
     let wc = WorkerConfig {
         table: TABLE,

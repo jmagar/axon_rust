@@ -1,5 +1,11 @@
 name: axon
 
+# AXON_DATA_DIR controls where persistent data is stored on the host.
+# Default: ./data (relative to this file, committed-safe for local dev).
+# Override in .env: AXON_DATA_DIR=/home/yourname/appdata/axon
+# Example: AXON_DATA_DIR=/home/jmagar/appdata/axon
+# See .env.example for the full list of environment variables.
+
 x-common-service: &common-service
   env_file:
     - .env
@@ -27,7 +33,7 @@ services:
     ports:
       - "127.0.0.1:53432:5432"  # homelab-only: not exposed to network
     volumes:
-      - /home/jmagar/appdata/axon-postgres:/var/lib/postgresql/data
+      - ${AXON_DATA_DIR:-./data}/postgres:/var/lib/postgresql/data
     healthcheck:
       test:
         [
@@ -47,7 +53,7 @@ services:
     ports:
       - "127.0.0.1:53379:6379"  # homelab-only: not exposed to network
     volumes:
-      - /home/jmagar/appdata/axon-redis:/data
+      - ${AXON_DATA_DIR:-./data}/redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "6379", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
       interval: 10s
@@ -65,7 +71,7 @@ services:
     ports:
       - "127.0.0.1:45535:5672"  # homelab-only: not exposed to network
     volumes:
-      - /home/jmagar/appdata/axon-rabbitmq:/var/lib/rabbitmq
+      - ${AXON_DATA_DIR:-./data}/rabbitmq:/var/lib/rabbitmq
       - ./docker/rabbitmq/20-axon.conf:/etc/rabbitmq/conf.d/20-axon.conf:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
@@ -82,7 +88,7 @@ services:
       - "127.0.0.1:53333:6333"  # homelab-only: not exposed to network
       - "127.0.0.1:53334:6334"  # gRPC — homelab-only
     volumes:
-      - /home/jmagar/appdata/axon-qdrant:/qdrant/storage
+      - ${AXON_DATA_DIR:-./data}/qdrant:/qdrant/storage
     healthcheck:
       test:
         [
@@ -96,26 +102,40 @@ services:
       retries: 5
       start_period: 20s
 
-  axon-webdriver:
-    <<: *common-service
-    image: selenium/standalone-chrome:4.34.0
-    container_name: axon-webdriver
-    # Override env_file to prevent app secrets from leaking into the browser container.
-    # Selenium only needs its own SE_* vars — no database credentials or API keys.
-    env_file: []
+  axon-chrome:
+    # headless_browser manager + chrome-headless-shell
+    # Port 6000: management API (/json/version, /fork, /shutdown)
+    # Port 9222: CDP proxy — pointed at by AXON_CHROME_REMOTE_URL
+    container_name: axon-chrome
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.chrome
+    env_file: []  # no app secrets needed in the browser container
     shm_size: "2gb"
     ports:
-      - "127.0.0.1:4444:4444"  # WebDriver endpoint for browser fallback
-      - "127.0.0.1:7900:7900"  # Optional VNC viewer
+      - "127.0.0.1:9222:9222"  # CDP proxy — local dev access
+      - "127.0.0.1:6000:6000"  # management API — local dev access
     environment:
-      SE_NODE_MAX_SESSIONS: "1"
-      SE_NODE_OVERRIDE_MAX_SESSIONS: "true"
+      # Rewrite the hostname in /json/version WebSocket URLs so that other
+      # containers on the axon network receive a resolvable address.
+      HOSTNAME_OVERRIDE: axon-chrome
+    networks:
+      - axon
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:4444/wd/hub/status >/dev/null 2>&1 || exit 1"]
-      interval: 15s
+      test: ["CMD-SHELL", "curl -fsSL http://127.0.0.1:6000/json/version > /dev/null || exit 1"]
+      interval: 10s
       timeout: 5s
-      retries: 10
-      start_period: 45s
+      retries: 6
+      start_period: 20s
 
   axon-workers:
     <<: *common-service
@@ -123,6 +143,13 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      # Inject spider_agent and its transitive path deps as named BuildKit
+      # contexts so they are available without widening the build context
+      # to the whole workspace.
+      additional_contexts:
+        spider-agent: ../spider/spider_agent
+        spider-agent-types: ../spider/spider_agent_types
+        spider-agent-html: ../spider/spider_agent_html
     environment:
       RUST_LOG: "info"
     depends_on:
@@ -133,6 +160,8 @@ services:
       axon-rabbitmq:
         condition: service_healthy
       axon-qdrant:
+        condition: service_healthy
+      axon-chrome:
         condition: service_healthy
     deploy:
       resources:
@@ -146,14 +175,15 @@ services:
       test:
         [
           "CMD-SHELL",
-          "/command/s6-svstat -u /run/service/crawl-worker >/dev/null && /command/s6-svstat -u /run/service/batch-worker >/dev/null && /command/s6-svstat -u /run/service/extract-worker >/dev/null && /command/s6-svstat -u /run/service/embed-worker >/dev/null",
+          "/command/s6-svstat -u /run/service/crawl-worker >/dev/null && /command/s6-svstat -u /run/service/batch-worker >/dev/null && /command/s6-svstat -u /run/service/extract-worker >/dev/null && /command/s6-svstat -u /run/service/embed-worker >/dev/null && /command/s6-svstat -u /run/service/ingest-worker >/dev/null",
         ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
     volumes:
-      - /home/jmagar/appdata/axon-worker-output:/app/.cache/axon-rust/output
+      - ${AXON_DATA_DIR:-./data}/worker-output:/app/.cache/axon-rust/output
+      - ${AXON_DATA_DIR:-./data}/logs:/app/logs
 
 networks:
   axon:

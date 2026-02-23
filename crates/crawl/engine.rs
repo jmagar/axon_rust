@@ -1,25 +1,21 @@
-mod sitemap;
-
+mod collector;
 #[cfg(test)]
 mod tests;
 
-pub use sitemap::{append_sitemap_backfill, crawl_sitemap_urls};
-
-use crate::axon_cli::crates::core::config::{Config, RenderMode};
-use crate::axon_cli::crates::core::content::{build_transform_config, url_to_filename};
-use crate::axon_cli::crates::core::http::ssrf_blacklist_patterns;
-use crate::axon_cli::crates::core::logging::{log_info, log_warn};
+use crate::crates::core::config::parse::is_docker_service_host;
+use crate::crates::core::config::{Config, RenderMode};
+use crate::crates::core::content::build_transform_config;
+use crate::crates::core::http::{cdp_discovery_url, ssrf_blacklist_patterns};
+use crate::crates::core::logging::{log_info, log_warn};
+use collector::collect_crawl_pages;
 use spider::features::chrome_common::RequestInterceptConfiguration;
-use spider::tokio;
 use spider::url::Url;
 use spider::website::Website;
-use spider_transformations::transformation::content::{transform_content_input, TransformInput};
 use std::collections::HashSet;
 use std::error::Error;
 use std::path::Path;
 use std::time::{Duration, Instant};
-use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 
 #[derive(Debug, Default, Clone)]
 pub struct CrawlSummary {
@@ -27,17 +23,6 @@ pub struct CrawlSummary {
     pub markdown_files: u32,
     pub thin_pages: u32,
     pub elapsed_ms: u128,
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SitemapBackfillStats {
-    pub sitemap_discovered: usize,
-    pub sitemap_candidates: usize,
-    pub processed: usize,
-    pub fetched_ok: usize,
-    pub written: usize,
-    pub failed: usize,
-    pub filtered: usize,
 }
 
 pub(crate) fn canonicalize_url_for_dedupe(url: &str) -> Option<String> {
@@ -75,17 +60,17 @@ pub(crate) fn is_excluded_url_path(url: &str, excludes: &[String]) -> bool {
 
 fn is_path_prefix_excluded(path: &str, prefix: &str) -> bool {
     let normalized = if prefix.starts_with('/') {
-        prefix
+        prefix.to_owned()
     } else {
-        return is_path_prefix_excluded(path, &format!("/{prefix}"));
+        format!("/{prefix}")
     };
-    let boundary_prefix = normalized.trim_end_matches('/');
-    if boundary_prefix.is_empty() {
+    let boundary = normalized.trim_end_matches('/');
+    if boundary.is_empty() {
         return false;
     }
-    path == boundary_prefix
+    path == boundary
         || path
-            .strip_prefix(boundary_prefix)
+            .strip_prefix(boundary)
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
@@ -127,20 +112,58 @@ fn build_exclude_blacklist_patterns(start_url: &str, excludes: &[String]) -> Vec
         .collect()
 }
 
-/// Ensure the Chrome DevTools Protocol URL includes the `/json/version` discovery path.
-/// chromiumoxide requires `http://host:port/json/version`, not bare `http://host:port`.
-fn normalize_cdp_url(url: &str) -> String {
-    match Url::parse(url) {
-        Ok(mut parsed) if parsed.path() == "/" || parsed.path().is_empty() => {
-            parsed.set_path("/json/version");
-            parsed.set_query(None);
-            parsed.to_string()
-        }
-        _ => url.to_string(),
+/// Pre-resolve the Chrome DevTools WebSocket URL from the CDP discovery endpoint.
+///
+/// If `remote_url` is already a `ws://` / `wss://` URL (pre-resolved by the
+/// bootstrap probe), return it directly without a second fetch — eliminating
+/// the redundant `/json/version` round-trip when bootstrap succeeded.
+///
+/// Otherwise, fetch `/json/version`, extract `webSocketDebuggerUrl`, and rewrite
+/// any known Docker service hostname (from the explicit allowlist) to `127.0.0.1`
+/// so the host CLI can reach the Chrome proxy.
+///
+/// Returns `None` inside Docker (container hostnames resolve on the bridge
+/// network) or when the fetch/parse fails.
+async fn resolve_cdp_ws_url(remote_url: &str) -> Option<String> {
+    // ws:// shortcut: bootstrap already resolved the URL — use it directly.
+    if remote_url.starts_with("ws://") || remote_url.starts_with("wss://") {
+        return Some(remote_url.to_string());
     }
+
+    // Inside Docker the container hostname resolves on the Docker network.
+    if Path::new("/.dockerenv").exists() {
+        return None;
+    }
+
+    // Build the discovery URL (appends /json/version, converts ws→http).
+    let discovery_url = cdp_discovery_url(remote_url)?;
+
+    let client = crate::crates::core::http::http_client().ok()?;
+
+    let body: serde_json::Value = client
+        .get(&discovery_url)
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+
+    let ws_url = body.get("webSocketDebuggerUrl")?.as_str()?;
+
+    // Rewrite known Docker service hostnames to 127.0.0.1, preserving the port.
+    let mut parsed = Url::parse(ws_url).ok()?;
+    if let Some(host) = parsed.host_str() {
+        let host = host.to_string();
+        if is_docker_service_host(&host) {
+            let _ = parsed.set_host(Some("127.0.0.1"));
+        }
+    }
+
+    Some(parsed.to_string())
 }
 
-fn configure_website(
+async fn configure_website(
     cfg: &Config,
     start_url: &str,
     mode: RenderMode,
@@ -148,7 +171,10 @@ fn configure_website(
     let mut website = Website::new(start_url);
     website.with_depth(cfg.max_depth);
     website.with_subdomains(cfg.include_subdomains);
-    website.with_tld(cfg.include_subdomains);
+    // Disable TLD crawling unconditionally — we don't want to silently expand
+    // example.com into example.co.uk, example.de, etc.  If TLD-scope crawling
+    // is ever needed, add an explicit --include-tld flag.
+    website.with_tld(false);
 
     if cfg.max_pages > 0 {
         website.with_limit(cfg.max_pages);
@@ -182,6 +208,13 @@ fn configure_website(
     if let Some(timeout_ms) = cfg.request_timeout_ms {
         website.with_request_timeout(Some(Duration::from_millis(timeout_ms)));
     }
+    // Wire retry count from config / performance profile.
+    // with_retry takes u8; cfg.fetch_retries is usize — clamp to u8::MAX.
+    if cfg.fetch_retries > 0 {
+        website.with_retry(cfg.fetch_retries.min(u8::MAX as usize) as u8);
+    }
+    // Deduplicate trailing-slash URL variants when requested.
+    website.with_normalize(cfg.normalize);
 
     if let Some(ref proxy) = cfg.chrome_proxy {
         website.with_proxies(Some(vec![proxy.clone()]));
@@ -198,8 +231,19 @@ fn configure_website(
             .with_stealth(cfg.chrome_stealth || cfg.chrome_anti_bot)
             .with_fingerprint(true);
         if let Some(ref remote_url) = cfg.chrome_remote_url {
-            // chromiumoxide requires the /json/version CDP discovery endpoint.
-            website.with_chrome_connection(Some(normalize_cdp_url(remote_url)));
+            // If remote_url is already a ws:// URL (threaded from the bootstrap
+            // probe), resolve_cdp_ws_url returns it directly with no second fetch.
+            // Otherwise it discovers via /json/version and normalises any Docker
+            // hostname to 127.0.0.1.  Inside Docker, resolve_cdp_ws_url returns None
+            // and we fall back to the discovery URL (spider.rs fetches it itself).
+            let chrome_url = match resolve_cdp_ws_url(remote_url).await {
+                Some(ws_url) => {
+                    log_info(&format!("[Chrome] CDP WebSocket resolved: {ws_url}"));
+                    ws_url
+                }
+                None => cdp_discovery_url(remote_url).unwrap_or_else(|| remote_url.to_string()),
+            };
+            website.with_chrome_connection(Some(chrome_url));
         }
         // `idle_network0` calls `wait_for_network_idle()` — waits until the network
         // has been fully quiet for 500 ms. This is essential for CSR frameworks
@@ -229,10 +273,14 @@ fn configure_website(
         )));
     }
 
+    // We always control the sitemap phase explicitly via run_crawl_once(run_sitemap: bool).
+    // Prevent spider from auto-running sitemap during crawl()/crawl_raw().
+    website.with_ignore_sitemap(true);
+
     Ok(website)
 }
 
-pub fn should_fallback_to_chrome(summary: &CrawlSummary, max_pages: u32) -> bool {
+pub fn should_fallback_to_chrome(summary: &CrawlSummary, max_pages: u32, cfg: &Config) -> bool {
     if summary.markdown_files == 0 {
         return true;
     }
@@ -241,7 +289,7 @@ pub fn should_fallback_to_chrome(summary: &CrawlSummary, max_pages: u32) -> bool
     } else {
         summary.thin_pages as f64 / summary.pages_seen as f64
     };
-    if thin_ratio > 0.60 {
+    if thin_ratio > cfg.auto_switch_thin_ratio {
         return true;
     }
     // When max_pages == 0 (uncapped), there's no expected page count to compare
@@ -249,7 +297,7 @@ pub fn should_fallback_to_chrome(summary: &CrawlSummary, max_pages: u32) -> bool
     if max_pages == 0 {
         return false;
     }
-    summary.markdown_files < (max_pages / 10).max(10)
+    summary.markdown_files < (max_pages / 10).max(cfg.auto_switch_min_pages as u32)
 }
 
 pub async fn crawl_and_collect_map(
@@ -257,7 +305,7 @@ pub async fn crawl_and_collect_map(
     start_url: &str,
     mode: RenderMode,
 ) -> Result<(CrawlSummary, Vec<String>), Box<dyn Error>> {
-    let mut website = configure_website(cfg, start_url, mode)?;
+    let mut website = configure_website(cfg, start_url, mode).await?;
     let start = Instant::now();
 
     match mode {
@@ -294,7 +342,8 @@ pub async fn run_crawl_once(
     start_url: &str,
     mode: RenderMode,
     output_dir: &Path,
-    progress_tx: Option<UnboundedSender<CrawlSummary>>,
+    progress_tx: Option<Sender<CrawlSummary>>,
+    run_sitemap: bool,
 ) -> Result<(CrawlSummary, HashSet<String>), Box<dyn Error>> {
     if output_dir.exists() {
         if std::env::var("AXON_NO_WIPE").is_ok() {
@@ -321,12 +370,12 @@ pub async fn run_crawl_once(
     }
     tokio::fs::create_dir_all(output_dir.join("markdown")).await?;
 
-    let mut website = configure_website(cfg, start_url, mode)?;
+    let mut website = configure_website(cfg, start_url, mode).await?;
     // Buffer at least max_pages worth of messages to prevent silent page drops
     // under high-throughput crawls (extreme/max profiles). Clamp to 16 384 so
     // a large --max-pages value can't allocate an unbounded broadcast ring buffer.
     let subscribe_buf = (cfg.max_pages as usize).clamp(4096, 16_384);
-    let mut rx = website
+    let rx = website
         .subscribe(subscribe_buf)
         .ok_or("failed to subscribe to spider broadcast channel")?;
     let markdown_dir = output_dir.join("markdown");
@@ -338,104 +387,73 @@ pub async fn run_crawl_once(
     let crawl_start = Instant::now();
     let transform_cfg = build_transform_config();
 
-    let join = tokio::spawn(async move {
-        let manifest_file = tokio::fs::File::create(&manifest_path)
-            .await
-            .map_err(|e| format!("manifest create failed: {e}"))?;
-        let mut manifest = tokio::io::BufWriter::new(manifest_file);
-        let mut summary = CrawlSummary::default();
-        let mut urls = HashSet::new();
-        let mut seen_canonical = HashSet::new();
+    let join = tokio::spawn(collect_crawl_pages(
+        rx,
+        markdown_dir,
+        manifest_path,
+        min_chars,
+        drop_thin,
+        exclude_path_prefix,
+        transform_cfg,
+        progress_tx,
+    ));
 
-        loop {
-            let page = match rx.recv().await {
-                Ok(page) => page,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    log_warn(&format!("crawl broadcast lagged: {skipped} pages dropped — increase subscribe buffer or reduce concurrency"));
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            };
-            let raw_url = page.get_url().to_string();
-            if is_excluded_url_path(&raw_url, &exclude_path_prefix) {
-                continue;
-            }
-            let Some(url) = canonicalize_url_for_dedupe(&raw_url) else {
-                continue;
-            };
-            if !seen_canonical.insert(url.clone()) {
-                continue;
-            }
-            summary.pages_seen += 1;
-            urls.insert(url.clone());
-
-            let input = TransformInput {
-                url: None,
-                content: page.get_html_bytes_u8(),
-                screenshot_bytes: None,
-                encoding: None,
-                selector_config: None,
-                ignore_tags: None,
-            };
-            let markdown = transform_content_input(input, transform_cfg);
-            let trimmed = markdown.trim(); // &str borrow — zero allocation
-            let chars = trimmed.chars().count();
-
-            if chars < min_chars {
-                summary.thin_pages += 1;
-                if drop_thin {
-                    if summary.pages_seen.is_multiple_of(25) {
-                        if let Some(tx) = progress_tx.as_ref() {
-                            let _ = tx.send(summary.clone());
-                        }
-                    }
-                    continue;
-                }
-            }
-            if trimmed.is_empty() {
-                if summary.pages_seen.is_multiple_of(25) {
-                    if let Some(tx) = progress_tx.as_ref() {
-                        let _ = tx.send(summary.clone());
-                    }
-                }
-                continue;
-            }
-
-            summary.markdown_files += 1;
-            let filename = url_to_filename(&url, summary.markdown_files);
-            let path = markdown_dir.join(filename);
-            tokio::fs::write(&path, trimmed.as_bytes())
-                .await
-                .map_err(|e| format!("write failed: {e}"))?;
-            let rec = serde_json::json!({"url": url, "file_path": path.to_string_lossy(), "markdown_chars": chars});
-            let mut line = rec.to_string();
-            line.push('\n');
-            manifest
-                .write_all(line.as_bytes())
-                .await
-                .map_err(|e| format!("manifest failed: {e}"))?;
-
-            if summary.pages_seen.is_multiple_of(25) {
-                if let Some(tx) = progress_tx.as_ref() {
-                    let _ = tx.send(summary.clone());
-                }
-            }
-        }
-
-        manifest
-            .flush()
-            .await
-            .map_err(|e| format!("manifest flush failed: {e}"))?;
-        if let Some(tx) = progress_tx.as_ref() {
-            let _ = tx.send(summary.clone());
-        }
-        Ok::<(CrawlSummary, HashSet<String>), String>((summary, urls))
-    });
+    // Spider-native sitemap phase: pages flow through the live subscription above.
+    // persist_links() carries accumulated sitemap links into the subsequent main crawl.
+    if run_sitemap && cfg.discover_sitemaps {
+        website.crawl_sitemap().await;
+        website.persist_links();
+    }
 
     match mode {
         RenderMode::Http => website.crawl_raw().await,
         RenderMode::Chrome | RenderMode::AutoSwitch => website.crawl().await,
     }
+    website.unsubscribe();
+
+    let (mut summary, urls) = join
+        .await
+        .map_err(|e| format!("collector join failure: {e}"))?
+        .map_err(|e| format!("collector failure: {e}"))?;
+    summary.elapsed_ms = crawl_start.elapsed().as_millis();
+
+    Ok((summary, urls))
+}
+
+/// Crawl only the sitemap — no follow-on main crawl.
+/// Pages flow through the same subscription pipeline as `run_crawl_once`.
+pub async fn run_sitemap_only(
+    cfg: &Config,
+    start_url: &str,
+    output_dir: &Path,
+) -> Result<(CrawlSummary, HashSet<String>), Box<dyn Error>> {
+    tokio::fs::create_dir_all(output_dir.join("markdown")).await?;
+
+    let mut website = configure_website(cfg, start_url, cfg.render_mode).await?;
+    // Override the default set by configure_website: sitemap IS the crawl here.
+    website.with_ignore_sitemap(false);
+
+    let subscribe_buf = (cfg.max_pages as usize).clamp(4096, 16_384);
+    let rx = website
+        .subscribe(subscribe_buf)
+        .ok_or("failed to subscribe to spider broadcast channel")?;
+    let manifest_path = output_dir.join("manifest.jsonl");
+    let markdown_dir = output_dir.join("markdown");
+    let transform_cfg = build_transform_config();
+    let crawl_start = Instant::now();
+
+    let join = tokio::spawn(collect_crawl_pages(
+        rx,
+        markdown_dir,
+        manifest_path,
+        cfg.min_markdown_chars,
+        cfg.drop_thin_markdown,
+        cfg.exclude_path_prefix.clone(),
+        transform_cfg,
+        None,
+    ));
+
+    website.crawl_sitemap().await;
     website.unsubscribe();
 
     let (mut summary, urls) = join

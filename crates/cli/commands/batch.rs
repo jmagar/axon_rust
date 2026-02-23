@@ -1,19 +1,17 @@
-use crate::axon_cli::crates::cli::commands::common::parse_urls;
-use crate::axon_cli::crates::cli::commands::run_doctor;
-use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::{to_markdown, url_to_filename};
-use crate::axon_cli::crates::core::http::{fetch_html, http_client};
-use crate::axon_cli::crates::core::logging::{log_done, log_warn};
-use crate::axon_cli::crates::core::ui::{
+use crate::crates::cli::commands::common::parse_urls;
+use crate::crates::core::config::Config;
+use crate::crates::core::content::{to_markdown, url_to_filename};
+use crate::crates::core::http::{fetch_html, http_client};
+use crate::crates::core::logging::{log_done, log_warn};
+use crate::crates::core::ui::{
     accent, confirm_destructive, muted, primary, status_text, symbol_for_status,
 };
-use crate::axon_cli::crates::jobs::batch_jobs::{
+use crate::crates::jobs::batch_jobs::{
     cancel_batch_job, cleanup_batch_jobs, clear_batch_jobs, get_batch_job, list_batch_jobs,
     recover_stale_batch_jobs, run_batch_worker, start_batch_job,
 };
-use crate::axon_cli::crates::vector::ops::embed_path_native;
+use crate::crates::vector::ops::embed_path_native;
 use indicatif::{ProgressBar, ProgressStyle};
-use spider::tokio;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,10 +51,6 @@ async fn maybe_handle_batch_subcommand(cfg: &Config) -> Result<bool, Box<dyn Err
         "clear" => handle_batch_clear(cfg).await?,
         "worker" => run_batch_worker(cfg).await?,
         "recover" => handle_batch_recover(cfg).await?,
-        "doctor" => {
-            eprintln!("{}", muted("`batch doctor` is deprecated; use `doctor`."));
-            run_doctor(cfg).await?;
-        }
         _ => return Ok(false),
     }
 

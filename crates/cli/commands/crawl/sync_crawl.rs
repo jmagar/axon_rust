@@ -1,10 +1,10 @@
-use crate::axon_cli::crates::core::config::{Config, RenderMode};
-use crate::axon_cli::crates::core::logging::log_done;
-use crate::axon_cli::crates::core::ui::{accent, muted, Spinner};
-use crate::axon_cli::crates::crawl::engine::{
-    append_sitemap_backfill, run_crawl_once, should_fallback_to_chrome,
+use crate::crates::core::config::{Config, RenderMode};
+use crate::crates::core::logging::log_done;
+use crate::crates::core::ui::{accent, muted, Spinner};
+use crate::crates::crawl::engine::{
+    run_crawl_once, run_sitemap_only, should_fallback_to_chrome, CrawlSummary,
 };
-use crate::axon_cli::crates::jobs::embed_jobs::start_embed_job;
+use crate::crates::jobs::embed_jobs::start_embed_job;
 use std::collections::HashSet;
 use std::error::Error;
 use std::time::SystemTime;
@@ -51,7 +51,66 @@ pub(super) async fn maybe_return_cached_result(
     Ok(true)
 }
 
+async fn run_sitemap_only_crawl(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
+    let spinner = Spinner::new("running sitemap-only crawl");
+    let (summary, _) = run_sitemap_only(cfg, start_url, &cfg.output_dir).await?;
+    spinner.finish(&format!(
+        "sitemap-only complete (pages={}, markdown={})",
+        summary.pages_seen, summary.markdown_files
+    ));
+    log_done(&format!(
+        "command=crawl sitemap_only=true pages_seen={} markdown_files={} elapsed_ms={} output_dir={}",
+        summary.pages_seen,
+        summary.markdown_files,
+        summary.elapsed_ms,
+        cfg.output_dir.to_string_lossy(),
+    ));
+    Ok(())
+}
+
+async fn maybe_chrome_fallback(
+    cfg: &Config,
+    start_url: &str,
+    http_summary: CrawlSummary,
+    http_seen_urls: HashSet<String>,
+) -> (CrawlSummary, HashSet<String>) {
+    if !matches!(cfg.render_mode, RenderMode::AutoSwitch)
+        || !should_fallback_to_chrome(&http_summary, cfg.max_pages, cfg)
+    {
+        return (http_summary, http_seen_urls);
+    }
+    let spinner = Spinner::new("HTTP yielded thin results; retrying with Chrome");
+    match run_crawl_once(
+        cfg,
+        start_url,
+        RenderMode::Chrome,
+        &cfg.output_dir,
+        None,
+        cfg.discover_sitemaps,
+    )
+    .await
+    {
+        Ok((chrome_summary, chrome_urls)) => {
+            spinner.finish(&format!(
+                "Chrome fallback complete (pages={}, markdown={})",
+                chrome_summary.pages_seen, chrome_summary.markdown_files
+            ));
+            (chrome_summary, chrome_urls)
+        }
+        Err(err) => {
+            spinner.finish(&format!(
+                "Chrome fallback failed ({err}), using HTTP result"
+            ));
+            (http_summary, http_seen_urls)
+        }
+    }
+}
+
 pub(super) async fn run_sync_crawl(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
+    if cfg.sitemap_only {
+        return run_sitemap_only_crawl(cfg, start_url).await;
+    }
+
     let manifest_path = cfg.output_dir.join("manifest.jsonl");
     let previous_urls = if cfg.cache {
         super::manifest::read_manifest_urls(&manifest_path).await?
@@ -68,59 +127,68 @@ pub(super) async fn run_sync_crawl(cfg: &Config, start_url: &str) -> Result<(), 
         println!("{} {}", muted("[Chrome Bootstrap]"), warning);
     }
 
+    // Thread the pre-resolved WebSocket URL through cfg so configure_website
+    // skips the redundant /json/version fetch on Chrome mode calls.
+    let ws_cfg_holder: Config;
+    let effective_cfg: &Config = if let Some(ref ws_url) = chrome_bootstrap.resolved_ws_url {
+        ws_cfg_holder = Config {
+            chrome_remote_url: Some(ws_url.clone()),
+            ..cfg.clone()
+        };
+        &ws_cfg_holder
+    } else {
+        cfg
+    };
+
     let spinner = Spinner::new("running crawl");
-    let (http_summary, http_seen_urls) =
-        run_crawl_once(cfg, start_url, initial_mode, &cfg.output_dir, None).await?;
+    let (http_summary, http_seen_urls) = run_crawl_once(
+        effective_cfg,
+        start_url,
+        initial_mode,
+        &cfg.output_dir,
+        None,
+        false,
+    )
+    .await?;
     spinner.finish(&format!(
         "crawl phase complete (pages={}, markdown={})",
         http_summary.pages_seen, http_summary.markdown_files
     ));
 
-    let (summary, seen_urls) = if matches!(cfg.render_mode, RenderMode::AutoSwitch)
-        && should_fallback_to_chrome(&http_summary, cfg.max_pages)
-    {
-        let chrome_spinner = Spinner::new("HTTP yielded thin results; retrying with Chrome");
-        match run_crawl_once(cfg, start_url, RenderMode::Chrome, &cfg.output_dir, None).await {
-            Ok((chrome_summary, chrome_urls)) => {
-                chrome_spinner.finish(&format!(
-                    "Chrome fallback complete (pages={}, markdown={})",
-                    chrome_summary.pages_seen, chrome_summary.markdown_files
-                ));
-                (chrome_summary, chrome_urls)
-            }
-            Err(err) => {
-                chrome_spinner.finish(&format!(
-                    "Chrome fallback failed ({err}), using HTTP result"
-                ));
-                (http_summary, http_seen_urls)
-            }
-        }
-    } else {
-        (http_summary, http_seen_urls)
-    };
+    let (summary, seen_urls) =
+        maybe_chrome_fallback(effective_cfg, start_url, http_summary, http_seen_urls).await;
 
     let mut final_summary = summary;
 
     if cfg.discover_sitemaps {
-        let spinner = Spinner::new("running sitemap backfill");
-        let _ = append_sitemap_backfill(
-            cfg,
-            start_url,
-            &cfg.output_dir,
-            &seen_urls,
-            &mut final_summary,
-        )
-        .await?;
+        // Spider-native sitemap already ran inside run_crawl_once() when run_sitemap=true.
+        // append_robots_backfill() supplements that by parsing robots.txt Sitemap: directives,
+        // which spider does not handle natively.
+        //
+        // Re-read the manifest to merge any URLs that were written to disk by run_crawl_once
+        // but not surfaced in `seen_urls` (e.g. URLs discovered via Spider's own sitemap pass).
+        // This prevents double-fetching pages that were already crawled.
+        let merged_seen = {
+            let manifest_urls = super::manifest::read_manifest_urls(&manifest_path)
+                .await
+                .unwrap_or_default();
+            seen_urls
+                .iter()
+                .cloned()
+                .chain(manifest_urls)
+                .collect::<HashSet<String>>()
+        };
+        let spinner = Spinner::new("running robots.txt sitemap supplement");
         let robots_stats = super::audit::append_robots_backfill(
             cfg,
             start_url,
             &cfg.output_dir,
-            &seen_urls,
+            &merged_seen,
             &mut final_summary,
         )
         .await?;
         spinner.finish(&format!(
-            "sitemap backfill complete (robots_extra_written={})",
+            "robots.txt supplement complete (written={})",
             robots_stats.written
         ));
     }
