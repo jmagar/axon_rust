@@ -293,7 +293,7 @@ pub async fn run_extract_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     };
 
     let process_fn: ProcessFn =
-        std::sync::Arc::new(|cfg, pool, id| Box::pin(process_claimed_extract_job(cfg, pool, id)));
+        Arc::new(|cfg, pool, id| Box::pin(process_claimed_extract_job(cfg, pool, id)));
 
     run_job_worker(cfg, pool, &wc, process_fn).await
 }

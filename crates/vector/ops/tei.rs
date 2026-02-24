@@ -311,17 +311,14 @@ pub async fn embed_text_with_metadata(
     if collection_needs_init(&cfg.collection) {
         ensure_collection(cfg, dim).await?;
     }
-    let domain = spider::url::Url::parse(url)
+    let domain = Url::parse(url)
         .ok()
         .and_then(|u| u.host_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "unknown".to_string());
-    let timestamp = chrono::Utc::now().to_rfc3339();
+    let timestamp = Utc::now().to_rfc3339();
     let mut points = Vec::with_capacity(vectors.len());
     for (idx, (chunk, vecv)) in chunks.into_iter().zip(vectors.into_iter()).enumerate() {
-        let point_id = uuid::Uuid::new_v5(
-            &uuid::Uuid::NAMESPACE_URL,
-            format!("{url}:{idx}").as_bytes(),
-        );
+        let point_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("{url}:{idx}").as_bytes());
         let mut payload = serde_json::json!({
             "url": url,
             "domain": domain,

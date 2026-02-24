@@ -8,11 +8,13 @@ use crate::crates::jobs::batch::apply_queue_injection_with_pool;
 use crate::crates::jobs::embed::start_embed_job_with_pool;
 use crate::crates::jobs::status::JobStatus;
 use crate::crates::vector::ops::qdrant::qdrant_delete_stale_domain_urls;
+use redis::AsyncCommands;
 use sqlx::PgPool;
 use std::collections::HashSet;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
 
 use super::super::robots::{append_robots_backfill, RobotsBackfillStats, RobotsDiscoveryStats};
@@ -92,7 +94,7 @@ async fn maybe_complete_cache_hit(
         let previous_manifest_path = previous_result_json
             .get("output_dir")
             .and_then(|v| v.as_str())
-            .map(|d| std::path::PathBuf::from(d).join("manifest.jsonl"));
+            .map(|d| PathBuf::from(d).join("manifest.jsonl"));
 
         if let Some(manifest_path) = previous_manifest_path {
             if crate::crates::crawl::manifest::manifest_cache_is_stale(
@@ -227,11 +229,42 @@ fn spawn_progress_task(
     (progress_tx, progress_task)
 }
 
+/// Single Redis check for the cancel key. Returns true if the job was canceled.
+/// Never errors — if Redis is unavailable, returns false (fail-safe: don't cancel).
+async fn is_crawl_canceled(cfg: &Config, id: Uuid) -> bool {
+    let Ok(client) = redis::Client::open(cfg.redis_url.clone()) else {
+        return false;
+    };
+    let conn = tokio::time::timeout(
+        Duration::from_secs(3),
+        client.get_multiplexed_async_connection(),
+    )
+    .await;
+    let Ok(Ok(mut conn)) = conn else {
+        return false;
+    };
+    let key = format!("axon:crawl:cancel:{id}");
+    let result =
+        tokio::time::timeout(Duration::from_secs(3), conn.get::<_, Option<String>>(&key)).await;
+    matches!(result, Ok(Ok(Some(_))))
+}
+
+/// Polls Redis every 3 seconds until the cancel key is found, then returns.
+/// Used as the cancellation arm of a tokio::select! in run_active_crawl_job.
+async fn poll_cancel_key(cfg: &Config, id: Uuid) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        if is_crawl_canceled(cfg, id).await {
+            return;
+        }
+    }
+}
+
 async fn run_primary_with_optional_chrome_fallback(
     ctx: &JobExecutionContext,
     id: Uuid,
     progress_tx: tokio::sync::mpsc::Sender<CrawlSummary>,
-) -> Result<(CrawlSummary, std::collections::HashSet<String>), Box<dyn Error>> {
+) -> Result<(CrawlSummary, HashSet<String>), Box<dyn Error>> {
     let initial_mode =
         resolve_initial_mode(ctx.job_cfg.render_mode, ctx.job_cfg.cache_skip_browser);
     let (http_summary, http_seen_urls) = run_crawl_once(
@@ -375,8 +408,13 @@ async fn run_active_crawl_job(
 
     let final_prompt = ctx.extraction_prompt.clone();
     let result = async {
-        let (summary, seen_urls) =
-            run_primary_with_optional_chrome_fallback(ctx, id, progress_tx).await?;
+        let (summary, seen_urls) = tokio::select! {
+            result = run_primary_with_optional_chrome_fallback(ctx, id, progress_tx) => result?,
+            _ = poll_cancel_key(&ctx.job_cfg, id) => {
+                log_info(&format!("crawl job {id} canceled mid-crawl; stopping"));
+                return Err(format!("crawl job {id} canceled").into());
+            }
+        };
 
         let mut final_summary = summary.clone();
         let (robots_backfill_stats, robots_discovery_stats) =

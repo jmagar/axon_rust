@@ -247,7 +247,7 @@ fn test_spider_retry_wiring_round_trips() {
     // Verify spider's with_retry() stores the value we pass from cfg.fetch_retries.
     // configure_website() calls with_retry(cfg.fetch_retries.min(u8::MAX) as u8)
     // when fetch_retries > 0; this test confirms the Spider API contract.
-    let mut website = spider::website::Website::new("https://example.com");
+    let mut website = Website::new("https://example.com");
     website.with_retry(3);
     assert_eq!(website.configuration.retry, 3);
 }
@@ -255,7 +255,7 @@ fn test_spider_retry_wiring_round_trips() {
 #[test]
 fn test_spider_normalize_wiring_round_trips() {
     // Verify spider's with_normalize() stores the value we pass from cfg.normalize.
-    let mut website = spider::website::Website::new("https://example.com");
+    let mut website = Website::new("https://example.com");
     website.with_normalize(true);
     assert!(website.configuration.normalize);
     website.with_normalize(false);
@@ -266,14 +266,14 @@ fn test_spider_normalize_wiring_round_trips() {
 fn test_spider_tld_disabled_by_default() {
     // TLD crawling is hardcoded to false in configure_website(); verify the Spider
     // API default matches our expectation (i.e., with_tld(false) is a no-op baseline).
-    let mut website = spider::website::Website::new("https://example.com");
+    let mut website = Website::new("https://example.com");
     website.with_tld(false);
     assert!(!website.configuration.tld);
 }
 
 #[test]
 fn test_spider_block_assets_wiring() {
-    let mut website = spider::website::Website::new("https://example.com");
+    let mut website = Website::new("https://example.com");
     website.with_block_assets(true);
     assert!(website.configuration.only_html);
 }
@@ -281,7 +281,7 @@ fn test_spider_block_assets_wiring() {
 #[test]
 fn test_spider_redirect_policy_strict_wiring() {
     use spider::configuration::RedirectPolicy;
-    let mut website = spider::website::Website::new("https://example.com");
+    let mut website = Website::new("https://example.com");
     website.with_redirect_policy(RedirectPolicy::Strict);
     assert_eq!(
         website.configuration.redirect_policy,
@@ -291,7 +291,7 @@ fn test_spider_redirect_policy_strict_wiring() {
 
 #[test]
 fn test_spider_whitelist_url_wiring() {
-    let mut website = spider::website::Website::new("https://example.com");
+    let mut website = Website::new("https://example.com");
     let patterns: Vec<spider::compact_str::CompactString> =
         vec!["https://example.com/docs/.*".into()];
     website.with_whitelist_url(Some(patterns));
@@ -300,7 +300,7 @@ fn test_spider_whitelist_url_wiring() {
 
 #[test]
 fn test_spider_max_page_bytes_wiring() {
-    let mut website = spider::website::Website::new("https://example.com");
+    let mut website = Website::new("https://example.com");
     website.with_max_page_bytes(Some(1_048_576.0));
     assert_eq!(website.configuration.max_page_bytes, Some(1_048_576.0));
 }

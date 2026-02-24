@@ -1,9 +1,9 @@
 use crate::crates::core::config::Config;
 use crate::crates::core::http::http_client;
 use crate::crates::core::logging::log_warn;
+use anyhow::{anyhow, Result};
 use reqwest::StatusCode;
 use std::collections::HashSet;
-use std::error::Error;
 use std::time::Duration;
 
 use super::types::{QdrantPoint, QdrantSearchHit, QdrantSearchResponse};
@@ -14,7 +14,7 @@ async fn qdrant_delete_with_retry(
     endpoint: &str,
     body: serde_json::Value,
     context: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     const MAX_ATTEMPTS: usize = 4;
     let mut last_error: Option<String> = None;
     for attempt in 1..=MAX_ATTEMPTS {
@@ -35,10 +35,9 @@ async fn qdrant_delete_with_retry(
                     tokio::time::sleep(Duration::from_millis(250 * (1 << (attempt - 1)))).await;
                     continue;
                 }
-                return Err(format!(
+                return Err(anyhow!(
                     "{context}: qdrant request failed with status {status} on attempt {attempt}"
-                )
-                .into());
+                ));
             }
             Err(err) => {
                 if attempt < MAX_ATTEMPTS {
@@ -54,9 +53,10 @@ async fn qdrant_delete_with_retry(
             }
         }
     }
-    Err(last_error
-        .unwrap_or_else(|| format!("{context}: unknown qdrant delete failure"))
-        .into())
+    Err(anyhow!(
+        "{}",
+        last_error.unwrap_or_else(|| format!("{context}: unknown qdrant delete failure"))
+    ))
 }
 
 /// Shared scroll pagination loop. POSTs to the given `endpoint` with `initial_body`,
@@ -67,7 +67,7 @@ async fn scroll_pages_raw(
     endpoint: &str,
     initial_body: serde_json::Value,
     mut on_page: impl FnMut(&[serde_json::Value]) -> bool,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let mut body = initial_body;
     loop {
         let val = client
@@ -102,7 +102,7 @@ async fn scroll_pages_raw(
 pub(crate) async fn qdrant_scroll_pages(
     cfg: &Config,
     mut process_page: impl FnMut(&[serde_json::Value]),
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let client = http_client()?;
     let endpoint = format!(
         "{}/collections/{}/points/scroll",
@@ -128,7 +128,7 @@ async fn scroll_url_set(
     cfg: &Config,
     filter: serde_json::Value,
     limit: Option<usize>,
-) -> Result<HashSet<String>, Box<dyn Error>> {
+) -> Result<HashSet<String>> {
     let client = http_client()?;
     let endpoint = format!(
         "{}/collections/{}/points/scroll",
@@ -162,10 +162,7 @@ async fn scroll_url_set(
     Ok(seen)
 }
 
-pub async fn qdrant_indexed_urls(
-    cfg: &Config,
-    limit: Option<usize>,
-) -> Result<Vec<String>, Box<dyn Error>> {
+pub async fn qdrant_indexed_urls(cfg: &Config, limit: Option<usize>) -> Result<Vec<String>> {
     let filter = serde_json::json!({
         "must": [{"key": "chunk_index", "match": {"value": 0}}]
     });
@@ -174,10 +171,7 @@ pub async fn qdrant_indexed_urls(
         .map(|s| s.into_iter().collect())
 }
 
-pub(crate) async fn qdrant_urls_for_domain(
-    cfg: &Config,
-    domain: &str,
-) -> Result<HashSet<String>, Box<dyn Error>> {
+pub(crate) async fn qdrant_urls_for_domain(cfg: &Config, domain: &str) -> Result<HashSet<String>> {
     let filter = serde_json::json!({
         "must": [
             {"key": "domain", "match": {"value": domain}},
@@ -188,10 +182,7 @@ pub(crate) async fn qdrant_urls_for_domain(
 }
 
 /// Delete all Qdrant points matching `url` via payload filter.
-pub(crate) async fn qdrant_delete_by_url_filter(
-    cfg: &Config,
-    url: &str,
-) -> Result<(), Box<dyn Error>> {
+pub(crate) async fn qdrant_delete_by_url_filter(cfg: &Config, url: &str) -> Result<()> {
     let client = http_client()?;
     let endpoint = format!(
         "{}/collections/{}/points/delete?wait=true",
@@ -217,7 +208,7 @@ pub async fn qdrant_delete_stale_domain_urls(
     cfg: &Config,
     domain: &str,
     current_urls: &HashSet<String>,
-) -> Result<usize, Box<dyn Error>> {
+) -> Result<usize> {
     let indexed = qdrant_urls_for_domain(cfg, domain).await?;
     let stale: Vec<String> = indexed
         .into_iter()
@@ -251,10 +242,7 @@ pub async fn qdrant_delete_stale_domain_urls(
     Ok(stale.len())
 }
 
-pub(crate) async fn qdrant_delete_points(
-    cfg: &Config,
-    ids: &[String],
-) -> Result<usize, Box<dyn Error>> {
+pub(crate) async fn qdrant_delete_points(cfg: &Config, ids: &[String]) -> Result<usize> {
     if ids.is_empty() {
         return Ok(0);
     }
@@ -279,7 +267,7 @@ pub(crate) async fn qdrant_delete_points(
 pub(crate) async fn qdrant_domain_facets(
     cfg: &Config,
     limit: usize,
-) -> Result<Vec<(String, usize)>, Box<dyn Error>> {
+) -> Result<Vec<(String, usize)>> {
     let client = http_client()?;
     let url = format!("{}/collections/{}/facet", qdrant_base(cfg), cfg.collection);
     let value = client
@@ -310,10 +298,7 @@ pub(crate) async fn qdrant_domain_facets(
     Ok(out)
 }
 
-pub(crate) async fn qdrant_url_facets(
-    cfg: &Config,
-    limit: usize,
-) -> Result<Vec<(String, usize)>, Box<dyn Error>> {
+pub(crate) async fn qdrant_url_facets(cfg: &Config, limit: usize) -> Result<Vec<(String, usize)>> {
     let client = http_client()?;
     let url = format!("{}/collections/{}/facet", qdrant_base(cfg), cfg.collection);
     let value = client
@@ -350,7 +335,7 @@ pub(crate) async fn qdrant_search(
     cfg: &Config,
     vector: &[f32],
     limit: usize,
-) -> Result<Vec<QdrantSearchHit>, Box<dyn Error>> {
+) -> Result<Vec<QdrantSearchHit>> {
     let client = http_client()?;
     let url = format!(
         "{}/collections/{}/points/search",
@@ -377,7 +362,7 @@ pub(crate) async fn qdrant_retrieve_by_url(
     cfg: &Config,
     url_match: &str,
     max_points: Option<usize>,
-) -> Result<Vec<QdrantPoint>, Box<dyn Error>> {
+) -> Result<Vec<QdrantPoint>> {
     let client = http_client()?;
     let endpoint = format!(
         "{}/collections/{}/points/scroll",

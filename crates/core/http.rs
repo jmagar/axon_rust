@@ -1,5 +1,5 @@
+use anyhow::anyhow;
 use spider::url::Url;
-use std::error::Error;
 use std::net::IpAddr;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -7,10 +7,10 @@ use std::time::Duration;
 pub(crate) static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> =
     LazyLock::new(|| build_client(30).map_err(|e| e.to_string()));
 
-pub fn http_client() -> Result<&'static reqwest::Client, Box<dyn Error>> {
+pub fn http_client() -> anyhow::Result<&'static reqwest::Client> {
     HTTP_CLIENT
         .as_ref()
-        .map_err(|err| format!("failed to initialize HTTP client: {err}").into())
+        .map_err(|err| anyhow::anyhow!("failed to initialize HTTP client: {err}"))
 }
 
 pub fn normalize_url(url: &str) -> String {
@@ -55,24 +55,28 @@ pub fn normalize_url(url: &str) -> String {
 ///
 /// As defence-in-depth, `ssrf_blacklist_patterns()` is also applied to
 /// discovered URLs during crawl via spider's `with_blacklist_url()`.
-pub fn validate_url(url: &str) -> Result<(), Box<dyn Error>> {
+pub fn validate_url(url: &str) -> Result<(), anyhow::Error> {
     let normalized = normalize_url(url);
-    let parsed = Url::parse(&normalized).map_err(|_| format!("invalid URL: {url}"))?;
+    let parsed = Url::parse(&normalized).map_err(|_| anyhow!("invalid URL: {url}"))?;
 
     match parsed.scheme() {
         "http" | "https" => {}
-        s => return Err(format!("blocked URL scheme '{s}': only http/https allowed").into()),
+        s => return Err(anyhow!("blocked URL scheme '{s}': only http/https allowed")),
     }
 
-    let host = parsed.host_str().ok_or("URL has no host")?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow!("URL has no host"))?;
 
     // Block localhost and .internal/.local TLDs
     let lower = host.to_ascii_lowercase();
     if lower == "localhost" || lower.ends_with(".localhost") {
-        return Err(format!("blocked host '{host}': localhost not allowed").into());
+        return Err(anyhow!("blocked host '{host}': localhost not allowed"));
     }
     if lower.ends_with(".internal") || lower.ends_with(".local") {
-        return Err(format!("blocked host '{host}': .internal/.local domains not allowed").into());
+        return Err(anyhow!(
+            "blocked host '{host}': .internal/.local domains not allowed"
+        ));
     }
 
     // Use parsed.host() for typed extraction — host_str().parse::<IpAddr>()
@@ -90,9 +94,9 @@ pub fn validate_url(url: &str) -> Result<(), Box<dyn Error>> {
 /// SSRF IP validation — checks loopback, link-local, RFC-1918 private, and
 /// IPv4-mapped IPv6 addresses. Extracted as a named function (not a closure)
 /// so the IPv4-mapped branch can recurse into the IPv4 checks.
-fn check_ip(ip: IpAddr) -> Result<(), Box<dyn Error>> {
+fn check_ip(ip: IpAddr) -> Result<(), anyhow::Error> {
     if ip.is_loopback() {
-        return Err(format!("blocked IP '{ip}': loopback address not allowed").into());
+        return Err(anyhow!("blocked IP '{ip}': loopback address not allowed"));
     }
     match ip {
         IpAddr::V4(v4) => {
@@ -103,15 +107,14 @@ fn check_ip(ip: IpAddr) -> Result<(), Box<dyn Error>> {
                 || (a == 172 && (16..=31).contains(&b))
                 || octets[0..2] == [192, 168];
             if is_link_local {
-                return Err(format!(
+                return Err(anyhow!(
                     "blocked IP '{v4}': link-local address (169.254.x.x) not allowed"
-                )
-                .into());
+                ));
             }
             if is_private {
-                return Err(
-                    format!("blocked IP '{v4}': private/RFC-1918 address not allowed").into(),
-                );
+                return Err(anyhow!(
+                    "blocked IP '{v4}': private/RFC-1918 address not allowed"
+                ));
             }
         }
         IpAddr::V6(v6) => {
@@ -127,9 +130,9 @@ fn check_ip(ip: IpAddr) -> Result<(), Box<dyn Error>> {
             let is_unique_local = segs[0] & 0xfe00 == 0xfc00;
             let is_link_local_v6 = segs[0] & 0xffc0 == 0xfe80;
             if is_unique_local || is_link_local_v6 {
-                return Err(
-                    format!("blocked IPv6 '{v6}': private/link-local address not allowed").into(),
-                );
+                return Err(anyhow!(
+                    "blocked IPv6 '{v6}': private/link-local address not allowed"
+                ));
             }
         }
     }
@@ -157,7 +160,7 @@ pub(crate) fn ssrf_blacklist_patterns() -> Vec<String> {
     ]
 }
 
-pub fn build_client(timeout_secs: u64) -> Result<reqwest::Client, Box<dyn Error>> {
+pub fn build_client(timeout_secs: u64) -> Result<reqwest::Client, anyhow::Error> {
     Ok(reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .build()?)
@@ -187,7 +190,7 @@ pub(crate) fn cdp_discovery_url(remote_url: &str) -> Option<String> {
     Some(format!("{http_scheme}://{host}:{port}{path}"))
 }
 
-pub async fn fetch_html(client: &reqwest::Client, url: &str) -> Result<String, Box<dyn Error>> {
+pub async fn fetch_html(client: &reqwest::Client, url: &str) -> Result<String, anyhow::Error> {
     let normalized = normalize_url(url);
     validate_url(&normalized)?;
     let body = client

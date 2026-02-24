@@ -13,7 +13,7 @@ use crate::crates::core::ui::{
 };
 use crate::crates::jobs::crawl::{
     cancel_job, cleanup_jobs, clear_jobs, get_job, list_jobs, recover_stale_crawl_jobs, run_worker,
-    start_crawl_jobs_batch,
+    start_crawl_jobs_batch, CrawlJob,
 };
 use std::error::Error;
 use uuid::Uuid;
@@ -223,6 +223,63 @@ async fn handle_errors_subcommand(cfg: &Config) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Returns a compact inline progress string for a crawl job list row.
+///
+/// - running:   "127 crawled · 43 docs"
+/// - completed: "342 docs · 5.2s"
+/// - failed:    first 60 chars of error_text
+/// - other:     None
+fn job_progress_summary(job: &CrawlJob) -> Option<String> {
+    match job.status.as_str() {
+        "running" => {
+            let metrics = job.result_json.as_ref()?;
+            let crawled = metrics
+                .get("pages_crawled")
+                .and_then(|v: &serde_json::Value| v.as_u64())
+                .unwrap_or(0);
+            let docs = metrics
+                .get("md_created")
+                .and_then(|v: &serde_json::Value| v.as_u64())
+                .unwrap_or(0);
+            if crawled == 0 && docs == 0 {
+                return None;
+            }
+            if docs > 0 {
+                Some(format!("{crawled} crawled · {docs} docs"))
+            } else {
+                Some(format!("{crawled} crawled"))
+            }
+        }
+        "completed" => {
+            let metrics = job.result_json.as_ref()?;
+            let docs = metrics
+                .get("md_created")
+                .and_then(|v: &serde_json::Value| v.as_u64())
+                .unwrap_or(0);
+            let elapsed_ms = metrics
+                .get("elapsed_ms")
+                .and_then(|v: &serde_json::Value| v.as_u64())
+                .unwrap_or(0);
+            let time = if elapsed_ms >= 1000 {
+                format!("{:.1}s", elapsed_ms as f64 / 1000.0)
+            } else {
+                format!("{elapsed_ms}ms")
+            };
+            Some(format!("{docs} docs · {time}"))
+        }
+        "failed" => {
+            let err = job.error_text.as_deref().unwrap_or("unknown error");
+            let truncated = if err.len() > 60 {
+                format!("{}…", &err[..60])
+            } else {
+                err.to_string()
+            };
+            Some(truncated)
+        }
+        _ => None,
+    }
+}
+
 async fn handle_list_subcommand(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let jobs = list_jobs(cfg, 50).await?;
     if cfg.json_output {
@@ -232,14 +289,26 @@ async fn handle_list_subcommand(cfg: &Config) -> Result<(), Box<dyn Error>> {
         if jobs.is_empty() {
             println!("  {}", muted("No crawl jobs found."));
         } else {
-            for job in jobs {
-                println!(
-                    "  {} {} {} {}",
-                    symbol_for_status(&job.status),
-                    accent(&job.id.to_string()),
-                    status_text(&job.status),
-                    muted(&job.url)
-                );
+            for job in &jobs {
+                let progress = job_progress_summary(job);
+                if let Some(p) = progress {
+                    println!(
+                        "  {} {} {} {}  {}",
+                        symbol_for_status(&job.status),
+                        accent(&job.id.to_string()),
+                        status_text(&job.status),
+                        muted(&job.url),
+                        muted(&p),
+                    );
+                } else {
+                    println!(
+                        "  {} {} {} {}",
+                        symbol_for_status(&job.status),
+                        accent(&job.id.to_string()),
+                        status_text(&job.status),
+                        muted(&job.url),
+                    );
+                }
             }
         }
     }

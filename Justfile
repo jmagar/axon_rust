@@ -27,6 +27,10 @@ clippy:
 build:
     cargo build --release
 
+install:
+    cargo build --release
+    ln -sf "$(pwd)/target/release/axon" ~/.local/bin/axon
+
 verify:
     just fmt-check
     just clippy

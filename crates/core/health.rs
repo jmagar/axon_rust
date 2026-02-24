@@ -113,18 +113,18 @@ mod tests {
     }
 
     fn reset_env() {
-        std::env::remove_var("AXON_WEBDRIVER_URL");
-        std::env::remove_var("AXON_CHROME_DIAGNOSTICS");
-        std::env::remove_var("AXON_CHROME_DIAGNOSTICS_SCREENSHOT");
-        std::env::remove_var("AXON_CHROME_DIAGNOSTICS_EVENTS");
-        std::env::remove_var("AXON_CHROME_DIAGNOSTICS_DIR");
+        env::remove_var("AXON_WEBDRIVER_URL");
+        env::remove_var("AXON_CHROME_DIAGNOSTICS");
+        env::remove_var("AXON_CHROME_DIAGNOSTICS_SCREENSHOT");
+        env::remove_var("AXON_CHROME_DIAGNOSTICS_EVENTS");
+        env::remove_var("AXON_CHROME_DIAGNOSTICS_DIR");
     }
 
     #[test]
     fn webdriver_url_prefers_axon_var() {
         with_env_lock(|| {
             reset_env();
-            std::env::set_var("AXON_WEBDRIVER_URL", "http://preferred.example");
+            env::set_var("AXON_WEBDRIVER_URL", "http://preferred.example");
             assert_eq!(
                 webdriver_url_from_env().as_deref(),
                 Some("http://preferred.example")
@@ -150,7 +150,7 @@ mod tests {
     fn diagnostics_enables_screenshot_events_when_global_flag_set() {
         with_env_lock(|| {
             reset_env();
-            std::env::set_var("AXON_CHROME_DIAGNOSTICS", "true");
+            env::set_var("AXON_CHROME_DIAGNOSTICS", "true");
             let pattern = browser_diagnostics_pattern();
             assert!(pattern.enabled);
             assert!(pattern.screenshot);
@@ -163,9 +163,9 @@ mod tests {
     fn diagnostics_allows_per_signal_override() {
         with_env_lock(|| {
             reset_env();
-            std::env::set_var("AXON_CHROME_DIAGNOSTICS", "true");
-            std::env::set_var("AXON_CHROME_DIAGNOSTICS_EVENTS", "false");
-            std::env::set_var("AXON_CHROME_DIAGNOSTICS_DIR", "/tmp/diag");
+            env::set_var("AXON_CHROME_DIAGNOSTICS", "true");
+            env::set_var("AXON_CHROME_DIAGNOSTICS_EVENTS", "false");
+            env::set_var("AXON_CHROME_DIAGNOSTICS_DIR", "/tmp/diag");
             let pattern = browser_diagnostics_pattern();
             assert!(pattern.enabled);
             assert!(pattern.screenshot);

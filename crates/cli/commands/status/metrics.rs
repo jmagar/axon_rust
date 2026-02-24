@@ -58,10 +58,7 @@ pub(super) fn section_symbol(statuses: &[&str]) -> String {
     }
 }
 
-pub(super) fn batch_metrics_suffix(
-    result_json: Option<&serde_json::Value>,
-    url_count: usize,
-) -> String {
+pub(super) fn batch_metrics_suffix(result_json: Option<&Value>, url_count: usize) -> String {
     let sep = muted(" | ");
     let mut parts = vec![metric(url_count, "urls")];
     if let Some(results_len) = result_json
@@ -74,10 +71,7 @@ pub(super) fn batch_metrics_suffix(
     format!("{sep}{}", parts.join(&sep))
 }
 
-pub(super) fn extract_metrics_suffix(
-    result_json: Option<&serde_json::Value>,
-    url_count: usize,
-) -> String {
+pub(super) fn extract_metrics_suffix(result_json: Option<&Value>, url_count: usize) -> String {
     let sep = muted(" | ");
     let mut parts = vec![metric(url_count, "urls")];
     if let Some(total_items) = result_json
@@ -95,10 +89,7 @@ pub(super) fn extract_metrics_suffix(
     format!("{sep}{}", parts.join(&sep))
 }
 
-pub(super) fn embed_metrics_suffix(
-    status: &str,
-    result_json: Option<&serde_json::Value>,
-) -> String {
+pub(super) fn embed_metrics_suffix(status: &str, result_json: Option<&Value>) -> String {
     let sep = muted(" | ");
     if matches!(status, "pending" | "running" | "processing") {
         if let (Some(done), Some(total)) = (
@@ -137,10 +128,7 @@ pub(super) fn embed_metrics_suffix(
     )
 }
 
-pub(super) fn ingest_metrics_suffix(
-    status: &str,
-    result_json: Option<&serde_json::Value>,
-) -> String {
+pub(super) fn ingest_metrics_suffix(status: &str, result_json: Option<&Value>) -> String {
     if matches!(status, "pending" | "running" | "processing") {
         return String::new();
     }

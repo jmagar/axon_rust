@@ -573,6 +573,7 @@ mod tests {
     }
 
     /// Verify validate_worker_env_vars passes when all required vars are present.
+    #[allow(unsafe_code)]
     #[test]
     fn validate_env_vars_passes_when_all_set() {
         // Set all required vars.
@@ -596,6 +597,7 @@ mod tests {
     }
 
     /// Verify canonical variables are required and missing vars fail recognition.
+    #[allow(unsafe_code)]
     #[test]
     fn validate_env_vars_requires_canonical_names() {
         unsafe {

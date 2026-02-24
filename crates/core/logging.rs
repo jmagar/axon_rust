@@ -1,11 +1,12 @@
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 use tracing_subscriber::fmt::writer::MakeWriter;
 
 #[derive(Debug)]
 struct SizeRotatingFile {
-    path: std::path::PathBuf,
+    path: PathBuf,
     file: std::fs::File,
     current_size: u64,
     max_bytes: u64,
@@ -13,7 +14,7 @@ struct SizeRotatingFile {
 }
 
 impl SizeRotatingFile {
-    fn new(path: std::path::PathBuf, max_bytes: u64, max_files_total: usize) -> io::Result<Self> {
+    fn new(path: PathBuf, max_bytes: u64, max_files_total: usize) -> io::Result<Self> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)?;
@@ -33,10 +34,10 @@ impl SizeRotatingFile {
         })
     }
 
-    fn indexed_path(&self, idx: usize) -> std::path::PathBuf {
+    fn indexed_path(&self, idx: usize) -> PathBuf {
         let mut s = self.path.as_os_str().to_owned();
         s.push(format!(".{idx}"));
-        std::path::PathBuf::from(s)
+        PathBuf::from(s)
     }
 
     // TODO(PERF-MED-4): rotate_if_needed performs blocking fs::rename and File::create.
@@ -181,10 +182,10 @@ pub fn init_tracing() {
         })
         .unwrap_or_else(|_| EnvFilter::new(format!("info,{SUPPRESS_CDP_NOISE}")));
 
-    let log_path = std::path::PathBuf::from(json_log_file);
+    let log_path = PathBuf::from(json_log_file);
 
     let console_layer = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr)
+        .with_writer(io::stderr)
         .with_filter(console_filter);
 
     match SizeRotatingFile::new(log_path.clone(), max_bytes, max_files_total) {

@@ -41,7 +41,7 @@ static TRANSFORM_CONFIG: LazyLock<TransformConfig> = LazyLock::new(|| TransformC
 const FALLBACK_CONCURRENCY_LIMIT: usize = 4;
 
 pub fn url_to_domain(url: &str) -> String {
-    spider::url::Url::parse(url)
+    Url::parse(url)
         .ok()
         .and_then(|u| u.host_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "unknown".to_string())
@@ -285,7 +285,7 @@ struct PageCollectResult {
 }
 
 async fn collect_page_results(
-    mut rx: spider::tokio::sync::broadcast::Receiver<spider::page::Page>,
+    mut rx: tokio::sync::broadcast::Receiver<spider::page::Page>,
     client: reqwest::Client,
     engine: Arc<DeterministicExtractionEngine>,
     cfg: FallbackConfig,
@@ -301,13 +301,13 @@ async fn collect_page_results(
     loop {
         let page = match rx.recv().await {
             Ok(page) => page,
-            Err(spider::tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                 log_warn(&format!(
                     "broadcast receiver lagged, skipped {n} pages — consider increasing buffer"
                 ));
                 continue;
             }
-            Err(spider::tokio::sync::broadcast::error::RecvError::Closed) => break,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         };
         pages_visited += 1;
         let page_url = page.get_url().to_string();

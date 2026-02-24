@@ -8,23 +8,39 @@ use spider_agent::{Agent, SearchOptions, TimeRange};
 use std::collections::HashSet;
 use std::error::Error;
 
+/// Domains that have dedicated ingest handlers or are unsuitable for generic crawling.
+/// Search results from these hosts are displayed but never queued as crawl jobs.
+const CRAWL_SKIP_HOSTS: &[&str] = &[
+    "reddit.com",
+    "www.reddit.com",
+    "youtube.com",
+    "www.youtube.com",
+    "youtu.be",
+    "github.com",
+    "www.github.com",
+];
+
 /// Extract the crawl seed URL from a search result URL.
 ///
 /// By default (`from_result = false`), strips to the scheme+host+port origin so all
 /// results from the same domain produce a single crawl job. When `from_result = true`,
 /// returns the exact result URL so the crawl starts from that specific page.
 ///
-/// Returns `None` if `url` cannot be parsed or has a non-http/https scheme.
+/// Returns `None` if `url` cannot be parsed, has a non-http/https scheme, or belongs
+/// to a domain with a dedicated ingest handler (see `CRAWL_SKIP_HOSTS`).
 pub fn extract_crawl_seed(url: &str, from_result: bool) -> Option<String> {
     let parsed = SpiderUrl::parse(url).ok()?;
     match parsed.scheme() {
         "http" | "https" => {}
         _ => return None,
     }
+    let host = parsed.host_str()?;
+    if CRAWL_SKIP_HOSTS.contains(&host) {
+        return None;
+    }
     if from_result {
         return Some(url.to_string());
     }
-    let host = parsed.host_str()?;
     let origin = match parsed.port() {
         Some(port) => format!("{}://{}:{}", parsed.scheme(), host, port),
         None => format!("{}://{}", parsed.scheme(), host),
@@ -84,6 +100,8 @@ pub async fn run_search(cfg: &Config) -> Result<(), Box<dyn Error>> {
     }
 
     // Deduplicate seeds — one crawl job per unique origin (or exact URL with --crawl-from-result).
+    // URLs from dedicated-ingest domains (reddit, youtube, github) are skipped;
+    // use `axon reddit`, `axon youtube`, or `axon github` to ingest those.
     let seeds: HashSet<String> = results
         .results
         .iter()
@@ -184,7 +202,7 @@ mod tests {
             "https://docs.example.com/en/stable/api/index.html",
             "https://docs.example.com/changelog",
         ];
-        let seeds: std::collections::HashSet<String> = urls
+        let seeds: HashSet<String> = urls
             .iter()
             .filter_map(|u| extract_crawl_seed(u, false))
             .collect();
@@ -204,6 +222,32 @@ mod tests {
             validate_url("http://10.0.0.1").is_err(),
             "validate_url must reject RFC-1918 seeds"
         );
+    }
+
+    #[test]
+    fn test_extract_crawl_seed_skips_ingest_domains() {
+        // These domains have dedicated ingest handlers — crawl seeds must be suppressed.
+        let blocked = [
+            "https://www.reddit.com/r/rust/comments/abc123/title/",
+            "https://reddit.com/r/rust/",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtu.be/dQw4w9WgXcQ",
+            "https://github.com/rust-lang/rust/issues/12345",
+            "https://www.github.com/rust-lang/",
+        ];
+        for url in &blocked {
+            assert_eq!(
+                extract_crawl_seed(url, false),
+                None,
+                "expected None for ingest-only domain: {url}"
+            );
+            // Also blocked when from_result=true
+            assert_eq!(
+                extract_crawl_seed(url, true),
+                None,
+                "expected None (from_result) for ingest-only domain: {url}"
+            );
+        }
     }
 
     fn make_search_cfg(key: &str, query: &str) -> Config {

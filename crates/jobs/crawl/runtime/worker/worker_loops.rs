@@ -169,7 +169,7 @@ async fn handle_crawl_delivery(
             ));
             // Brief pause before requeuing so a persistent DB failure (e.g. PG
             // restart) doesn't spin-loop at full speed consuming CPU and flooding logs.
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
             if let Err(nack_err) = delivery
                 .nack(BasicNackOptions {
                     requeue: true,

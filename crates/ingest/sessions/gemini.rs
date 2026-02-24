@@ -38,7 +38,7 @@ pub(super) async fn ingest_gemini_sessions(
     }
 
     while let Some(res) = futures.next().await {
-        let (p, m, s, r) = res.map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let (p, m, s, r) = res?;
         match r {
             Ok(count) => {
                 total += count;
@@ -64,14 +64,8 @@ async fn enqueue_gemini_dir(
     futures: &mut GeminiFutures,
     total: &mut usize,
 ) -> IngestResult<()> {
-    let mut read_dir = fs::read_dir(root)
-        .await
-        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-    while let Some(entry) = read_dir
-        .next_entry()
-        .await
-        .map_err(|e| anyhow::anyhow!(e.to_string()))?
-    {
+    let mut read_dir = fs::read_dir(root).await?;
+    while let Some(entry) = read_dir.next_entry().await? {
         let path = entry.path();
         if !path.is_dir() {
             continue;
@@ -120,24 +114,14 @@ async fn enqueue_gemini_chat_files(
     futures: &mut GeminiFutures,
     total: &mut usize,
 ) -> IngestResult<()> {
-    let mut chats_read = fs::read_dir(chats_dir)
-        .await
-        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-    while let Some(chat_entry) = chats_read
-        .next_entry()
-        .await
-        .map_err(|e| anyhow::anyhow!(e.to_string()))?
-    {
+    let mut chats_read = fs::read_dir(chats_dir).await?;
+    while let Some(chat_entry) = chats_read.next_entry().await? {
         let chat_path = chat_entry.path();
         if chat_path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
-        let meta = fs::metadata(&chat_path)
-            .await
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        let mtime = meta
-            .modified()
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let meta = fs::metadata(&chat_path).await?;
+        let mtime = meta.modified()?;
         if state.should_skip(&chat_path, mtime, meta.len()).await {
             continue;
         }
@@ -152,7 +136,7 @@ async fn enqueue_gemini_chat_files(
 
         if futures.len() >= 32 {
             if let Some(res) = futures.next().await {
-                let (p, m, s, r) = res.map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                let (p, m, s, r) = res?;
                 match r {
                     Ok(count) => {
                         *total += count;
@@ -191,10 +175,8 @@ async fn process_gemini_file(
     path: PathBuf,
     collection: String,
 ) -> IngestResult<usize> {
-    let content = fs::read_to_string(&path)
-        .await
-        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-    let val: Value = serde_json::from_str(&content).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    let content = fs::read_to_string(&path).await?;
+    let val: Value = serde_json::from_str(&content)?;
 
     let mut session_cfg = cfg.clone();
     session_cfg.collection = collection;
@@ -231,21 +213,20 @@ async fn process_gemini_file(
 
     let mut attempt = 0;
     loop {
-        let res =
+        let res: Result<usize, String> =
             embed_text_with_metadata(&session_cfg, &session_text, &url, "gemini_session", title)
                 .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()));
-        match res {
+                .map_err(|e| e.to_string());
+        let err_msg = match res {
             Ok(n) => return Ok(n),
-            Err(e) => {
-                if attempt < 3 {
-                    attempt += 1;
-                    tokio::time::sleep(Duration::from_millis(attempt * 500)).await;
-                    log_warn(&format!("retry {} for {}: {}", attempt, url, e));
-                } else {
-                    return Err(e);
-                }
-            }
+            Err(msg) => msg,
+        };
+        if attempt < 3 {
+            attempt += 1;
+            tokio::time::sleep(Duration::from_millis(attempt * 500)).await;
+            log_warn(&format!("retry {} for {}: {}", attempt, url, err_msg));
+        } else {
+            return Err(anyhow::anyhow!(err_msg));
         }
     }
 }

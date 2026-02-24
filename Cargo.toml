@@ -46,6 +46,7 @@ uuid = { version = "1", features = ["v4", "v5", "serde"] }
 sha2 = "0.10.9"
 hex = "0.4.3"
 reflink-copy = "0.1.28"
+dotenvy = "0.15.7"
 
 [profile.release]
 opt-level = 3
@@ -61,5 +62,16 @@ regex = "1"
 # tei_embed 413-retry logic, ensure_collection idempotency, and API clients
 # without requiring live services.
 httpmock = "0.7"
+
+[lints.rust]
+unsafe_code = "deny"
+unused_import_braces = "warn"
+unused_qualifications = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+# Known intentional suppressions — tracked in rust-best-practices-fixes.md
+too_many_arguments = "allow"   # FIX-07: streaming/evaluate funcs pending param-struct refactor
+module_inception = "allow"     # crates/crawl.rs: acceptable module name
 
 

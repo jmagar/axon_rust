@@ -642,6 +642,7 @@ dependencies = [
  "console",
  "criterion",
  "dialoguer",
+ "dotenvy",
  "futures-util",
  "hex",
  "httpmock",

@@ -483,6 +483,7 @@ mod tests {
         assert!(!is_docker_service_host(""));
     }
 
+    #[allow(unsafe_code)]
     #[test]
     fn test_tavily_api_key_read_from_env() {
         let _guard = ENV_LOCK.lock().unwrap();

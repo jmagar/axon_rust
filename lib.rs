@@ -90,14 +90,14 @@ async fn run_once(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn is_job_subcommand(cfg: &self::crates::core::config::Config) -> bool {
+fn is_job_subcommand(cfg: &Config) -> bool {
     matches!(
         cfg.positional.first().map(|s| s.as_str()),
         Some("status" | "cancel" | "errors" | "list" | "cleanup" | "clear" | "worker" | "recover")
     )
 }
 
-fn job_subcommand_name(cfg: &self::crates::core::config::Config) -> Option<&str> {
+fn job_subcommand_name(cfg: &Config) -> Option<&str> {
     cfg.positional.first().map(|s| s.as_str()).filter(|s| {
         matches!(
             *s,
@@ -106,7 +106,7 @@ fn job_subcommand_name(cfg: &self::crates::core::config::Config) -> Option<&str>
     })
 }
 
-fn is_async_enqueue_mode(cfg: &self::crates::core::config::Config) -> bool {
+fn is_async_enqueue_mode(cfg: &Config) -> bool {
     !cfg.wait
         && matches!(
             cfg.command,
