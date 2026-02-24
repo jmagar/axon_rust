@@ -1,12 +1,18 @@
 'use client'
 
 import type { ReactNode } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ContentViewer } from '@/components/content-viewer'
 import { CrawlFileExplorer } from '@/components/crawl-file-explorer'
 import { CrawlProgress } from '@/components/crawl-progress'
+import { CardsRenderer } from '@/components/results/cards-renderer'
 import { RawRenderer } from '@/components/results/raw-renderer'
+import { ReportRenderer } from '@/components/results/report-renderer'
+import { StatusRenderer } from '@/components/results/status-renderer'
+import { TableRenderer } from '@/components/results/table-renderer'
 import { useWsMessages } from '@/hooks/use-ws-messages'
+import { AXON_COMMAND_SPECS } from '@/lib/axon-command-map'
+import { normalizeResult } from '@/lib/result-normalizers'
 
 type TabId = 'content' | 'stats' | 'recent'
 
@@ -41,6 +47,16 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
   const isCrawlMode = currentMode === 'crawl'
   const hasCrawlFiles = crawlFiles.length > 0
   const isMarkdownMode = commandMode === null || commandMode === 'scrape' || commandMode === 'crawl'
+
+  const spec = useMemo(
+    () => (commandMode ? AXON_COMMAND_SPECS.find((s) => s.id === commandMode) : undefined),
+    [commandMode],
+  )
+
+  const normalized = useMemo(
+    () => (commandMode && stdoutJson.length > 0 ? normalizeResult(commandMode, stdoutJson) : null),
+    [commandMode, stdoutJson],
+  )
 
   return (
     <div
@@ -118,6 +134,14 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
                   <span className="mb-2 block text-sm font-bold text-[#ff87af]">Error</span>
                   {errorMessage}
                 </div>
+              ) : normalized && spec?.renderIntent === 'table' ? (
+                <TableRenderer result={normalized} />
+              ) : normalized && spec?.renderIntent === 'cards' ? (
+                <CardsRenderer result={normalized} />
+              ) : normalized && spec?.renderIntent === 'report' ? (
+                <ReportRenderer result={normalized} commandMode={commandMode} />
+              ) : normalized && spec?.renderIntent === 'status-summary' ? (
+                <StatusRenderer result={normalized} />
               ) : (
                 <RawRenderer
                   stdoutJson={stdoutJson}
