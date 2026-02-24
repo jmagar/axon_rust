@@ -4,7 +4,7 @@ use crate::crates::jobs::common::{
 };
 use chrono::Duration;
 use std::env;
-use tokio::time::{sleep, timeout, Duration as TokioDuration};
+use tokio::time::{Duration as TokioDuration, sleep, timeout};
 
 fn watchdog_json(observed: DateTime<Utc>, first_seen: &str) -> serde_json::Value {
     serde_json::json!({

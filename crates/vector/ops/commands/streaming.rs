@@ -19,6 +19,20 @@ pub(super) fn build_openai_chat_request(
     req
 }
 
+/// Context for LLM judge comparison between RAG and baseline answers.
+pub(crate) struct JudgeContext<'a> {
+    pub query: &'a str,
+    pub rag_answer: &'a str,
+    pub baseline_answer: &'a str,
+    pub reference_chunks: &'a str,
+    pub rag_sources_list: &'a str,
+    pub ref_quality_note: &'a str,
+    pub rag_elapsed_ms: u128,
+    pub baseline_elapsed_ms: u128,
+    pub source_count: usize,
+    pub context_chars: usize,
+}
+
 fn judge_system_prompt() -> &'static str {
     "You are an expert evaluator with access to authoritative reference material.\n\
 Compare two AI responses to the same question.\n\
@@ -52,19 +66,7 @@ YES/NO — [Did the indexed knowledge base provide information the LLM could not
 [1-2 sentences: which response is better overall and why?]"
 }
 
-#[allow(clippy::too_many_arguments)]
-fn judge_user_msg(
-    query: &str,
-    rag_answer: &str,
-    baseline_answer: &str,
-    reference_chunks: &str,
-    rag_sources_list: &str,
-    ref_quality_note: &str,
-    rag_ms: u128,
-    baseline_ms: u128,
-    source_count: usize,
-    context_chars: usize,
-) -> String {
+fn judge_user_msg(ctx: &JudgeContext<'_>) -> String {
     format!(
         "Question: {query}\n\n\
 ## RAG Answer (WITH context — {source_count} sources, {context_chars} chars, {rag_ms}ms)\n\
@@ -75,7 +77,17 @@ Sources the RAG answer was built from:\n{rag_sources_list}\n\n\
 ## Reference Material (independent retrieval for accuracy grounding)\n\
 {ref_quality_note}\
 {reference_chunks}\n\n\
-Analyze and compare the two responses following the format in your instructions."
+Analyze and compare the two responses following the format in your instructions.",
+        query = ctx.query,
+        source_count = ctx.source_count,
+        context_chars = ctx.context_chars,
+        rag_ms = ctx.rag_elapsed_ms,
+        rag_sources_list = ctx.rag_sources_list,
+        rag_answer = ctx.rag_answer,
+        baseline_ms = ctx.baseline_elapsed_ms,
+        baseline_answer = ctx.baseline_answer,
+        ref_quality_note = ctx.ref_quality_note,
+        reference_chunks = ctx.reference_chunks,
     )
 }
 
@@ -243,34 +255,13 @@ pub(crate) async fn baseline_llm_non_streaming(
         .to_string())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn judge_llm_streaming(
     cfg: &Config,
     client: &reqwest::Client,
-    query: &str,
-    rag_answer: &str,
-    baseline_answer: &str,
-    reference_chunks: &str,
-    rag_sources_list: &str,
-    ref_quality_note: &str,
-    rag_ms: u128,
-    baseline_ms: u128,
-    source_count: usize,
-    context_chars: usize,
+    ctx: &JudgeContext<'_>,
     print_tokens: bool,
 ) -> Result<String, Box<dyn Error>> {
-    let user_msg = judge_user_msg(
-        query,
-        rag_answer,
-        baseline_answer,
-        reference_chunks,
-        rag_sources_list,
-        ref_quality_note,
-        rag_ms,
-        baseline_ms,
-        source_count,
-        context_chars,
-    );
+    let user_msg = judge_user_msg(ctx);
     let req = build_openai_chat_request(client, cfg).json(&serde_json::json!({
         "model": cfg.openai_model,
         "messages": [
@@ -283,33 +274,12 @@ pub(crate) async fn judge_llm_streaming(
     run_sse_stream(req, print_tokens).await
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn judge_llm_non_streaming(
     cfg: &Config,
     client: &reqwest::Client,
-    query: &str,
-    rag_answer: &str,
-    baseline_answer: &str,
-    reference_chunks: &str,
-    rag_sources_list: &str,
-    ref_quality_note: &str,
-    rag_ms: u128,
-    baseline_ms: u128,
-    source_count: usize,
-    context_chars: usize,
+    ctx: &JudgeContext<'_>,
 ) -> Result<String, Box<dyn Error>> {
-    let user_msg = judge_user_msg(
-        query,
-        rag_answer,
-        baseline_answer,
-        reference_chunks,
-        rag_sources_list,
-        ref_quality_note,
-        rag_ms,
-        baseline_ms,
-        source_count,
-        context_chars,
-    );
+    let user_msg = judge_user_msg(ctx);
     let req = build_openai_chat_request(client, cfg).json(&serde_json::json!({
         "model": cfg.openai_model,
         "messages": [

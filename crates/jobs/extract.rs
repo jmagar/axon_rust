@@ -1,10 +1,10 @@
 use crate::crates::core::config::Config;
-use crate::crates::core::content::{run_extract_with_engine, DeterministicExtractionEngine};
+use crate::crates::core::content::{DeterministicExtractionEngine, run_extract_with_engine};
 use crate::crates::core::health::redis_healthy;
 use crate::crates::core::logging::{log_done, log_info, log_warn};
 use crate::crates::jobs::common::{
-    enqueue_job, make_pool, mark_job_failed, open_amqp_channel, purge_queue_safe,
-    reclaim_stale_running_jobs, JobTable,
+    JobTable, enqueue_job, make_pool, mark_job_failed, open_amqp_channel, purge_queue_safe,
+    reclaim_stale_running_jobs,
 };
 use crate::crates::jobs::status::JobStatus;
 use chrono::{DateTime, Utc};
@@ -40,7 +40,7 @@ pub struct ExtractJob {
     pub result_json: Option<serde_json::Value>,
 }
 
-async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
+async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS axon_extract_jobs (

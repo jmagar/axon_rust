@@ -75,15 +75,19 @@ chmod -R u+rwX,g+rwX "$resolved_dir"
 
 diag_dir="${AXON_CHROME_DIAGNOSTICS_DIR:-/app/.cache/chrome-diagnostics}"
 
-resolved_diag="$(realpath -m "$diag_dir")"
-case "$resolved_diag" in
-  /app/*|/home/*|/data/*|/tmp/*) ;;
-  *)
-    echo "[cont-init] ERROR: AXON_CHROME_DIAGNOSTICS_DIR '$resolved_diag' is not under a safe prefix" >&2
-    exit 1
-    ;;
-esac
+if [ -n "$diag_dir" ]; then
+  resolved_diag="$(realpath -m "$diag_dir")"
+  case "$resolved_diag" in
+    /app/*|/home/*|/data/*|/tmp/*) ;;
+    *)
+      echo "[cont-init] ERROR: AXON_CHROME_DIAGNOSTICS_DIR '$resolved_diag' is not under a safe prefix" >&2
+      exit 1
+      ;;
+  esac
 
-mkdir -p "$resolved_diag"
-chown -R axon:axon "$resolved_diag"
-chmod -R u+rwX,g+rwX "$resolved_diag"
+  mkdir -p "$resolved_diag"
+  chown -R axon:axon "$resolved_diag"
+  chmod -R u+rwX,g+rwX "$resolved_diag"
+else
+  echo "[cont-init] AXON_CHROME_DIAGNOSTICS_DIR is empty, skipping diagnostics dir setup"
+fi

@@ -4,13 +4,13 @@ Async job workers backed by RabbitMQ (lapin) + PostgreSQL (sqlx).
 
 ## Module Layout
 
-```
+```text
 jobs/
 ├── common/          # Shared infra: pool, AMQP channel, claim/mark/enqueue
-├── crawl_jobs/      # manifest, processor, repo, sitemap, watchdog, worker, runtime
-├── extract_jobs/    # Extract worker
-├── embed_jobs/      # Embed worker
-├── ingest_jobs.rs   # Ingest job schema + worker (github/reddit/youtube)
+├── crawl/           # manifest, processor, repo, sitemap, watchdog, worker, runtime
+├── extract/         # Extract worker
+├── embed/           # Embed worker
+├── ingest.rs        # Ingest job schema + worker (github/reddit/youtube)
 ├── status.rs        # JobStatus enum
 └── worker_lane.rs   # Multi-lane coordination for ingest
 ```
@@ -19,7 +19,8 @@ jobs/
 
 ### Job Lifecycle
 Always use `common::` functions — never write raw SQL job state updates:
-```
+
+```text
 claim_next_pending() → mark_job_started() → mark_job_completed() / mark_job_failed()
 ```
 

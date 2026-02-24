@@ -2,7 +2,7 @@ use crate::crates::cli::commands::crawl::discover_sitemap_urls_with_robots;
 use crate::crates::core::config::{Config, RenderMode};
 use crate::crates::core::http::validate_url;
 use crate::crates::core::logging::log_done;
-use crate::crates::core::ui::{muted, primary, print_option, print_phase, Spinner};
+use crate::crates::core::ui::{Spinner, muted, primary, print_option, print_phase};
 use crate::crates::crawl::engine::crawl_and_collect_map;
 use std::error::Error;
 

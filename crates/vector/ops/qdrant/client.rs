@@ -1,7 +1,16 @@
+//! Low-level Qdrant HTTP client operations.
+//!
+//! ## Key invariants
+//! - Use [`qdrant_url_facets`] (O(1) `/facet` POST) for URL counting and aggregation.
+//!   Never use full scroll for aggregation — it loads the entire collection into memory.
+//! - [`ensure_collection`](super::tei::ensure_collection) issues GET-first, PUT only on 404.
+//!   Safe to call on every embed.
+//! - All delete operations use [`qdrant_delete_with_retry`] with exponential backoff.
+
 use crate::crates::core::config::Config;
 use crate::crates::core::http::http_client;
 use crate::crates::core::logging::log_warn;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use reqwest::StatusCode;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -90,11 +99,14 @@ async fn scroll_pages_raw(
             break;
         }
 
-        let next = val["result"].get("next_page_offset").cloned();
-        if next.is_none() || next == Some(serde_json::Value::Null) {
+        let Some(next) = val["result"]
+            .get("next_page_offset")
+            .cloned()
+            .filter(|v| !v.is_null())
+        else {
             break;
-        }
-        body["offset"] = next.unwrap();
+        };
+        body["offset"] = next;
     }
     Ok(())
 }
@@ -223,15 +235,16 @@ pub async fn qdrant_delete_stale_domain_urls(
         .map(|url| serde_json::json!({"key": "url", "match": {"value": url}}))
         .collect();
     let client = http_client()?;
+    let delete_url = format!(
+        "{}/collections/{}/points/delete?wait=true",
+        qdrant_base(cfg),
+        cfg.collection
+    );
     // Qdrant filter limit is generous but chunk at 500 to be safe with large stale sets.
     for batch in url_conditions.chunks(500) {
         qdrant_delete_with_retry(
             client,
-            &format!(
-                "{}/collections/{}/points/delete?wait=true",
-                qdrant_base(cfg),
-                cfg.collection
-            ),
+            &delete_url,
             serde_json::json!({
                 "filter": {"should": batch}
             }),
@@ -288,8 +301,7 @@ pub(crate) async fn qdrant_domain_facets(
             let domain = hit
                 .get("value")
                 .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
+                .map_or_else(|| "unknown".to_string(), str::to_string);
             let vectors = hit.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
             out.push((domain, vectors));
         }
@@ -386,6 +398,8 @@ pub(crate) async fn qdrant_retrieve_by_url(
     let mut out = Vec::new();
     scroll_pages_raw(client, &endpoint, body, |points| {
         for p in points {
+            // Clone required: scroll_pages_raw yields &[Value] (borrowed from response JSON).
+            // from_value consumes the value, so we must clone from the slice reference.
             if let Ok(point) = serde_json::from_value::<QdrantPoint>(p.clone()) {
                 out.push(point);
             }

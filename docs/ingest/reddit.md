@@ -1,6 +1,6 @@
-> CLI reference (flags, subcommands, examples): [`docs/commands/reddit.md`](../commands/reddit.md)
-
 # Reddit Ingest
+
+> CLI reference (flags, subcommands, examples): [`docs/commands/reddit.md`](../commands/reddit.md)
 
 Ingests subreddit posts and comment threads into Qdrant via the Reddit OAuth2 API (client credentials flow — no user login required).
 

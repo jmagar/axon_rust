@@ -1,6 +1,6 @@
 use crate::crates::core::config::Config;
 use futures_util::future;
-use sqlx::{postgres::PgPoolOptions, Row};
+use sqlx::{Row, postgres::PgPoolOptions};
 use std::time::Duration;
 
 /// Whitelist of tables allowed in dynamic SQL queries.

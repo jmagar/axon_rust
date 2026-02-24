@@ -1,6 +1,6 @@
-> CLI reference (flags, subcommands, examples): [`docs/commands/github.md`](../commands/github.md)
-
 # GitHub Ingest
+
+> CLI reference (flags, subcommands, examples): [`docs/commands/github.md`](../commands/github.md)
 
 Ingests a GitHub repository — source code, documentation, issues, pull requests, and wiki pages — into Qdrant via a hybrid approach: raw reqwest for file content, octocrab for metadata/issues/PRs, and `git clone` for wiki pages.
 

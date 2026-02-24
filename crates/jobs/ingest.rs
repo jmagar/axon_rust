@@ -1,9 +1,10 @@
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::jobs::common::{
-    enqueue_job, make_pool, mark_job_failed, purge_queue_safe, reclaim_stale_running_jobs, JobTable,
+    JobTable, enqueue_job, make_pool, mark_job_failed, purge_queue_safe, reclaim_stale_running_jobs,
 };
-use crate::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
+use crate::crates::jobs::status::JobStatus;
+use crate::crates::jobs::worker_lane::{ProcessFn, WorkerConfig, run_job_worker};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
@@ -57,7 +58,7 @@ pub struct IngestJob {
     pub result_json: Option<serde_json::Value>,
 }
 
-async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
+async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS axon_ingest_jobs (
@@ -159,10 +160,11 @@ pub async fn start_ingest_job(cfg: &Config, source: IngestSource) -> Result<Uuid
     let target = target_label(&source);
 
     let id = Uuid::new_v4();
-    sqlx::query(
+    sqlx::query(&format!(
         "INSERT INTO axon_ingest_jobs (id, status, source_type, target, config_json) \
-         VALUES ($1, 'pending', $2, $3, $4)",
-    )
+         VALUES ($1, '{pending}', $2, $3, $4)",
+        pending = JobStatus::Pending.as_str(),
+    ))
     .bind(id)
     .bind(source_type)
     .bind(&target)
@@ -218,10 +220,13 @@ pub async fn cancel_ingest_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn E
         ensure_schema(&pool).await?;
         let _ = SCHEMA_INIT.set(());
     }
-    let rows = sqlx::query(
-        "UPDATE axon_ingest_jobs SET status='canceled',updated_at=NOW(),finished_at=NOW() \
-         WHERE id=$1 AND status IN ('pending','running')",
-    )
+    let rows = sqlx::query(&format!(
+        "UPDATE axon_ingest_jobs SET status='{canceled}',updated_at=NOW(),finished_at=NOW() \
+         WHERE id=$1 AND status IN ('{pending}','{running}')",
+        canceled = JobStatus::Canceled.as_str(),
+        pending = JobStatus::Pending.as_str(),
+        running = JobStatus::Running.as_str(),
+    ))
     .bind(id)
     .execute(&pool)
     .await?
@@ -235,10 +240,13 @@ pub async fn cleanup_ingest_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
         ensure_schema(&pool).await?;
         let _ = SCHEMA_INIT.set(());
     }
-    Ok(sqlx::query(
-        "DELETE FROM axon_ingest_jobs WHERE status IN ('failed','canceled') \
-         OR (status = 'completed' AND finished_at < NOW() - INTERVAL '30 days')",
-    )
+    Ok(sqlx::query(&format!(
+        "DELETE FROM axon_ingest_jobs WHERE status IN ('{failed}','{canceled}') \
+         OR (status = '{completed}' AND finished_at < NOW() - INTERVAL '30 days')",
+        failed = JobStatus::Failed.as_str(),
+        canceled = JobStatus::Canceled.as_str(),
+        completed = JobStatus::Completed.as_str(),
+    ))
     .execute(&pool)
     .await?
     .rows_affected())
@@ -272,16 +280,17 @@ async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
         Ok(Some(v)) => match serde_json::from_value(v) {
             Ok(c) => c,
             Err(e) => {
-                mark_job_failed(&pool, TABLE, id, &format!("invalid config_json: {e}")).await;
+                let _ =
+                    mark_job_failed(&pool, TABLE, id, &format!("invalid config_json: {e}")).await;
                 return;
             }
         },
         Ok(None) => {
-            mark_job_failed(&pool, TABLE, id, "job not found in DB").await;
+            let _ = mark_job_failed(&pool, TABLE, id, "job not found in DB").await;
             return;
         }
         Err(e) => {
-            mark_job_failed(&pool, TABLE, id, &format!("DB read error: {e}")).await;
+            let _ = mark_job_failed(&pool, TABLE, id, &format!("DB read error: {e}")).await;
             return;
         }
     };
@@ -310,10 +319,12 @@ async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
 
     match result {
         Ok(chunks) => {
-            if let Err(e) = sqlx::query(
-                "UPDATE axon_ingest_jobs SET status='completed',updated_at=NOW(),\
-                 finished_at=NOW(),result_json=$2 WHERE id=$1 AND status='running'",
-            )
+            if let Err(e) = sqlx::query(&format!(
+                "UPDATE axon_ingest_jobs SET status='{completed}',updated_at=NOW(),\
+                 finished_at=NOW(),result_json=$2 WHERE id=$1 AND status='{running}'",
+                completed = JobStatus::Completed.as_str(),
+                running = JobStatus::Running.as_str(),
+            ))
             .bind(id)
             .bind(serde_json::json!({"chunks_embedded": chunks}))
             .execute(&pool)
@@ -325,7 +336,7 @@ async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
             }
         }
         Err(e) => {
-            mark_job_failed(&pool, TABLE, id, &e.to_string()).await;
+            let _ = mark_job_failed(&pool, TABLE, id, &e.to_string()).await;
         }
     }
 }

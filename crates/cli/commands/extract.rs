@@ -1,6 +1,6 @@
 use crate::crates::cli::commands::common::parse_urls;
 use crate::crates::core::config::Config;
-use crate::crates::core::content::{run_extract_with_engine, DeterministicExtractionEngine};
+use crate::crates::core::content::{DeterministicExtractionEngine, run_extract_with_engine};
 use crate::crates::core::logging::log_done;
 use crate::crates::core::ui::{
     accent, confirm_destructive, muted, primary, status_text, symbol_for_status,
@@ -9,8 +9,8 @@ use crate::crates::jobs::extract::{
     cancel_extract_job, cleanup_extract_jobs, clear_extract_jobs, get_extract_job,
     list_extract_jobs, recover_stale_extract_jobs, run_extract_worker, start_extract_job,
 };
-use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
+use futures_util::stream::FuturesUnordered;
 use std::error::Error;
 use std::sync::Arc;
 use uuid::Uuid;

@@ -79,22 +79,17 @@ mod tests {
     }
 
     #[test]
-    fn all_variants_are_distinct() {
-        let statuses = [
+    fn all_variants_have_unique_string_representations() {
+        let strings: std::collections::HashSet<_> = [
             JobStatus::Pending,
             JobStatus::Running,
             JobStatus::Completed,
             JobStatus::Failed,
             JobStatus::Canceled,
-        ];
-        for (i, a) in statuses.iter().enumerate() {
-            for (j, b) in statuses.iter().enumerate() {
-                if i == j {
-                    assert_eq!(a, b);
-                } else {
-                    assert_ne!(a, b);
-                }
-            }
-        }
+        ]
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+        assert_eq!(strings.len(), 5);
     }
 }

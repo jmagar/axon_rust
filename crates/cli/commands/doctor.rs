@@ -3,10 +3,7 @@ mod render;
 use crate::crates::cli::commands::probe::{probe_http, with_path};
 use crate::crates::core::config::Config;
 use crate::crates::core::content::redact_url;
-use crate::crates::core::health::{
-    browser_backend_selection, browser_diagnostics_pattern, webdriver_url_from_env,
-    BrowserBackendSelection,
-};
+use crate::crates::core::health::browser_diagnostics_pattern;
 use crate::crates::core::http::build_client;
 use crate::crates::jobs::common::count_stale_and_pending_jobs;
 use crate::crates::jobs::crawl::doctor as crawl_doctor;
@@ -137,8 +134,7 @@ async fn probe_chrome(chrome_url: Option<&str>) -> (bool, Option<String>) {
     };
 
     // CDP /json/version is the canonical health endpoint.
-    let result = probe_http(url, &["/json/version", "/json"]).await;
-    (result.0, result.1)
+    probe_http(url, &["/json/version", "/json"]).await
 }
 
 struct DoctorProbes {
@@ -149,7 +145,6 @@ struct DoctorProbes {
     tei_probe: (bool, Option<String>),
     tei_info_probe: (Option<Value>, Option<String>),
     qdrant_probe: (bool, Option<String>),
-    webdriver_probe: Option<(bool, Option<String>)>,
     chrome_probe: (bool, Option<String>),
     openai_probe: (bool, String),
     stale_jobs: Option<(i64, i64)>,
@@ -157,7 +152,6 @@ struct DoctorProbes {
 
 async fn gather_doctor_probes(
     cfg: &Config,
-    webdriver_url: Option<&str>,
     openai_model: &str,
 ) -> Result<DoctorProbes, Box<dyn Error>> {
     let (
@@ -168,7 +162,6 @@ async fn gather_doctor_probes(
         tei_probe,
         tei_info_probe,
         qdrant_probe,
-        webdriver_probe,
         chrome_probe,
         openai_probe,
         stale_jobs,
@@ -180,12 +173,6 @@ async fn gather_doctor_probes(
         probe_http(&cfg.tei_url, &["/health", "/"]),
         probe_tei_info(&cfg.tei_url),
         probe_http(&cfg.qdrant_url, &["/healthz", "/"]),
-        async {
-            match webdriver_url {
-                Some(url) => Some(probe_http(url, &["/status", "/wd/hub/status"]).await),
-                None => None,
-            }
-        },
         probe_chrome(cfg.chrome_remote_url.as_deref()),
         probe_openai(cfg, openai_model),
         count_stale_and_pending_jobs(cfg, 15),
@@ -199,7 +186,6 @@ async fn gather_doctor_probes(
         tei_probe,
         tei_info_probe,
         qdrant_probe,
-        webdriver_probe,
         chrome_probe,
         openai_probe,
         stale_jobs,
@@ -219,23 +205,11 @@ fn build_pipeline_status(probes: &DoctorProbes, openai_ok: bool) -> Value {
     })
 }
 
-fn browser_backend_label(selection: BrowserBackendSelection) -> &'static str {
-    match selection {
-        BrowserBackendSelection::Chrome => "chrome",
-        BrowserBackendSelection::WebDriverFallback => "webdriver",
-    }
-}
-
 fn build_browser_runtime(
     diagnostics: &crate::crates::core::health::BrowserDiagnosticsPattern,
-    selection: BrowserBackendSelection,
-    webdriver_configured: bool,
-    webdriver_ok: bool,
 ) -> Value {
     serde_json::json!({
-        "selection": browser_backend_label(selection),
-        "fallback_enabled": webdriver_configured,
-        "fallback_ready": webdriver_ok,
+        "selection": "chrome",
         "diagnostics": {
             "enabled": diagnostics.enabled,
             "screenshot": diagnostics.screenshot,
@@ -245,12 +219,7 @@ fn build_browser_runtime(
     })
 }
 
-fn build_services_status(
-    cfg: &Config,
-    probes: &DoctorProbes,
-    webdriver_url: Option<&str>,
-    openai_model: &str,
-) -> Value {
+fn build_services_status(cfg: &Config, probes: &DoctorProbes, openai_model: &str) -> Value {
     let tei_info = probes.tei_info_probe.0.clone();
     let tei_info_detail = probes.tei_info_probe.1.clone();
     let tei_model = tei_info.as_ref().and_then(tei_model_from_info);
@@ -284,12 +253,6 @@ fn build_services_status(
             "ok": probes.qdrant_probe.0,
             "url": cfg.qdrant_url,
             "detail": probes.qdrant_probe.1.clone(),
-        },
-        "webdriver": {
-            "ok": probes.webdriver_probe.as_ref().map(|probe| probe.0).unwrap_or(false),
-            "configured": webdriver_url.is_some(),
-            "url": webdriver_url,
-            "detail": probes.webdriver_probe.as_ref().and_then(|probe| probe.1.clone()),
         },
         "chrome": {
             "ok": chrome_ok,
@@ -328,28 +291,14 @@ fn report_overall_ok(pipelines: &Value, tei_ok: bool, qdrant_ok: bool) -> bool {
 // NOTE: run_doctor delegates to build_doctor_report and only renders output.
 // Keep probe logic centralized in build_doctor_report to avoid drift.
 pub async fn build_doctor_report(cfg: &Config) -> Result<Value, Box<dyn Error>> {
-    let webdriver_url = webdriver_url_from_env();
     let diagnostics = browser_diagnostics_pattern();
     let openai_model = resolve_openai_model(cfg);
-    let probes = gather_doctor_probes(cfg, webdriver_url.as_deref(), &openai_model).await?;
+    let probes = gather_doctor_probes(cfg, &openai_model).await?;
     let (openai_live_ok, _) = probes.openai_probe.clone();
     let pipelines = build_pipeline_status(&probes, openai_live_ok);
-    let services = build_services_status(cfg, &probes, webdriver_url.as_deref(), &openai_model);
+    let services = build_services_status(cfg, &probes, &openai_model);
     let queue_names = build_queue_names(cfg);
-
-    let webdriver_configured = webdriver_url.is_some();
-    let webdriver_ok = probes
-        .webdriver_probe
-        .as_ref()
-        .map(|probe| probe.0)
-        .unwrap_or(false);
-    let backend_selection = browser_backend_selection(true, webdriver_configured, webdriver_ok);
-    let browser_runtime = build_browser_runtime(
-        &diagnostics,
-        backend_selection,
-        webdriver_configured,
-        webdriver_ok,
-    );
+    let browser_runtime = build_browser_runtime(&diagnostics);
     let all_ok = report_overall_ok(&pipelines, probes.tei_probe.0, probes.qdrant_probe.0);
 
     let (stale_count, pending_count) = probes.stale_jobs.unwrap_or((0, 0));

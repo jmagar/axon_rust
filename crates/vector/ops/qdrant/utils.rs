@@ -92,7 +92,7 @@ pub(crate) fn retrieve_max_points(max_points: Option<usize>) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{retrieve_max_points, RETRIEVE_MAX_POINTS_CEILING};
+    use super::{RETRIEVE_MAX_POINTS_CEILING, retrieve_max_points};
 
     #[test]
     fn retrieve_max_points_defaults_to_ceiling() {

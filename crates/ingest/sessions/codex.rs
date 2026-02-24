@@ -1,4 +1,4 @@
-use super::{resolve_collection, IngestResult, SessionStateTracker};
+use super::{IngestResult, SessionStateTracker, resolve_collection};
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::log_warn;
 use crate::crates::vector::ops::embed_text_with_metadata;
@@ -69,13 +69,17 @@ pub(super) async fn ingest_codex_sessions(
 
             if futures.len() >= 32 {
                 if let Some(res) = futures.next().await {
-                    let (p, m, s, r) = res.map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                    match r {
-                        Ok(count) => {
-                            total += count;
-                            state.mark_indexed(&p, m, s).await;
+                    match res {
+                        Ok((p, m, s, r)) => match r {
+                            Ok(count) => {
+                                total += count;
+                                state.mark_indexed(&p, m, s).await;
+                            }
+                            Err(e) => log_warn(&format!("Codex file {}: {e}", p.display())),
+                        },
+                        Err(join_err) => {
+                            log_warn(&format!("Codex ingest task panicked: {join_err}"));
                         }
-                        Err(e) => log_warn(&format!("Codex file {}: {e}", p.display())),
                     }
                 }
             }
@@ -83,13 +87,18 @@ pub(super) async fn ingest_codex_sessions(
     }
 
     while let Some(res) = futures.next().await {
-        let (p, m, s, r) = res.map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        match r {
-            Ok(count) => {
-                total += count;
-                state.mark_indexed(&p, m, s).await;
+        match res {
+            Ok((p, m, s, r)) => match r {
+                Ok(count) => {
+                    total += count;
+                    state.mark_indexed(&p, m, s).await;
+                }
+                Err(e) => log_warn(&format!("Codex file {}: {e}", p.display())),
+            },
+            Err(join_err) => {
+                log_warn(&format!("Codex ingest task panicked: {join_err}"));
+                continue;
             }
-            Err(e) => log_warn(&format!("Codex file {}: {e}", p.display())),
         }
     }
 

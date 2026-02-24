@@ -38,8 +38,10 @@ jobs:
 
           if [ -f "$HOME/.claude/hooks/enforce_monoliths.py" ]; then
             python3 "$HOME/.claude/hooks/enforce_monoliths.py" --base "$BASE_SHA" --head "$HEAD_SHA"
+          elif [ -f "scripts/enforce_monoliths.py" ]; then
+            python3 scripts/enforce_monoliths.py --base "$BASE_SHA" --head "$HEAD_SHA"
           else
-            echo "[skip] global monolith enforcer not found at ~/.claude/hooks/enforce_monoliths.py"
+            echo "ERROR: enforce_monoliths.py not found in ~/.claude/hooks/ or scripts/" && exit 1
           fi
 
   fmt:

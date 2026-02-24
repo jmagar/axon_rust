@@ -52,7 +52,7 @@ axon github recover           # reclaim stale/interrupted jobs
 axon github worker            # run an ingest worker inline (blocking)
 ```
 
-Note: These subcommands operate on all ingest jobs (github, reddit, youtube), not just GitHub jobs. The `list` output shows `source_type/target` to distinguish them.
+Note: These subcommands operate on all ingest jobs (GitHub, Reddit, YouTube), not just GitHub jobs. The `list` output shows `source_type/target` to distinguish them.
 
 ## Examples
 

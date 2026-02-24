@@ -11,8 +11,8 @@ const NO_REFERENCE: &str = "No reference material available.";
 
 use super::ask::build_ask_context;
 use super::streaming::{
-    ask_llm_non_streaming, ask_llm_streaming, baseline_llm_non_streaming, baseline_llm_streaming,
-    judge_llm_non_streaming, judge_llm_streaming,
+    JudgeContext, ask_llm_non_streaming, ask_llm_streaming, baseline_llm_non_streaming,
+    baseline_llm_streaming, judge_llm_non_streaming, judge_llm_streaming,
 };
 
 struct EvalTiming {
@@ -115,21 +115,19 @@ async fn run_evaluate_native_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
     emit_analysis_header(cfg)?;
     let source_count = ctx.chunks_selected + ctx.full_docs_selected + ctx.supplemental_count;
     let context_chars = ctx.context.len();
-    let (analysis_answer, analysis_elapsed_ms) = run_analysis(
-        cfg,
-        client,
-        &query,
-        &rag_answer,
-        &baseline_answer,
-        &judge_reference,
-        &rag_sources_list,
+    let judge_ctx = JudgeContext {
+        query: &query,
+        rag_answer: &rag_answer,
+        baseline_answer: &baseline_answer,
+        reference_chunks: &judge_reference,
+        rag_sources_list: &rag_sources_list,
         ref_quality_note,
         rag_elapsed_ms,
         baseline_elapsed_ms,
         source_count,
         context_chars,
-    )
-    .await;
+    };
+    let (analysis_answer, analysis_elapsed_ms) = run_analysis(cfg, client, &judge_ctx).await;
 
     let timing = EvalTiming {
         rag_elapsed_ms,
@@ -138,17 +136,14 @@ async fn run_evaluate_native_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
         analysis_elapsed_ms,
         total_elapsed_ms: eval_started.elapsed().as_millis(),
     };
-    emit_evaluate_output(
-        cfg,
-        &query,
-        &ctx,
-        &rag_answer,
-        &baseline_answer,
-        &analysis_answer,
+    let eval_answers = EvalAnswers {
+        rag: &rag_answer,
+        baseline: &baseline_answer,
+        analysis: &analysis_answer,
         ref_chunk_count,
         context_chars,
-        &timing,
-    )?;
+    };
+    emit_evaluate_output(cfg, &query, &ctx, &eval_answers, &timing)?;
     Ok(())
 }
 
@@ -294,60 +289,19 @@ fn emit_analysis_header(cfg: &Config) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_analysis(
     cfg: &Config,
     client: &reqwest::Client,
-    query: &str,
-    rag_answer: &str,
-    baseline_answer: &str,
-    judge_reference: &str,
-    rag_sources_list: &str,
-    ref_quality_note: &str,
-    rag_elapsed_ms: u128,
-    baseline_elapsed_ms: u128,
-    source_count: usize,
-    context_chars: usize,
+    judge_ctx: &JudgeContext<'_>,
 ) -> (String, u128) {
     let started = Instant::now();
-    let answer = match judge_llm_streaming(
-        cfg,
-        client,
-        query,
-        rag_answer,
-        baseline_answer,
-        judge_reference,
-        rag_sources_list,
-        ref_quality_note,
-        rag_elapsed_ms,
-        baseline_elapsed_ms,
-        source_count,
-        context_chars,
-        !cfg.json_output,
-    )
-    .await
-    {
+    let answer = match judge_llm_streaming(cfg, client, judge_ctx, !cfg.json_output).await {
         Ok(v) => v,
         Err(e) => {
             log_warn(&format!(
                 "judge streaming failed, falling back to non-streaming: {e}"
             ));
-            match judge_llm_non_streaming(
-                cfg,
-                client,
-                query,
-                rag_answer,
-                baseline_answer,
-                judge_reference,
-                rag_sources_list,
-                ref_quality_note,
-                rag_elapsed_ms,
-                baseline_elapsed_ms,
-                source_count,
-                context_chars,
-            )
-            .await
-            {
+            match judge_llm_non_streaming(cfg, client, judge_ctx).await {
                 Ok(fallback) => {
                     if !cfg.json_output {
                         print!("{fallback}");
@@ -368,16 +322,19 @@ async fn run_analysis(
     (answer, started.elapsed().as_millis())
 }
 
-#[allow(clippy::too_many_arguments)]
+struct EvalAnswers<'a> {
+    rag: &'a str,
+    baseline: &'a str,
+    analysis: &'a str,
+    ref_chunk_count: usize,
+    context_chars: usize,
+}
+
 fn emit_evaluate_output(
     cfg: &Config,
     query: &str,
     ctx: &super::ask::AskContext,
-    rag_answer: &str,
-    baseline_answer: &str,
-    analysis_answer: &str,
-    ref_chunk_count: usize,
-    context_chars: usize,
+    answers: &EvalAnswers<'_>,
     timing: &EvalTiming,
 ) -> Result<(), Box<dyn Error>> {
     if cfg.json_output {
@@ -385,10 +342,10 @@ fn emit_evaluate_output(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "query": query,
-                "rag_answer": rag_answer,
-                "baseline_answer": baseline_answer,
-                "analysis_answer": analysis_answer,
-                "ref_chunk_count": ref_chunk_count,
+                "rag_answer": answers.rag,
+                "baseline_answer": answers.baseline,
+                "analysis_answer": answers.analysis,
+                "ref_chunk_count": answers.ref_chunk_count,
                 "diagnostics": if cfg.ask_diagnostics {
                     serde_json::json!({
                         "candidate_pool": ctx.candidate_count,
@@ -396,7 +353,7 @@ fn emit_evaluate_output(
                         "chunks_selected": ctx.chunks_selected,
                         "full_docs_selected": ctx.full_docs_selected,
                         "supplemental_selected": ctx.supplemental_count,
-                        "context_chars": context_chars,
+                        "context_chars": answers.context_chars,
                         "min_relevance_score": cfg.ask_min_relevance_score,
                         "doc_fetch_concurrency": cfg.ask_doc_fetch_concurrency,
                     })

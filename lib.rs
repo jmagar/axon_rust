@@ -5,14 +5,14 @@ use self::crates::cli::commands::{
     run_reddit, run_research, run_scrape, run_search, run_sessions, run_status, run_youtube,
     start_url_from_cfg,
 };
-use self::crates::core::config::{parse_args, CommandKind, Config};
+use self::crates::core::config::{CommandKind, Config, parse_args};
 use self::crates::core::logging::{init_tracing, log_done, log_info, log_warn};
 use self::crates::vector::ops::{
     run_ask_native, run_dedupe_native, run_domains_native, run_evaluate_native, run_query_native,
     run_retrieve_native, run_sources_native, run_stats_native, run_suggest_native,
 };
-use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use std::error::Error;
 use std::sync::OnceLock;
 use std::time::Duration;

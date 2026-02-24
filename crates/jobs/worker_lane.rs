@@ -1,11 +1,11 @@
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::jobs::common::{
-    claim_next_pending, claim_pending_by_id, open_amqp_connection_and_channel,
-    reclaim_stale_running_jobs, JobTable,
+    JobTable, claim_next_pending, claim_pending_by_id, open_amqp_connection_and_channel,
+    reclaim_stale_running_jobs,
 };
-use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
+use futures_util::stream::FuturesUnordered;
 use lapin::options::{BasicAckOptions, BasicConsumeOptions, BasicNackOptions, BasicQosOptions};
 use lapin::types::FieldTable;
 use sqlx::PgPool;

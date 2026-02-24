@@ -4,15 +4,8 @@ use crate::crates::core::http::cdp_discovery_url;
 use spider::url::Url;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ChromeRuntimeMode {
-    Chrome,
-    WebDriverFallback,
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct ChromeBootstrapOutcome {
-    pub mode: ChromeRuntimeMode,
     pub remote_ready: bool,
     /// Pre-resolved CDP WebSocket URL (`ws://host:port/devtools/browser/UUID`).
     ///
@@ -54,7 +47,6 @@ async fn probe_cdp_connection(client: &reqwest::Client, probe_url: &str) -> Opti
 
 pub(super) async fn bootstrap_chrome_runtime(cfg: &Config) -> ChromeBootstrapOutcome {
     let mut outcome = ChromeBootstrapOutcome {
-        mode: ChromeRuntimeMode::Chrome,
         remote_ready: false,
         resolved_ws_url: None,
         warnings: Vec::new(),
@@ -104,17 +96,9 @@ pub(super) async fn bootstrap_chrome_runtime(cfg: &Config) -> ChromeBootstrapOut
         }
     }
 
-    if cfg.webdriver_url.is_some() {
-        outcome.mode = ChromeRuntimeMode::WebDriverFallback;
-        outcome.warnings.push(
-            "remote chrome probe failed; WebDriver fallback selected for engine handoff"
-                .to_string(),
-        );
-    } else {
-        outcome
-            .warnings
-            .push("remote chrome probe failed; falling back to local Chrome launcher".to_string());
-    }
+    outcome
+        .warnings
+        .push("remote chrome probe failed; falling back to local Chrome launcher".to_string());
 
     outcome
 }

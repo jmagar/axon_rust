@@ -1,65 +1,71 @@
 use super::*;
 use crate::crates::core::logging::log_done;
 use crate::crates::jobs::worker_lane::{
-    run_job_worker, validate_worker_env_vars, ProcessFn, WorkerConfig,
+    ProcessFn, WorkerConfig, run_job_worker, validate_worker_env_vars,
 };
-use crate::crates::vector::ops::{embed_path_native_with_progress, EmbedProgress};
+use crate::crates::vector::ops::{EmbedProgress, embed_path_native_with_progress};
 use tokio::time::Duration;
+
+/// Open a Redis connection for embed cancel checks. Returns None (with warning)
+/// on failure — cancel checks will be skipped (fail-safe: never false-cancel).
+async fn open_embed_redis(cfg: &Config) -> Option<redis::aio::MultiplexedConnection> {
+    let client = match redis::Client::open(cfg.redis_url.clone()) {
+        Ok(c) => c,
+        Err(e) => {
+            log_warn(&format!("embed cancel redis client open failed: {e}"));
+            return None;
+        }
+    };
+    match tokio::time::timeout(
+        Duration::from_secs(EMBED_CANCEL_REDIS_TIMEOUT_SECS),
+        client.get_multiplexed_async_connection(),
+    )
+    .await
+    {
+        Ok(Ok(conn)) => Some(conn),
+        Ok(Err(e)) => {
+            log_warn(&format!("embed cancel redis connect failed: {e}"));
+            None
+        }
+        Err(_) => {
+            log_warn(&format!(
+                "embed cancel redis connect timeout after {}s",
+                EMBED_CANCEL_REDIS_TIMEOUT_SECS
+            ));
+            None
+        }
+    }
+}
 
 /// Check if the embed job has been canceled via Redis. Returns `true` if a cancel
 /// key is present and the job has been marked canceled in the DB, `false` otherwise.
-/// On Redis failure, logs a warning and returns `false` (non-cancellation path).
+/// If `redis_conn` is None (Redis unavailable), returns `false` (fail-safe).
 async fn check_embed_canceled(
-    cfg: &Config,
+    redis_conn: &mut Option<redis::aio::MultiplexedConnection>,
     pool: &PgPool,
     id: Uuid,
 ) -> Result<bool, Box<dyn Error>> {
+    let Some(conn) = redis_conn.as_mut() else {
+        return Ok(false);
+    };
     let cancel_key = format!("axon:embed:cancel:{id}");
-    let cancel_value: Option<String> = match redis::Client::open(cfg.redis_url.clone()) {
-        Err(e) => {
-            log_warn(&format!("embed cancel redis client failed for {id}: {e}"));
+    let cancel_value: Option<String> = match tokio::time::timeout(
+        Duration::from_secs(EMBED_CANCEL_REDIS_TIMEOUT_SECS),
+        conn.get::<_, Option<String>>(&cancel_key),
+    )
+    .await
+    {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
+            log_warn(&format!("embed cancel check failed for {id}: {e}"));
             None
         }
-        Ok(redis_client) => {
-            match tokio::time::timeout(
-                Duration::from_secs(EMBED_CANCEL_REDIS_TIMEOUT_SECS),
-                redis_client.get_multiplexed_async_connection(),
-            )
-            .await
-            {
-                Err(_) => {
-                    log_warn(&format!(
-                        "embed cancel redis connect timeout for {id} after {}s",
-                        EMBED_CANCEL_REDIS_TIMEOUT_SECS
-                    ));
-                    None
-                }
-                Ok(Err(e)) => {
-                    log_warn(&format!("embed cancel redis connect failed for {id}: {e}"));
-                    None
-                }
-                Ok(Ok(mut conn)) => {
-                    match tokio::time::timeout(
-                        Duration::from_secs(EMBED_CANCEL_REDIS_TIMEOUT_SECS),
-                        conn.get::<_, Option<String>>(&cancel_key),
-                    )
-                    .await
-                    {
-                        Err(_) => {
-                            log_warn(&format!(
-                                "embed cancel check timeout for {id} after {}s",
-                                EMBED_CANCEL_REDIS_TIMEOUT_SECS
-                            ));
-                            None
-                        }
-                        Ok(Err(e)) => {
-                            log_warn(&format!("embed cancel check failed for {id}: {e}"));
-                            None
-                        }
-                        Ok(Ok(v)) => v,
-                    }
-                }
-            }
+        Err(_) => {
+            log_warn(&format!(
+                "embed cancel check timeout for {id} after {}s",
+                EMBED_CANCEL_REDIS_TIMEOUT_SECS
+            ));
+            None
         }
     };
     if cancel_value.is_none() {
@@ -123,7 +129,11 @@ async fn run_embed_core(
     }))
 }
 
+// TODO(monolith): 96 lines — consider splitting claim/cancel/progress phases into helpers.
 async fn process_embed_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), Box<dyn Error>> {
+    // Open a single Redis connection for cancel checks (reused across the job lifecycle).
+    let mut redis_conn = open_embed_redis(cfg).await;
+
     let run_result = async {
         let row = sqlx::query_as::<_, (String, serde_json::Value)>(
             "SELECT input_text, config_json FROM axon_embed_jobs WHERE id=$1",
@@ -164,7 +174,7 @@ async fn process_embed_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
             }
         });
 
-        if check_embed_canceled(cfg, pool, id).await? {
+        if check_embed_canceled(&mut redis_conn, pool, id).await? {
             let _ = heartbeat_stop_tx.send(true);
             let _ = heartbeat_task.await;
             return Ok(None);
@@ -202,17 +212,7 @@ async fn process_embed_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
         }
         Ok(None) => {}
         Err(error_text) => {
-            let _ = sqlx::query(
-                "UPDATE axon_embed_jobs \
-                 SET status=$2,updated_at=NOW(),finished_at=NOW(),error_text=$3 \
-                 WHERE id=$1 AND status=$4",
-            )
-            .bind(id)
-            .bind(JobStatus::Failed.as_str())
-            .bind(error_text.clone())
-            .bind(JobStatus::Running.as_str())
-            .execute(pool)
-            .await;
+            let _ = mark_job_failed(pool, TABLE, id, &error_text).await;
             log_warn(&format!("worker failed embed job {id}: {error_text}"));
         }
     }
@@ -226,7 +226,7 @@ async fn process_claimed_embed_job(cfg: Config, pool: PgPool, id: Uuid) {
         Err(err) => Some(err.to_string()),
     };
     if let Some(error_text) = fail_msg {
-        mark_job_failed(&pool, TABLE, id, &error_text).await;
+        let _ = mark_job_failed(&pool, TABLE, id, &error_text).await;
         log_warn(&format!("worker failed embed job {id}: {error_text}"));
     }
 }
@@ -234,7 +234,7 @@ async fn process_claimed_embed_job(cfg: Config, pool: PgPool, id: Uuid) {
 pub async fn run_embed_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     // Validate required environment variables before attempting any connections.
     if let Err(msg) = validate_worker_env_vars() {
-        return Err(std::io::Error::other(msg).into());
+        return Err(msg.into());
     }
 
     let pool = make_pool(cfg).await?;

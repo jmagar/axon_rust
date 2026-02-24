@@ -37,8 +37,9 @@ mod tests {
             &["/private".to_string()],
         )
         .expect_err("excluded start URL must fail");
-        assert!(err
-            .to_string()
-            .contains("excluded by configured path prefixes"));
+        assert!(
+            err.to_string()
+                .contains("excluded by configured path prefixes")
+        );
     }
 }

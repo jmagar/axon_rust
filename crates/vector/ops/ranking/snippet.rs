@@ -16,7 +16,7 @@ fn strip_markdown_inline(text: &str) -> String {
         if ch == '!' {
             if iter.peek().map(|(_, c)| *c) == Some('[') {
                 iter.next(); // consume '['
-                             // Skip alt text until ']'
+                // Skip alt text until ']'
                 for (_, c) in iter.by_ref() {
                     if c == ']' {
                         break;

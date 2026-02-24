@@ -228,9 +228,6 @@ pub struct Config {
     /// Number of retries for Chrome bootstrap failures. Flag: `--chrome-bootstrap-retries`.
     pub chrome_bootstrap_retries: usize,
 
-    /// URL of the WebDriver endpoint (alternative to direct CDP). Env: `AXON_WEBDRIVER_URL`.
-    pub webdriver_url: Option<String>,
-
     /// Whether to honour `robots.txt` directives. Defaults `false`. Flag: `--respect-robots`.
     pub respect_robots: bool,
 
@@ -527,7 +524,6 @@ impl Default for Config {
             chrome_bootstrap: true,
             chrome_bootstrap_timeout_ms: 3_000,
             chrome_bootstrap_retries: 2,
-            webdriver_url: None,
             respect_robots: false,
             min_markdown_chars: 200,
             drop_thin_markdown: true,
@@ -641,7 +637,6 @@ impl fmt::Debug for Config {
                 &self.chrome_bootstrap_timeout_ms,
             )
             .field("chrome_bootstrap_retries", &self.chrome_bootstrap_retries)
-            .field("webdriver_url", &self.webdriver_url)
             .field("respect_robots", &self.respect_robots)
             .field("min_markdown_chars", &self.min_markdown_chars)
             .field("drop_thin_markdown", &self.drop_thin_markdown)
@@ -750,32 +745,57 @@ mod tests {
     }
 
     #[test]
-    fn test_config_default_sensible_values() {
+    fn config_default_crawl_settings() {
         let cfg = Config::default();
-        assert_eq!(cfg.search_limit, 10);
         assert_eq!(cfg.max_depth, 5);
         assert_eq!(cfg.min_markdown_chars, 200);
-        assert_eq!(cfg.batch_concurrency, 16);
-        assert_eq!(cfg.collection, "cortex");
-        assert!(cfg.embed);
-        assert!(!cfg.wait);
         assert!(cfg.discover_sitemaps);
         assert!(cfg.drop_thin_markdown);
         assert!(!cfg.respect_robots);
-        assert!(cfg.shared_queue);
-        assert!(!cfg.json_output);
+    }
+
+    #[test]
+    fn config_default_vector_settings() {
+        let cfg = Config::default();
+        assert_eq!(cfg.collection, "cortex");
+        assert!(cfg.embed);
+        assert_eq!(cfg.search_limit, 10);
         assert_eq!(cfg.qdrant_url, "http://127.0.0.1:53333");
-        assert_eq!(cfg.crawl_queue, "axon.crawl.jobs");
-        assert_eq!(cfg.embed_queue, "axon.embed.jobs");
+    }
+
+    #[test]
+    fn config_default_ask_settings() {
+        let cfg = Config::default();
         assert_eq!(cfg.ask_max_context_chars, 120_000);
         assert_eq!(cfg.ask_candidate_limit, 64);
         assert!((cfg.ask_min_relevance_score - 0.45).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn config_default_queue_settings() {
+        let cfg = Config::default();
+        assert!(cfg.shared_queue);
+        assert_eq!(cfg.crawl_queue, "axon.crawl.jobs");
+        assert_eq!(cfg.embed_queue, "axon.embed.jobs");
+    }
+
+    #[test]
+    fn config_default_worker_settings() {
+        let cfg = Config::default();
+        assert_eq!(cfg.batch_concurrency, 16);
         assert_eq!(cfg.watchdog_stale_timeout_secs, 300);
         assert_eq!(cfg.watchdog_confirm_secs, 60);
     }
 
     #[test]
-    fn test_config_default_secrets_are_empty() {
+    fn config_default_output_flags() {
+        let cfg = Config::default();
+        assert!(!cfg.wait);
+        assert!(!cfg.json_output);
+    }
+
+    #[test]
+    fn config_default_secrets_are_empty() {
         let cfg = Config::default();
         assert!(cfg.pg_url.is_empty());
         assert!(cfg.redis_url.is_empty());
@@ -788,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_default_sessions_flags_off() {
+    fn config_default_sessions_flags_off() {
         let cfg = Config::default();
         assert!(!cfg.sessions_claude);
         assert!(!cfg.sessions_codex);
@@ -797,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_debug_redacts_secrets() {
+    fn config_debug_redacts_secrets() {
         let cfg = Config {
             pg_url: "postgresql://user:password@host/db".to_string(),
             redis_url: "redis://:secret@host:6379".to_string(),

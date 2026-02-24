@@ -1,30 +1,34 @@
-use super::{canonicalize_url_for_dedupe, is_excluded_url_path, CrawlSummary};
+use super::{CrawlSummary, canonicalize_url_for_dedupe, is_excluded_url_path};
 use crate::crates::core::content::url_to_filename;
 use crate::crates::core::logging::log_warn;
 use crate::crates::crawl::manifest::ManifestEntry;
 use sha2::{Digest, Sha256};
-use spider_transformations::transformation::content::{transform_content_input, TransformInput};
+use spider_transformations::transformation::content::{TransformInput, transform_content_input};
 use std::collections::{HashMap, HashSet};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::Sender;
+
+/// Configuration for the crawl page collector.
+pub(super) struct CollectorConfig {
+    pub markdown_dir: std::path::PathBuf,
+    pub manifest_path: std::path::PathBuf,
+    pub min_chars: usize,
+    pub drop_thin: bool,
+    pub exclude_path_prefix: Vec<String>,
+    pub transform_cfg: &'static spider_transformations::transformation::content::TransformConfig,
+    pub progress_tx: Option<Sender<CrawlSummary>>,
+    pub previous_manifest: HashMap<String, ManifestEntry>,
+}
 
 /// Drives the spider broadcast subscription to collect, filter, render, and
 /// persist crawled pages. Runs in a spawned task while `website.crawl*()`
 /// executes concurrently. Returns when the broadcast channel closes
 /// (i.e. the crawl or sitemap phase has finished and `unsubscribe()` was called).
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn collect_crawl_pages(
     mut rx: tokio::sync::broadcast::Receiver<spider::page::Page>,
-    markdown_dir: std::path::PathBuf,
-    manifest_path: std::path::PathBuf,
-    min_chars: usize,
-    drop_thin: bool,
-    exclude_path_prefix: Vec<String>,
-    transform_cfg: &'static spider_transformations::transformation::content::TransformConfig,
-    progress_tx: Option<Sender<CrawlSummary>>,
-    previous_manifest: HashMap<String, ManifestEntry>,
+    col: CollectorConfig,
 ) -> Result<(CrawlSummary, HashSet<String>), String> {
-    let manifest_file = tokio::fs::File::create(&manifest_path)
+    let manifest_file = tokio::fs::File::create(&col.manifest_path)
         .await
         .map_err(|e| format!("manifest create failed: {e}"))?;
     let mut manifest = tokio::io::BufWriter::new(manifest_file);
@@ -36,13 +40,15 @@ pub(super) async fn collect_crawl_pages(
         let page = match rx.recv().await {
             Ok(page) => page,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                log_warn(&format!("crawl broadcast lagged: {skipped} pages dropped — increase subscribe buffer or reduce concurrency"));
+                log_warn(&format!(
+                    "crawl broadcast lagged: {skipped} pages dropped — increase subscribe buffer or reduce concurrency"
+                ));
                 continue;
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         };
         let raw_url = page.get_url().to_string();
-        if is_excluded_url_path(&raw_url, &exclude_path_prefix) {
+        if is_excluded_url_path(&raw_url, &col.exclude_path_prefix) {
             continue;
         }
         let Some(url) = canonicalize_url_for_dedupe(&raw_url) else {
@@ -62,16 +68,16 @@ pub(super) async fn collect_crawl_pages(
             selector_config: None,
             ignore_tags: None,
         };
-        let markdown = transform_content_input(input, transform_cfg);
+        let markdown = transform_content_input(input, col.transform_cfg);
         let trimmed = markdown.trim();
         // Byte length (O(1)) — sufficient for thin-page threshold (~200 chars).
         let chars = trimmed.len();
 
-        if chars < min_chars {
+        if chars < col.min_chars {
             summary.thin_pages += 1;
-            if drop_thin {
+            if col.drop_thin {
                 if summary.pages_seen.is_multiple_of(25) {
-                    if let Some(tx) = progress_tx.as_ref() {
+                    if let Some(tx) = col.progress_tx.as_ref() {
                         tx.send(summary.clone()).await.ok();
                     }
                 }
@@ -80,7 +86,7 @@ pub(super) async fn collect_crawl_pages(
         }
         if trimmed.is_empty() {
             if summary.pages_seen.is_multiple_of(25) {
-                if let Some(tx) = progress_tx.as_ref() {
+                if let Some(tx) = col.progress_tx.as_ref() {
                     tx.send(summary.clone()).await.ok();
                 }
             }
@@ -91,19 +97,15 @@ pub(super) async fn collect_crawl_pages(
         hasher.update(trimmed.as_bytes());
         let content_hash = hex::encode(hasher.finalize());
 
-        if let Some(prev) = previous_manifest.get(&url) {
+        if let Some(prev) = col.previous_manifest.get(&url) {
             if prev.content_hash.as_deref() == Some(&content_hash) {
-                // Potential hardlink opportunity
                 let prev_path = std::path::Path::new(&prev.relative_path);
-                // The previous path might be absolute (legacy) or relative.
-                // If it's relative, we must join it with the parent of the previous manifest.
-                // For simplicity in this test, we assume the previous files are still accessible.
 
                 if prev_path.exists() {
-                    summary.markdown_files += 1;
-                    summary.reused_pages += 1;
-                    let filename = url_to_filename(&url, summary.markdown_files);
-                    let path = markdown_dir.join(&filename);
+                    // Speculatively compute filename (uses current count + 1).
+                    let next_count = summary.markdown_files + 1;
+                    let filename = url_to_filename(&url, next_count);
+                    let path = col.markdown_dir.join(&filename);
 
                     // Attempt Reflink first (COW), then Hardlink, then Copy.
                     let link_res = if reflink_copy::reflink_or_copy(prev_path, &path).is_ok() {
@@ -113,6 +115,10 @@ pub(super) async fn collect_crawl_pages(
                     };
 
                     if link_res.is_ok() {
+                        // Only increment counters after successful link/copy.
+                        summary.markdown_files += 1;
+                        summary.reused_pages += 1;
+
                         let entry = ManifestEntry {
                             url: url.clone(),
                             relative_path: format!("markdown/{}", filename),
@@ -129,7 +135,7 @@ pub(super) async fn collect_crawl_pages(
                             .map_err(|e| format!("manifest failed: {e}"))?;
 
                         if summary.pages_seen.is_multiple_of(25) {
-                            if let Some(tx) = progress_tx.as_ref() {
+                            if let Some(tx) = col.progress_tx.as_ref() {
                                 tx.send(summary.clone()).await.ok();
                             }
                         }
@@ -141,7 +147,7 @@ pub(super) async fn collect_crawl_pages(
 
         summary.markdown_files += 1;
         let filename = url_to_filename(&url, summary.markdown_files);
-        let path = markdown_dir.join(&filename);
+        let path = col.markdown_dir.join(&filename);
         tokio::fs::write(&path, trimmed.as_bytes())
             .await
             .map_err(|e| format!("write failed: {e}"))?;
@@ -162,7 +168,7 @@ pub(super) async fn collect_crawl_pages(
             .map_err(|e| format!("manifest failed: {e}"))?;
 
         if summary.pages_seen.is_multiple_of(25) {
-            if let Some(tx) = progress_tx.as_ref() {
+            if let Some(tx) = col.progress_tx.as_ref() {
                 tx.send(summary.clone()).await.ok();
             }
         }
@@ -172,7 +178,7 @@ pub(super) async fn collect_crawl_pages(
         .flush()
         .await
         .map_err(|e| format!("manifest flush failed: {e}"))?;
-    if let Some(tx) = progress_tx.as_ref() {
+    if let Some(tx) = col.progress_tx.as_ref() {
         tx.send(summary.clone()).await.ok();
     }
     Ok((summary, urls))

@@ -1,6 +1,6 @@
 use super::*;
 use crate::crates::core::content::ExtractRun;
-use crate::crates::jobs::worker_lane::{run_job_worker, ProcessFn, WorkerConfig};
+use crate::crates::jobs::worker_lane::{ProcessFn, WorkerConfig, run_job_worker};
 
 struct ExtractAggregation {
     runs: Vec<serde_json::Value>,
@@ -267,7 +267,7 @@ async fn process_claimed_extract_job(cfg: Config, pool: PgPool, id: Uuid) {
         Err(err) => Some(err.to_string()),
     };
     if let Some(error_text) = fail_msg {
-        mark_job_failed(&pool, TABLE, id, &error_text).await;
+        let _ = mark_job_failed(&pool, TABLE, id, &error_text).await;
         log_warn(&format!("worker failed extract job {id}: {error_text}"));
     }
 }
@@ -275,7 +275,7 @@ async fn process_claimed_extract_job(cfg: Config, pool: PgPool, id: Uuid) {
 pub async fn run_extract_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     // Validate required environment variables before attempting any connections.
     if let Err(msg) = crate::crates::jobs::worker_lane::validate_worker_env_vars() {
-        return Err(std::io::Error::other(msg).into());
+        return Err(msg.into());
     }
 
     let pool = make_pool(cfg).await?;

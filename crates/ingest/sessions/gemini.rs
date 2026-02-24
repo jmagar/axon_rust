@@ -1,4 +1,4 @@
-use super::{matches_project_filter, resolve_collection, IngestResult, SessionStateTracker};
+use super::{IngestResult, SessionStateTracker, matches_project_filter, resolve_collection};
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::log_warn;
 use crate::crates::vector::ops::embed_text_with_metadata;
@@ -38,13 +38,18 @@ pub(super) async fn ingest_gemini_sessions(
     }
 
     while let Some(res) = futures.next().await {
-        let (p, m, s, r) = res?;
-        match r {
-            Ok(count) => {
-                total += count;
-                state.mark_indexed(&p, m, s).await;
+        match res {
+            Ok((p, m, s, r)) => match r {
+                Ok(count) => {
+                    total += count;
+                    state.mark_indexed(&p, m, s).await;
+                }
+                Err(e) => log_warn(&format!("Gemini file {}: {e}", p.display())),
+            },
+            Err(join_err) => {
+                log_warn(&format!("Gemini ingest task panicked: {join_err}"));
+                continue;
             }
-            Err(e) => log_warn(&format!("Gemini file {}: {e}", p.display())),
         }
     }
 
@@ -121,7 +126,16 @@ async fn enqueue_gemini_chat_files(
             continue;
         }
         let meta = fs::metadata(&chat_path).await?;
-        let mtime = meta.modified()?;
+        let mtime = match meta.modified() {
+            Ok(t) => t,
+            Err(e) => {
+                log_warn(&format!(
+                    "cannot read mtime for {}: {e}",
+                    chat_path.display()
+                ));
+                continue;
+            }
+        };
         if state.should_skip(&chat_path, mtime, meta.len()).await {
             continue;
         }
@@ -136,13 +150,17 @@ async fn enqueue_gemini_chat_files(
 
         if futures.len() >= 32 {
             if let Some(res) = futures.next().await {
-                let (p, m, s, r) = res?;
-                match r {
-                    Ok(count) => {
-                        *total += count;
-                        state.mark_indexed(&p, m, s).await;
+                match res {
+                    Ok((p, m, s, r)) => match r {
+                        Ok(count) => {
+                            *total += count;
+                            state.mark_indexed(&p, m, s).await;
+                        }
+                        Err(e) => log_warn(&format!("Gemini file {}: {e}", p.display())),
+                    },
+                    Err(join_err) => {
+                        log_warn(&format!("Gemini ingest task panicked: {join_err}"));
                     }
-                    Err(e) => log_warn(&format!("Gemini file {}: {e}", p.display())),
                 }
             }
         }
@@ -213,10 +231,10 @@ async fn process_gemini_file(
 
     let mut attempt = 0;
     loop {
-        let res: Result<usize, String> =
+        let res =
             embed_text_with_metadata(&session_cfg, &session_text, &url, "gemini_session", title)
                 .await
-                .map_err(|e| e.to_string());
+                .map_err(|e| format!("{e:#}"));
         let err_msg = match res {
             Ok(n) => return Ok(n),
             Err(msg) => msg,

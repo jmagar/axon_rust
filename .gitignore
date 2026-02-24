@@ -54,4 +54,4 @@ container/*.local.yaml
 
 # Runtime cache directories
 http-cacache/
-storage/
+/storage/

@@ -50,6 +50,7 @@ async fn fetch_indexable_files(
     )
     .send()
     .await?
+    .error_for_status()?
     .json()
     .await?;
 

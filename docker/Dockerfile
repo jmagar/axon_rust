@@ -95,6 +95,7 @@ RUN set -eux; \
 WORKDIR /app
 
 # Install yt-dlp standalone binary (no Python required) for YouTube transcript ingestion
+ARG YT_DLP_VERSION=2024.12.23
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
@@ -103,7 +104,7 @@ RUN set -eux; \
       *) echo "Unsupported arch: $arch"; exit 1 ;; \
     esac; \
     curl -fsSL -o /usr/local/bin/yt-dlp \
-      "https://github.com/yt-dlp/yt-dlp/releases/latest/download/${ytdlp_bin}"; \
+      "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/${ytdlp_bin}"; \
     chmod +x /usr/local/bin/yt-dlp
 
 COPY --from=builder /src/axon_rust/target/release/axon /usr/local/bin/axon

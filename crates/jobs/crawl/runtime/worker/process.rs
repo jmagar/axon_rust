@@ -2,7 +2,7 @@ use crate::crates::core::config::{Config, RenderMode};
 use crate::crates::core::content::url_to_domain;
 use crate::crates::core::logging::{log_done, log_info, log_warn};
 use crate::crates::crawl::engine::{
-    run_crawl_once, should_fallback_to_chrome, update_latest_reflink, CrawlSummary,
+    CrawlSummary, run_crawl_once, should_fallback_to_chrome, update_latest_reflink,
 };
 use crate::crates::jobs::embed::start_embed_job_with_pool;
 use crate::crates::jobs::status::JobStatus;
@@ -15,10 +15,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 
-use super::super::robots::{append_robots_backfill, RobotsBackfillStats, RobotsDiscoveryStats};
+use super::super::robots::{RobotsBackfillStats, RobotsDiscoveryStats, append_robots_backfill};
 use super::super::{read_manifest_urls, resolve_initial_mode, write_audit_diff};
-use super::job_context::{load_job_execution_context, JobExecutionContext};
-use super::result_builder::{build_completed_result, CompletedResultContext};
+use super::job_context::{JobExecutionContext, load_job_execution_context};
+use super::result_builder::{CompletedResultContext, build_completed_result};
 
 pub(super) async fn process_job(
     cfg: &Config,
@@ -56,16 +56,26 @@ async fn process_job_impl(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), B
             log_done(&format!("worker completed crawl job {id}"));
         }
         Err(err) => {
+            let is_canceled = err.contains("canceled");
+            let status = if is_canceled {
+                JobStatus::Canceled
+            } else {
+                JobStatus::Failed
+            };
             sqlx::query(&format!(
-                "UPDATE axon_crawl_jobs SET status='{failed}', updated_at=NOW(), finished_at=NOW(), error_text=$2 WHERE id=$1 AND status='{running}'",
-                failed = JobStatus::Failed.as_str(),
+                "UPDATE axon_crawl_jobs SET status='{status}', updated_at=NOW(), finished_at=NOW(), error_text=$2 WHERE id=$1 AND status='{running}'",
+                status = status.as_str(),
                 running = JobStatus::Running.as_str(),
             ))
             .bind(id)
             .bind(err.to_string())
             .execute(pool)
             .await?;
-            log_warn(&format!("worker failed crawl job {id}"));
+            if is_canceled {
+                log_info(&format!("worker canceled crawl job {id}"));
+            } else {
+                log_warn(&format!("worker failed crawl job {id}"));
+            }
         }
     }
     Ok(())
@@ -86,24 +96,29 @@ async fn maybe_complete_cache_hit(
     if let Some((_, previous_result_json)) =
         super::super::latest_completed_result_for_url(pool, &ctx.url, id).await?
     {
-        let previous_manifest_path = previous_result_json
+        let Some(previous_manifest_path) = previous_result_json
             .get("output_dir")
             .and_then(|v| v.as_str())
-            .map(|d| PathBuf::from(d).join("manifest.jsonl"));
+            .map(|d| PathBuf::from(d).join("manifest.jsonl"))
+        else {
+            // No output_dir in previous result — treat as stale, can't verify freshness
+            log_info(&format!(
+                "crawl job {id} previous result has no output_dir — starting fresh crawl"
+            ));
+            return Ok(false);
+        };
 
-        if let Some(manifest_path) = previous_manifest_path {
-            if crate::crates::crawl::manifest::manifest_cache_is_stale(
-                &manifest_path,
-                DEFAULT_CACHE_TTL_SECS,
-            )
-            .await
-            {
-                log_info(&format!(
-                    "crawl job {id} cache source is stale (TTL {}s) — starting fresh crawl",
-                    DEFAULT_CACHE_TTL_SECS
-                ));
-                return Ok(false);
-            }
+        if crate::crates::crawl::manifest::manifest_cache_is_stale(
+            &previous_manifest_path,
+            DEFAULT_CACHE_TTL_SECS,
+        )
+        .await
+        {
+            log_info(&format!(
+                "crawl job {id} cache source is stale (TTL {}s) — starting fresh crawl",
+                DEFAULT_CACHE_TTL_SECS
+            ));
+            return Ok(false);
         }
     }
 
@@ -181,11 +196,20 @@ fn spawn_progress_task(
     (progress_tx, progress_task)
 }
 
-/// Single Redis check for the cancel key. Returns true if the job was canceled.
-/// Never errors — if Redis is unavailable, returns false (fail-safe: don't cancel).
-async fn is_crawl_canceled(cfg: &Config, id: Uuid) -> bool {
+/// Polls Redis every 3 seconds until the cancel key is found, then returns.
+/// Creates the Redis connection once and reuses it across all polls.
+/// Used as the cancellation arm of a tokio::select! in run_active_crawl_job.
+///
+/// Fail-safe: if the connection cannot be established or breaks, logs a warning
+/// and returns without canceling (never false-cancels).
+async fn poll_cancel_key(cfg: &Config, id: Uuid) {
     let Ok(client) = redis::Client::open(cfg.redis_url.clone()) else {
-        return false;
+        log_warn(&format!(
+            "crawl cancel poll: failed to open Redis client for job {id}; cancellation disabled"
+        ));
+        // Park forever — tokio::select! will still complete via the crawl future.
+        std::future::pending::<()>().await;
+        return;
     };
     let conn = tokio::time::timeout(
         Duration::from_secs(3),
@@ -193,21 +217,34 @@ async fn is_crawl_canceled(cfg: &Config, id: Uuid) -> bool {
     )
     .await;
     let Ok(Ok(mut conn)) = conn else {
-        return false;
+        log_warn(&format!(
+            "crawl cancel poll: Redis connect failed for job {id}; cancellation disabled"
+        ));
+        std::future::pending::<()>().await;
+        return;
     };
     let key = format!("axon:crawl:cancel:{id}");
-    let result =
-        tokio::time::timeout(Duration::from_secs(3), conn.get::<_, Option<String>>(&key)).await;
-    matches!(result, Ok(Ok(Some(_))))
-}
-
-/// Polls Redis every 3 seconds until the cancel key is found, then returns.
-/// Used as the cancellation arm of a tokio::select! in run_active_crawl_job.
-async fn poll_cancel_key(cfg: &Config, id: Uuid) {
     loop {
         tokio::time::sleep(Duration::from_secs(3)).await;
-        if is_crawl_canceled(cfg, id).await {
-            return;
+        let result =
+            tokio::time::timeout(Duration::from_secs(3), conn.get::<_, Option<String>>(&key)).await;
+        match result {
+            Ok(Ok(Some(_))) => return,
+            Ok(Ok(None)) => {}
+            Ok(Err(e)) => {
+                log_warn(&format!(
+                    "crawl cancel poll: Redis GET failed for job {id}: {e}; cancellation disabled"
+                ));
+                std::future::pending::<()>().await;
+                return;
+            }
+            Err(_) => {
+                log_warn(&format!(
+                    "crawl cancel poll: Redis GET timed out for job {id}; cancellation disabled"
+                ));
+                std::future::pending::<()>().await;
+                return;
+            }
         }
     }
 }
@@ -373,12 +410,14 @@ async fn run_active_crawl_job(
 
         maybe_enqueue_embed_job(pool, ctx, id).await?;
 
-        let latest_dir = ctx.job_cfg.output_dir.parent().unwrap().join("latest");
-        if let Err(err) = update_latest_reflink(&ctx.job_cfg.output_dir, &latest_dir).await {
-            log_warn(&format!(
-                "failed to update 'latest' reflink for domain {}: {err}",
-                url_to_domain(&ctx.url)
-            ));
+        if let Some(parent) = ctx.job_cfg.output_dir.parent() {
+            let latest_dir = parent.join("latest");
+            if let Err(err) = update_latest_reflink(&ctx.job_cfg.output_dir, &latest_dir).await {
+                log_warn(&format!(
+                    "failed to update 'latest' reflink for domain {}: {err}",
+                    url_to_domain(&ctx.url)
+                ));
+            }
         }
 
         let mut result_json = build_completed_result(

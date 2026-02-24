@@ -133,7 +133,7 @@ async fn latest_completed_result_for_url(
     Ok(row)
 }
 
-async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
+async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
     if SCHEMA_INIT.get().is_some() {
         return Ok(());
     }
@@ -184,7 +184,7 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
         Err(sqlx::Error::Database(ref db_err)) if db_err.code().as_deref() == Some("42710") => {
             // Constraint already exists — expected for tables created with inline CHECK.
         }
-        Err(err) => return Err(err.into()),
+        Err(err) => return Err(err),
     }
 
     let _ = SCHEMA_INIT.set(());

@@ -1,10 +1,10 @@
 use crate::crates::core::config::{Config, RenderMode};
 use crate::crates::core::content::url_to_domain;
 use crate::crates::core::logging::log_done;
-use crate::crates::core::ui::{accent, muted, Spinner};
+use crate::crates::core::ui::{Spinner, accent, muted};
 use crate::crates::crawl::engine::{
-    run_crawl_once, run_sitemap_only, should_fallback_to_chrome, update_latest_reflink,
-    CrawlSummary,
+    CrawlSummary, run_crawl_once, run_sitemap_only, should_fallback_to_chrome,
+    update_latest_reflink,
 };
 use crate::crates::crawl::manifest::{
     manifest_cache_is_stale, read_manifest_data, read_manifest_urls, write_audit_diff,
@@ -211,7 +211,11 @@ pub(super) async fn run_sync_crawl(cfg: &Config, start_url: &str) -> Result<(), 
 
     let current_urls = read_manifest_urls(&manifest_path).await?;
 
-    let latest_dir = cfg.output_dir.parent().unwrap().join("latest");
+    let latest_dir = cfg
+        .output_dir
+        .parent()
+        .expect("output_dir always has a parent")
+        .join("latest");
     if let Err(err) = update_latest_reflink(&cfg.output_dir, &latest_dir).await {
         println!(
             "{} failed to update 'latest' reflink for domain {}: {err}",

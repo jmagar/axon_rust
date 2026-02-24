@@ -2,8 +2,8 @@ use crate::crates::core::config::Config;
 use crate::crates::core::health::redis_healthy;
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::jobs::common::{
-    enqueue_job, make_pool, mark_job_failed, open_amqp_connection_and_channel, purge_queue_safe,
-    reclaim_stale_running_jobs, JobTable,
+    JobTable, enqueue_job, make_pool, mark_job_failed, open_amqp_connection_and_channel,
+    purge_queue_safe, reclaim_stale_running_jobs,
 };
 use crate::crates::jobs::status::JobStatus;
 use chrono::{DateTime, Utc};
@@ -41,7 +41,7 @@ pub struct EmbedJob {
     pub result_json: Option<serde_json::Value>,
 }
 
-async fn ensure_schema(pool: &PgPool) -> Result<(), Box<dyn Error>> {
+async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS axon_embed_jobs (
@@ -199,10 +199,12 @@ pub async fn cancel_embed_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Er
     .await?
     .rows_affected();
 
-    let redis_client = redis::Client::open(cfg.redis_url.clone())?;
-    let mut conn = redis_client.get_multiplexed_async_connection().await?;
-    let key = format!("axon:embed:cancel:{id}");
-    let _: () = conn.set_ex(key, "1", 86400).await?;
+    if rows > 0 {
+        let redis_client = redis::Client::open(cfg.redis_url.clone())?;
+        let mut conn = redis_client.get_multiplexed_async_connection().await?;
+        let key = format!("axon:embed:cancel:{id}");
+        let _: () = conn.set_ex(key, "1", 86400).await?;
+    }
     Ok(rows > 0)
 }
 

@@ -1,6 +1,6 @@
-> CLI reference (flags, subcommands, examples): [`docs/commands/youtube.md`](../commands/youtube.md)
-
 # YouTube Ingest
+
+> CLI reference (flags, subcommands, examples): [`docs/commands/youtube.md`](../commands/youtube.md)
 
 Ingests a single YouTube video transcript into Qdrant via `yt-dlp`. No API key required.
 
@@ -55,7 +55,7 @@ yt-dlp --version
 
 The exact yt-dlp invocation:
 
-```
+```bash
 yt-dlp --write-auto-sub --skip-download --sub-format vtt --convert-subs vtt \
   --sub-langs en --no-exec -o "<tmp>/<%(id)s>" -- https://www.youtube.com/watch?v=<ID>
 ```

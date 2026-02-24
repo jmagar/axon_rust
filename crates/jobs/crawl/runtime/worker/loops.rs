@@ -1,9 +1,8 @@
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::jobs::common::{
-    claim_next_pending, claim_pending_by_id, make_pool, mark_job_failed,
+    WatchdogSweepStats, claim_next_pending, claim_pending_by_id, make_pool, mark_job_failed,
     open_amqp_connection_and_channel, reclaim_stale_running_jobs as generic_reclaim,
-    WatchdogSweepStats,
 };
 use crate::crates::jobs::worker_lane::validate_worker_env_vars;
 use futures_util::StreamExt;
@@ -16,9 +15,9 @@ use tokio;
 use uuid::Uuid;
 
 use super::super::{
-    ensure_schema, CrawlWatchdogSweepStats, STALE_SWEEP_INTERVAL_SECS, TABLE, WORKER_CONCURRENCY,
+    CrawlWatchdogSweepStats, STALE_SWEEP_INTERVAL_SECS, TABLE, WORKER_CONCURRENCY, ensure_schema,
 };
-use super::worker_process::process_job;
+use super::process::process_job;
 
 /// Thin wrapper around the generic watchdog that delegates all logic to
 /// `common::reclaim_stale_running_jobs` while mapping the result to the
@@ -105,7 +104,7 @@ async fn run_worker_polling_lane(
         if let Some(job_id) = claim_next_pending(pool, TABLE).await? {
             if let Err(err) = process_job(cfg, pool, job_id).await {
                 let error_text = err.to_string();
-                mark_job_failed(pool, TABLE, job_id, &error_text).await;
+                let _ = mark_job_failed(pool, TABLE, job_id, &error_text).await;
                 log_warn(&format!("worker failed crawl job {job_id}: {error_text}"));
             }
         } else {
@@ -152,7 +151,7 @@ async fn handle_crawl_delivery(
             }
             if let Err(err) = process_job(cfg, pool, job_id).await {
                 let error_text = err.to_string();
-                mark_job_failed(pool, TABLE, job_id, &error_text).await;
+                let _ = mark_job_failed(pool, TABLE, job_id, &error_text).await;
                 log_warn(&format!("worker failed crawl job {job_id}: {error_text}"));
             }
         }
@@ -268,7 +267,7 @@ async fn run_amqp_worker_lane(
 pub(crate) async fn run_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     // Validate required environment variables before attempting any connections.
     if let Err(msg) = validate_worker_env_vars() {
-        return Err(std::io::Error::other(msg).into());
+        return Err(msg.into());
     }
 
     let pool = make_pool(cfg).await?;

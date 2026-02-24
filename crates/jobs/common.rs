@@ -1,5 +1,15 @@
+//! Shared job infrastructure: pool creation, AMQP channel, job lifecycle helpers.
+//!
+//! ## Patterns
+//! - Create [`PgPool`] once per worker via [`make_pool`]; pass as `&PgPool` everywhere.
+//! - All AMQP work goes through [`open_amqp_channel`] (5 s timeout).
+//! - Use [`claim_next_pending`] → [`mark_job_failed`] /
+//!   `mark_job_completed` — never write raw SQL job state updates.
+//! - All internal channels are bounded (`channel(256)`); never use `unbounded_channel`.
+
 use crate::crates::core::config::Config;
 use crate::crates::core::content::redact_url;
+use crate::crates::jobs::status::JobStatus;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use lapin::options::QueueDeclareOptions;
@@ -115,7 +125,7 @@ pub(crate) async fn open_amqp_connection_and_channel(
 ) -> Result<(Connection, Channel)> {
     let props = ConnectionProperties::default()
         .with_executor(TokioExecutor::current())
-        .with_reactor(TokioReactor);
+        .with_reactor(TokioReactor::current());
     let conn = tokio::time::timeout(
         Duration::from_secs(5),
         Connection::connect(&cfg.amqp_url, props),
@@ -146,10 +156,12 @@ pub async fn claim_next_pending(pool: &PgPool, table: JobTable) -> Result<Option
     let table = table.as_str();
     let query = format!(
         r#"WITH n AS (
-            SELECT id FROM {table} WHERE status='pending' ORDER BY created_at ASC FOR UPDATE SKIP LOCKED LIMIT 1
+            SELECT id FROM {table} WHERE status='{pending}' ORDER BY created_at ASC FOR UPDATE SKIP LOCKED LIMIT 1
         )
-        UPDATE {table} j SET status='running', updated_at=NOW(), started_at=COALESCE(started_at, NOW())
-        FROM n WHERE j.id=n.id RETURNING j.id"#
+        UPDATE {table} j SET status='{running}', updated_at=NOW(), started_at=COALESCE(started_at, NOW())
+        FROM n WHERE j.id=n.id RETURNING j.id"#,
+        pending = JobStatus::Pending.as_str(),
+        running = JobStatus::Running.as_str(),
     );
     let row = sqlx::query_as::<_, (Uuid,)>(&query)
         .fetch_optional(pool)
@@ -161,7 +173,9 @@ pub async fn claim_next_pending(pool: &PgPool, table: JobTable) -> Result<Option
 pub async fn claim_pending_by_id(pool: &PgPool, table: JobTable, id: Uuid) -> Result<bool> {
     let table = table.as_str();
     let query = format!(
-        "UPDATE {table} SET status='running', updated_at=NOW(), started_at=COALESCE(started_at, NOW()), error_text=NULL WHERE id=$1 AND status='pending'"
+        "UPDATE {table} SET status='{running}', updated_at=NOW(), started_at=COALESCE(started_at, NOW()), error_text=NULL WHERE id=$1 AND status='{pending}'",
+        running = JobStatus::Running.as_str(),
+        pending = JobStatus::Pending.as_str(),
     );
     let updated = sqlx::query(&query)
         .bind(id)
@@ -172,28 +186,37 @@ pub async fn claim_pending_by_id(pool: &PgPool, table: JobTable, id: Uuid) -> Re
 }
 
 /// Mark a running job as failed with an error message.
-pub async fn mark_job_failed(pool: &PgPool, table: JobTable, id: Uuid, error_text: &str) {
-    use crate::crates::core::logging::log_warn;
+///
+/// # Errors
+///
+/// Returns `Err` if the database query fails (e.g. pool exhausted, connection dropped).
+/// Callers that want fire-and-forget behavior can use
+/// `.unwrap_or_else(|e| log_warn(&format!("mark_job_failed: {e}")))`.
+pub async fn mark_job_failed(
+    pool: &PgPool,
+    table: JobTable,
+    id: Uuid,
+    error_text: &str,
+) -> Result<()> {
     let table_name = table.as_str();
     let query = format!(
-        "UPDATE {table_name} SET status='failed', updated_at=NOW(), finished_at=NOW(), error_text=$2 WHERE id=$1 AND status='running'"
+        "UPDATE {table_name} SET status='{failed}', updated_at=NOW(), finished_at=NOW(), error_text=$2 WHERE id=$1 AND status='{running}'",
+        failed = JobStatus::Failed.as_str(),
+        running = JobStatus::Running.as_str(),
     );
-    if let Err(err) = sqlx::query(&query)
+    sqlx::query(&query)
         .bind(id)
         .bind(error_text)
         .execute(pool)
         .await
-    {
-        log_warn(&format!(
-            "mark_job_failed db error for job {id} in {table_name}: {err}"
-        ));
-    }
+        .with_context(|| format!("mark_job_failed for job {id} in {table_name}"))?;
+    Ok(())
 }
 
 /// Publish a job ID to an AMQP queue.
 pub async fn enqueue_job(cfg: &Config, queue_name: &str, job_id: Uuid) -> Result<()> {
-    use lapin::options::BasicPublishOptions;
     use lapin::BasicProperties;
+    use lapin::options::BasicPublishOptions;
 
     let (conn, ch) = open_amqp_connection_and_channel(cfg, queue_name).await?;
 
@@ -225,8 +248,8 @@ pub async fn enqueue_job(cfg: &Config, queue_name: &str, job_id: Uuid) -> Result
 /// N publishes, one CLOSE. Uses publisher confirms so the broker acks every
 /// message before we close — follows the official lapin `publisher_confirms` example.
 pub async fn batch_enqueue_jobs(cfg: &Config, queue_name: &str, job_ids: &[Uuid]) -> Result<()> {
-    use lapin::options::{BasicPublishOptions, ConfirmSelectOptions};
     use lapin::BasicProperties;
+    use lapin::options::{BasicPublishOptions, ConfirmSelectOptions};
 
     if job_ids.is_empty() {
         return Ok(());
@@ -368,12 +391,13 @@ pub async fn reclaim_stale_running_jobs(
         r#"
         SELECT id, updated_at, result_json
         FROM {}
-        WHERE status = 'running'
+        WHERE status = '{running}'
           AND updated_at < NOW() - make_interval(secs => $1::int)
         ORDER BY updated_at ASC
         LIMIT 50
         "#,
-        table.as_str()
+        table.as_str(),
+        running = JobStatus::Running.as_str(),
     );
     let rows = sqlx::query(&select_query)
         .bind(idle_timeout_secs.min(i32::MAX as i64) as i32)
@@ -397,8 +421,10 @@ pub async fn reclaim_stale_running_jobs(
                 job_kind, idle_seconds, marker
             );
             let fail_query = format!(
-                "UPDATE {} SET status='failed', updated_at=NOW(), finished_at=NOW(), error_text=$2 WHERE id=$1 AND status='running'",
-                table.as_str()
+                "UPDATE {} SET status='{failed}', updated_at=NOW(), finished_at=NOW(), error_text=$2 WHERE id=$1 AND status='{running}'",
+                table.as_str(),
+                failed = JobStatus::Failed.as_str(),
+                running = JobStatus::Running.as_str(),
             );
             let affected = sqlx::query(&fail_query)
                 .bind(id)
@@ -412,8 +438,9 @@ pub async fn reclaim_stale_running_jobs(
 
         let marked = stale_watchdog_payload(current_json, updated_at);
         let mark_query = format!(
-            "UPDATE {} SET result_json=$2 WHERE id=$1 AND status='running'",
-            table.as_str()
+            "UPDATE {} SET result_json=$2 WHERE id=$1 AND status='{running}'",
+            table.as_str(),
+            running = JobStatus::Running.as_str()
         );
         let _ = sqlx::query(&mark_query)
             .bind(id)
@@ -427,42 +454,55 @@ pub async fn reclaim_stale_running_jobs(
 }
 
 /// Count jobs stuck in `running` state beyond `stale_minutes` and jobs in `pending` state,
-/// across all five job tables. Returns `(stale, pending)` counts, or `None` if Postgres
-/// is unreachable.
-pub async fn count_stale_and_pending_jobs(cfg: &Config, stale_minutes: i64) -> Option<(i64, i64)> {
-    let pool = match make_pool(cfg).await {
-        Ok(p) => p,
-        Err(_) => return None,
-    };
-
-    let query = r#"
+/// across all four job tables. Uses a pre-existing pool. Returns `(stale, pending)` counts,
+/// or `None` on query failure.
+pub async fn count_stale_and_pending_jobs_with_pool(
+    pool: &PgPool,
+    stale_minutes: i64,
+) -> Option<(i64, i64)> {
+    let query = format!(
+        r#"
         WITH all_jobs AS (
-            SELECT status, started_at FROM axon_crawl_jobs
+            SELECT status, updated_at FROM axon_crawl_jobs
             UNION ALL
-            SELECT status, started_at FROM axon_extract_jobs
+            SELECT status, updated_at FROM axon_extract_jobs
             UNION ALL
-            SELECT status, started_at FROM axon_embed_jobs
+            SELECT status, updated_at FROM axon_embed_jobs
             UNION ALL
-            SELECT status, started_at FROM axon_ingest_jobs
+            SELECT status, updated_at FROM axon_ingest_jobs
         )
         SELECT
             COUNT(*) FILTER (
-                WHERE status = 'running'
-                  AND started_at < NOW() - make_interval(mins => $1::int)
+                WHERE status = '{running}'
+                  AND updated_at < NOW() - make_interval(mins => $1::int)
             ) AS stale,
-            COUNT(*) FILTER (WHERE status = 'pending') AS pending
+            COUNT(*) FILTER (WHERE status = '{pending}') AS pending
         FROM all_jobs
-    "#;
+    "#,
+        running = JobStatus::Running.as_str(),
+        pending = JobStatus::Pending.as_str(),
+    );
 
-    let stale_mins = stale_minutes.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
-    match sqlx::query_as::<_, (i64, i64)>(query)
+    let stale_mins = stale_minutes.clamp(1, i32::MAX as i64) as i32;
+    match sqlx::query_as::<_, (i64, i64)>(&query)
         .bind(stale_mins)
-        .fetch_one(&pool)
+        .fetch_one(pool)
         .await
     {
         Ok((stale, pending)) => Some((stale, pending)),
         Err(_) => None,
     }
+}
+
+/// Count jobs stuck in `running` state beyond `stale_minutes` and jobs in `pending` state,
+/// across all four job tables. Creates a new pool for the call.
+/// Returns `(stale, pending)` counts, or `None` if Postgres is unreachable.
+pub async fn count_stale_and_pending_jobs(cfg: &Config, stale_minutes: i64) -> Option<(i64, i64)> {
+    let pool = match make_pool(cfg).await {
+        Ok(p) => p,
+        Err(_) => return None,
+    };
+    count_stale_and_pending_jobs_with_pool(&pool, stale_minutes).await
 }
 
 #[cfg(test)]

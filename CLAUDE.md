@@ -175,10 +175,10 @@ axon_rust/
 │   │   └── sessions/       # AI session export parsers (Claude/Codex/Gemini)
 │   ├── jobs/               # AMQP-backed async job workers
 │   │   ├── common/         # Shared infra: make_pool, open_amqp_channel, claim_next_pending
-│   │   ├── crawl_jobs/     # Crawl pipeline (manifest, processor, repo, sitemap, watchdog, worker, runtime)
-│   │   ├── extract_jobs/   # Extract worker
-│   │   ├── embed_jobs/     # Embed worker
-│   │   ├── ingest_jobs.rs  # Ingest job schema + worker (github/reddit/youtube)
+│   │   ├── crawl/          # Crawl pipeline (manifest, processor, repo, sitemap, watchdog, worker, runtime)
+│   │   ├── extract/        # Extract worker
+│   │   ├── embed/          # Embed worker
+│   │   ├── ingest.rs       # Ingest job schema + worker (github/reddit/youtube)
 │   │   ├── status.rs       # JobStatus enum (pending/running/completed/failed/canceled)
 │   │   └── worker_lane.rs  # Multi-lane worker coordination for ingest
 │   └── vector/
@@ -295,7 +295,7 @@ The CLI auto-detects whether it's running inside Docker:
 ## Gotchas
 
 ### `--wait false` (default) = fire-and-forget
-By default, `crawl`, `extract`, and `embed` enqueue jobs and return immediately. Use `--wait true` to block until completion. Without workers running, enqueued jobs will pend forever.
+By default, `crawl`, `extract`, `embed`, `github`, `reddit`, and `youtube` enqueue jobs and return immediately. Use `--wait true` to block until completion. Without workers running, enqueued jobs will pend forever.
 
 ### `render-mode auto-switch`
 The default mode. Runs an HTTP crawl first; if >60% of pages are thin (<200 chars) or total coverage is too low, automatically retries with Chrome. Chrome requires a running Chrome instance — if none is available, the HTTP result is kept.
@@ -331,7 +331,8 @@ After a crawl, `append_sitemap_backfill()` discovers URLs via sitemap.xml that t
 
 ### Docker build context
 The `Dockerfile` builds from `docker/Dockerfile`. The build command inside the container is:
-```
+
+```bash
 cargo build --release --bin axon
 ```
 `docker-compose.yaml` sets `context: .` — run `docker compose build` from this directory, not from a parent workspace.

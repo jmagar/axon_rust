@@ -1,40 +1,29 @@
 use crate::crates::core::content::redact_url;
 use crate::crates::core::ui::{muted, primary, status_text, symbol_for_status};
 
+fn report_value<'a>(report: &'a serde_json::Value, path: &[&str]) -> &'a serde_json::Value {
+    path.iter().fold(report, |curr, key| {
+        curr.get(*key).unwrap_or(&serde_json::Value::Null)
+    })
+}
+
 pub(super) fn report_bool(report: &serde_json::Value, path: &[&str]) -> bool {
-    path.iter()
-        .fold(report, |curr, key| {
-            curr.get(*key).unwrap_or(&serde_json::Value::Null)
-        })
-        .as_bool()
-        .unwrap_or(false)
+    report_value(report, path).as_bool().unwrap_or(false)
 }
 
 pub(super) fn report_text(report: &serde_json::Value, path: &[&str], default: &str) -> String {
-    path.iter()
-        .fold(report, |curr, key| {
-            curr.get(*key).unwrap_or(&serde_json::Value::Null)
-        })
+    report_value(report, path)
         .as_str()
         .unwrap_or(default)
         .to_string()
 }
 
 pub(super) fn report_i64(report: &serde_json::Value, path: &[&str]) -> i64 {
-    path.iter()
-        .fold(report, |curr, key| {
-            curr.get(*key).unwrap_or(&serde_json::Value::Null)
-        })
-        .as_i64()
-        .unwrap_or(0)
+    report_value(report, path).as_i64().unwrap_or(0)
 }
 
 fn status_from_bool(ok: bool) -> &'static str {
-    if ok {
-        "completed"
-    } else {
-        "failed"
-    }
+    if ok { "completed" } else { "failed" }
 }
 
 fn render_status_line(name: &str, ok: bool, detail: &str) {
@@ -74,18 +63,6 @@ fn render_tei_info_lines(report: &serde_json::Value) {
     }
 }
 
-fn webdriver_status_label(report: &serde_json::Value) -> String {
-    if report_bool(report, &["services", "webdriver", "configured"]) {
-        format!(
-            "{} ({})",
-            redact_url(&report_text(report, &["services", "webdriver", "url"], "")),
-            report_text(report, &["services", "webdriver", "detail"], "unreachable")
-        )
-    } else {
-        "not configured (optional fallback)".to_string()
-    }
-}
-
 fn chrome_status_label(report: &serde_json::Value) -> String {
     if report_bool(report, &["services", "chrome", "configured"]) {
         let url = report_text(report, &["services", "chrome", "url"], "");
@@ -104,7 +81,6 @@ fn render_services_section(report: &serde_json::Value) {
     let amqp_ok = report_bool(report, &["services", "amqp", "ok"]);
     let tei_ok = report_bool(report, &["services", "tei", "ok"]);
     let qdrant_ok = report_bool(report, &["services", "qdrant", "ok"]);
-    let webdriver_ok = report_bool(report, &["services", "webdriver", "ok"]);
     let chrome_ok = report_bool(report, &["services", "chrome", "ok"]);
     let openai_ok = report_bool(report, &["services", "openai", "ok"]);
 
@@ -133,13 +109,6 @@ fn render_services_section(report: &serde_json::Value) {
         "qdrant",
         qdrant_ok,
         &report_text(report, &["services", "qdrant", "url"], "n/a"),
-    );
-    let webdriver_configured = report_bool(report, &["services", "webdriver", "configured"]);
-    render_optional_status_line(
-        "webdriver",
-        webdriver_configured,
-        webdriver_ok,
-        &webdriver_status_label(report),
     );
     let chrome_configured = report_bool(report, &["services", "chrome", "configured"]);
     render_optional_status_line(
@@ -224,19 +193,18 @@ fn diagnostics_enabled_label(report: &serde_json::Value) -> &'static str {
 
 fn render_browser_runtime_section(report: &serde_json::Value) {
     println!("{}", primary("Browser Runtime"));
-    println!(
-        "  selection: {}",
-        muted(&report_text(
-            report,
-            &["browser_runtime", "selection"],
-            "unknown"
-        ))
-    );
+    let on_off = |b: bool| if b { "on" } else { "off" };
     println!(
         "  diagnostics: {} (screenshot={} events={} dir={})",
         muted(diagnostics_enabled_label(report)),
-        report_bool(report, &["browser_runtime", "diagnostics", "screenshot"]),
-        report_bool(report, &["browser_runtime", "diagnostics", "events"]),
+        on_off(report_bool(
+            report,
+            &["browser_runtime", "diagnostics", "screenshot"]
+        )),
+        on_off(report_bool(
+            report,
+            &["browser_runtime", "diagnostics", "events"]
+        )),
         report_text(
             report,
             &["browser_runtime", "diagnostics", "output_dir"],

@@ -8,7 +8,7 @@ use crate::crates::core::content::build_transform_config;
 use crate::crates::core::http::{cdp_discovery_url, ssrf_blacklist_patterns};
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::crawl::manifest::ManifestEntry;
-use collector::collect_crawl_pages;
+use collector::{CollectorConfig, collect_crawl_pages};
 use spider::configuration::RedirectPolicy;
 use spider::features::chrome_common::{
     RequestInterceptConfiguration, ScreenShotConfig, ScreenshotParams, WaitForSelector,
@@ -227,22 +227,6 @@ async fn apply_browser_settings(
         website = website
             .build()
             .map_err(|e| format!("failed to build website with chrome settings: {e}"))?;
-    } else if let Some(ref wd_url) = cfg.webdriver_url {
-        // Selenium/WebDriver — secondary path when CDP remote URL is unavailable.
-        use spider::features::webdriver_common::{WebDriverBrowser, WebDriverConfig};
-        let wd_cfg = WebDriverConfig {
-            server_url: wd_url.clone(),
-            browser: WebDriverBrowser::Chrome,
-            headless: cfg.chrome_headless,
-            proxy: cfg.chrome_proxy.clone(),
-            user_agent: cfg.chrome_user_agent.clone(),
-            ..WebDriverConfig::default()
-        };
-        website.with_webdriver(wd_cfg);
-        // Same fully-idle wait: WebDriver also needs to wait for JS hydration.
-        website.with_wait_for_idle_network0(Some(spider::configuration::WaitForIdleNetwork::new(
-            Some(Duration::from_secs(cfg.chrome_network_idle_timeout_secs)),
-        )));
     }
     Ok(website)
 }
@@ -278,7 +262,8 @@ async fn configure_website(
     }
     // Always apply SSRF protection. Append path exclusions if configured.
     let mut blacklist_patterns: Vec<spider::compact_str::CompactString> = ssrf_blacklist_patterns()
-        .into_iter()
+        .iter()
+        .copied()
         .map(Into::into)
         .collect();
     if !cfg.exclude_path_prefix.is_empty() {
@@ -417,7 +402,9 @@ pub async fn update_latest_reflink(
     let manifest = "manifest.jsonl";
     let source_manifest = source_dir.join(manifest);
     if source_manifest.exists() {
-        reflink_copy::reflink_or_copy(&source_manifest, latest_dir.join(manifest))?;
+        let src = source_manifest.clone();
+        let dst = latest_dir.join(manifest);
+        tokio::task::spawn_blocking(move || reflink_copy::reflink_or_copy(&src, dst)).await??;
     }
 
     let markdown = "markdown";
@@ -429,8 +416,13 @@ pub async fn update_latest_reflink(
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if path.is_file() {
-                let filename = path.file_name().unwrap();
-                reflink_copy::reflink_or_copy(&path, target_md.join(filename))?;
+                let Some(filename) = path.file_name() else {
+                    continue;
+                };
+                let dst = target_md.join(filename);
+                let src = path.clone();
+                tokio::task::spawn_blocking(move || reflink_copy::reflink_or_copy(&src, dst))
+                    .await??;
             }
         }
     }
@@ -506,14 +498,16 @@ pub async fn run_crawl_once(
 
     let join = tokio::spawn(collect_crawl_pages(
         rx,
-        markdown_dir,
-        manifest_path,
-        min_chars,
-        drop_thin,
-        exclude_path_prefix,
-        transform_cfg,
-        progress_tx,
-        previous_manifest,
+        CollectorConfig {
+            markdown_dir,
+            manifest_path,
+            min_chars,
+            drop_thin,
+            exclude_path_prefix,
+            transform_cfg,
+            progress_tx,
+            previous_manifest,
+        },
     ));
 
     // Spider-native sitemap phase: pages flow through the live subscription above.
@@ -568,14 +562,16 @@ pub async fn run_sitemap_only(
 
     let join = tokio::spawn(collect_crawl_pages(
         rx,
-        markdown_dir,
-        manifest_path,
-        cfg.min_markdown_chars,
-        cfg.drop_thin_markdown,
-        cfg.exclude_path_prefix.clone(),
-        transform_cfg,
-        None,
-        previous_manifest,
+        CollectorConfig {
+            markdown_dir,
+            manifest_path,
+            min_chars: cfg.min_markdown_chars,
+            drop_thin: cfg.drop_thin_markdown,
+            exclude_path_prefix: cfg.exclude_path_prefix.clone(),
+            transform_cfg,
+            progress_tx: None,
+            previous_manifest,
+        },
     ));
 
     website.crawl_sitemap().await;

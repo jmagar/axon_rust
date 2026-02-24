@@ -189,9 +189,9 @@ services:
       - ${AXON_DATA_DIR:-./data}/axon/chrome-diagnostics:/app/.cache/chrome-diagnostics
       # Session history mounts — required for `axon sessions` ingest worker.
       # Set HOST_HOME in .env to your home directory (e.g. /home/yourname).
-      - ${HOST_HOME}/.claude/projects:/home/axon/.claude/projects:ro
-      - ${HOST_HOME}/.codex/sessions:/home/axon/.codex/sessions:ro
-      - ${HOST_HOME}/.gemini:/home/axon/.gemini:ro
+      - ${HOST_HOME:-${HOME}}/.claude/projects:/home/axon/.claude/projects:ro
+      - ${HOST_HOME:-${HOME}}/.codex/sessions:/home/axon/.codex/sessions:ro
+      - ${HOST_HOME:-${HOME}}/.gemini:/home/axon/.gemini:ro
 
 networks:
   axon:

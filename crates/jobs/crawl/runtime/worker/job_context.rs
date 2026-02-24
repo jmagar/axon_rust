@@ -1,5 +1,5 @@
 use crate::crates::core::config::Config;
-use crate::crates::crawl::manifest::{read_manifest_data, ManifestEntry};
+use crate::crates::crawl::manifest::{ManifestEntry, read_manifest_data, read_manifest_urls};
 use redis::AsyncCommands;
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
@@ -7,7 +7,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use super::super::{latest_completed_result_for_url, CrawlJobConfig};
+use super::super::{CrawlJobConfig, latest_completed_result_for_url};
 
 pub(super) struct JobExecutionContext {
     pub(super) url: String,
@@ -126,7 +126,20 @@ async fn load_previous_urls_for_cache(
         if let Some(previous_output_dir) = previous_output_dir {
             let previous_manifest_path = previous_output_dir.join("manifest.jsonl");
             previous_manifest = read_manifest_data(&previous_manifest_path).await?;
+            // Resolve relative paths against the previous output directory so downstream
+            // consumers (collector.rs hardlink/reflink) don't resolve against CWD.
+            for entry in previous_manifest.values_mut() {
+                let p = std::path::Path::new(&entry.relative_path);
+                if p.is_relative() {
+                    entry.relative_path =
+                        previous_output_dir.join(p).to_string_lossy().into_owned();
+                }
+            }
+            // Also read URLs from legacy manifest entries that may lack full ManifestEntry
+            // fields (backward compat: older manifests may have different JSON shapes).
+            let legacy_urls = read_manifest_urls(&previous_manifest_path).await?;
             previous_urls = previous_manifest.keys().cloned().collect();
+            previous_urls.extend(legacy_urls);
             if !previous_urls.is_empty() {
                 cache_source = Some(format!(
                     "job:{} manifest:{}",

@@ -2,6 +2,12 @@ use crate::crates::core::config::{CommandKind, Config};
 use crate::crates::core::http::normalize_url;
 use std::collections::HashSet;
 
+/// Truncate a string to at most `max_chars` characters, slicing on a char
+/// boundary so multi-byte UTF-8 sequences never panic.
+pub fn truncate_chars(s: &str, max_chars: usize) -> &str {
+    s.char_indices().nth(max_chars).map_or(s, |(i, _)| &s[..i])
+}
+
 fn expand_numeric_range(start: i64, end: i64, step: i64) -> Vec<String> {
     let mut out = Vec::new();
     if step == 0 {

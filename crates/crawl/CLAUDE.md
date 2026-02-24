@@ -36,9 +36,6 @@ Chrome requires `AXON_CHROME_REMOTE_URL` set. If not set, HTTP result is kept.
 ### readability: false (DO NOT CHANGE)
 `build_transform_config()` in `crates/core/content.rs` sets `readability: false`. Changing to `true` causes Mozilla Readability to score VitePress/sidebar docs as low-quality and strip them to just the title — produces ~97% thin pages on most doc sites. `main_content: true` handles structural extraction without the scoring penalty.
 
-### Chrome CDP Wiring
-`with_chrome_connection()` is called in **both** the `webdriver` and `chrome` branches of `configure_website()`. Spider compiled with both features uses chromiumoxide in `crawl_concurrent` regardless of which `webdriver_config` is set. Both branches must set the connection URL.
-
 ### Sitemap Backfill
 `append_sitemap_backfill()` runs after the main crawl, discovers URLs from sitemap.xml that the crawler missed, and fetches them individually. Respects `--max-sitemaps` (default 512) and `--include-subdomains`. Safe to skip if `--discover-sitemaps false`.
 

@@ -1,3 +1,10 @@
+//! HTTP client and URL validation utilities.
+//!
+//! [`http_client()`] returns a shared [`reqwest::Client`] backed by a [`LazyLock`].
+//! [`validate_url()`] enforces SSRF protection: private IP ranges, loopback, and
+//! metadata endpoints are rejected. Note that this is a best-effort check — DNS
+//! rebinding can still bypass it at request time (TOCTOU).
+
 use anyhow::anyhow;
 use spider::url::Url;
 use std::net::IpAddr;
@@ -40,6 +47,11 @@ pub fn normalize_url(url: &str) -> String {
 /// - Link-local addresses (169.254.0.0/16, fe80::/10)
 /// - RFC-1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
 /// - `.internal` and `.local` TLDs
+///
+/// # Errors
+///
+/// Returns `Err` if the URL is malformed, uses a non-HTTP(S) scheme, or resolves
+/// to a blocked address range.
 ///
 /// # DNS Rebinding (TOCTOU residual risk)
 ///
@@ -143,20 +155,20 @@ fn check_ip(ip: IpAddr) -> Result<(), anyhow::Error> {
 ///
 /// Covers RFC-1918 private ranges, loopback, link-local, and IPv6 private addresses.
 /// Use alongside `validate_url()` on the seed URL so discovered URLs are also blocked.
-pub(crate) fn ssrf_blacklist_patterns() -> Vec<String> {
-    vec![
-        r"^https?://127\.".to_string(),
-        r"^https?://10\.".to_string(),
-        r"^https?://192\.168\.".to_string(),
-        r"^https?://172\.(1[6-9]|2[0-9]|3[01])\.".to_string(),
-        r"^https?://169\.254\.".to_string(),
-        r"^https?://0\.".to_string(),
-        r"^https?://localhost([^a-zA-Z0-9]|$)".to_string(),
-        r"^https?://\[::1\]".to_string(),
-        r"^https?://\[::ffff:".to_string(),
-        r"^https?://\[fe80:".to_string(),
-        r"^https?://\[fc[0-9a-f]{2}:".to_string(),
-        r"^https?://\[fd[0-9a-f]{2}:".to_string(),
+pub(crate) fn ssrf_blacklist_patterns() -> &'static [&'static str] {
+    &[
+        r"^https?://127\.",
+        r"^https?://10\.",
+        r"^https?://192\.168\.",
+        r"^https?://172\.(1[6-9]|2[0-9]|3[01])\.",
+        r"^https?://169\.254\.",
+        r"^https?://0\.",
+        r"^https?://localhost([^a-zA-Z0-9]|$)",
+        r"^https?://\[::1\]",
+        r"^https?://\[::ffff:",
+        r"^https?://\[fe80:",
+        r"^https?://\[fc[0-9a-f]{2}:",
+        r"^https?://\[fd[0-9a-f]{2}:",
     ]
 }
 
@@ -284,41 +296,41 @@ mod tests {
     // --- Public URLs should be allowed ---
 
     #[test]
-    fn test_validate_url_allows_public_https() {
+    fn validate_url_allows_public_https() {
         assert!(validate_url("https://example.com/").is_ok());
     }
 
     #[test]
-    fn test_validate_url_allows_public_http() {
+    fn validate_url_allows_public_http() {
         assert!(validate_url("http://example.com/page").is_ok());
     }
 
     // --- Loopback addresses ---
 
     #[test]
-    fn test_validate_url_blocks_loopback_ipv4() {
+    fn validate_url_blocks_loopback_ipv4() {
         assert!(validate_url("http://127.0.0.1/").is_err());
     }
 
     #[test]
-    fn test_validate_url_blocks_localhost() {
+    fn validate_url_blocks_localhost() {
         assert!(validate_url("http://localhost/").is_err());
     }
 
     #[test]
-    fn test_validate_url_blocks_ipv6_loopback() {
+    fn validate_url_blocks_ipv6_loopback() {
         assert!(validate_url("http://[::1]/").is_err());
     }
 
     // --- AWS metadata / link-local ---
 
     #[test]
-    fn test_validate_url_blocks_aws_metadata() {
+    fn validate_url_blocks_aws_metadata() {
         assert!(validate_url("http://169.254.169.254/latest/meta-data/").is_err());
     }
 
     #[test]
-    fn test_validate_url_blocks_link_local_boundary() {
+    fn validate_url_blocks_link_local_boundary() {
         // 169.254.169.253 is still in 169.254.0.0/16 — should be blocked
         assert!(validate_url("http://169.254.169.253/").is_err());
     }
@@ -326,88 +338,88 @@ mod tests {
     // --- RFC-1918 private ranges ---
 
     #[test]
-    fn test_validate_url_blocks_10_network() {
+    fn validate_url_blocks_10_network() {
         assert!(validate_url("http://10.0.0.1/").is_err());
     }
 
     #[test]
-    fn test_validate_url_blocks_10_network_upper() {
+    fn validate_url_blocks_10_network_upper() {
         assert!(validate_url("http://10.255.255.255/").is_err());
     }
 
     #[test]
-    fn test_validate_url_blocks_172_16() {
+    fn validate_url_blocks_172_16() {
         assert!(validate_url("http://172.16.0.1/").is_err());
     }
 
     #[test]
-    fn test_validate_url_allows_172_15() {
+    fn validate_url_allows_172_15() {
         // 172.15.255.255 is just below the 172.16.0.0/12 range — should ALLOW
         assert!(validate_url("http://172.15.255.255/").is_ok());
     }
 
     #[test]
-    fn test_validate_url_allows_172_32() {
+    fn validate_url_allows_172_32() {
         // 172.32.0.0 is just above the 172.16-31 range — should ALLOW
         assert!(validate_url("http://172.32.0.0/").is_ok());
     }
 
     #[test]
-    fn test_validate_url_blocks_192_168() {
+    fn validate_url_blocks_192_168() {
         assert!(validate_url("http://192.168.0.1/").is_err());
     }
 
     // --- Blocked URL schemes ---
 
     #[test]
-    fn test_validate_url_blocks_ftp() {
+    fn validate_url_blocks_ftp() {
         assert!(validate_url("ftp://example.com/").is_err());
     }
 
     #[test]
-    fn test_validate_url_blocks_file() {
+    fn validate_url_blocks_file() {
         assert!(validate_url("file:///etc/passwd").is_err());
     }
 
     #[test]
-    fn test_validate_url_blocks_data() {
+    fn validate_url_blocks_data() {
         assert!(validate_url("data:text/plain,hello").is_err());
     }
 
     // --- TLD blocking ---
 
     #[test]
-    fn test_validate_url_blocks_internal_tld() {
+    fn validate_url_blocks_internal_tld() {
         assert!(validate_url("http://host.internal/").is_err());
     }
 
     #[test]
-    fn test_validate_url_blocks_local_tld() {
+    fn validate_url_blocks_local_tld() {
         assert!(validate_url("http://host.local/").is_err());
     }
 
     #[test]
-    fn test_validate_url_blocks_internal_tld_case_insensitive() {
+    fn validate_url_blocks_internal_tld_case_insensitive() {
         assert!(validate_url("http://HOST.INTERNAL/").is_err());
     }
 
     // --- Invalid URLs ---
 
     #[test]
-    fn test_validate_url_blocks_invalid_url() {
+    fn validate_url_blocks_invalid_url() {
         assert!(validate_url("not a valid url at all").is_err());
     }
 
     // --- IPv6 private ranges ---
 
     #[test]
-    fn test_validate_url_blocks_ipv6_ula() {
+    fn validate_url_blocks_ipv6_ula() {
         // fc00::1 is unique-local address (fc00::/7)
         assert!(validate_url("http://[fc00::1]/").is_err());
     }
 
     #[test]
-    fn test_validate_url_blocks_ipv6_link_local() {
+    fn validate_url_blocks_ipv6_link_local() {
         // fe80::1 is link-local (fe80::/10)
         assert!(validate_url("http://[fe80::1]/").is_err());
     }
@@ -415,13 +427,13 @@ mod tests {
     /// Compiled SSRF blacklist regexes — built once, reused across tests.
     static COMPILED_SSRF_PATTERNS: LazyLock<Vec<regex::Regex>> = LazyLock::new(|| {
         ssrf_blacklist_patterns()
-            .into_iter()
-            .map(|p| regex::Regex::new(&p).expect("ssrf blacklist pattern must compile"))
+            .iter()
+            .map(|p| regex::Regex::new(p).expect("ssrf blacklist pattern must compile"))
             .collect()
     });
 
     #[test]
-    fn test_ssrf_blacklist_blocks_localhost_with_query() {
+    fn ssrf_blacklist_blocks_localhost_with_query() {
         let url = "http://localhost?admin=true";
         let blocked = COMPILED_SSRF_PATTERNS.iter().any(|re| re.is_match(url));
         assert!(
@@ -433,7 +445,7 @@ mod tests {
     // --- cdp_discovery_url tests ---
 
     #[test]
-    fn test_cdp_discovery_url_http_appends_json_version() {
+    fn cdp_discovery_url_http_appends_json_version() {
         assert_eq!(
             cdp_discovery_url("http://127.0.0.1:6000"),
             Some("http://127.0.0.1:6000/json/version".to_string())
@@ -441,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cdp_discovery_url_ws_converts_to_http_and_appends() {
+    fn cdp_discovery_url_ws_converts_to_http_and_appends() {
         assert_eq!(
             cdp_discovery_url("ws://axon-chrome:9222"),
             Some("http://axon-chrome:9222/json/version".to_string())
@@ -449,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cdp_discovery_url_preserves_non_root_path() {
+    fn cdp_discovery_url_preserves_non_root_path() {
         // Already has /json/version — must not double-append.
         assert_eq!(
             cdp_discovery_url("http://127.0.0.1:6000/json/version"),
@@ -458,13 +470,13 @@ mod tests {
     }
 
     #[test]
-    fn test_cdp_discovery_url_rejects_unsupported_scheme() {
+    fn cdp_discovery_url_rejects_unsupported_scheme() {
         assert_eq!(cdp_discovery_url("ftp://host:21/"), None);
         assert_eq!(cdp_discovery_url("file:///etc/hosts"), None);
     }
 
     #[test]
-    fn test_cdp_discovery_url_wss_converts_to_https() {
+    fn cdp_discovery_url_wss_converts_to_https() {
         assert_eq!(
             cdp_discovery_url("wss://secure-host:443"),
             Some("https://secure-host:443/json/version".to_string())
@@ -472,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cdp_discovery_url_ws_with_existing_path_preserved() {
+    fn cdp_discovery_url_ws_with_existing_path_preserved() {
         // Pre-resolved ws:// URL with browser UUID path: path must not be clobbered.
         let ws = "ws://127.0.0.1:9222/devtools/browser/abc-123";
         let result = cdp_discovery_url(ws);
@@ -483,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ssrf_blacklist_blocks_localhost_with_fragment() {
+    fn ssrf_blacklist_blocks_localhost_with_fragment() {
         let url = "https://localhost#secret";
         let blocked = COMPILED_SSRF_PATTERNS.iter().any(|re| re.is_match(url));
         assert!(
@@ -503,7 +515,7 @@ mod tests {
     /// Full mitigation would require DNS pre-resolution + connection pinning (e.g.
     /// `hickory-resolver`), which `reqwest` does not natively support.
     #[test]
-    fn test_dns_rebinding_toctou_documents_residual_risk() {
+    fn dns_rebinding_toctou_documents_residual_risk() {
         // A hostname that resolves to a public IP passes validation — this is correct
         // behavior. The risk is that between validation and connection, the DNS record
         // could change to 127.0.0.1. We cannot test the actual rebind in a unit test,
@@ -525,7 +537,7 @@ mod tests {
     /// Verifies that a public IP passes validation — documents the TOCTOU window.
     /// Between validation (public IP) and connection, DNS could rebind to private.
     #[test]
-    fn test_validate_url_accepts_public_ip_but_documents_rebinding_risk() {
+    fn validate_url_accepts_public_ip_but_documents_rebinding_risk() {
         // 93.184.216.34 is example.com's public IP. This passes validation correctly.
         // The TOCTOU risk: an attacker-controlled domain could resolve to this IP during
         // validation, then rebind to 127.0.0.1 before reqwest connects. We cannot
@@ -541,7 +553,7 @@ mod tests {
 
     /// Verifies the LazyLock SSRF pattern compilation works and all patterns are valid.
     #[test]
-    fn test_ssrf_blacklist_patterns_compile_once() {
+    fn ssrf_blacklist_patterns_compile_once() {
         // Accessing COMPILED_SSRF_PATTERNS forces the LazyLock to initialize.
         // If any pattern fails to compile, the .expect() inside the LazyLock panics.
         let patterns = &*COMPILED_SSRF_PATTERNS;
@@ -570,7 +582,7 @@ mod tests {
     /// an IPv6 representation. Without explicit handling, these bypass the IPv4
     /// private/loopback checks because they arrive in the V6 branch of check_ip.
     #[test]
-    fn test_validate_url_rejects_ipv4_mapped_ipv6_loopback() {
+    fn validate_url_rejects_ipv4_mapped_ipv6_loopback() {
         // ::ffff:127.0.0.1 is loopback via IPv4-mapped IPv6
         assert!(
             validate_url("http://[::ffff:127.0.0.1]/").is_err(),
@@ -579,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_url_rejects_ipv4_mapped_ipv6_link_local() {
+    fn validate_url_rejects_ipv4_mapped_ipv6_link_local() {
         // ::ffff:169.254.0.1 is link-local via IPv4-mapped IPv6
         assert!(
             validate_url("http://[::ffff:169.254.0.1]/").is_err(),
@@ -588,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_url_rejects_ipv4_mapped_ipv6_private() {
+    fn validate_url_rejects_ipv4_mapped_ipv6_private() {
         // ::ffff:10.0.0.1 is RFC-1918 private via IPv4-mapped IPv6
         assert!(
             validate_url("http://[::ffff:10.0.0.1]/").is_err(),
@@ -607,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_url_allows_ipv4_mapped_ipv6_public() {
+    fn validate_url_allows_ipv4_mapped_ipv6_public() {
         // ::ffff:93.184.216.34 (example.com) should be allowed — it's a public IP
         assert!(
             validate_url("http://[::ffff:93.184.216.34]/").is_ok(),

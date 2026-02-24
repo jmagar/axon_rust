@@ -6,7 +6,7 @@ use std::error::Error;
 use std::io::Write;
 
 mod context;
-pub(crate) use context::{build_ask_context, AskContext};
+pub(crate) use context::{AskContext, build_ask_context};
 
 use super::streaming::{ask_llm_non_streaming, ask_llm_streaming};
 

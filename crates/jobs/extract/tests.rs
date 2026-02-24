@@ -2,7 +2,7 @@ use super::*;
 use crate::crates::jobs::common::test_config;
 use chrono::{DateTime, Duration, Utc};
 use std::env;
-use tokio::time::{sleep, timeout, Duration as TokioDuration};
+use tokio::time::{Duration as TokioDuration, sleep, timeout};
 
 fn pg_url() -> Option<String> {
     env::var("AXON_TEST_PG_URL")

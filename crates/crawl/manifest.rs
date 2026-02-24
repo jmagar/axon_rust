@@ -32,12 +32,14 @@ fn default_true() -> bool {
 use std::time::SystemTime;
 
 pub async fn manifest_cache_is_stale(manifest_path: &Path, ttl_secs: u64) -> bool {
-    tokio::fs::metadata(manifest_path)
-        .await
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|mtime| SystemTime::now().duration_since(mtime).ok())
-        .is_some_and(|age| age.as_secs() > ttl_secs)
+    match tokio::fs::metadata(manifest_path).await {
+        Ok(metadata) => metadata
+            .modified()
+            .ok()
+            .and_then(|mtime| SystemTime::now().duration_since(mtime).ok())
+            .is_some_and(|age| age.as_secs() > ttl_secs),
+        Err(_) => true, // Missing or unreadable file = stale
+    }
 }
 
 pub async fn write_audit_diff(
@@ -92,6 +94,8 @@ pub async fn read_manifest_urls(path: &Path) -> Result<HashSet<String>, std::io:
     Ok(out)
 }
 
+/// Reads manifest JSONL into a HashMap keyed by URL. Duplicate URLs use last-write-wins
+/// (the latest entry in the file supersedes earlier ones for the same URL).
 pub async fn read_manifest_data(
     path: &Path,
 ) -> Result<HashMap<String, ManifestEntry>, std::io::Error> {

@@ -9,3 +9,11 @@
 scripts/qdrant-quality.py
 # collect_crawl_pages() 145 lines — pre-existing, refactor tracked (2026-02-23)
 crates/crawl/engine/collector.rs
+# 598 lines — configure_website + run_crawl_once + reflink helpers (2026-02-23)
+crates/crawl/engine.rs
+# run_sync_crawl() 122 lines — slightly over limit, refactor tracked (2026-02-23)
+crates/cli/commands/crawl/sync_crawl.rs
+# 505 lines — tei_embed + embed pipeline + retry logic (2026-02-23)
+crates/vector/ops/tei.rs
+# 562 lines — vendored monolith enforcement script, not Rust (2026-02-23)
+scripts/enforce_monoliths.py

@@ -13,7 +13,7 @@ Axon is a single CLI for crawl/scrape/extract plus local vector retrieval and Q&
 - **Surgical Incremental Crawling**: SHA-256 content hashing, Reflink/Hardlink storage reuse, and smart embedding skips for unchanged pages.
 - TEI embeddings + Qdrant vector storage
 - OpenAI-compatible extraction and answer generation
-- Browser fallback via Selenium WebDriver for dynamic sites
+- Chrome CDP rendering for dynamic sites
 - Automation-friendly JSON mode via `--json`
 
 ## Architecture
@@ -196,11 +196,10 @@ Copy `.env.example` to `.env`. At minimum set the `[REQUIRED]` vars:
 | `REDDIT_CLIENT_SECRET` | OAuth2 client secret (required for `reddit` command) |
 | `TAVILY_API_KEY` | Tavily AI Search API key (required for `search` and `research` commands) |
 
-### Optional Browser / WebDriver
+### Optional Browser / Chrome
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AXON_WEBDRIVER_URL` | — | Primary WebDriver endpoint (e.g. `http://127.0.0.1:4444`) |
 | `AXON_CHROME_REMOTE_URL` | — | Remote Chrome DevTools endpoint |
 | `CHROME_URL` | — | spider-rs native CDP env var (alternative to `AXON_CHROME_REMOTE_URL`) |
 | `AXON_CHROME_PROXY` | — | Proxy URL for Chrome requests |
@@ -258,6 +257,7 @@ Notes:
 - `crawl-worker` -> `/usr/local/bin/axon crawl worker`
 - `extract-worker` -> `/usr/local/bin/axon extract worker`
 - `embed-worker` -> `/usr/local/bin/axon embed worker`
+- `ingest-worker` -> `/usr/local/bin/axon ingest worker`
 
 Startup loads `.env` via `docker/s6/cont-init.d/10-load-axon-env`. Health checks verify each worker process via s6-svstat. The container is resource-limited to 4 CPUs / 4 GB RAM with a 512 MB / 1 CPU reservation.
 
@@ -375,11 +375,10 @@ All flags are global (usable with any subcommand).
 | `--url-glob <patterns>` | csv | — | Comma-separated brace-glob patterns for URL expansion. |
 | `--start-url <url>` | string | `https://example.com` | Seed URL override. |
 
-#### Browser / WebDriver
+#### Browser / Chrome
 
 | Flag | Type | Default | Env Var | Description |
 |------|------|---------|---------|-------------|
-| `--webdriver-url <url>` | string | — | `AXON_WEBDRIVER_URL` | WebDriver endpoint for browser fallback (e.g. `http://127.0.0.1:4444`). |
 | `--chrome-remote-url <url>` | string | — | `AXON_CHROME_REMOTE_URL` | Remote Chrome DevTools endpoint. |
 | `--chrome-proxy <url>` | string | — | `AXON_CHROME_PROXY` | Proxy URL for Chrome requests. |
 | `--chrome-user-agent <ua>` | string | — | `AXON_CHROME_USER_AGENT` | User-Agent override for Chrome. |
@@ -592,7 +591,7 @@ Differs from the other four tables: uses `source_type` + `target` instead of `ur
 ## Gotchas
 
 ### `--wait false` (default) = fire-and-forget
-By default, `crawl`, `extract`, and `embed` enqueue jobs and return immediately. Use `--wait true` to block until completion. Without workers running, enqueued jobs will pend forever.
+By default, `crawl`, `extract`, `embed`, `github`, `reddit`, and `youtube` enqueue jobs and return immediately. Use `--wait true` to block until completion. Without workers running, enqueued jobs will pend forever.
 
 ### Armory Structure: Domain-Grouped
 Axon now organizes its spoils by domain to make the armory more browseable.

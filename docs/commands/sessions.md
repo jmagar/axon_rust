@@ -48,6 +48,6 @@ axon sessions --json
 
 ## Notes
 
-- Unlike `github`, `reddit`, and `youtube`, `sessions` does not use the AMQP queue and does not create an `axon_ingest_jobs` record. It runs entirely in-process.
+- Unlike `github`, `reddit`, and `youtube`, the `sessions` command does not use the AMQP queue and does not create an `axon_ingest_jobs` record. It runs entirely in-process.
 - This is intentional: session files are local, the operation is fast, and async queuing adds no benefit for local I/O.
 - The state tracker table (`axon_session_ingest_state`) is auto-created in Postgres on first run.

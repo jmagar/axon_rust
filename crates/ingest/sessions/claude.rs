@@ -1,5 +1,5 @@
 use super::{
-    expand_home, matches_project_filter, resolve_collection, IngestResult, SessionStateTracker,
+    IngestResult, SessionStateTracker, expand_home, matches_project_filter, resolve_collection,
 };
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::log_warn;
@@ -87,13 +87,17 @@ pub(super) async fn ingest_claude_sessions(
 
             if futures.len() >= 32 {
                 if let Some(res) = futures.next().await {
-                    let (p, m, s, r) = res.map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                    match r {
-                        Ok(count) => {
-                            total += count;
-                            state.mark_indexed(&p, m, s).await;
+                    match res {
+                        Ok((p, m, s, r)) => match r {
+                            Ok(count) => {
+                                total += count;
+                                state.mark_indexed(&p, m, s).await;
+                            }
+                            Err(e) => log_warn(&format!("Claude file {}: {e}", p.display())),
+                        },
+                        Err(join_err) => {
+                            log_warn(&format!("Claude ingest task panicked: {join_err}"));
                         }
-                        Err(e) => log_warn(&format!("Claude file {}: {e}", p.display())),
                     }
                 }
             }
@@ -101,13 +105,18 @@ pub(super) async fn ingest_claude_sessions(
     }
 
     while let Some(res) = futures.next().await {
-        let (p, m, s, r) = res.map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        match r {
-            Ok(count) => {
-                total += count;
-                state.mark_indexed(&p, m, s).await;
+        match res {
+            Ok((p, m, s, r)) => match r {
+                Ok(count) => {
+                    total += count;
+                    state.mark_indexed(&p, m, s).await;
+                }
+                Err(e) => log_warn(&format!("Claude file {}: {e}", p.display())),
+            },
+            Err(join_err) => {
+                log_warn(&format!("Claude ingest task panicked: {join_err}"));
+                continue;
             }
-            Err(e) => log_warn(&format!("Claude file {}: {e}", p.display())),
         }
     }
 

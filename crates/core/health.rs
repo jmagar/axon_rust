@@ -1,4 +1,3 @@
-use super::config::parse::normalize_local_service_url;
 use std::env;
 use std::time::Duration;
 use tokio;
@@ -11,12 +10,6 @@ pub struct BrowserDiagnosticsPattern {
     pub screenshot: bool,
     pub events: bool,
     pub output_dir: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BrowserBackendSelection {
-    Chrome,
-    WebDriverFallback,
 }
 
 pub async fn redis_healthy(redis_url: &str) -> bool {
@@ -37,25 +30,6 @@ pub async fn redis_healthy(redis_url: &str) -> bool {
         tokio::time::timeout(Duration::from_secs(5), ping).await,
         Ok(Ok(()))
     )
-}
-
-pub fn webdriver_url_from_env() -> Option<String> {
-    env::var("AXON_WEBDRIVER_URL")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .map(normalize_local_service_url)
-}
-
-pub fn browser_backend_selection(
-    chrome_ok: bool,
-    webdriver_configured: bool,
-    webdriver_ok: bool,
-) -> BrowserBackendSelection {
-    if !chrome_ok && webdriver_configured && webdriver_ok {
-        BrowserBackendSelection::WebDriverFallback
-    } else {
-        BrowserBackendSelection::Chrome
-    }
 }
 
 pub fn browser_diagnostics_pattern() -> BrowserDiagnosticsPattern {
@@ -101,6 +75,7 @@ fn env_flag_or(key: &str, fallback: bool) -> bool {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
     use std::sync::{LazyLock, Mutex};
@@ -113,24 +88,13 @@ mod tests {
     }
 
     fn reset_env() {
-        env::remove_var("AXON_WEBDRIVER_URL");
-        env::remove_var("AXON_CHROME_DIAGNOSTICS");
-        env::remove_var("AXON_CHROME_DIAGNOSTICS_SCREENSHOT");
-        env::remove_var("AXON_CHROME_DIAGNOSTICS_EVENTS");
-        env::remove_var("AXON_CHROME_DIAGNOSTICS_DIR");
-    }
-
-    #[test]
-    fn webdriver_url_prefers_axon_var() {
-        with_env_lock(|| {
-            reset_env();
-            env::set_var("AXON_WEBDRIVER_URL", "http://preferred.example");
-            assert_eq!(
-                webdriver_url_from_env().as_deref(),
-                Some("http://preferred.example")
-            );
-            reset_env();
-        });
+        // SAFETY: Tests use ENV_LOCK to ensure single-threaded access to env vars.
+        unsafe {
+            env::remove_var("AXON_CHROME_DIAGNOSTICS");
+            env::remove_var("AXON_CHROME_DIAGNOSTICS_SCREENSHOT");
+            env::remove_var("AXON_CHROME_DIAGNOSTICS_EVENTS");
+            env::remove_var("AXON_CHROME_DIAGNOSTICS_DIR");
+        }
     }
 
     #[test]
@@ -150,7 +114,8 @@ mod tests {
     fn diagnostics_enables_screenshot_events_when_global_flag_set() {
         with_env_lock(|| {
             reset_env();
-            env::set_var("AXON_CHROME_DIAGNOSTICS", "true");
+            // SAFETY: Tests use ENV_LOCK to ensure single-threaded access to env vars.
+            unsafe { env::set_var("AXON_CHROME_DIAGNOSTICS", "true") };
             let pattern = browser_diagnostics_pattern();
             assert!(pattern.enabled);
             assert!(pattern.screenshot);
@@ -163,9 +128,12 @@ mod tests {
     fn diagnostics_allows_per_signal_override() {
         with_env_lock(|| {
             reset_env();
-            env::set_var("AXON_CHROME_DIAGNOSTICS", "true");
-            env::set_var("AXON_CHROME_DIAGNOSTICS_EVENTS", "false");
-            env::set_var("AXON_CHROME_DIAGNOSTICS_DIR", "/tmp/diag");
+            // SAFETY: Tests use ENV_LOCK to ensure single-threaded access to env vars.
+            unsafe {
+                env::set_var("AXON_CHROME_DIAGNOSTICS", "true");
+                env::set_var("AXON_CHROME_DIAGNOSTICS_EVENTS", "false");
+                env::set_var("AXON_CHROME_DIAGNOSTICS_DIR", "/tmp/diag");
+            }
             let pattern = browser_diagnostics_pattern();
             assert!(pattern.enabled);
             assert!(pattern.screenshot);
@@ -173,25 +141,5 @@ mod tests {
             assert_eq!(pattern.output_dir, "/tmp/diag");
             reset_env();
         });
-    }
-
-    #[test]
-    fn selects_webdriver_only_when_chrome_unhealthy_and_fallback_ready() {
-        assert_eq!(
-            browser_backend_selection(false, true, true),
-            BrowserBackendSelection::WebDriverFallback
-        );
-        assert_eq!(
-            browser_backend_selection(true, true, true),
-            BrowserBackendSelection::Chrome
-        );
-        assert_eq!(
-            browser_backend_selection(false, false, true),
-            BrowserBackendSelection::Chrome
-        );
-        assert_eq!(
-            browser_backend_selection(false, true, false),
-            BrowserBackendSelection::Chrome
-        );
     }
 }

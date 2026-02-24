@@ -252,7 +252,9 @@ fn emit_suggest_output(
     if accepted.is_empty() {
         println!(
             "  {}",
-            muted("No new URLs survived filtering. Retry with a different focus or higher model temperature.")
+            muted(
+                "No new URLs survived filtering. Retry with a different focus or higher model temperature."
+            )
         );
     }
     Ok(())

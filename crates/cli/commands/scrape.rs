@@ -19,7 +19,8 @@ use std::time::Duration;
 /// never follows links beyond the target page.
 fn build_scrape_website(cfg: &Config, url: &str) -> Result<Website, Box<dyn Error>> {
     let ssrf_patterns: Vec<CompactString> = ssrf_blacklist_patterns()
-        .into_iter()
+        .iter()
+        .copied()
         .map(Into::into)
         .collect();
 

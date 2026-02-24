@@ -19,7 +19,6 @@ const HOST_MAP: &[(&str, &str, u16)] = &[
     ("axon-rabbitmq", "127.0.0.1", 45535),
     ("axon-qdrant", "127.0.0.1", 53333),
     ("axon-chrome", "127.0.0.1", 6000),
-    ("axon-webdriver", "127.0.0.1", 4444),
 ];
 
 /// Returns `true` if `host` is a known Docker-internal service hostname.
@@ -264,10 +263,6 @@ fn into_config(cli: Cli) -> Result<Config, String> {
         chrome_bootstrap: global.chrome_bootstrap,
         chrome_bootstrap_timeout_ms: global.chrome_bootstrap_timeout_ms.max(250),
         chrome_bootstrap_retries: global.chrome_bootstrap_retries.min(10),
-        webdriver_url: global
-            .webdriver_url
-            .or_else(|| env::var("AXON_WEBDRIVER_URL").ok())
-            .map(normalize_local_service_url),
         respect_robots: global.respect_robots,
         min_markdown_chars: global.min_markdown_chars,
         drop_thin_markdown: global.drop_thin_markdown,
@@ -459,7 +454,6 @@ mod tests {
         assert!(is_docker_service_host("axon-rabbitmq"));
         assert!(is_docker_service_host("axon-qdrant"));
         assert!(is_docker_service_host("axon-chrome"));
-        assert!(is_docker_service_host("axon-webdriver"));
     }
 
     #[test]

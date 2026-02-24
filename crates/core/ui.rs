@@ -1,6 +1,6 @@
 use crate::crates::core::config::Config;
-use console::{style, Style};
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use console::{Style, style};
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::error::Error;
 use std::time::Duration;

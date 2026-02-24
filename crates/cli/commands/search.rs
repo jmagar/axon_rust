@@ -35,7 +35,10 @@ pub fn extract_crawl_seed(url: &str, from_result: bool) -> Option<String> {
         _ => return None,
     }
     let host = parsed.host_str()?;
-    if CRAWL_SKIP_HOSTS.contains(&host) {
+    if CRAWL_SKIP_HOSTS
+        .iter()
+        .any(|d| host == *d || host.ends_with(&format!(".{d}")))
+    {
         return None;
     }
     if from_result {

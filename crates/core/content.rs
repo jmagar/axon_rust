@@ -10,11 +10,11 @@ pub use deterministic::{
 
 use super::http::{http_client, ssrf_blacklist_patterns, validate_url};
 use super::logging::log_warn;
-use deterministic::{extract_items_fallback, FallbackResponse};
+use deterministic::{FallbackResponse, extract_items_fallback};
 use spider::url::Url;
 use spider::website::Website;
 use spider_transformations::transformation::content::{
-    transform_content_input, ReturnFormat, TransformConfig, TransformInput,
+    ReturnFormat, TransformConfig, TransformInput, transform_content_input,
 };
 use std::collections::HashMap;
 use std::error::Error;
@@ -45,7 +45,7 @@ pub fn url_to_domain(url: &str) -> String {
         .ok()
         .and_then(|u| u.host_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "unknown".to_string())
-        .replace(':', "_")
+        .replace(['[', ']', ':'], "_")
 }
 
 pub fn build_transform_config() -> &'static TransformConfig {
@@ -213,15 +213,24 @@ pub fn is_excluded_url_path(url: &str, prefixes: &[String]) -> bool {
             return false;
         }
         // Common case: prefix already has leading slash (no allocation needed).
+        // Treat `/` and `-` as word boundaries to match engine.rs locale logic
+        // (e.g. `/ja` blocks `/ja/docs` AND `/ja-jp/docs`).
         if p.starts_with('/') {
             return path == p
-                || (path.starts_with(p) && path.as_bytes().get(p.len()) == Some(&b'/'));
+                || (path.starts_with(p)
+                    && matches!(
+                        path.as_bytes().get(p.len()),
+                        Some(&b'/') | Some(&b'-') | None
+                    ));
         }
         // Rare case: prefix lacks leading slash — compare with implicit "/".
         path == format!("/{p}")
             || path.starts_with('/')
                 && path[1..].starts_with(p)
-                && path.as_bytes().get(p.len() + 1) == Some(&b'/')
+                && matches!(
+                    path.as_bytes().get(p.len() + 1),
+                    Some(&b'/') | Some(&b'-') | None
+                )
     })
 }
 
@@ -415,7 +424,8 @@ pub async fn run_extract_with_engine(
 
     validate_url(start_url)?;
     let ssrf_patterns: Vec<spider::compact_str::CompactString> = ssrf_blacklist_patterns()
-        .into_iter()
+        .iter()
+        .copied()
         .map(Into::into)
         .collect();
     let mut website = Website::new(start_url);

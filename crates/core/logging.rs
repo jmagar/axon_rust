@@ -132,8 +132,8 @@ impl Write for SizeRotateWriterGuard {
 }
 
 pub fn init_tracing() {
-    use tracing_subscriber::prelude::*;
     use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::prelude::*;
 
     let json_log_file = std::env::var("AXON_LOG_FILE")
         .ok()

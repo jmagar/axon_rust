@@ -2,11 +2,31 @@ use crate::crates::core::config::Config;
 use crate::crates::core::logging::log_warn;
 use crate::crates::vector::ops::embed_text_with_metadata;
 use std::error::Error;
+use std::path::{Path, PathBuf};
+
+/// Recursively walk a directory and collect all file paths.
+async fn walk_dir_recursive(dir: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
+    let mut files = Vec::new();
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(Box::pin(walk_dir_recursive(&path)).await?);
+        } else {
+            files.push(path);
+        }
+    }
+    Ok(files)
+}
 
 /// Ingest wiki pages from a GitHub repository by cloning the wiki git repo.
 ///
-/// Uses `git clone --depth=1` to clone the wiki. If the wiki doesn't exist,
-/// the clone exits non-zero and this function returns `Ok(0)` silently.
+/// Uses `git clone --depth=1` to clone the wiki. If the wiki doesn't exist
+/// (exit code 128 with "not found" in stderr), returns `Ok(0)` silently.
+/// Other clone failures are logged and returned as errors.
+///
+/// Authentication uses `http.extraHeader` via git config env vars to avoid
+/// embedding the token in the clone URL (which would leak in process args).
 ///
 /// Requires `git` to be installed and on PATH.
 pub async fn ingest_wiki(
@@ -19,30 +39,45 @@ pub async fn ingest_wiki(
     let _tmp = tempfile::tempdir()?;
     let tmp_path = _tmp.path().to_string_lossy().to_string();
 
-    // Construct clone URL — embed token for private wikis, plain HTTPS otherwise
-    let clone_url = if let Some(t) = token {
-        format!("https://{t}@github.com/{owner}/{name}.wiki.git")
-    } else {
-        format!("https://github.com/{owner}/{name}.wiki.git")
-    };
+    // Plain HTTPS clone URL — token is passed via git config env vars, not the URL
+    let clone_url = format!("https://github.com/{owner}/{name}.wiki.git");
 
     // "--" separates flags from the URL argument to prevent argument injection
-    let output = tokio::process::Command::new("git")
-        .args(["clone", "--depth=1", "--", &clone_url, &tmp_path])
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.args(["clone", "--depth=1", "--", &clone_url, &tmp_path]);
+
+    // Use header-based auth to avoid embedding token in process args
+    if let Some(t) = token {
+        cmd.env("GIT_CONFIG_COUNT", "1");
+        cmd.env("GIT_CONFIG_KEY_0", "http.extraHeader");
+        cmd.env("GIT_CONFIG_VALUE_0", format!("Authorization: Bearer {t}"));
+    }
+
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("git not found or failed to start: {e}"))?;
 
     if !output.status.success() {
-        // Non-zero exit most commonly means the repo has no wiki — treat as empty
-        return Ok(0);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Exit code 128 with "not found" / "does not exist" = no wiki, expected
+        if stderr.contains("not found") || stderr.contains("does not exist") {
+            return Ok(0);
+        }
+        // Other failures are real errors worth surfacing
+        log_warn(&format!(
+            "wiki clone failed (exit {}): {}",
+            output.status,
+            stderr.trim()
+        ));
+        return Err(format!("wiki clone failed: {}", stderr.trim()).into());
     }
 
-    // Walk the cloned directory for text files to embed
+    // Recursively walk the cloned directory for text files to embed
+    let all_files = walk_dir_recursive(Path::new(&tmp_path)).await?;
     let mut total = 0usize;
-    let mut dir = tokio::fs::read_dir(&tmp_path).await?;
-    while let Some(entry) = dir.next_entry().await? {
-        let path = entry.path();
+
+    for path in all_files {
         let ext = path
             .extension()
             .and_then(|e| e.to_str())

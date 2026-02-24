@@ -25,62 +25,61 @@ fn validate_subreddit(name: &str) -> Result<(), Box<dyn Error>> {
 }
 
 struct CommentWithContext {
-    data: serde_json::Value,
+    body: String,
     parent_text: Option<String>,
 }
 
 /// Recursively traverse a Reddit comment tree up to max_depth, filtering by min_score.
-async fn fetch_comments_recursive(
-    client: &Client,
+/// Borrows from `data` — no cloning of JSON subtrees. Only the body text string is
+/// extracted and owned by `CommentWithContext`.
+fn collect_comments_recursive(
     data: &serde_json::Value,
     current_depth: usize,
     max_depth: usize,
     min_score: i32,
-    parent_text: Option<String>,
-) -> Vec<CommentWithContext> {
+    parent_text: Option<&str>,
+    out: &mut Vec<CommentWithContext>,
+) {
     if current_depth > max_depth {
-        return Vec::new();
+        return;
     }
 
-    let mut comments = Vec::new();
-    if let Some(children) = data["children"].as_array() {
-        for child in children {
-            let kind = child["kind"].as_str().unwrap_or("");
-            if kind != "t1" {
-                continue;
-            }
-            let c_data = &child["data"];
-            let score = c_data["score"].as_i64().unwrap_or(0) as i32;
-            if score < min_score {
-                continue;
-            }
+    let Some(children) = data["children"].as_array() else {
+        return;
+    };
+    for child in children {
+        let kind = child["kind"].as_str().unwrap_or("");
+        if kind != "t1" {
+            continue;
+        }
+        let c_data = &child["data"];
+        let score = c_data["score"].as_i64().unwrap_or(0) as i32;
+        if score < min_score {
+            continue;
+        }
 
-            let body = c_data["body"].as_str().unwrap_or("");
-            if body.is_empty() || body == "[deleted]" || body == "[removed]" {
-                continue;
-            }
+        let body = c_data["body"].as_str().unwrap_or("");
+        if body.is_empty() || body == "[deleted]" || body == "[removed]" {
+            continue;
+        }
 
-            comments.push(CommentWithContext {
-                data: child.clone(),
-                parent_text: parent_text.clone(),
-            });
+        out.push(CommentWithContext {
+            body: body.to_string(),
+            parent_text: parent_text.map(str::to_string),
+        });
 
-            let replies = &c_data["replies"];
-            if replies.is_object() && replies["data"].is_object() {
-                let mut nested = Box::pin(fetch_comments_recursive(
-                    client,
-                    &replies["data"],
-                    current_depth + 1,
-                    max_depth,
-                    min_score,
-                    Some(body.to_string()),
-                ))
-                .await;
-                comments.append(&mut nested);
-            }
+        let replies = &c_data["replies"];
+        if replies.is_object() && replies["data"].is_object() {
+            collect_comments_recursive(
+                &replies["data"],
+                current_depth + 1,
+                max_depth,
+                min_score,
+                Some(body),
+                out,
+            );
         }
     }
-    comments
 }
 
 /// Discriminates between a subreddit name and a specific thread URL.
@@ -200,15 +199,14 @@ async fn fetch_thread_comments(
 
     let mut comments = Vec::new();
     if let Some(data) = resp[1].get("data") {
-        comments = Box::pin(fetch_comments_recursive(
-            client,
+        collect_comments_recursive(
             data,
             1,
             cfg.reddit_depth,
             cfg.reddit_min_score,
             None,
-        ))
-        .await;
+            &mut comments,
+        );
     }
 
     Ok(comments)
@@ -288,13 +286,11 @@ async fn ingest_subreddit(
                         match fetch_thread_comments(cfg, client, token, permalink).await {
                             Ok(comments) => {
                                 for comment_ctx in &comments {
-                                    let c_data = &comment_ctx.data["data"];
-                                    let body = c_data["body"].as_str().unwrap_or("");
                                     let mut ctx = format!("\n\n---\nPost: {title}\n\n");
                                     if let Some(parent) = comment_ctx.parent_text.as_deref() {
                                         ctx.push_str(&format!("Replying to: {parent}\n\n"));
                                     }
-                                    ctx.push_str(body);
+                                    ctx.push_str(&comment_ctx.body);
                                     content.push_str(&ctx);
                                 }
                             }
@@ -370,24 +366,22 @@ async fn ingest_thread(
     }
 
     if let Some(data) = resp[1].get("data") {
-        let comments = fetch_comments_recursive(
-            client,
+        let mut comments = Vec::new();
+        collect_comments_recursive(
             data,
             1,
             cfg.reddit_depth,
             cfg.reddit_min_score,
             None,
-        )
-        .await;
+            &mut comments,
+        );
 
         for comment_ctx in &comments {
-            let c_data = &comment_ctx.data["data"];
-            let body = c_data["body"].as_str().unwrap_or("");
             let mut ctx = format!("\n\n---\nPost: {title}\n\n");
             if let Some(parent) = comment_ctx.parent_text.as_deref() {
                 ctx.push_str(&format!("Replying to: {parent}\n\n"));
             }
-            ctx.push_str(body);
+            ctx.push_str(&comment_ctx.body);
             content.push_str(&ctx);
         }
     }
@@ -432,7 +426,7 @@ pub async fn ingest_reddit(cfg: &Config, target: &str) -> Result<usize, Box<dyn 
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_target, validate_subreddit, RedditTarget};
+    use super::{RedditTarget, classify_target, validate_subreddit};
 
     #[test]
     fn classify_bare_subreddit_name() {
@@ -543,24 +537,24 @@ mod tests {
     }
 
     #[test]
-    fn test_min_length_boundary() {
+    fn min_length_boundary() {
         assert!(validate_subreddit("a").is_err());
         assert!(validate_subreddit("ab").is_ok());
     }
 
     #[test]
-    fn test_max_length_boundary() {
+    fn max_length_boundary() {
         assert!(validate_subreddit(&"a".repeat(21)).is_ok());
         assert!(validate_subreddit(&"a".repeat(22)).is_err());
     }
 
     #[test]
-    fn test_rejects_null_byte() {
+    fn rejects_null_byte() {
         assert!(validate_subreddit("rust\0hack").is_err());
     }
 
     #[test]
-    fn test_rejects_unicode() {
+    fn rejects_unicode() {
         assert!(validate_subreddit("r\u{fc}st").is_err());
         assert!(validate_subreddit("caf\u{e9}").is_err());
     }

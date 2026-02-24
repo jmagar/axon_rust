@@ -251,9 +251,6 @@ pub(super) struct GlobalArgs {
     #[arg(global = true, long, default_value_t = 2)]
     pub(super) chrome_bootstrap_retries: usize,
 
-    #[arg(global = true, long, env = "AXON_WEBDRIVER_URL")]
-    pub(super) webdriver_url: Option<String>,
-
     #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
     pub(super) respect_robots: bool,
 

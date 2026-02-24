@@ -9,7 +9,7 @@ use crate::crates::vector::ops::qdrant::{
 };
 use chrono::Utc;
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use rand::Rng as _;
+use rand::RngExt as _;
 use reqwest::StatusCode;
 use spider::url::Url;
 use std::collections::HashSet;
@@ -65,6 +65,12 @@ fn env_bool(name: &str, default: bool) -> bool {
         },
         Err(_) => default,
     }
+}
+
+/// Cached `AXON_EMBED_STRICT_PREDELETE` value — read from env once per process.
+fn strict_predelete() -> bool {
+    static STRICT: OnceLock<bool> = OnceLock::new();
+    *STRICT.get_or_init(|| env_bool("AXON_EMBED_STRICT_PREDELETE", true))
 }
 
 pub(crate) async fn tei_embed(
@@ -232,7 +238,7 @@ async fn embed_prepared_doc(
     // Re-embedding can yield fewer chunks; delete stale points before upsert.
     // By default this is strict to preserve index consistency.
     // Set AXON_EMBED_STRICT_PREDELETE=false to continue-on-error.
-    let strict_predelete = env_bool("AXON_EMBED_STRICT_PREDELETE", true);
+    let strict_predelete = strict_predelete();
     if let Err(err) = qdrant_delete_by_url_filter(cfg, &doc.url).await {
         if strict_predelete {
             return Err(format!("embed pre-delete failed for {}: {}", doc.url, err).into());
@@ -384,6 +390,7 @@ async fn prepare_embed_docs(
         let html = fetch_html(&client, input).await?;
         docs = vec![(input.to_string(), to_markdown(&html))];
     }
+    let input_is_dir = Path::new(input).is_dir();
     let mut prepared = Vec::new();
     for (url, raw) in docs {
         if raw.trim().is_empty() {
@@ -393,7 +400,6 @@ async fn prepare_embed_docs(
         // URLs that slipped through — second line of defense behind the collector.
         // Single-URL embeds (axon embed https://...) are intentional user requests
         // and always pass through regardless of the exclude list.
-        let input_is_dir = Path::new(input).is_dir();
         if input_is_dir && url.starts_with("http") && is_excluded_url_path(&url, exclude_prefixes) {
             continue;
         }
@@ -482,7 +488,7 @@ async fn run_embed_pipeline(
                     "TEI embedding dimension mismatch: expected {}, got {}",
                     existing, dim
                 )
-                .into())
+                .into());
             }
             _ => {}
         }
@@ -531,6 +537,10 @@ async fn embed_prepared_doc_with_timeout(
     {
         Ok(result) => result,
         Err(_) => {
+            log_warn(&format!(
+                "embed timed out after {timeout_secs}s for {url}; \
+                 pre-delete may have run — Qdrant index is incomplete for this URL until re-embed"
+            ));
             Err(format!("embed timed out after {timeout_secs}s while processing {url}").into())
         }
     }

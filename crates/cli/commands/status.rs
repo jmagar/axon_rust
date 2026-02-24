@@ -2,10 +2,10 @@ mod metrics;
 
 use crate::crates::core::config::Config;
 use crate::crates::core::ui::{accent, metric, muted, primary, status_label, symbol_for_status};
-use crate::crates::jobs::crawl::{list_jobs, CrawlJob};
-use crate::crates::jobs::embed::{list_embed_jobs, EmbedJob};
-use crate::crates::jobs::extract::{list_extract_jobs, ExtractJob};
-use crate::crates::jobs::ingest::{list_ingest_jobs, IngestJob};
+use crate::crates::jobs::crawl::{CrawlJob, list_jobs};
+use crate::crates::jobs::embed::{EmbedJob, list_embed_jobs};
+use crate::crates::jobs::extract::{ExtractJob, list_extract_jobs};
+use crate::crates::jobs::ingest::{IngestJob, list_ingest_jobs};
 use chrono::{DateTime, Utc};
 use metrics::{
     display_embed_input, embed_metrics_suffix, extract_metrics_suffix, format_error,
@@ -17,26 +17,26 @@ pub async fn run_status(cfg: &Config) -> Result<(), Box<dyn Error>> {
     run_status_impl(cfg).await
 }
 
-type StatusJobs = (
-    Vec<CrawlJob>,
-    Vec<ExtractJob>,
-    Vec<EmbedJob>,
-    Vec<IngestJob>,
-);
+struct StatusJobs {
+    crawl: Vec<CrawlJob>,
+    extract: Vec<ExtractJob>,
+    embed: Vec<EmbedJob>,
+    ingest: Vec<IngestJob>,
+}
 
 async fn run_status_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let (crawl_jobs, extract_jobs, embed_jobs, ingest_jobs) = load_status_jobs(cfg).await?;
+    let jobs = load_status_jobs(cfg).await?;
 
     if cfg.json_output {
-        emit_status_json(&crawl_jobs, &extract_jobs, &embed_jobs, &ingest_jobs)?;
+        emit_status_json(&jobs.crawl, &jobs.extract, &jobs.embed, &jobs.ingest)?;
     } else {
-        emit_status_human(&crawl_jobs, &extract_jobs, &embed_jobs, &ingest_jobs);
+        emit_status_human(&jobs.crawl, &jobs.extract, &jobs.embed, &jobs.ingest);
     }
     Ok(())
 }
 
 async fn load_status_jobs(cfg: &Config) -> Result<StatusJobs, Box<dyn Error>> {
-    let jobs = spider::tokio::try_join!(
+    let (crawl, extract, embed, ingest) = spider::tokio::try_join!(
         async {
             list_jobs(cfg, 20)
                 .await
@@ -58,7 +58,12 @@ async fn load_status_jobs(cfg: &Config) -> Result<StatusJobs, Box<dyn Error>> {
                 .map_err(|e| format!("ingest status lookup failed: {e}"))
         },
     )?;
-    Ok(jobs)
+    Ok(StatusJobs {
+        crawl,
+        extract,
+        embed,
+        ingest,
+    })
 }
 
 fn emit_status_json(

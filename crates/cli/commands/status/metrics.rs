@@ -37,8 +37,11 @@ pub(super) fn format_error(error_text: Option<&str>) -> Option<String> {
         return None;
     }
     let first_line = text.lines().next().unwrap_or(text);
-    if first_line.len() > 60 {
-        Some(format!("{}…", &first_line[..60]))
+    if first_line.chars().count() > 60 {
+        Some(format!(
+            "{}…",
+            crate::crates::cli::commands::common::truncate_chars(first_line, 60)
+        ))
     } else {
         Some(first_line.to_string())
     }
@@ -151,12 +154,23 @@ pub(super) fn summarize_urls(urls_json: &Value) -> (String, usize) {
     (label, count)
 }
 
-/// Extract crawl job UUID from an embed input path like
-/// `.cache/axon-rust/output/jobs/<UUID>/markdown`.
+/// Extract crawl job UUID from an embed input path.
+/// Supports both legacy `.cache/axon-rust/output/jobs/<UUID>/markdown` and
+/// current `.cache/axon-rust/output/domains/<domain>/<UUID>/markdown` layouts.
 pub(super) fn crawl_uuid_from_embed_input(input: &str) -> Option<uuid::Uuid> {
-    let after_jobs = input.split("/jobs/").nth(1)?;
-    let candidate = after_jobs.split('/').next()?;
-    candidate.parse::<uuid::Uuid>().ok()
+    // Try legacy /jobs/<UUID> format first.
+    if let Some(after_jobs) = input.split("/jobs/").nth(1) {
+        if let Ok(uid) = after_jobs.split('/').next()?.parse::<uuid::Uuid>() {
+            return Some(uid);
+        }
+    }
+    // Try new /domains/<domain>/<UUID> format: walk path segments looking for a valid UUID.
+    for segment in input.split('/') {
+        if let Ok(uid) = segment.parse::<uuid::Uuid>() {
+            return Some(uid);
+        }
+    }
+    None
 }
 
 /// Resolve a human-readable label for an embed job's input_text.

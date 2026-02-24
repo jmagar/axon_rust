@@ -12,8 +12,8 @@ use crate::crates::core::ui::{
     symbol_for_status,
 };
 use crate::crates::jobs::crawl::{
-    cancel_job, cleanup_jobs, clear_jobs, get_job, list_jobs, recover_stale_crawl_jobs, run_worker,
-    start_crawl_jobs_batch, CrawlJob,
+    CrawlJob, cancel_job, cleanup_jobs, clear_jobs, get_job, list_jobs, recover_stale_crawl_jobs,
+    run_worker, start_crawl_jobs_batch,
 };
 use std::error::Error;
 use uuid::Uuid;
@@ -54,6 +54,9 @@ async fn maybe_handle_subcommand(cfg: &Config) -> Result<bool, Box<dyn Error>> {
         "recover" => handle_recover_subcommand(cfg).await?,
         "audit" => {
             let url = cfg.positional.get(1).map(|s| s.as_str()).unwrap_or("");
+            if url.is_empty() {
+                return Err("crawl audit requires a URL argument".into());
+            }
             audit::run_crawl_audit(cfg, url).await?;
         }
         "diff" => audit::run_crawl_audit_diff(cfg).await?,
@@ -269,8 +272,11 @@ fn job_progress_summary(job: &CrawlJob) -> Option<String> {
         }
         "failed" => {
             let err = job.error_text.as_deref().unwrap_or("unknown error");
-            let truncated = if err.len() > 60 {
-                format!("{}…", &err[..60])
+            let truncated = if err.chars().count() > 60 {
+                format!(
+                    "{}…",
+                    crate::crates::cli::commands::common::truncate_chars(err, 60)
+                )
             } else {
                 err.to_string()
             };
@@ -433,11 +439,6 @@ fn print_async_options(cfg: &Config, start_url: &str) {
     print_option("chromeScreenshot", &cfg.chrome_screenshot.to_string());
     print_option("bypassCsp", &cfg.bypass_csp.to_string());
     print_option("acceptInvalidCerts", &cfg.accept_invalid_certs.to_string());
-    // WebDriver fallback
-    print_option(
-        "webdriverFallbackUrl",
-        cfg.webdriver_url.as_deref().unwrap_or("none"),
-    );
     // Output
     print_option("embed", &cfg.embed.to_string());
     print_option("wait", &cfg.wait.to_string());
@@ -487,8 +488,8 @@ async fn run_async_enqueue_multi(cfg: &Config, urls: &[String]) -> Result<(), Bo
         }
     }
     println!();
-    if let Some((_, first_id)) = jobs.first() {
-        println!("Job ID: {first_id}");
+    for (_, job_id) in &jobs {
+        println!("Job ID: {job_id}");
     }
     Ok(())
 }

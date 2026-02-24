@@ -8,7 +8,7 @@ use redis::AsyncCommands;
 use std::error::Error;
 use uuid::Uuid;
 
-use super::{ensure_schema, reclaim_stale_running_jobs, to_job_config, CrawlJob};
+use super::{CrawlJob, ensure_schema, reclaim_stale_running_jobs, to_job_config};
 
 pub async fn doctor(cfg: &Config) -> Result<serde_json::Value, Box<dyn Error>> {
     let pg_ok = match make_pool(cfg).await {

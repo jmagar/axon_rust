@@ -194,14 +194,14 @@ async fn claim_and_fail_lifecycle_transitions_are_state_guarded() -> Result<()> 
     assert!(claim_pending_by_id(&pool, JobTable::Embed, pending_id).await?);
     assert!(!claim_pending_by_id(&pool, JobTable::Embed, pending_id).await?);
 
-    mark_job_failed(&pool, JobTable::Embed, pending_id, "synthetic-failure").await;
+    mark_job_failed(&pool, JobTable::Embed, pending_id, "synthetic-failure").await?;
     mark_job_failed(
         &pool,
         JobTable::Embed,
         already_running_id,
         "running-failure",
     )
-    .await;
+    .await?;
 
     let pending_status: String =
         sqlx::query_scalar("SELECT status FROM axon_embed_jobs WHERE id=$1")
