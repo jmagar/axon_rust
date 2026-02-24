@@ -356,9 +356,6 @@ pub(super) struct GlobalArgs {
     pub(super) crawl_queue: Option<String>,
 
     #[arg(global = true, long)]
-    pub(super) batch_queue: Option<String>,
-
-    #[arg(global = true, long)]
     pub(super) extract_queue: Option<String>,
 
     #[arg(global = true, long)]

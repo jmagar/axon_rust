@@ -8,7 +8,6 @@ use std::time::Duration;
 #[derive(Clone, Copy)]
 pub(super) enum StatsTable {
     Crawl,
-    Batch,
     Extract,
     Embed,
 }
@@ -17,7 +16,6 @@ impl StatsTable {
     fn as_str(self) -> &'static str {
         match self {
             Self::Crawl => "axon_crawl_jobs",
-            Self::Batch => "axon_batch_jobs",
             Self::Extract => "axon_extract_jobs",
             Self::Embed => "axon_embed_jobs",
         }
@@ -64,7 +62,6 @@ async fn command_count(pool: &sqlx::PgPool, command: &str) -> Option<i64> {
 #[derive(Default)]
 pub(super) struct PostgresMetrics {
     pub(super) crawl_count: Option<i64>,
-    pub(super) batch_count: Option<i64>,
     pub(super) extract_count: Option<i64>,
     pub(super) average_pages_per_second: Option<f64>,
     pub(super) average_crawl_duration_seconds: Option<f64>,
@@ -92,9 +89,8 @@ pub(super) async fn collect_postgres_metrics(cfg: &Config) -> PostgresMetrics {
     };
 
     // Check all table existence in parallel.
-    let (crawl_exists, batch_exists, extract_exists, embed_exists, runs_exists) = tokio::join!(
+    let (crawl_exists, extract_exists, embed_exists, runs_exists) = tokio::join!(
         table_exists(&pool, StatsTable::Crawl),
-        table_exists(&pool, StatsTable::Batch),
         table_exists(&pool, StatsTable::Extract),
         table_exists(&pool, StatsTable::Embed),
         // axon_command_runs is not a job table — use parameterized query directly.
@@ -104,17 +100,10 @@ pub(super) async fn collect_postgres_metrics(cfg: &Config) -> PostgresMetrics {
     let runs_exists = runs_exists.unwrap_or(false);
 
     // Collect all metric groups in parallel.
-    let (crawl_m, batch_m, extract_m, embed_m, cmd_m) = tokio::join!(
+    let (crawl_m, extract_m, embed_m, cmd_m) = tokio::join!(
         async {
             if crawl_exists {
                 collect_crawl_metrics(&pool).await
-            } else {
-                PostgresMetrics::default()
-            }
-        },
-        async {
-            if batch_exists {
-                collect_batch_metrics(&pool).await
             } else {
                 PostgresMetrics::default()
             }
@@ -150,7 +139,6 @@ pub(super) async fn collect_postgres_metrics(cfg: &Config) -> PostgresMetrics {
         average_crawl_duration_seconds: crawl_m.average_crawl_duration_seconds,
         longest_crawl: crawl_m.longest_crawl,
         average_overall_crawl_duration_seconds: crawl_m.average_overall_crawl_duration_seconds,
-        batch_count: batch_m.batch_count,
         extract_count: extract_m.extract_count,
         average_embedding_duration_seconds: embed_m.average_embedding_duration_seconds,
         total_chunks: embed_m.total_chunks,
@@ -234,13 +222,6 @@ async fn collect_crawl_metrics(pool: &sqlx::PgPool) -> PostgresMetrics {
         average_crawl_duration_seconds: crawl_dur.ok().flatten(),
         average_overall_crawl_duration_seconds: overall_dur.ok().flatten(),
         longest_crawl,
-        ..Default::default()
-    }
-}
-
-async fn collect_batch_metrics(pool: &sqlx::PgPool) -> PostgresMetrics {
-    PostgresMetrics {
-        batch_count: count_table_rows(pool, StatsTable::Batch).await,
         ..Default::default()
     }
 }

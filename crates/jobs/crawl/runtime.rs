@@ -1,7 +1,5 @@
 use crate::crates::core::config::{Config, RenderMode};
-pub(crate) use crate::crates::crawl::manifest::{
-    read_manifest_candidates, read_manifest_urls, write_audit_diff,
-};
+pub(crate) use crate::crates::crawl::manifest::{read_manifest_urls, write_audit_diff};
 use crate::crates::jobs::common::JobTable;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -13,8 +11,6 @@ use uuid::Uuid;
 static SCHEMA_INIT: OnceLock<()> = OnceLock::new();
 
 const TABLE: JobTable = JobTable::Crawl;
-const MID_CRAWL_INJECTION_TRIGGER_PAGES: u32 = 25;
-const MID_CRAWL_INJECTION_MIN_CANDIDATES: usize = 3;
 const WORKER_CONCURRENCY: usize = 2;
 const STALE_SWEEP_INTERVAL_SECS: u64 = 30;
 

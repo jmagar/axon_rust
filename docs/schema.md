@@ -19,21 +19,6 @@ Tables are auto-created on first worker/command start via `CREATE TABLE IF NOT E
 
 **Index:** `idx_axon_crawl_jobs_status` on `status`.
 
-## axon_batch_jobs
-
-| Column | Type | Nullable | Default | Description |
-|--------|------|----------|---------|-------------|
-| `id` | UUID | NOT NULL | — | Primary key |
-| `status` | TEXT | NOT NULL | — | `pending` / `running` / `completed` / `failed` / `canceled` |
-| `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Job creation timestamp |
-| `updated_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Last status change |
-| `started_at` | TIMESTAMPTZ | NULL | — | When worker began processing |
-| `finished_at` | TIMESTAMPTZ | NULL | — | When job completed/failed/canceled |
-| `error_text` | TEXT | NULL | — | Error message on failure |
-| `urls_json` | JSONB | NOT NULL | — | Array of URLs to batch-scrape |
-| `result_json` | JSONB | NULL | — | Batch results |
-| `config_json` | JSONB | NOT NULL | — | Serialized job configuration |
-
 ## axon_extract_jobs
 
 | Column | Type | Nullable | Default | Description |
@@ -97,7 +82,6 @@ This table differs structurally from the other four: it uses `source_type` and `
 | Table | Target column(s) | Notes |
 |-------|-----------------|-------|
 | `axon_crawl_jobs` | `url TEXT NOT NULL` | Single crawl seed URL |
-| `axon_batch_jobs` | `urls_json JSONB NOT NULL` | Array of URLs |
 | `axon_extract_jobs` | `urls_json JSONB NOT NULL` | Array of URLs |
 | `axon_embed_jobs` | `input_text TEXT NOT NULL` | File path, URL, or raw text |
 | `axon_ingest_jobs` | `source_type TEXT` + `target TEXT` | Discriminated source type + typed target |

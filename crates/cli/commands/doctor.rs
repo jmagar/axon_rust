@@ -8,7 +8,6 @@ use crate::crates::core::health::{
     BrowserBackendSelection,
 };
 use crate::crates::core::http::build_client;
-use crate::crates::jobs::batch::batch_doctor;
 use crate::crates::jobs::common::count_stale_and_pending_jobs;
 use crate::crates::jobs::crawl::doctor as crawl_doctor;
 use crate::crates::jobs::embed::embed_doctor;
@@ -144,7 +143,6 @@ async fn probe_chrome(chrome_url: Option<&str>) -> (bool, Option<String>) {
 
 struct DoctorProbes {
     crawl_report: Value,
-    batch_report: Value,
     extract_report: Value,
     embed_report: Value,
     ingest_report: Value,
@@ -164,7 +162,6 @@ async fn gather_doctor_probes(
 ) -> Result<DoctorProbes, Box<dyn Error>> {
     let (
         crawl_report,
-        batch_report,
         extract_report,
         embed_report,
         ingest_report,
@@ -177,7 +174,6 @@ async fn gather_doctor_probes(
         stale_jobs,
     ) = spider::tokio::join!(
         crawl_doctor(cfg),
-        batch_doctor(cfg),
         extract_doctor(cfg),
         embed_doctor(cfg),
         ingest_doctor(cfg),
@@ -197,7 +193,6 @@ async fn gather_doctor_probes(
 
     Ok(DoctorProbes {
         crawl_report: crawl_report?,
-        batch_report: batch_report?,
         extract_report: extract_report?,
         embed_report: embed_report?,
         ingest_report: ingest_report?,
@@ -217,7 +212,6 @@ fn build_pipeline_status(probes: &DoctorProbes, openai_ok: bool) -> Value {
     let extract_infra_ok = probes.extract_report["all_ok"].as_bool().unwrap_or(false);
     serde_json::json!({
         "crawl": probes.crawl_report["all_ok"].as_bool().unwrap_or(false),
-        "batch": probes.batch_report["all_ok"].as_bool().unwrap_or(false),
         "extract": extract_infra_ok,
         "extract_llm_ready": extract_infra_ok && openai_ok,
         "embed": probes.embed_report["all_ok"].as_bool().unwrap_or(false),
@@ -316,7 +310,6 @@ fn build_services_status(
 fn build_queue_names(cfg: &Config) -> Value {
     serde_json::json!({
         "crawl": cfg.crawl_queue,
-        "batch": cfg.batch_queue,
         "extract": cfg.extract_queue,
         "embed": cfg.embed_queue,
         "ingest": cfg.ingest_queue,
@@ -325,7 +318,6 @@ fn build_queue_names(cfg: &Config) -> Value {
 
 fn report_overall_ok(pipelines: &Value, tei_ok: bool, qdrant_ok: bool) -> bool {
     pipelines["crawl"].as_bool().unwrap_or(false)
-        && pipelines["batch"].as_bool().unwrap_or(false)
         && pipelines["extract"].as_bool().unwrap_or(false)
         && pipelines["embed"].as_bool().unwrap_or(false)
         && pipelines["ingest"].as_bool().unwrap_or(false)

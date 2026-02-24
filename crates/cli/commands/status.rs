@@ -2,15 +2,14 @@ mod metrics;
 
 use crate::crates::core::config::Config;
 use crate::crates::core::ui::{accent, metric, muted, primary, status_label, symbol_for_status};
-use crate::crates::jobs::batch::{list_batch_jobs, BatchJob};
 use crate::crates::jobs::crawl::{list_jobs, CrawlJob};
 use crate::crates::jobs::embed::{list_embed_jobs, EmbedJob};
 use crate::crates::jobs::extract::{list_extract_jobs, ExtractJob};
 use crate::crates::jobs::ingest::{list_ingest_jobs, IngestJob};
 use chrono::{DateTime, Utc};
 use metrics::{
-    batch_metrics_suffix, display_embed_input, embed_metrics_suffix, extract_metrics_suffix,
-    format_error, ingest_metrics_suffix, job_age, section_symbol, summarize_urls,
+    display_embed_input, embed_metrics_suffix, extract_metrics_suffix, format_error,
+    ingest_metrics_suffix, job_age, section_symbol, summarize_urls,
 };
 use std::error::Error;
 
@@ -20,32 +19,18 @@ pub async fn run_status(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
 type StatusJobs = (
     Vec<CrawlJob>,
-    Vec<BatchJob>,
     Vec<ExtractJob>,
     Vec<EmbedJob>,
     Vec<IngestJob>,
 );
 
 async fn run_status_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let (crawl_jobs, batch_jobs, extract_jobs, embed_jobs, ingest_jobs) =
-        load_status_jobs(cfg).await?;
+    let (crawl_jobs, extract_jobs, embed_jobs, ingest_jobs) = load_status_jobs(cfg).await?;
 
     if cfg.json_output {
-        emit_status_json(
-            &crawl_jobs,
-            &batch_jobs,
-            &extract_jobs,
-            &embed_jobs,
-            &ingest_jobs,
-        )?;
+        emit_status_json(&crawl_jobs, &extract_jobs, &embed_jobs, &ingest_jobs)?;
     } else {
-        emit_status_human(
-            &crawl_jobs,
-            &batch_jobs,
-            &extract_jobs,
-            &embed_jobs,
-            &ingest_jobs,
-        );
+        emit_status_human(&crawl_jobs, &extract_jobs, &embed_jobs, &ingest_jobs);
     }
     Ok(())
 }
@@ -56,11 +41,6 @@ async fn load_status_jobs(cfg: &Config) -> Result<StatusJobs, Box<dyn Error>> {
             list_jobs(cfg, 20)
                 .await
                 .map_err(|e| format!("crawl status lookup failed: {e}"))
-        },
-        async {
-            list_batch_jobs(cfg, 20)
-                .await
-                .map_err(|e| format!("batch status lookup failed: {e}"))
         },
         async {
             list_extract_jobs(cfg, 20)
@@ -83,7 +63,6 @@ async fn load_status_jobs(cfg: &Config) -> Result<StatusJobs, Box<dyn Error>> {
 
 fn emit_status_json(
     crawl_jobs: &[CrawlJob],
-    batch_jobs: &[BatchJob],
     extract_jobs: &[ExtractJob],
     embed_jobs: &[EmbedJob],
     ingest_jobs: &[IngestJob],
@@ -92,7 +71,6 @@ fn emit_status_json(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "local_crawl_jobs": crawl_jobs,
-            "local_batch_jobs": batch_jobs,
             "local_extract_jobs": extract_jobs,
             "local_embed_jobs": embed_jobs,
             "local_ingest_jobs": ingest_jobs,
@@ -103,22 +81,14 @@ fn emit_status_json(
 
 fn emit_status_human(
     crawl_jobs: &[CrawlJob],
-    batch_jobs: &[BatchJob],
     extract_jobs: &[ExtractJob],
     embed_jobs: &[EmbedJob],
     ingest_jobs: &[IngestJob],
 ) {
-    print_totals(
-        crawl_jobs,
-        batch_jobs,
-        extract_jobs,
-        embed_jobs,
-        ingest_jobs,
-    );
+    print_totals(crawl_jobs, extract_jobs, embed_jobs, ingest_jobs);
     print_crawls(crawl_jobs);
     print_embeds(embed_jobs, crawl_jobs);
     print_ingests(ingest_jobs);
-    print_batches(batch_jobs);
     print_extracts(extract_jobs);
 }
 
@@ -155,28 +125,24 @@ fn status_breakdown(statuses: &[&str]) -> String {
 
 fn print_totals(
     crawl_jobs: &[CrawlJob],
-    batch_jobs: &[BatchJob],
     extract_jobs: &[ExtractJob],
     embed_jobs: &[EmbedJob],
     ingest_jobs: &[IngestJob],
 ) {
     let crawl_statuses: Vec<&str> = crawl_jobs.iter().map(|j| j.status.as_str()).collect();
-    let batch_statuses: Vec<&str> = batch_jobs.iter().map(|j| j.status.as_str()).collect();
     let extract_statuses: Vec<&str> = extract_jobs.iter().map(|j| j.status.as_str()).collect();
     let embed_statuses: Vec<&str> = embed_jobs.iter().map(|j| j.status.as_str()).collect();
     let ingest_statuses: Vec<&str> = ingest_jobs.iter().map(|j| j.status.as_str()).collect();
 
     println!("{}", primary("Job Status"));
     println!(
-        "  {}  {}    {}  {}    {}  {}    {}  {}    {}  {}",
+        "  {}  {}    {}  {}    {}  {}    {}  {}",
         muted("Crawl"),
         status_breakdown(&crawl_statuses),
         muted("Embed"),
         status_breakdown(&embed_statuses),
         muted("Ingest"),
         status_breakdown(&ingest_statuses),
-        muted("Batch"),
-        status_breakdown(&batch_statuses),
         muted("Extract"),
         status_breakdown(&extract_statuses),
     );
@@ -310,35 +276,6 @@ fn print_job_row(
     if let Some(err) = format_error(error_text) {
         println!("       {}", muted(&format!("↳ {err}")));
     }
-}
-
-fn print_batches(batch_jobs: &[BatchJob]) {
-    let statuses: Vec<&str> = batch_jobs.iter().map(|j| j.status.as_str()).collect();
-    let header_sym = if batch_jobs.is_empty() {
-        symbol_for_status("completed")
-    } else {
-        section_symbol(&statuses)
-    };
-    println!("{}", primary(&format!("{header_sym} Batches")));
-    if batch_jobs.is_empty() {
-        println!("  {}", muted("None."));
-        println!();
-        return;
-    }
-    for job in batch_jobs.iter().take(5) {
-        let (target, url_count) = summarize_urls(&job.urls_json);
-        let metrics_suffix = batch_metrics_suffix(job.result_json.as_ref(), url_count);
-        print_job_row(
-            &job.status,
-            &job.id,
-            &target,
-            &metrics_suffix,
-            job.finished_at.as_ref(),
-            &job.updated_at,
-            job.error_text.as_deref(),
-        );
-    }
-    println!();
 }
 
 fn print_extracts(extract_jobs: &[ExtractJob]) {

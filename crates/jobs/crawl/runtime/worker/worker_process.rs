@@ -4,7 +4,6 @@ use crate::crates::core::logging::{log_done, log_info, log_warn};
 use crate::crates::crawl::engine::{
     run_crawl_once, should_fallback_to_chrome, update_latest_reflink, CrawlSummary,
 };
-use crate::crates::jobs::batch::apply_queue_injection_with_pool;
 use crate::crates::jobs::embed::start_embed_job_with_pool;
 use crate::crates::jobs::status::JobStatus;
 use crate::crates::vector::ops::qdrant::qdrant_delete_stale_domain_urls;
@@ -13,15 +12,11 @@ use sqlx::PgPool;
 use std::collections::HashSet;
 use std::error::Error;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
 use super::super::robots::{append_robots_backfill, RobotsBackfillStats, RobotsDiscoveryStats};
-use super::super::{
-    read_manifest_candidates, read_manifest_urls, resolve_initial_mode, write_audit_diff,
-    MID_CRAWL_INJECTION_MIN_CANDIDATES, MID_CRAWL_INJECTION_TRIGGER_PAGES,
-};
+use super::super::{read_manifest_urls, resolve_initial_mode, write_audit_diff};
 use super::job_context::{load_job_execution_context, JobExecutionContext};
 use super::result_builder::{build_completed_result, CompletedResultContext};
 
@@ -152,10 +147,6 @@ async fn maybe_complete_cache_hit(
 fn spawn_progress_task(
     pool: &PgPool,
     id: Uuid,
-    job_cfg: &Config,
-    extraction_prompt: Option<String>,
-    manifest_path: PathBuf,
-    injection_state: Arc<tokio::sync::Mutex<Option<serde_json::Value>>>,
 ) -> (
     tokio::sync::mpsc::Sender<CrawlSummary>,
     tokio::task::JoinHandle<()>,
@@ -163,49 +154,11 @@ fn spawn_progress_task(
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<CrawlSummary>(256);
     let progress_pool = pool.clone();
     let progress_job_id = id;
-    let progress_cfg = job_cfg.clone();
-    let progress_prompt = extraction_prompt;
-    let progress_manifest_path = manifest_path;
-    let progress_injection_state = Arc::clone(&injection_state);
     let progress_task = tokio::spawn(async move {
-        let mut injection_attempted = false;
         while let Some(progress) = progress_rx.recv().await {
             let pages_crawled = progress.pages_seen as u64;
             let filtered_urls = pages_crawled.saturating_sub(progress.markdown_files as u64);
 
-            if !injection_attempted && progress.pages_seen >= MID_CRAWL_INJECTION_TRIGGER_PAGES {
-                match read_manifest_candidates(&progress_manifest_path).await {
-                    Ok(candidates) if candidates.len() >= MID_CRAWL_INJECTION_MIN_CANDIDATES => {
-                        let injection = match apply_queue_injection_with_pool(
-                            &progress_pool,
-                            &progress_cfg,
-                            &candidates,
-                            progress_prompt.as_deref(),
-                            "mid-crawl",
-                            true,
-                        )
-                        .await
-                        {
-                            Ok(value) => value,
-                            Err(err) => serde_json::json!({
-                                "phase": "mid-crawl",
-                                "queue_status": "failed",
-                                "error": err.to_string(),
-                            }),
-                        };
-                        *progress_injection_state.lock().await = Some(injection);
-                        injection_attempted = true;
-                    }
-                    Ok(_) => {}
-                    Err(err) => {
-                        log_warn(&format!(
-                            "mid-crawl queue injection probe failed for crawl job {progress_job_id}: {err}"
-                        ));
-                    }
-                }
-            }
-
-            let mid_queue_injection = progress_injection_state.lock().await.clone();
             let progress_json = serde_json::json!({
                 "phase": "crawling",
                 "md_created": progress.markdown_files,
@@ -213,7 +166,6 @@ fn spawn_progress_task(
                 "filtered_urls": filtered_urls,
                 "pages_crawled": pages_crawled,
                 "crawl_stream_pages": progress.pages_seen,
-                "mid_queue_injection": mid_queue_injection,
             });
             let _ = sqlx::query(&format!(
                 "UPDATE axon_crawl_jobs SET updated_at=NOW(), result_json=$2 WHERE id=$1 AND status='{running}'",
@@ -396,15 +348,7 @@ async fn run_active_crawl_job(
     ctx: &JobExecutionContext,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
     let manifest_path = ctx.job_cfg.output_dir.join("manifest.jsonl");
-    let mid_injection_state = Arc::new(tokio::sync::Mutex::new(None::<serde_json::Value>));
-    let (progress_tx, progress_task) = spawn_progress_task(
-        pool,
-        id,
-        &ctx.job_cfg,
-        ctx.extraction_prompt.clone(),
-        manifest_path.clone(),
-        Arc::clone(&mid_injection_state),
-    );
+    let (progress_tx, progress_task) = spawn_progress_task(pool, id);
 
     let final_prompt = ctx.extraction_prompt.clone();
     let result = async {
@@ -445,7 +389,6 @@ async fn run_active_crawl_job(
                 final_summary,
                 robots_backfill_stats,
                 robots_discovery_stats,
-                mid_injection_state: Arc::clone(&mid_injection_state),
                 final_prompt,
             },
         )

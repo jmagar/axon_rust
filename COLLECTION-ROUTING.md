@@ -22,7 +22,6 @@ Reddit and YouTube content lives in its own source collection (`r/selfhosted`, `
 |---------|-----------|--------|
 | `scrape <url>` | `cortex` | global default |
 | `crawl <url>` | `cortex` | global default |
-| `batch <urls>` | `cortex` | global default |
 | `embed <file/url>` | `cortex` | global default |
 | `search`, `research` | `cortex` | global default |
 

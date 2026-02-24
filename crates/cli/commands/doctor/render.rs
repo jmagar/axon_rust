@@ -177,7 +177,7 @@ fn render_pipeline_row(report: &serde_json::Value, name: &str) {
 
 fn render_pipelines_section(report: &serde_json::Value) {
     println!("{}", primary("Pipelines"));
-    for name in ["crawl", "batch", "extract", "embed", "ingest"] {
+    for name in ["crawl", "extract", "embed", "ingest"] {
         render_pipeline_row(report, name);
     }
     // Extra warning line for extract when infra is up but LLM is missing.

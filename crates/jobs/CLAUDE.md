@@ -8,7 +8,6 @@ Async job workers backed by RabbitMQ (lapin) + PostgreSQL (sqlx).
 jobs/
 ├── common/          # Shared infra: pool, AMQP channel, claim/mark/enqueue
 ├── crawl_jobs/      # manifest, processor, repo, sitemap, watchdog, worker, runtime
-├── batch_jobs/      # worker + queue_injection rule engine + maintenance
 ├── extract_jobs/    # Extract worker
 ├── embed_jobs/      # Embed worker
 ├── ingest_jobs.rs   # Ingest job schema + worker (github/reddit/youtube)
@@ -42,9 +41,6 @@ All internal async channels use `tokio::sync::mpsc::channel(256)` — **never** 
 
 ### worker_lane.rs (Ingest)
 `AXON_INGEST_LANES` (default 2) controls how many ingest jobs run in parallel. Each lane holds one AMQP consumer. Lane count is separate from per-job concurrency.
-
-### Queue Injection (`batch_jobs/queue_injection.rs`)
-Rule engine that routes batch results into downstream queues (e.g. batch→extract). Rules loaded from `AXON_QUEUE_INJECTION_RULES_JSON` env var (empty = disabled). Keep this logic in `queue_injection.rs` — do not inline into the worker.
 
 ## ingest_jobs Schema Difference
 `axon_ingest_jobs` uses `source_type` + `target` columns instead of `url`/`urls_json` used by all other job tables. When querying or listing ingest jobs, join/filter on `source_type` (`github`/`reddit`/`youtube`) not on `url`.

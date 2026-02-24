@@ -148,11 +148,6 @@ fn print_top_level_help() {
         cmd("extract [urls...]"),
         dim("Extract structured data")
     );
-    println!(
-        "  {:<28} {}",
-        cmd("batch [urls...]"),
-        dim("Batch scrape multiple URLs")
-    );
     println!();
     println!("  {}", section("Vector Search"));
     println!(

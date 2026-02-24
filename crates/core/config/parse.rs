@@ -296,10 +296,6 @@ fn into_config(cli: Cli) -> Result<Config, String> {
             .crawl_queue
             .or_else(|| env::var("AXON_CRAWL_QUEUE").ok())
             .unwrap_or_else(|| "axon.crawl.jobs".to_string()),
-        batch_queue: global
-            .batch_queue
-            .or_else(|| env::var("AXON_BATCH_QUEUE").ok())
-            .unwrap_or_else(|| "axon.batch.jobs".to_string()),
         extract_queue: global
             .extract_queue
             .or_else(|| env::var("AXON_EXTRACT_QUEUE").ok())

@@ -177,7 +177,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "/command/s6-svstat -u /run/service/crawl-worker >/dev/null && /command/s6-svstat -u /run/service/batch-worker >/dev/null && /command/s6-svstat -u /run/service/extract-worker >/dev/null && /command/s6-svstat -u /run/service/embed-worker >/dev/null && /command/s6-svstat -u /run/service/ingest-worker >/dev/null",
+          "/command/s6-svstat -u /run/service/crawl-worker >/dev/null && /command/s6-svstat -u /run/service/extract-worker >/dev/null && /command/s6-svstat -u /run/service/embed-worker >/dev/null && /command/s6-svstat -u /run/service/ingest-worker >/dev/null",
         ]
       interval: 30s
       timeout: 10s

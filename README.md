@@ -8,8 +8,8 @@ Axon is a single CLI for crawl/scrape/extract plus local vector retrieval and Q&
 
 ## Features
 
-- Commands: `scrape`, `crawl`, `map`, `search`, `batch`, `extract`, `embed`, `query`, `retrieve`, `ask`, `evaluate`, `suggest`, `github`, `ingest`, `reddit`, `youtube`, `sessions`, `sources`, `domains`, `stats`, `status`, `doctor`, `dedupe`, `debug`
-- Async queue-backed jobs for `crawl`/`batch`/`extract`/`embed`
+- Commands: `scrape`, `crawl`, `map`, `search`, `extract`, `embed`, `query`, `retrieve`, `ask`, `evaluate`, `suggest`, `github`, `ingest`, `reddit`, `youtube`, `sessions`, `sources`, `domains`, `stats`, `status`, `doctor`, `dedupe`, `debug`
+- Async queue-backed jobs for `crawl`/`extract`/`embed`
 - **Surgical Incremental Crawling**: SHA-256 content hashing, Reflink/Hardlink storage reuse, and smart embedding skips for unchanged pages.
 - TEI embeddings + Qdrant vector storage
 - OpenAI-compatible extraction and answer generation
@@ -24,7 +24,7 @@ Axon is a single CLI for crawl/scrape/extract plus local vector retrieval and Q&
 - `crates/core` — config, HTTP, health checks, logging, content transforms
 - `crates/crawl` — crawling engine and sitemap backfill
 - `crates/extract` — placeholder module (extraction logic lives in `vector/ops`)
-- `crates/jobs` — queue workers for crawl/batch/extract/embed
+- `crates/jobs` — queue workers for crawl/extract/embed
 - `crates/vector` — embeddings + Qdrant operations (`query/retrieve/ask/evaluate/suggest/sources/domains/stats/dedupe`)
 
 ```
@@ -43,7 +43,7 @@ axon_rust/
 │   │       │   ├── audit.rs
 │   │       │   └── audit/audit_diff.rs
 │   │       ├── doctor/     # Doctor command subdir
-│   │       └── scrape.rs, map.rs, batch.rs, embed.rs, extract.rs,
+│   │       └── scrape.rs, map.rs, embed.rs, extract.rs,
 │   │           search.rs, status.rs, debug.rs, doctor/,
 │   │           github.rs, reddit.rs, youtube.rs
 │   ├── core/
@@ -75,8 +75,6 @@ axon_rust/
 │   │   │                   # claim_next_pending, mark_job_failed, enqueue_job
 │   │   ├── common/
 │   │   │   └── tests.rs
-│   │   ├── batch_jobs/     # Batch worker
-│   │   │   ├── worker.rs, maintenance.rs, tests.rs
 │   │   ├── embed_jobs/     # Embed worker
 │   │   │   └── tests.rs
 │   │   ├── extract_jobs/   # Extract worker
@@ -109,7 +107,6 @@ axon_rust/
 │       │   └── 10-load-axon-env  # Loads .env on container startup
 │       └── s6-rc.d/        # s6-rc service definitions
 │           ├── crawl-worker/  (run, type)
-│           ├── batch-worker/  (run, type)
 │           ├── extract-worker/  (run, type)
 │           ├── embed-worker/  (run, type)
 │           └── user/contents.d/
@@ -184,13 +181,11 @@ Copy `.env.example` to `.env`. At minimum set the `[REQUIRED]` vars:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AXON_CRAWL_QUEUE` | `axon.crawl.jobs` | Crawl job queue name |
-| `AXON_BATCH_QUEUE` | `axon.batch.jobs` | Batch job queue name |
 | `AXON_EXTRACT_QUEUE` | `axon.extract.jobs` | Extract job queue name |
 | `AXON_EMBED_QUEUE` | `axon.embed.jobs` | Embed job queue name |
 | `AXON_INGEST_QUEUE` | `axon.ingest.jobs` | Ingest job queue name (github/reddit/youtube) |
 | `AXON_INGEST_LANES` | `2` | Number of parallel ingest worker lanes |
 | `AXON_COLLECTION` | `cortex` | Qdrant collection name |
-| `AXON_QUEUE_INJECTION_RULES_JSON` | — | JSON array of `QueueInjectionRule` objects controlling which batch-scraped pages are forwarded to the extract queue. Each rule has `name`, `min_markdown_chars`, `min_quality_score`, `max_urls`, and `url_contains_any` fields. Defaults to three built-in rules (`docs-first`, `tutorial-longform`, `high-signal-catchall`). |
 
 ### Optional Ingest Credentials
 
@@ -261,7 +256,6 @@ Notes:
 `axon-workers` uses `s6-overlay` and runs four long-lived worker services in one container:
 
 - `crawl-worker` -> `/usr/local/bin/axon crawl worker`
-- `batch-worker` -> `/usr/local/bin/axon batch worker`
 - `extract-worker` -> `/usr/local/bin/axon extract worker`
 - `embed-worker` -> `/usr/local/bin/axon embed worker`
 
@@ -468,7 +462,6 @@ All flags are global (usable with any subcommand).
 |------|---------|---------|
 | `--shared-queue <bool>` | — | `true` |
 | `--crawl-queue <name>` | `AXON_CRAWL_QUEUE` | `axon.crawl.jobs` |
-| `--batch-queue <name>` | `AXON_BATCH_QUEUE` | `axon.batch.jobs` |
 | `--extract-queue <name>` | `AXON_EXTRACT_QUEUE` | `axon.extract.jobs` |
 | `--embed-queue <name>` | `AXON_EMBED_QUEUE` | `axon.embed.jobs` |
 
@@ -491,7 +484,6 @@ Concurrency tuned relative to available CPU cores:
 - Jobs stuck in pending: ensure `axon-workers` is healthy and AMQP/Redis are reachable
 - Manually reclaim stale jobs if needed:
   - `axon crawl recover`
-  - `axon batch recover`
   - `axon extract recover`
   - `axon embed recover`
 - `ask`/`extract` failures: verify `OPENAI_BASE_URL` is a base URL (e.g. `http://host/v1`, not `/chat/completions`)
@@ -546,21 +538,6 @@ Tables are auto-created on first worker/command start via `CREATE TABLE IF NOT E
 | `config_json` | JSONB | NOT NULL | — | Serialized job configuration |
 
 **Index:** `idx_axon_crawl_jobs_status` on `status`.
-
-### axon_batch_jobs
-
-| Column | Type | Nullable | Default | Description |
-|--------|------|----------|---------|-------------|
-| `id` | UUID | NOT NULL | — | Primary key |
-| `status` | TEXT | NOT NULL | — | `pending` / `running` / `completed` / `failed` / `canceled` |
-| `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Job creation timestamp |
-| `updated_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Last status change |
-| `started_at` | TIMESTAMPTZ | NULL | — | When worker began processing |
-| `finished_at` | TIMESTAMPTZ | NULL | — | When job completed/failed/canceled |
-| `error_text` | TEXT | NULL | — | Error message on failure |
-| `urls_json` | JSONB | NOT NULL | — | Array of URLs to batch-scrape |
-| `result_json` | JSONB | NULL | — | Batch results |
-| `config_json` | JSONB | NOT NULL | — | Serialized job configuration |
 
 ### axon_extract_jobs
 

@@ -185,11 +185,6 @@ fn print_command_counts(stats: &serde_json::Value) {
     );
     println!(
         "  {} {}",
-        muted("Batches:"),
-        fmt_count(&stats["counts"]["batches"])
-    );
-    println!(
-        "  {} {}",
         muted("Queries:"),
         fmt_count(&stats["counts"]["queries"])
     );

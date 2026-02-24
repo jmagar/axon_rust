@@ -59,7 +59,6 @@ async fn run_stats_native_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
             "embeds": pg.embed_count,
             "scrapes": pg.scrape_count,
             "extracts": pg.extract_count,
-            "batches": pg.batch_count,
             "queries": pg.query_count,
             "asks": pg.ask_count,
             "retrieves": pg.retrieve_count,

@@ -27,7 +27,6 @@ fn durable_queue_options() -> QueueDeclareOptions {
 #[derive(Debug, Clone, Copy)]
 pub enum JobTable {
     Crawl,
-    Batch,
     Extract,
     Embed,
     Ingest,
@@ -37,7 +36,6 @@ impl JobTable {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Crawl => "axon_crawl_jobs",
-            Self::Batch => "axon_batch_jobs",
             Self::Extract => "axon_extract_jobs",
             Self::Embed => "axon_embed_jobs",
             Self::Ingest => "axon_ingest_jobs",
@@ -55,7 +53,6 @@ pub(crate) fn test_config(pg_url: &str) -> Config {
         collection: "test".to_string(),
         output_dir: PathBuf::from(".cache/test-worker-jobs"),
         crawl_queue: "axon.test.crawl".to_string(),
-        batch_queue: "axon.test.batch".to_string(),
         extract_queue: "axon.test.extract".to_string(),
         embed_queue: "axon.test.embed".to_string(),
         ingest_queue: "axon.test.ingest".to_string(),
@@ -441,8 +438,6 @@ pub async fn count_stale_and_pending_jobs(cfg: &Config, stale_minutes: i64) -> O
     let query = r#"
         WITH all_jobs AS (
             SELECT status, started_at FROM axon_crawl_jobs
-            UNION ALL
-            SELECT status, started_at FROM axon_batch_jobs
             UNION ALL
             SELECT status, started_at FROM axon_extract_jobs
             UNION ALL

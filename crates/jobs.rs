@@ -1,4 +1,3 @@
-pub mod batch;
 pub mod common;
 pub mod crawl;
 pub mod embed;

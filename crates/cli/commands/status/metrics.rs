@@ -58,19 +58,6 @@ pub(super) fn section_symbol(statuses: &[&str]) -> String {
     }
 }
 
-pub(super) fn batch_metrics_suffix(result_json: Option<&Value>, url_count: usize) -> String {
-    let sep = muted(" | ");
-    let mut parts = vec![metric(url_count, "urls")];
-    if let Some(results_len) = result_json
-        .and_then(|r| r.get("results"))
-        .and_then(|v| v.as_array())
-        .map(|v| v.len())
-    {
-        parts.push(metric(results_len, "results"));
-    }
-    format!("{sep}{}", parts.join(&sep))
-}
-
 pub(super) fn extract_metrics_suffix(result_json: Option<&Value>, url_count: usize) -> String {
     let sep = muted(" | ");
     let mut parts = vec![metric(url_count, "urls")];

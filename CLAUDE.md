@@ -140,7 +140,6 @@ All flags are `--global` (usable with any subcommand).
 |------|------|---------|---------|
 | `--shared-queue <bool>` | bool | — | `true` |
 | `--crawl-queue <name>` | string | `AXON_CRAWL_QUEUE` | `axon.crawl.jobs` |
-| `--batch-queue <name>` | string | `AXON_BATCH_QUEUE` | `axon.batch.jobs` |
 | `--extract-queue <name>` | string | `AXON_EXTRACT_QUEUE` | `axon.extract.jobs` |
 | `--embed-queue <name>` | string | `AXON_EMBED_QUEUE` | `axon.embed.jobs` |
 
@@ -177,7 +176,6 @@ axon_rust/
 │   ├── jobs/               # AMQP-backed async job workers
 │   │   ├── common/         # Shared infra: make_pool, open_amqp_channel, claim_next_pending
 │   │   ├── crawl_jobs/     # Crawl pipeline (manifest, processor, repo, sitemap, watchdog, worker, runtime)
-│   │   ├── batch_jobs/     # Batch worker + queue_injection rule engine + maintenance
 │   │   ├── extract_jobs/   # Extract worker
 │   │   ├── embed_jobs/     # Embed worker
 │   │   ├── ingest_jobs.rs  # Ingest job schema + worker (github/reddit/youtube)
@@ -189,7 +187,7 @@ axon_rust/
 │   ├── Dockerfile          # Multi-stage build; s6-overlay for service supervision
 │   └── s6/
 │       ├── cont-init.d/    # 10-load-axon-env: loads .env on container startup
-│       └── s6-rc.d/        # crawl-worker, batch-worker, extract-worker, embed-worker, ingest-worker (+ user bundle)
+│       └── s6-rc.d/        # crawl-worker, extract-worker, embed-worker, ingest-worker (+ user bundle)
 ├── docker-compose.yaml     # Full stack: postgres, redis, rabbitmq, qdrant, axon-workers
 ├── .env                    # Secrets (gitignored)
 └── .env.example            # Template — copy to .env and fill in
@@ -206,7 +204,7 @@ axon_rust/
 | `axon-rabbitmq` | rabbitmq:4.0-management | `45535` | AMQP job queue |
 | `axon-qdrant` | qdrant/qdrant:v1.13.1 | `53333`, `53334` (gRPC) | Vector store |
 | `axon-chrome` | built from Dockerfile.chrome | `6000` (management), `9222` (CDP proxy) | headless_browser + chrome-headless-shell |
-| `axon-workers` | built from Dockerfile | — | 5 workers (crawl/batch/extract/embed/ingest) |
+| `axon-workers` | built from Dockerfile | — | 4 workers (crawl/extract/embed/ingest) |
 
 All services live on the `axon` bridge network. Data volumes use `${AXON_DATA_DIR:-./data}/axon/...` (override with `AXON_DATA_DIR` in `.env`).
 
@@ -265,7 +263,6 @@ AXON_CHROME_REMOTE_URL=http://axon-chrome:6000
 
 # Optional queue name overrides
 AXON_CRAWL_QUEUE=axon.crawl.jobs
-AXON_BATCH_QUEUE=axon.batch.jobs
 AXON_EXTRACT_QUEUE=axon.extract.jobs
 AXON_EMBED_QUEUE=axon.embed.jobs
 AXON_INGEST_QUEUE=axon.ingest.jobs
@@ -285,7 +282,6 @@ AXON_EMBED_DOC_TIMEOUT_SECS=300     # per-document embed timeout
 AXON_EMBED_STRICT_PREDELETE=true    # delete existing points before re-embedding
 AXON_JOB_STALE_TIMEOUT_SECS=300    # seconds before a running job is considered stale
 AXON_JOB_STALE_CONFIRM_SECS=60     # additional grace period before stale reclaim
-AXON_QUEUE_INJECTION_RULES_JSON=    # JSON rules for batch→extract queue injection (empty = disabled)
 ```
 
 ### Dev vs Container URL Resolution
@@ -443,7 +439,6 @@ Tables are auto-created via `ensure_schema()` in each `*_jobs.rs`. Full column d
 | Table | Key columns |
 |-------|-------------|
 | `axon_crawl_jobs` | `id`, `url`, `status`, `config_json`, `result_json` — index on `status` |
-| `axon_batch_jobs` | `id`, `status`, `urls_json`, `config_json`, `result_json` |
 | `axon_extract_jobs` | `id`, `status`, `urls_json`, `config_json`, `result_json` |
 | `axon_embed_jobs` | `id`, `status`, `input_text`, `config_json`, `result_json` |
 | `axon_ingest_jobs` | `id`, `source_type`, `target`, `status`, `config_json`, `result_json` — partial index on pending |
