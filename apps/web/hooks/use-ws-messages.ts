@@ -72,6 +72,9 @@ export function useWsMessages() {
 
 export { WsMessagesContext }
 
+/** Cap stdout accumulators to prevent unbounded memory growth */
+const MAX_STDOUT_ITEMS = 5000
+
 export function useWsMessagesProvider() {
   const { subscribe, send } = useAxonWs()
   const [markdownContent, setMarkdownContent] = useState('')
@@ -122,17 +125,29 @@ export function useWsMessagesProvider() {
           setStdoutLines([])
           setStdoutJson([])
           break
-        case 'stdout_json':
-          setStdoutJson((prev) => [...prev, msg.data])
+        case 'stdout_json': {
+          setStdoutJson((prev) => {
+            const next = [...prev, msg.data]
+            return next.length > MAX_STDOUT_ITEMS ? next.slice(-MAX_STDOUT_ITEMS) : next
+          })
           setHasResults(true)
           break
-        case 'stdout_line':
-          setStdoutLines((prev) => [...prev, msg.line])
+        }
+        case 'stdout_line': {
+          setStdoutLines((prev) => {
+            const next = [...prev, msg.line]
+            return next.length > MAX_STDOUT_ITEMS ? next.slice(-MAX_STDOUT_ITEMS) : next
+          })
           setHasResults(true)
           break
+        }
         case 'screenshot_files':
           setScreenshotFiles(msg.files)
           setHasResults(true)
+          break
+        case 'output':
+        case 'stats':
+          // Handled by other consumers (DockerStats component for stats, legacy for output)
           break
         case 'done': {
           setIsProcessing(false)
