@@ -19,3 +19,5 @@ crates/vector/ops/tei.rs
 scripts/enforce_monoliths.py
 # cdp_screenshot() 199 lines — CDP protocol sequence, splitting mid-flow hurts readability (2026-02-24)
 crates/cli/commands/screenshot.rs
+# 1081 lines — imperative canvas animation ported from neural.js, splitting hurts animation coherence (2026-02-24)
+apps/web/components/neural-canvas.tsx
