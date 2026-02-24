@@ -24,10 +24,7 @@ export function DockerStats({ onStats }: DockerStatsProps) {
   const { subscribe, updateStatusLabel } = useAxonWs()
   const [data, setData] = useState<StatsData | null>(null)
 
-  const stableOnStats = useCallback(
-    (d: StatsData) => onStats?.(d),
-    [onStats],
-  )
+  const stableOnStats = useCallback((d: StatsData) => onStats?.(d), [onStats])
 
   useEffect(() => {
     return subscribe((msg: WsServerMsg) => {
@@ -42,7 +39,7 @@ export function DockerStats({ onStats }: DockerStatsProps) {
 
       // Update WS indicator label with live stats
       updateStatusLabel(
-        `LIVE ${msg.container_count}\u00d7 CPU ${msg.aggregate.cpu_percent.toFixed(0)}%`
+        `LIVE ${msg.container_count}\u00d7 CPU ${msg.aggregate.cpu_percent.toFixed(0)}%`,
       )
     })
   }, [subscribe, stableOnStats, updateStatusLabel])
@@ -76,17 +73,15 @@ export function DockerStats({ onStats }: DockerStatsProps) {
             const shortName = name.replace(/^axon-/, '')
             return (
               <div key={name} className="flex items-center gap-3 px-2 py-1 rounded bg-card/30">
-                <span className="text-primary font-medium min-w-[80px] truncate">
-                  {shortName}
-                </span>
-                <span className="text-muted-foreground">
-                  CPU {m.cpu_percent.toFixed(1)}%
-                </span>
+                <span className="text-primary font-medium min-w-[80px] truncate">{shortName}</span>
+                <span className="text-muted-foreground">CPU {m.cpu_percent.toFixed(1)}%</span>
                 <span className="text-muted-foreground">
                   MEM {m.memory_usage_mb.toFixed(0)}MB/{m.memory_limit_mb.toFixed(0)}MB
                 </span>
                 <span className="text-muted-foreground">
-                  NET {'\u2191'}{formatBytes(m.net_tx_rate)}/s {'\u2193'}{formatBytes(m.net_rx_rate)}/s
+                  NET {'\u2191'}
+                  {formatBytes(m.net_tx_rate)}/s {'\u2193'}
+                  {formatBytes(m.net_rx_rate)}/s
                 </span>
               </div>
             )

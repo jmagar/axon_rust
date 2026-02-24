@@ -1,11 +1,6 @@
 'use client'
 
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-} from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import type { ContainerStats } from '@/lib/ws-protocol'
 
 // ---------------------------------------------------------------------------
@@ -109,10 +104,8 @@ class Dendrite {
     this.endY = y + Math.sin(angle) * length
 
     const perpAngle = angle + Math.PI / 2
-    this.cpX =
-      (this.startX + this.endX) / 2 + Math.cos(perpAngle) * this.curvature
-    this.cpY =
-      (this.startY + this.endY) / 2 + Math.sin(perpAngle) * this.curvature
+    this.cpX = (this.startX + this.endX) / 2 + Math.cos(perpAngle) * this.curvature
+    this.cpY = (this.startY + this.endY) / 2 + Math.sin(perpAngle) * this.curvature
 
     // Dendritic spines — LOD: skip for shallow-depth neurons
     this.spines = []
@@ -129,15 +122,11 @@ class Dendrite {
 
     // Branch deeper with tapering probability
     if (depth < 3 && Math.random() > 0.3 + depth * 0.15) {
-      const branchCount =
-        depth < 2 ? Math.floor(Math.random() * 2) + 1 : 1
+      const branchCount = depth < 2 ? Math.floor(Math.random() * 2) + 1 : 1
       for (let i = 0; i < branchCount; i++) {
-        const branchAngle =
-          angle + ((Math.random() - 0.5) * Math.PI) / 2.5
+        const branchAngle = angle + ((Math.random() - 0.5) * Math.PI) / 2.5
         const branchLength = length * (0.45 + Math.random() * 0.25)
-        this.branches.push(
-          new Dendrite(this.endX, this.endY, branchAngle, branchLength, depth + 1),
-        )
+        this.branches.push(new Dendrite(this.endX, this.endY, branchAngle, branchLength, depth + 1))
       }
     }
   }
@@ -185,14 +174,8 @@ class Dendrite {
     if (!skipSpines) {
       for (const spine of this.spines) {
         const t = spine.t
-        const px =
-          (1 - t) * (1 - t) * this.startX +
-          2 * (1 - t) * t * cpxs +
-          t * t * this.endX
-        const py =
-          (1 - t) * (1 - t) * this.startY +
-          2 * (1 - t) * t * cpys +
-          t * t * this.endY
+        const px = (1 - t) * (1 - t) * this.startX + 2 * (1 - t) * t * cpxs + t * t * this.endX
+        const py = (1 - t) * (1 - t) * this.startY + 2 * (1 - t) * t * cpys + t * t * this.endY
         const sx = px + Math.cos(spine.angle) * spine.length * depthScale
         const sy = py + Math.sin(spine.angle) * spine.length * depthScale
 
@@ -223,18 +206,14 @@ class Dendrite {
       }
     }
 
-    this.branches.forEach((branch) =>
-      branch.draw(ctx, opacity, time, depthScale, skipSpines),
-    )
+    this.branches.forEach((branch) => branch.draw(ctx, opacity, time, depthScale, skipSpines))
   }
 
   getTip(): { x: number; y: number } {
     if (this.branches.length === 0) {
       return { x: this.endX, y: this.endY }
     }
-    return this.branches[
-      Math.floor(Math.random() * this.branches.length)
-    ].getTip()
+    return this.branches[Math.floor(Math.random() * this.branches.length)].getTip()
   }
 
   updatePosition(newStartX: number, newStartY: number) {
@@ -246,9 +225,7 @@ class Dendrite {
     this.endY += dy
     this.cpX += dx
     this.cpY += dy
-    this.branches.forEach((branch) =>
-      branch.updatePosition(this.endX, this.endY),
-    )
+    this.branches.forEach((branch) => branch.updatePosition(this.endX, this.endY))
   }
 }
 
@@ -316,8 +293,7 @@ class Axon {
     this.boutons = []
     const boutonCount = 2 + Math.floor(Math.random() * 3)
     for (let i = 0; i < boutonCount; i++) {
-      const bAngle =
-        currentAngle + ((Math.random() - 0.5) * Math.PI) / 2
+      const bAngle = currentAngle + ((Math.random() - 0.5) * Math.PI) / 2
       const bLength = 8 + Math.random() * 15
       this.boutons.push({
         x: currentX + Math.cos(bAngle) * bLength,
@@ -373,13 +349,7 @@ class Axon {
         nrg.addColorStop(0, rgba(COLORS.bright, opacity * 0.3))
         nrg.addColorStop(1, rgba(COLORS.bright, 0))
         ctx.beginPath()
-        ctx.arc(
-          segment.endX,
-          segment.endY,
-          8 * depthScale,
-          0,
-          Math.PI * 2,
-        )
+        ctx.arc(segment.endX, segment.endY, 8 * depthScale, 0, Math.PI * 2)
         ctx.fillStyle = nrg
         ctx.fill()
         ctx.restore()
@@ -411,14 +381,7 @@ class Axon {
 
       ctx.save()
       ctx.globalCompositeOperation = 'lighter'
-      const bg = ctx.createRadialGradient(
-        bouton.x,
-        bouton.y,
-        0,
-        bouton.x,
-        bouton.y,
-        r * 5,
-      )
+      const bg = ctx.createRadialGradient(bouton.x, bouton.y, 0, bouton.x, bouton.y, r * 5)
       bg.addColorStop(0, rgba(COLORS.bright, opacity * 0.2))
       bg.addColorStop(0.4, rgba(COLORS.mid, opacity * 0.08))
       bg.addColorStop(1, rgba(COLORS.dim, 0))
@@ -500,15 +463,13 @@ class Neuron {
     this.isFiring = false
     this.firePhase = 0
     this.fireTimer = 0
-    this.spontaneousRate =
-      Math.random() < 0.15 ? 0.001 + Math.random() * 0.002 : 0
+    this.spontaneousRate = Math.random() < 0.15 ? 0.001 + Math.random() * 0.002 : 0
     this.epsp = 0
 
     this.dendrites = []
     const dendriteCount = 4 + Math.floor(Math.random() * 4)
     for (let i = 0; i < dendriteCount; i++) {
-      const angle =
-        ((Math.PI * 2) / dendriteCount) * i + (Math.random() - 0.5) * 0.5
+      const angle = ((Math.PI * 2) / dendriteCount) * i + (Math.random() - 0.5) * 0.5
       const length = 30 + Math.random() * 50
       this.dendrites.push(new Dendrite(this.x, this.y, angle, length))
     }
@@ -565,8 +526,7 @@ class Neuron {
           this.firePhase = 2
         }
       } else if (this.firePhase === 2) {
-        this.potential +=
-          (this.restingPotential - 10 - this.potential) * 0.15
+        this.potential += (this.restingPotential - 10 - this.potential) * 0.15
         if (this.potential < this.restingPotential) {
           this.firePhase = 0
           this.isFiring = false
@@ -582,13 +542,11 @@ class Neuron {
       0,
       Math.min(
         1,
-        (this.potential - this.restingPotential) /
-          (this.peakPotential - this.restingPotential),
+        (this.potential - this.restingPotential) / (this.peakPotential - this.restingPotential),
       ),
     )
 
-    const flicker =
-      Math.sin(time * 0.002 + this.x * 0.01) * 0.05 + 0.95
+    const flicker = Math.sin(time * 0.002 + this.x * 0.01) * 0.05 + 0.95
     const baseOpacity = (0.3 + potentialNorm * 0.7) * flicker
 
     const ds = 0.4 + this.depth * 0.6
@@ -598,9 +556,7 @@ class Neuron {
     const skipSpines = this.depth < 0.3
 
     this.axon.draw(ctx, baseOpacity * da, ds)
-    this.dendrites.forEach((d) =>
-      d.draw(ctx, baseOpacity * da, time, ds, skipSpines),
-    )
+    this.dendrites.forEach((d) => d.draw(ctx, baseOpacity * da, time, ds, skipSpines))
 
     const r = this.radius * ds
     const x = this.x
@@ -653,10 +609,7 @@ class Neuron {
       const flashR = r * (14 + potentialNorm * 10)
       const fG = ctx.createRadialGradient(x, y, 0, x, y, flashR)
       fG.addColorStop(0, rgba(COLORS.core, 0.25 * potentialNorm * da))
-      fG.addColorStop(
-        0.15,
-        rgba(COLORS.bright, 0.12 * potentialNorm * da),
-      )
+      fG.addColorStop(0.15, rgba(COLORS.bright, 0.12 * potentialNorm * da))
       fG.addColorStop(0.5, rgba(COLORS.mid, 0.04 * potentialNorm * da))
       fG.addColorStop(1, 'rgba(0,0,0,0)')
       ctx.beginPath()
@@ -671,26 +624,10 @@ class Neuron {
     const offX = -r * 0.25
     const offY = -r * 0.25
 
-    const somaG = ctx.createRadialGradient(
-      x + offX,
-      y + offY,
-      r * 0.1,
-      x,
-      y,
-      r,
-    )
-    somaG.addColorStop(
-      0,
-      rgba(COLORS.core, (0.3 + potentialNorm * 0.4) * da),
-    )
-    somaG.addColorStop(
-      0.4,
-      rgba(COLORS.bright, (0.18 + potentialNorm * 0.2) * da),
-    )
-    somaG.addColorStop(
-      0.8,
-      rgba(COLORS.mid, (0.1 + potentialNorm * 0.1) * da),
-    )
+    const somaG = ctx.createRadialGradient(x + offX, y + offY, r * 0.1, x, y, r)
+    somaG.addColorStop(0, rgba(COLORS.core, (0.3 + potentialNorm * 0.4) * da))
+    somaG.addColorStop(0.4, rgba(COLORS.bright, (0.18 + potentialNorm * 0.2) * da))
+    somaG.addColorStop(0.8, rgba(COLORS.mid, (0.1 + potentialNorm * 0.1) * da))
     somaG.addColorStop(1, rgba(COLORS.dim, 0.05 * da))
     ctx.beginPath()
     ctx.arc(x, y, r, 0, Math.PI * 2)
@@ -700,10 +637,7 @@ class Neuron {
     // Membrane ring
     ctx.beginPath()
     ctx.arc(x, y, r + 0.5, 0, Math.PI * 2)
-    ctx.strokeStyle = rgba(
-      COLORS.bright,
-      (0.15 + potentialNorm * 0.3) * da,
-    )
+    ctx.strokeStyle = rgba(COLORS.bright, (0.15 + potentialNorm * 0.3) * da)
     ctx.lineWidth = 1.2 * ds
     ctx.stroke()
 
@@ -715,10 +649,7 @@ class Neuron {
         const angle1 = (k / 5) * Math.PI * 2 + time * 0.0001
         const angle2 = angle1 + Math.PI * 0.6
         ctx.beginPath()
-        ctx.moveTo(
-          x + Math.cos(angle1) * r * 0.7,
-          y + Math.sin(angle1) * r * 0.7,
-        )
+        ctx.moveTo(x + Math.cos(angle1) * r * 0.7, y + Math.sin(angle1) * r * 0.7)
         ctx.quadraticCurveTo(
           x + Math.cos((angle1 + angle2) / 2) * r * 0.3,
           y + Math.sin((angle1 + angle2) / 2) * r * 0.3,
@@ -734,22 +665,9 @@ class Neuron {
 
     // Nucleus
     const nucR = r * 0.4
-    const nucG = ctx.createRadialGradient(
-      x + offX * 0.3,
-      y + offY * 0.3,
-      0,
-      x,
-      y,
-      nucR,
-    )
-    nucG.addColorStop(
-      0,
-      rgba(COLORS.core, (0.55 + potentialNorm * 0.4) * da),
-    )
-    nucG.addColorStop(
-      0.5,
-      rgba(COLORS.bright, (0.25 + potentialNorm * 0.2) * da),
-    )
+    const nucG = ctx.createRadialGradient(x + offX * 0.3, y + offY * 0.3, 0, x, y, nucR)
+    nucG.addColorStop(0, rgba(COLORS.core, (0.55 + potentialNorm * 0.4) * da))
+    nucG.addColorStop(0.5, rgba(COLORS.bright, (0.25 + potentialNorm * 0.2) * da))
     nucG.addColorStop(1, rgba(COLORS.mid, 0))
     ctx.beginPath()
     ctx.arc(x, y, nucR, 0, Math.PI * 2)
@@ -758,8 +676,7 @@ class Neuron {
   }
 
   getRandomDendriteTip(): { x: number; y: number } {
-    const d =
-      this.dendrites[Math.floor(Math.random() * this.dendrites.length)]
+    const d = this.dendrites[Math.floor(Math.random() * this.dendrites.length)]
     return d.getTip()
   }
 }
@@ -816,7 +733,7 @@ class ActionPotential {
     this.baseSpeed = 0.02 + Math.random() * 0.015
   }
 
-  update(dt: number) {
+  update(_dt: number) {
     if (this.phase === 'axon') {
       const seg = this.segments[this.currentSegment]
       this.progress += seg.isMyelin ? this.baseSpeed * 3 : this.baseSpeed
@@ -831,9 +748,7 @@ class ActionPotential {
     } else if (this.phase === 'synapse') {
       this.synapseTimer += 0.04
       if (this.synapseTimer >= 1) {
-        this.connection.postNeuron.receiveSignal(
-          10 * this.connection.strength,
-        )
+        this.connection.postNeuron.receiveSignal(10 * this.connection.strength)
         this.phase = 'dendrite'
         this.progress = 0
       }
@@ -925,8 +840,7 @@ class BackgroundParticle {
   }
 
   draw(ctx: CanvasRenderingContext2D, time: number) {
-    const pulse =
-      Math.sin(time * this.pulseSpeed + this.pulseOffset) * 0.2 + 0.8
+    const pulse = Math.sin(time * this.pulseSpeed + this.pulseOffset) * 0.2 + 0.8
     const alpha = this.brightness * pulse
     const sz = this.baseSize * (0.5 + this.z * 0.5) * pulse
 
@@ -934,14 +848,7 @@ class BackgroundParticle {
       ctx.save()
       ctx.globalCompositeOperation = 'lighter'
       const glowSz = sz * 6
-      const g = ctx.createRadialGradient(
-        this.x,
-        this.y,
-        0,
-        this.x,
-        this.y,
-        glowSz,
-      )
+      const g = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, glowSz)
       g.addColorStop(0, rgba(COLORS.bright, alpha * 0.12))
       g.addColorStop(0.5, rgba(COLORS.mid, alpha * 0.04))
       g.addColorStop(1, 'rgba(0,0,0,0)')
@@ -1000,10 +907,7 @@ function drawConnections(
   ctx.globalCompositeOperation = 'lighter'
   for (let b = 0; b < 3; b++) {
     if (buckets[b].length === 0) continue
-    ctx.strokeStyle = rgba(
-      COLORS.dim,
-      Math.min(alphas[b] * boost * 0.5, 0.15),
-    )
+    ctx.strokeStyle = rgba(COLORS.dim, Math.min(alphas[b] * boost * 0.5, 0.15))
     ctx.lineWidth = glowWidths[b]
     ctx.beginPath()
     for (let i = 0; i < buckets[b].length; i++) {
@@ -1018,10 +922,7 @@ function drawConnections(
   // Crisp fiber pass
   for (let b = 0; b < 3; b++) {
     if (buckets[b].length === 0) continue
-    ctx.strokeStyle = rgba(
-      COLORS.mid,
-      Math.min(alphas[b] * boost, 0.25),
-    )
+    ctx.strokeStyle = rgba(COLORS.mid, Math.min(alphas[b] * boost, 0.25))
     ctx.lineWidth = widths[b]
     ctx.beginPath()
     for (let i = 0; i < buckets[b].length; i++) {
@@ -1053,8 +954,7 @@ interface AnimState {
 
 function createAnimState(width: number, height: number): AnimState {
   // Adaptive neuron count based on hardware
-  const cores =
-    typeof navigator !== 'undefined' ? navigator.hardwareConcurrency ?? 4 : 4
+  const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency ?? 4) : 4
   const neuronCount = Math.min(80, cores * 6)
   const particleCount = 250
 
@@ -1072,10 +972,7 @@ function createAnimState(width: number, height: number): AnimState {
   const connections: SynapticConnection[] = []
   neurons.forEach((neuron, i) => {
     const terminal = neuron.axon.getTerminal()
-    const endpoints = [
-      terminal,
-      ...neuron.axon.boutons.map((b) => ({ x: b.x, y: b.y })),
-    ]
+    const endpoints = [terminal, ...neuron.axon.boutons.map((b) => ({ x: b.x, y: b.y }))]
 
     neurons.forEach((target, j) => {
       if (i === j) return
@@ -1118,197 +1015,165 @@ function createAnimState(width: number, height: number): AnimState {
 // React component
 // ---------------------------------------------------------------------------
 
-const NeuralCanvas = forwardRef<NeuralCanvasHandle>(
-  function NeuralCanvas(_props, ref) {
-    const canvasRef = useRef<HTMLCanvasElement>(null)
-    const stateRef = useRef<AnimState | null>(null)
+const NeuralCanvas = forwardRef<NeuralCanvasHandle>(function NeuralCanvas(_props, ref) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const stateRef = useRef<AnimState | null>(null)
 
-    useImperativeHandle(ref, () => ({
-      setIntensity(target: number) {
-        if (stateRef.current) {
-          stateRef.current.targetIntensity = Math.max(
-            0,
-            Math.min(1, target),
-          )
-        }
-      },
-      stimulate(containers: Record<string, ContainerStats>) {
-        if (!stateRef.current) return
-        // Map container CPU usage to neural intensity
-        const values = Object.values(containers)
-        if (values.length === 0) return
-        const avgCpu =
-          values.reduce((sum, c) => sum + c.cpu_percent, 0) / values.length
-        // Scale: 0-100% CPU -> 0-1 intensity
-        stateRef.current.targetIntensity = Math.max(
-          0,
-          Math.min(1, avgCpu / 100),
-        )
-        // Also directly stimulate random neurons proportional to CPU load
-        const state = stateRef.current
-        const stimCount = Math.floor(avgCpu / 20)
-        for (let i = 0; i < stimCount && i < state.neurons.length; i++) {
-          const idx = Math.floor(Math.random() * state.neurons.length)
-          state.neurons[idx].receiveSignal(20 + avgCpu * 0.3)
-        }
-      },
-    }))
-
-    useEffect(() => {
-      const canvas = canvasRef.current
-      if (!canvas) return
-
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return
-
-      // Size to viewport
-      const resize = () => {
-        canvas.width = window.innerWidth
-        canvas.height = window.innerHeight
-        if (stateRef.current) {
-          stateRef.current.width = canvas.width
-          stateRef.current.height = canvas.height
-        }
+  useImperativeHandle(ref, () => ({
+    setIntensity(target: number) {
+      if (stateRef.current) {
+        stateRef.current.targetIntensity = Math.max(0, Math.min(1, target))
       }
-      resize()
-
-      // Debounced resize
-      let resizeTimeout: ReturnType<typeof setTimeout>
-      const onResize = () => {
-        clearTimeout(resizeTimeout)
-        resizeTimeout = setTimeout(resize, 100)
+    },
+    stimulate(containers: Record<string, ContainerStats>) {
+      if (!stateRef.current) return
+      // Map container CPU usage to neural intensity
+      const values = Object.values(containers)
+      if (values.length === 0) return
+      const avgCpu = values.reduce((sum, c) => sum + c.cpu_percent, 0) / values.length
+      // Scale: 0-100% CPU -> 0-1 intensity
+      stateRef.current.targetIntensity = Math.max(0, Math.min(1, avgCpu / 100))
+      // Also directly stimulate random neurons proportional to CPU load
+      const state = stateRef.current
+      const stimCount = Math.floor(avgCpu / 20)
+      for (let i = 0; i < stimCount && i < state.neurons.length; i++) {
+        const idx = Math.floor(Math.random() * state.neurons.length)
+        state.neurons[idx].receiveSignal(20 + avgCpu * 0.3)
       }
-      window.addEventListener('resize', onResize)
+    },
+  }))
 
-      // Initialize state
-      const state = createAnimState(canvas.width, canvas.height)
-      stateRef.current = state
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
 
-      // Animation loop
-      const animate = (currentTime: number) => {
-        const dt = Math.min(currentTime - state.lastTime, 50)
-        state.lastTime = currentTime
-        state.frameCount++
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
 
-        // Smooth intensity lerp (fast ramp up, slow decay)
-        const lerpRate =
-          state.targetIntensity > state.intensity ? 0.12 : 0.02
-        state.intensity +=
-          (state.targetIntensity - state.intensity) * lerpRate
+    // Size to viewport
+    const resize = () => {
+      canvas.width = window.innerWidth
+      canvas.height = window.innerHeight
+      if (stateRef.current) {
+        stateRef.current.width = canvas.width
+        stateRef.current.height = canvas.height
+      }
+    }
+    resize()
 
-        const w = canvas.width
-        const h = canvas.height
+    // Debounced resize
+    let resizeTimeout: ReturnType<typeof setTimeout>
+    const onResize = () => {
+      clearTimeout(resizeTimeout)
+      resizeTimeout = setTimeout(resize, 100)
+    }
+    window.addEventListener('resize', onResize)
 
-        // Motion blur: semi-transparent fill instead of clearRect
-        ctx.fillStyle = 'rgba(3,7,18,0.08)'
-        ctx.fillRect(0, 0, w, h)
+    // Initialize state
+    const state = createAnimState(canvas.width, canvas.height)
+    stateRef.current = state
 
-        // Ambient glow
-        const cx = w / 2
-        const cy = h / 2
-        const ambR = Math.max(w, h) * 0.5
-        const ambG = ctx.createRadialGradient(cx, cy, 0, cx, cy, ambR)
-        ambG.addColorStop(
-          0,
-          rgba(COLORS.dim, 0.03 + state.intensity * 0.02),
-        )
-        ambG.addColorStop(1, 'rgba(0,0,0,0)')
-        ctx.fillStyle = ambG
-        ctx.fillRect(0, 0, w, h)
+    // Animation loop
+    const animate = (currentTime: number) => {
+      const dt = Math.min(currentTime - state.lastTime, 50)
+      state.lastTime = currentTime
+      state.frameCount++
 
-        canvas.style.opacity = String(0.9 + state.intensity * 0.1)
+      // Smooth intensity lerp (fast ramp up, slow decay)
+      const lerpRate = state.targetIntensity > state.intensity ? 0.12 : 0.02
+      state.intensity += (state.targetIntensity - state.intensity) * lerpRate
 
-        // Background particles (z < 0.5)
-        state.particles.forEach((p) => {
-          p.update(currentTime, w, h)
-          if (p.z < 0.5) p.draw(ctx, currentTime)
-        })
+      const w = canvas.width
+      const h = canvas.height
 
-        // Connection fibers
-        drawConnections(
-          ctx,
-          state.connections,
-          state.intensity,
-          state.neurons.length,
-          state.frameCount,
-        )
+      // Motion blur: semi-transparent fill instead of clearRect
+      ctx.fillStyle = 'rgba(3,7,18,0.08)'
+      ctx.fillRect(0, 0, w, h)
 
-        // Update and draw neurons (sorted back-to-front)
-        state.neurons.forEach((neuron) => {
-          neuron.update(currentTime, dt, w, h)
-          neuron.draw(ctx, currentTime)
+      // Ambient glow
+      const cx = w / 2
+      const cy = h / 2
+      const ambR = Math.max(w, h) * 0.5
+      const ambG = ctx.createRadialGradient(cx, cy, 0, cx, cy, ambR)
+      ambG.addColorStop(0, rgba(COLORS.dim, 0.03 + state.intensity * 0.02))
+      ambG.addColorStop(1, 'rgba(0,0,0,0)')
+      ctx.fillStyle = ambG
+      ctx.fillRect(0, 0, w, h)
 
-          // Fire action potentials
-          if (
-            neuron.isFiring &&
-            neuron.firePhase === 1 &&
-            neuron.fireTimer < dt * 2
-          ) {
-            const outgoing = neuron.outgoingConnections
-            const maxSignals = 2 + Math.floor(state.intensity * 5)
-            let sent = 0
-            for (
-              let c = 0;
-              c < outgoing.length && sent < maxSignals;
-              c++
-            ) {
-              if (Math.random() < outgoing[c].strength * 0.4) {
-                state.signals.push(
-                  new ActionPotential(neuron, outgoing[c]),
-                )
-                sent++
-              }
+      canvas.style.opacity = String(0.9 + state.intensity * 0.1)
+
+      // Background particles (z < 0.5)
+      state.particles.forEach((p) => {
+        p.update(currentTime, w, h)
+        if (p.z < 0.5) p.draw(ctx, currentTime)
+      })
+
+      // Connection fibers
+      drawConnections(
+        ctx,
+        state.connections,
+        state.intensity,
+        state.neurons.length,
+        state.frameCount,
+      )
+
+      // Update and draw neurons (sorted back-to-front)
+      state.neurons.forEach((neuron) => {
+        neuron.update(currentTime, dt, w, h)
+        neuron.draw(ctx, currentTime)
+
+        // Fire action potentials
+        if (neuron.isFiring && neuron.firePhase === 1 && neuron.fireTimer < dt * 2) {
+          const outgoing = neuron.outgoingConnections
+          const maxSignals = 2 + Math.floor(state.intensity * 5)
+          let sent = 0
+          for (let c = 0; c < outgoing.length && sent < maxSignals; c++) {
+            if (Math.random() < outgoing[c].strength * 0.4) {
+              state.signals.push(new ActionPotential(neuron, outgoing[c]))
+              sent++
             }
           }
-
-          // Intensity-driven spontaneous activity
-          if (
-            state.intensity > 0.1 &&
-            !neuron.isFiring &&
-            neuron.refractoryTime <= 0
-          ) {
-            if (Math.random() < state.intensity * 0.025) {
-              neuron.epsp += 25
-            }
-          }
-        })
-
-        // Action potentials
-        for (let i = state.signals.length - 1; i >= 0; i--) {
-          state.signals[i].update(dt)
-          state.signals[i].draw(ctx)
-          if (!state.signals[i].active) state.signals.splice(i, 1)
         }
-        while (state.signals.length > 60) state.signals.shift()
 
-        // Foreground particles (z >= 0.5)
-        state.particles.forEach((p) => {
-          if (p.z >= 0.5) p.draw(ctx, currentTime)
-        })
+        // Intensity-driven spontaneous activity
+        if (state.intensity > 0.1 && !neuron.isFiring && neuron.refractoryTime <= 0) {
+          if (Math.random() < state.intensity * 0.025) {
+            neuron.epsp += 25
+          }
+        }
+      })
 
-        state.frameId = requestAnimationFrame(animate)
+      // Action potentials
+      for (let i = state.signals.length - 1; i >= 0; i--) {
+        state.signals[i].update(dt)
+        state.signals[i].draw(ctx)
+        if (!state.signals[i].active) state.signals.splice(i, 1)
       }
+      while (state.signals.length > 60) state.signals.shift()
+
+      // Foreground particles (z >= 0.5)
+      state.particles.forEach((p) => {
+        if (p.z >= 0.5) p.draw(ctx, currentTime)
+      })
 
       state.frameId = requestAnimationFrame(animate)
+    }
 
-      // Cleanup
-      return () => {
-        cancelAnimationFrame(state.frameId)
-        window.removeEventListener('resize', onResize)
-        clearTimeout(resizeTimeout)
-        stateRef.current = null
-      }
-    }, [])
+    state.frameId = requestAnimationFrame(animate)
 
-    return (
-      <canvas
-        ref={canvasRef}
-        className="fixed inset-0 z-0"
-        style={{ willChange: 'transform' }}
-      />
-    )
-  },
-)
+    // Cleanup
+    return () => {
+      cancelAnimationFrame(state.frameId)
+      window.removeEventListener('resize', onResize)
+      clearTimeout(resizeTimeout)
+      stateRef.current = null
+    }
+  }, [])
+
+  return (
+    <canvas ref={canvasRef} className="fixed inset-0 z-0" style={{ willChange: 'transform' }} />
+  )
+})
 
 NeuralCanvas.displayName = 'NeuralCanvas'
 

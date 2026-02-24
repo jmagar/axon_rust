@@ -1,15 +1,11 @@
-import { MarkdownPlugin, remarkMdx, remarkMention } from '@platejs/markdown'
+import { deserializeMd, MarkdownPlugin, remarkMdx, remarkMention } from '@platejs/markdown'
 import type { Descendant } from 'platejs'
 import { createSlateEditor } from 'platejs'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 
-import { deserializeMd } from '@platejs/markdown'
-
 /** Empty paragraph node used as fallback for blank input. */
-const EMPTY_VALUE: Descendant[] = [
-  { type: 'p', children: [{ text: '' }] },
-]
+const EMPTY_VALUE: Descendant[] = [{ type: 'p', children: [{ text: '' }] }]
 
 /**
  * Singleton editor instance used exclusively for markdown deserialization.

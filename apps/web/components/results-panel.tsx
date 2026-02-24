@@ -1,8 +1,8 @@
 'use client'
 
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 interface OutputLine {
   type: 'output' | 'log' | 'error'
@@ -105,8 +105,12 @@ export function ResultsPanel({ lines, recentRuns, isProcessing, statsSlot }: Res
                       />
                     </td>
                     <td className="py-1.5 font-medium">{run.mode}</td>
-                    <td className="py-1.5 text-muted-foreground truncate max-w-[200px]">{run.target}</td>
-                    <td className="py-1.5 text-right text-muted-foreground font-mono">{run.duration}</td>
+                    <td className="py-1.5 text-muted-foreground truncate max-w-[200px]">
+                      {run.target}
+                    </td>
+                    <td className="py-1.5 text-right text-muted-foreground font-mono">
+                      {run.duration}
+                    </td>
                     <td className="py-1.5 text-right text-muted-foreground">{run.lines}</td>
                     <td className="py-1.5 text-right text-muted-foreground">{run.time}</td>
                   </tr>
@@ -122,9 +126,7 @@ export function ResultsPanel({ lines, recentRuns, isProcessing, statsSlot }: Res
 
 function OutputLineRenderer({ line }: { line: OutputLine }) {
   if (line.type === 'log') {
-    return (
-      <div className="text-xs text-muted-foreground/70 italic">{line.content}</div>
-    )
+    return <div className="text-xs text-muted-foreground/70 italic">{line.content}</div>
   }
 
   if (line.type === 'error') {
@@ -145,7 +147,12 @@ function OutputLineRenderer({ line }: { line: OutputLine }) {
         <div className="prose prose-invert prose-sm max-w-none">
           {obj.title ? <h2 className="text-foreground">{String(obj.title)}</h2> : null}
           {obj.url ? (
-            <a href={String(obj.url)} target="_blank" rel="noopener noreferrer" className="text-primary text-xs">
+            <a
+              href={String(obj.url)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary text-xs"
+            >
               {String(obj.url)}
             </a>
           ) : null}
@@ -178,12 +185,20 @@ function OutputLineRenderer({ line }: { line: OutputLine }) {
               <span className="text-xs text-muted-foreground">{Number(obj.score).toFixed(4)}</span>
             ) : null}
             {obj.url ? (
-              <a href={String(obj.url)} target="_blank" rel="noopener noreferrer" className="text-xs text-primary truncate">
+              <a
+                href={String(obj.url)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-primary truncate"
+              >
                 {String(obj.url)}
               </a>
             ) : null}
           </div>
-          <div className="text-sm" dangerouslySetInnerHTML={{ __html: simpleMarkdownToHtml(String(obj.snippet)) }} />
+          <div
+            className="text-sm"
+            dangerouslySetInnerHTML={{ __html: simpleMarkdownToHtml(String(obj.snippet)) }}
+          />
         </div>
       )
     }
@@ -201,7 +216,8 @@ function OutputLineRenderer({ line }: { line: OutputLine }) {
 }
 
 function JsonRenderer({ data, depth = 0 }: { data: unknown; depth?: number }) {
-  if (data === null || data === undefined) return <span className="text-muted-foreground">&mdash;</span>
+  if (data === null || data === undefined)
+    return <span className="text-muted-foreground">&mdash;</span>
   if (typeof data === 'string') {
     if (data.startsWith('http://') || data.startsWith('https://')) {
       return (
@@ -220,7 +236,9 @@ function JsonRenderer({ data, depth = 0 }: { data: unknown; depth?: number }) {
     return (
       <div className="space-y-1">
         {data.map((item, i) => (
-          <div key={i}><JsonRenderer data={item} depth={depth + 1} /></div>
+          <div key={i}>
+            <JsonRenderer data={item} depth={depth + 1} />
+          </div>
         ))}
       </div>
     )
@@ -236,7 +254,9 @@ function JsonRenderer({ data, depth = 0 }: { data: unknown; depth?: number }) {
             <span className="text-muted-foreground min-w-[80px] shrink-0">
               {key.replace(/_/g, ' ')}
             </span>
-            <span className="text-foreground"><JsonRenderer data={val} depth={depth + 1} /></span>
+            <span className="text-foreground">
+              <JsonRenderer data={val} depth={depth + 1} />
+            </span>
           </div>
         ))}
       </div>
@@ -263,8 +283,14 @@ function simpleMarkdownToHtml(md: string): string {
     result = result.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
     result = result.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     result = result.replace(/\*(.+?)\*/g, '<em>$1</em>')
-    result = result.replace(/`([^`]+)`/g, '<code class="bg-muted px-1 py-0.5 rounded text-xs">$1</code>')
-    result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="text-primary underline">$1</a>')
+    result = result.replace(
+      /`([^`]+)`/g,
+      '<code class="bg-muted px-1 py-0.5 rounded text-xs">$1</code>',
+    )
+    result = result.replace(
+      /\[([^\]]+)\]\(([^)]+)\)/g,
+      '<a href="$2" target="_blank" class="text-primary underline">$1</a>',
+    )
     return result
   }
 
@@ -284,7 +310,7 @@ function simpleMarkdownToHtml(md: string): string {
       i++
       let code = ''
       while (i < lines.length && !lines[i].trimStart().startsWith('```')) {
-        code += esc(lines[i]) + '\n'
+        code += `${esc(lines[i])}\n`
         i++
       }
       i++
@@ -292,7 +318,11 @@ function simpleMarkdownToHtml(md: string): string {
       continue
     }
 
-    if (line.trim() === '') { closeList(); i++; continue }
+    if (line.trim() === '') {
+      closeList()
+      i++
+      continue
+    }
 
     // Headers
     const hMatch = line.match(/^(#{1,6})\s+(.+)/)
@@ -300,24 +330,35 @@ function simpleMarkdownToHtml(md: string): string {
       closeList()
       const level = hMatch[1].length
       html += `<h${level} class="font-semibold mt-3 mb-1">${inline(hMatch[2])}</h${level}>\n`
-      i++; continue
+      i++
+      continue
     }
 
     // HR
     if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line.trim())) {
-      closeList(); html += '<hr class="border-border/50 my-3">\n'; i++; continue
+      closeList()
+      html += '<hr class="border-border/50 my-3">\n'
+      i++
+      continue
     }
 
     // Table
     if (line.includes('|') && i + 1 < lines.length && /^\s*\|?\s*[-:]+/.test(lines[i + 1])) {
       closeList()
-      const headers = line.split('|').map(c => c.trim()).filter(Boolean)
+      const headers = line
+        .split('|')
+        .map((c) => c.trim())
+        .filter(Boolean)
       i += 2
       html += '<table class="w-full text-sm border-collapse"><tr>'
-      for (const h of headers) html += `<th class="border-b border-border/50 pb-1 text-left">${inline(h)}</th>`
+      for (const h of headers)
+        html += `<th class="border-b border-border/50 pb-1 text-left">${inline(h)}</th>`
       html += '</tr>\n'
       while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
-        const cells = lines[i].split('|').map(c => c.trim()).filter(Boolean)
+        const cells = lines[i]
+          .split('|')
+          .map((c) => c.trim())
+          .filter(Boolean)
         html += '<tr>'
         for (const c of cells) html += `<td class="py-1 pr-3">${inline(c)}</td>`
         html += '</tr>\n'
@@ -332,7 +373,7 @@ function simpleMarkdownToHtml(md: string): string {
       closeList()
       let bq = ''
       while (i < lines.length && lines[i].trimStart().startsWith('>')) {
-        bq += lines[i].replace(/^\s*>\s?/, '') + ' '
+        bq += `${lines[i].replace(/^\s*>\s?/, '')} `
         i++
       }
       html += `<blockquote class="border-l-2 border-primary/50 pl-3 text-muted-foreground italic">${inline(bq.trim())}</blockquote>\n`
@@ -341,16 +382,28 @@ function simpleMarkdownToHtml(md: string): string {
 
     // Unordered list
     if (/^\s*[-*+]\s/.test(line)) {
-      if (!inList || listType !== 'ul') { closeList(); html += '<ul class="list-disc pl-5 space-y-0.5">\n'; inList = true; listType = 'ul' }
+      if (!inList || listType !== 'ul') {
+        closeList()
+        html += '<ul class="list-disc pl-5 space-y-0.5">\n'
+        inList = true
+        listType = 'ul'
+      }
       html += `<li>${inline(line.replace(/^\s*[-*+]\s/, ''))}</li>\n`
-      i++; continue
+      i++
+      continue
     }
 
     // Ordered list
     if (/^\s*\d+\.\s/.test(line)) {
-      if (!inList || listType !== 'ol') { closeList(); html += '<ol class="list-decimal pl-5 space-y-0.5">\n'; inList = true; listType = 'ol' }
+      if (!inList || listType !== 'ol') {
+        closeList()
+        html += '<ol class="list-decimal pl-5 space-y-0.5">\n'
+        inList = true
+        listType = 'ol'
+      }
       html += `<li>${inline(line.replace(/^\s*\d+\.\s/, ''))}</li>\n`
-      i++; continue
+      i++
+      continue
     }
 
     // Paragraph — collect consecutive non-special lines
@@ -365,7 +418,7 @@ function simpleMarkdownToHtml(md: string): string {
       !lines[i].trimStart().startsWith('```') &&
       !lines[i].trimStart().startsWith('>')
     ) {
-      para += lines[i] + ' '
+      para += `${lines[i]} `
       i++
     }
     if (para.trim()) html += `<p class="mb-2">${inline(para.trim())}</p>\n`

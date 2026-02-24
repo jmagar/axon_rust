@@ -29,9 +29,25 @@ export function useAxonWsProvider() {
   const attemptsRef = useRef(0)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const handlersRef = useRef(new Set<(msg: WsServerMsg) => void>())
+  const connectRef = useRef<() => void>(() => {})
+
+  const scheduleReconnect = useCallback(() => {
+    if (timerRef.current) return
+    const delay = Math.min(BASE_BACKOFF * 2 ** attemptsRef.current, MAX_BACKOFF)
+    attemptsRef.current++
+    setStatusLabel(`RETRY ${Math.round(delay / 1000)}s`)
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null
+      connectRef.current()
+    }, delay)
+  }, [])
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.CONNECTING || wsRef.current?.readyState === WebSocket.OPEN) return
+    if (
+      wsRef.current?.readyState === WebSocket.CONNECTING ||
+      wsRef.current?.readyState === WebSocket.OPEN
+    )
+      return
 
     const proto = globalThis.location?.protocol === 'https:' ? 'wss:' : 'ws:'
     const envUrl = process.env.NEXT_PUBLIC_AXON_WS_URL
@@ -51,7 +67,9 @@ export function useAxonWsProvider() {
         try {
           const msg: WsServerMsg = JSON.parse(event.data)
           for (const handler of handlersRef.current) handler(msg)
-        } catch { /* malformed */ }
+        } catch {
+          /* malformed */
+        }
       }
 
       ws.onclose = () => {
@@ -59,22 +77,15 @@ export function useAxonWsProvider() {
         scheduleReconnect()
       }
 
-      ws.onerror = () => { /* onclose fires after */ }
+      ws.onerror = () => {
+        /* onclose fires after */
+      }
     } catch {
       scheduleReconnect()
     }
-  }, [])
+  }, [scheduleReconnect])
 
-  const scheduleReconnect = useCallback(() => {
-    if (timerRef.current) return
-    const delay = Math.min(BASE_BACKOFF * 2 ** attemptsRef.current, MAX_BACKOFF)
-    attemptsRef.current++
-    setStatusLabel(`RETRY ${Math.round(delay / 1000)}s`)
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null
-      connect()
-    }, delay)
-  }, [connect])
+  connectRef.current = connect
 
   useEffect(() => {
     connect()
@@ -92,7 +103,9 @@ export function useAxonWsProvider() {
 
   const subscribe = useCallback((handler: (msg: WsServerMsg) => void) => {
     handlersRef.current.add(handler)
-    return () => { handlersRef.current.delete(handler) }
+    return () => {
+      handlersRef.current.delete(handler)
+    }
   }, [])
 
   const updateStatusLabel = useCallback((label: string) => {

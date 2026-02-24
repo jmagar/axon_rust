@@ -2,13 +2,13 @@
 
 import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useAxonWs } from '@/hooks/use-axon-ws'
-import type { ContainerStats, WsServerMsg } from '@/lib/ws-protocol'
-import { Omnibox, type OmniboxHandle } from '@/components/omnibox'
-import { ResultsPanel, type OutputLine, type RecentRun } from '@/components/results-panel'
-import { WsIndicator } from '@/components/ws-indicator'
 import { DockerStats } from '@/components/docker-stats'
 import type { NeuralCanvasHandle } from '@/components/neural-canvas'
+import { Omnibox, type OmniboxHandle } from '@/components/omnibox'
+import { type OutputLine, type RecentRun, ResultsPanel } from '@/components/results-panel'
+import { WsIndicator } from '@/components/ws-indicator'
+import { useAxonWs } from '@/hooks/use-axon-ws'
+import type { ContainerStats, WsServerMsg } from '@/lib/ws-protocol'
 
 const NeuralCanvas = dynamic(() => import('@/components/neural-canvas'), { ssr: false })
 
@@ -27,7 +27,11 @@ export default function DashboardPage() {
       switch (msg.type) {
         case 'output': {
           let parsed: Record<string, unknown> | undefined
-          try { parsed = JSON.parse(msg.line) } catch { /* plain text */ }
+          try {
+            parsed = JSON.parse(msg.line)
+          } catch {
+            /* plain text */
+          }
           setLines((prev) => [...prev, { type: 'output', content: msg.line, parsed }])
           break
         }
@@ -76,7 +80,7 @@ export default function DashboardPage() {
     })
   }, [subscribe])
 
-  const handleExecute = useCallback((mode: string, input: string) => {
+  const handleExecute = useCallback((mode: string, _input: string) => {
     currentModeRef.current = mode
     setLines([])
     setIsProcessing(true)
@@ -85,7 +89,11 @@ export default function DashboardPage() {
   }, [])
 
   const handleStats = useCallback(
-    (data: { aggregate: { cpu_percent: number }; containers: Record<string, ContainerStats>; container_count: number }) => {
+    (data: {
+      aggregate: { cpu_percent: number }
+      containers: Record<string, ContainerStats>
+      container_count: number
+    }) => {
       canvasRef.current?.stimulate(data.containers)
       // Map aggregate CPU to background neural intensity when not processing
       if (!isProcessing) {

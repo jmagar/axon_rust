@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { DM_Sans, DM_Mono } from 'next/font/google'
+import { DM_Mono, DM_Sans } from 'next/font/google'
 import { Providers } from './providers'
 import './globals.css'
 
