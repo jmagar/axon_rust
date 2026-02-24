@@ -29,6 +29,8 @@ const COLORS: Record<string, RGB> = {
   dim: { r: 8, g: 45, b: 140 },
   faint: { r: 4, g: 20, b: 70 },
 }
+const CONNECTION_MAX_DIST = 280
+const CONNECTION_MAX_DIST_SQ = CONNECTION_MAX_DIST * CONNECTION_MAX_DIST
 
 function rgba(c: RGB, a: number): string {
   return `rgba(${c.r},${c.g},${c.b},${a})`
@@ -537,7 +539,7 @@ class Neuron {
     }
   }
 
-  draw(ctx: CanvasRenderingContext2D, time: number) {
+  draw(ctx: CanvasRenderingContext2D, time: number, fineDetail = true) {
     const potentialNorm = Math.max(
       0,
       Math.min(
@@ -642,7 +644,7 @@ class Neuron {
     ctx.stroke()
 
     // Internal texture (only foreground neurons)
-    if (this.depth > 0.4) {
+    if (fineDetail && this.depth > 0.4) {
       ctx.save()
       ctx.globalAlpha = (0.06 + potentialNorm * 0.08) * da
       for (let k = 0; k < 5; k++) {
@@ -758,7 +760,7 @@ class ActionPotential {
     }
   }
 
-  draw(ctx: CanvasRenderingContext2D) {
+  draw(ctx: CanvasRenderingContext2D, withGlow = true) {
     if (!this.active) return
 
     let x: number | undefined
@@ -784,17 +786,19 @@ class ActionPotential {
     if (x === undefined || y === undefined) return
 
     // Glow halo
-    ctx.save()
-    ctx.globalCompositeOperation = 'lighter'
-    const g = ctx.createRadialGradient(x, y, 0, x, y, 10)
-    g.addColorStop(0, rgba(COLORS.core, 0.35))
-    g.addColorStop(0.3, rgba(COLORS.bright, 0.12))
-    g.addColorStop(1, 'rgba(0,0,0,0)')
-    ctx.beginPath()
-    ctx.arc(x, y, 10, 0, Math.PI * 2)
-    ctx.fillStyle = g
-    ctx.fill()
-    ctx.restore()
+    if (withGlow) {
+      ctx.save()
+      ctx.globalCompositeOperation = 'lighter'
+      const g = ctx.createRadialGradient(x, y, 0, x, y, 10)
+      g.addColorStop(0, rgba(COLORS.core, 0.35))
+      g.addColorStop(0.3, rgba(COLORS.bright, 0.12))
+      g.addColorStop(1, 'rgba(0,0,0,0)')
+      ctx.beginPath()
+      ctx.arc(x, y, 10, 0, Math.PI * 2)
+      ctx.fillStyle = g
+      ctx.fill()
+      ctx.restore()
+    }
 
     // Core dot
     ctx.beginPath()
@@ -839,12 +843,12 @@ class BackgroundParticle {
     if (this.y > height + 20) this.y = -20
   }
 
-  draw(ctx: CanvasRenderingContext2D, time: number) {
+  draw(ctx: CanvasRenderingContext2D, time: number, withGlow = true) {
     const pulse = Math.sin(time * this.pulseSpeed + this.pulseOffset) * 0.2 + 0.8
     const alpha = this.brightness * pulse
     const sz = this.baseSize * (0.5 + this.z * 0.5) * pulse
 
-    if (this.brightness > 0.2) {
+    if (withGlow && this.brightness > 0.2) {
       ctx.save()
       ctx.globalCompositeOperation = 'lighter'
       const glowSz = sz * 6
@@ -874,22 +878,20 @@ function drawConnections(
   ctx: CanvasRenderingContext2D,
   conns: SynapticConnection[],
   neuralIntensity: number,
-  neuronCount: number,
-  frameCount: number,
+  stride = 1,
 ) {
   const buckets: SynapticConnection[][] = [[], [], []]
-  // Connection LOD: skip every other frame when neuronCount > 60
-  const skipOdd = neuronCount > 60 && frameCount % 2 === 0
 
   for (let i = 0; i < conns.length; i++) {
-    if (skipOdd && i % 2 === 1) continue
+    if (stride > 1 && i % stride !== 0) continue
     const c = conns[i]
     const dx = c.dendriteTip.x - c.preTerminal.x
     const dy = c.dendriteTip.y - c.preTerminal.y
-    const dist = Math.sqrt(dx * dx + dy * dy)
-    if (dist > 280) continue
+    const distSq = dx * dx + dy * dy
+    if (distSq > CONNECTION_MAX_DIST_SQ) continue
+    const distNorm = Math.sqrt(distSq) / CONNECTION_MAX_DIST
 
-    const baseAlpha = (1 - dist / 280) * 0.18 * c.strength
+    const baseAlpha = (1 - distNorm) * 0.18 * c.strength
     const alpha = baseAlpha + neuralIntensity * baseAlpha * 1.5
 
     if (alpha > 0.12) buckets[0].push(c)
@@ -943,20 +945,60 @@ interface AnimState {
   connections: SynapticConnection[]
   signals: ActionPotential[]
   particles: BackgroundParticle[]
+  densityLayer: HTMLCanvasElement
   intensity: number
   targetIntensity: number
   frameId: number
   lastTime: number
+  lastRenderTime: number
+  fpsEma: number
   frameCount: number
   width: number
   height: number
+  targetFrameMs: number
+  isVisible: boolean
 }
 
-function createAnimState(width: number, height: number): AnimState {
-  // Adaptive neuron count based on hardware
-  const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency ?? 4) : 4
-  const neuronCount = Math.min(80, cores * 6)
-  const particleCount = 250
+function createDensityLayer(
+  width: number,
+  height: number,
+  reducedMotion: boolean,
+): HTMLCanvasElement {
+  const layer = document.createElement('canvas')
+  layer.width = width
+  layer.height = height
+  const layerCtx = layer.getContext('2d')
+  if (!layerCtx) return layer
+
+  const area = width * height
+  const baseCount = reducedMotion ? 0.09 : 0.13
+  const dotCount = Math.max(120, Math.round((area / 10000) * baseCount * 100))
+
+  for (let i = 0; i < dotCount; i++) {
+    const x = Math.random() * width
+    const y = Math.random() * height
+    const r = Math.random() < 0.85 ? 0.35 + Math.random() * 0.9 : 0.8 + Math.random() * 1.2
+    const alpha = 0.015 + Math.random() * 0.045
+    layerCtx.beginPath()
+    layerCtx.arc(x, y, r, 0, Math.PI * 2)
+    layerCtx.fillStyle = rgba(COLORS.faint, alpha)
+    layerCtx.fill()
+  }
+
+  return layer
+}
+
+function createAnimState(
+  width: number,
+  height: number,
+  options: {
+    neuronCount: number
+    particleCount: number
+    targetFrameMs: number
+    reducedMotion: boolean
+  },
+): AnimState {
+  const { neuronCount, particleCount, targetFrameMs, reducedMotion } = options
 
   const particles: BackgroundParticle[] = []
   for (let i = 0; i < particleCount; i++) {
@@ -981,9 +1023,9 @@ function createAnimState(width: number, height: number): AnimState {
           const tip = dendrite.getTip()
           const dx = ep.x - tip.x
           const dy = ep.y - tip.y
-          const dist = Math.sqrt(dx * dx + dy * dy)
+          const distSq = dx * dx + dy * dy
 
-          if (dist < 280 && Math.random() > 0.45) {
+          if (distSq < CONNECTION_MAX_DIST_SQ && Math.random() > 0.45) {
             const conn = new SynapticConnection(neuron, target, ep, tip)
             connections.push(conn)
             neuron.outgoingConnections.push(conn)
@@ -1001,13 +1043,18 @@ function createAnimState(width: number, height: number): AnimState {
     connections,
     signals: [],
     particles,
+    densityLayer: createDensityLayer(width, height, reducedMotion),
     intensity: 0,
     targetIntensity: 0,
     frameId: 0,
     lastTime: 0,
+    lastRenderTime: 0,
+    fpsEma: 60,
     frameCount: 0,
     width,
     height,
+    targetFrameMs,
+    isVisible: true,
   }
 }
 
@@ -1050,13 +1097,32 @@ const NeuralCanvas = forwardRef<NeuralCanvasHandle>(function NeuralCanvas(_props
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    // Size to viewport
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const lowCoreCount =
+      typeof navigator.hardwareConcurrency === 'number' && navigator.hardwareConcurrency <= 4
+    const maxDpr = reducedMotion || lowCoreCount ? 1 : 1.25
+    const targetFrameMs = reducedMotion ? 1000 / 35 : lowCoreCount ? 1000 / 50 : 1000 / 60
+    const viewportScale = Math.min(
+      1.15,
+      Math.max(0.7, (window.innerWidth * window.innerHeight) / (1920 * 1080)),
+    )
+    const neuronCount = Math.max(24, Math.round((reducedMotion ? 34 : 50) * viewportScale))
+    const particleCount = Math.max(90, Math.round((reducedMotion ? 130 : 250) * viewportScale))
+
+    // Size to viewport with DPR scaling for crisp rendering on high-DPI displays
     const resize = () => {
-      canvas.width = window.innerWidth
-      canvas.height = window.innerHeight
+      const dpr = Math.min(window.devicePixelRatio || 1, maxDpr)
+      const w = window.innerWidth
+      const h = window.innerHeight
+      canvas.width = w * dpr
+      canvas.height = h * dpr
+      canvas.style.width = `${w}px`
+      canvas.style.height = `${h}px`
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       if (stateRef.current) {
-        stateRef.current.width = canvas.width
-        stateRef.current.height = canvas.height
+        stateRef.current.width = w
+        stateRef.current.height = h
+        stateRef.current.densityLayer = createDensityLayer(w, h, reducedMotion)
       }
     }
     resize()
@@ -1070,25 +1136,58 @@ const NeuralCanvas = forwardRef<NeuralCanvasHandle>(function NeuralCanvas(_props
     window.addEventListener('resize', onResize)
 
     // Initialize state
-    const state = createAnimState(canvas.width, canvas.height)
+    const state = createAnimState(window.innerWidth, window.innerHeight, {
+      neuronCount,
+      particleCount,
+      targetFrameMs,
+      reducedMotion,
+    })
+    state.isVisible = document.visibilityState === 'visible'
     stateRef.current = state
+    const onVisibilityChange = () => {
+      if (!stateRef.current) return
+      stateRef.current.isVisible = document.visibilityState === 'visible'
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
 
     // Animation loop
     const animate = (currentTime: number) => {
+      if (!state.isVisible) {
+        state.lastTime = currentTime
+        state.lastRenderTime = currentTime
+        state.frameId = requestAnimationFrame(animate)
+        return
+      }
+
       const dt = Math.min(currentTime - state.lastTime, 50)
       state.lastTime = currentTime
+      if (currentTime - state.lastRenderTime < state.targetFrameMs) {
+        state.frameId = requestAnimationFrame(animate)
+        return
+      }
+      state.lastRenderTime = currentTime
       state.frameCount++
+
+      const fps = dt > 0 ? 1000 / dt : 60
+      state.fpsEma = state.fpsEma * 0.9 + fps * 0.1
+      const degraded = reducedMotion || state.fpsEma < 44
+      const medium = state.fpsEma < 52
+      const particleStride = degraded ? 3 : medium ? 2 : 1
+      const connectionStride = degraded ? 3 : medium ? 2 : 1
+      const signalCap = degraded ? 36 : medium ? 48 : 60
 
       // Smooth intensity lerp (fast ramp up, slow decay)
       const lerpRate = state.targetIntensity > state.intensity ? 0.12 : 0.02
       state.intensity += (state.targetIntensity - state.intensity) * lerpRate
 
-      const w = canvas.width
-      const h = canvas.height
+      const w = state.width
+      const h = state.height
 
-      // Motion blur: semi-transparent fill instead of clearRect
-      ctx.fillStyle = 'rgba(3,7,18,0.08)'
-      ctx.fillRect(0, 0, w, h)
+      // Clear frame (matches original neural.js)
+      ctx.clearRect(0, 0, w, h)
+
+      // Static micro-particle layer for denser field at near-zero runtime cost
+      ctx.drawImage(state.densityLayer, 0, 0, w, h)
 
       // Ambient glow
       const cx = w / 2
@@ -1103,29 +1202,24 @@ const NeuralCanvas = forwardRef<NeuralCanvasHandle>(function NeuralCanvas(_props
       canvas.style.opacity = String(0.9 + state.intensity * 0.1)
 
       // Background particles (z < 0.5)
-      state.particles.forEach((p) => {
+      state.particles.forEach((p, index) => {
         p.update(currentTime, w, h)
-        if (p.z < 0.5) p.draw(ctx, currentTime)
+        if (index % particleStride !== 0) return
+        if (p.z < 0.5) p.draw(ctx, currentTime, !degraded)
       })
 
       // Connection fibers
-      drawConnections(
-        ctx,
-        state.connections,
-        state.intensity,
-        state.neurons.length,
-        state.frameCount,
-      )
+      drawConnections(ctx, state.connections, state.intensity, connectionStride)
 
       // Update and draw neurons (sorted back-to-front)
       state.neurons.forEach((neuron) => {
         neuron.update(currentTime, dt, w, h)
-        neuron.draw(ctx, currentTime)
+        neuron.draw(ctx, currentTime, !degraded)
 
         // Fire action potentials
         if (neuron.isFiring && neuron.firePhase === 1 && neuron.fireTimer < dt * 2) {
           const outgoing = neuron.outgoingConnections
-          const maxSignals = 2 + Math.floor(state.intensity * 5)
+          const maxSignals = Math.max(1, 2 + Math.floor((state.intensity * 5) / connectionStride))
           let sent = 0
           for (let c = 0; c < outgoing.length && sent < maxSignals; c++) {
             if (Math.random() < outgoing[c].strength * 0.4) {
@@ -1146,14 +1240,15 @@ const NeuralCanvas = forwardRef<NeuralCanvasHandle>(function NeuralCanvas(_props
       // Action potentials
       for (let i = state.signals.length - 1; i >= 0; i--) {
         state.signals[i].update(dt)
-        state.signals[i].draw(ctx)
+        state.signals[i].draw(ctx, !degraded)
         if (!state.signals[i].active) state.signals.splice(i, 1)
       }
-      while (state.signals.length > 60) state.signals.shift()
+      while (state.signals.length > signalCap) state.signals.shift()
 
       // Foreground particles (z >= 0.5)
-      state.particles.forEach((p) => {
-        if (p.z >= 0.5) p.draw(ctx, currentTime)
+      state.particles.forEach((p, index) => {
+        if (index % particleStride !== 0) return
+        if (p.z >= 0.5) p.draw(ctx, currentTime, !degraded)
       })
 
       state.frameId = requestAnimationFrame(animate)
@@ -1165,6 +1260,7 @@ const NeuralCanvas = forwardRef<NeuralCanvasHandle>(function NeuralCanvas(_props
     return () => {
       cancelAnimationFrame(state.frameId)
       window.removeEventListener('resize', onResize)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
       clearTimeout(resizeTimeout)
       stateRef.current = null
     }

@@ -60,6 +60,13 @@ pub(super) async fn collect_crawl_pages(
         summary.pages_seen += 1;
         urls.insert(url.clone());
 
+        // Track discovered URLs from outgoing links for progress denominator
+        if let Some(links) = &page.page_links {
+            summary.pages_discovered = summary
+                .pages_discovered
+                .max(seen_canonical.len() as u32 + links.len() as u32);
+        }
+
         let input = TransformInput {
             url: None,
             content: page.get_html_bytes_u8(),
@@ -76,7 +83,7 @@ pub(super) async fn collect_crawl_pages(
         if chars < col.min_chars {
             summary.thin_pages += 1;
             if col.drop_thin {
-                if summary.pages_seen.is_multiple_of(25) {
+                if summary.pages_seen.is_multiple_of(5) {
                     if let Some(tx) = col.progress_tx.as_ref() {
                         tx.send(summary.clone()).await.ok();
                     }
@@ -85,7 +92,7 @@ pub(super) async fn collect_crawl_pages(
             }
         }
         if trimmed.is_empty() {
-            if summary.pages_seen.is_multiple_of(25) {
+            if summary.pages_seen.is_multiple_of(5) {
                 if let Some(tx) = col.progress_tx.as_ref() {
                     tx.send(summary.clone()).await.ok();
                 }
@@ -134,7 +141,7 @@ pub(super) async fn collect_crawl_pages(
                             .await
                             .map_err(|e| format!("manifest failed: {e}"))?;
 
-                        if summary.pages_seen.is_multiple_of(25) {
+                        if summary.pages_seen.is_multiple_of(5) {
                             if let Some(tx) = col.progress_tx.as_ref() {
                                 tx.send(summary.clone()).await.ok();
                             }
@@ -167,7 +174,7 @@ pub(super) async fn collect_crawl_pages(
             .await
             .map_err(|e| format!("manifest failed: {e}"))?;
 
-        if summary.pages_seen.is_multiple_of(25) {
+        if summary.pages_seen.is_multiple_of(5) {
             if let Some(tx) = col.progress_tx.as_ref() {
                 tx.send(summary.clone()).await.ok();
             }

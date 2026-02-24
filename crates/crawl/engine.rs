@@ -28,6 +28,7 @@ pub struct CrawlSummary {
     pub markdown_files: u32,
     pub thin_pages: u32,
     pub reused_pages: u32,
+    pub pages_discovered: u32,
     pub elapsed_ms: u128,
 }
 

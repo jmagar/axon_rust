@@ -1,12 +1,11 @@
-import path from 'node:path'
 import type { NextConfig } from 'next'
 
-const axonPort = process.env.NEXT_PUBLIC_AXON_PORT || '3333'
+const axonPort = process.env.NEXT_PUBLIC_AXON_PORT || '3939'
 
 const nextConfig: NextConfig = {
   output: 'standalone',
   turbopack: {
-    root: path.resolve(__dirname, '../..'),
+    root: __dirname,
   },
   async rewrites() {
     return [

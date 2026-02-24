@@ -129,4 +129,34 @@
   body {
     @apply bg-background text-foreground;
   }
+
+}
+
+/* Themed scrollbars — outside @layer for specificity over Tailwind resets */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(175, 215, 255, 0.15) transparent;
+  -webkit-overflow-scrolling: touch;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(175, 215, 255, 0.15);
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(175, 215, 255, 0.25);
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.animate-shimmer {
+  animation: shimmer 2s ease-in-out infinite;
 }

@@ -32,6 +32,11 @@ install:
     mkdir -p ~/.local/bin
     ln -sf "$(pwd)/target/release/axon" ~/.local/bin/axon
 
+lint-all:
+    just fmt-check
+    just clippy
+    cd apps/web && pnpm lint
+
 verify:
     just fmt-check
     just clippy
@@ -52,6 +57,10 @@ precommit:
 fix:
     cargo fmt --all
     cargo clippy --fix --all-targets --allow-dirty --allow-staged
+
+fix-all:
+    just fix
+    cd apps/web && pnpm format
 
 clean:
     cargo clean
@@ -78,3 +87,41 @@ rebuild:
     just check
     just test
     just docker-build
+
+# ── Web UI (axum built-in server) ─────────────────────────────────
+
+serve port="3939":
+    cargo run --bin axon -- serve --port {{port}}
+
+serve-release port="3939":
+    cargo run --release --bin axon -- serve --port {{port}}
+
+# ── Web UI (Next.js dashboard) ────────────────────────────────────
+
+web-dev:
+    cd apps/web && pnpm dev
+
+web-build:
+    cd apps/web && pnpm build
+
+web-lint:
+    cd apps/web && pnpm lint
+
+web-format:
+    cd apps/web && pnpm format
+
+# ── Full stack ────────────────────────────────────────────────────
+
+# Kill any running axon serve or Next.js dev processes
+stop:
+    -pkill -f 'axon.*serve' 2>/dev/null || true
+    -pkill -f 'next dev' 2>/dev/null || true
+    @echo "Stopped running servers"
+
+# Start infra, axum server, and Next.js dev server (all foreground)
+dev:
+    just stop
+    docker compose up -d --build
+    cargo run --bin axon -- serve --port 3939 &
+    cd apps/web && pnpm dev &
+    wait

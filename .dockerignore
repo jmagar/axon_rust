@@ -3,10 +3,21 @@
 .github
 .cache
 .serena
+.1code
 target
 docs
 storage
 data
+specs
+.full-review
+http-cacache
+logs
+
+# Frontend — not needed for the Rust worker image
+apps
+node_modules
+**/node_modules
+
 **/.DS_Store
 **/*.log
 **/*.tmp

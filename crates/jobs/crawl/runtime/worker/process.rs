@@ -180,6 +180,7 @@ fn spawn_progress_task(
                 "thin_md": progress.thin_pages,
                 "filtered_urls": filtered_urls,
                 "pages_crawled": pages_crawled,
+                "pages_discovered": progress.pages_discovered,
                 "crawl_stream_pages": progress.pages_seen,
             });
             let _ = sqlx::query(&format!(
