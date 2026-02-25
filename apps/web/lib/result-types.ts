@@ -76,13 +76,23 @@ export interface DoctorServiceStatus {
   detail?: string
   model?: string
   summary?: string
+  latency_ms?: number
+  info_latency_ms?: number
 }
 
 export interface DoctorResult {
+  observed_at_utc?: string
   services: Record<string, DoctorServiceStatus>
   pipelines: Record<string, boolean>
   queue_names: Record<string, string>
   browser_runtime?: { selection: string; diagnostics?: unknown }
+  timing_ms?: {
+    crawl_report?: number
+    extract_report?: number
+    embed_report?: number
+    ingest_report?: number
+    stale_pending?: number
+  }
   stale_jobs: number
   pending_jobs: number
   all_ok: boolean

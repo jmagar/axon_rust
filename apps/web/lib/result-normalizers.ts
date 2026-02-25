@@ -102,10 +102,25 @@ function normalizeStats(items: unknown[]): NormalizedResult {
 function normalizeStatus(items: unknown[]): NormalizedResult {
   const obj = first(items)
   if (!isRecord(obj)) return { type: 'raw', data: items }
-  // status has job arrays keyed by local_*_jobs
-  const hasJobArrays = Object.keys(obj).some((k) => k.startsWith('local_') && Array.isArray(obj[k]))
-  if (!hasJobArrays) return { type: 'raw', data: items }
-  return { type: 'status', data: obj as unknown as StatusResult }
+  // Accept both canonical and relaxed status payload shapes.
+  // Canonical: local_*_jobs keys from `axon status --json`.
+  const hasCanonicalKeys = ['local_crawl_jobs', 'local_extract_jobs', 'local_embed_jobs', 'local_ingest_jobs']
+    .some((k) => Array.isArray(obj[k]))
+
+  // Relaxed: any "*_jobs" array key (forward/backward compatibility).
+  const hasAnyJobsArray = Object.keys(obj).some((k) => k.endsWith('_jobs') && Array.isArray(obj[k]))
+
+  if (!hasCanonicalKeys && !hasAnyJobsArray) return { type: 'raw', data: items }
+
+  // Normalize into the renderer's expected shape so missing keys don't break UI.
+  const normalized: StatusResult = {
+    local_crawl_jobs: ((obj.local_crawl_jobs as unknown[]) ?? ((obj.crawl_jobs as unknown[]) ?? [])) as StatusResult['local_crawl_jobs'],
+    local_extract_jobs: ((obj.local_extract_jobs as unknown[]) ?? ((obj.extract_jobs as unknown[]) ?? [])) as StatusResult['local_extract_jobs'],
+    local_embed_jobs: ((obj.local_embed_jobs as unknown[]) ?? ((obj.embed_jobs as unknown[]) ?? [])) as StatusResult['local_embed_jobs'],
+    local_ingest_jobs: ((obj.local_ingest_jobs as unknown[]) ?? ((obj.ingest_jobs as unknown[]) ?? [])) as StatusResult['local_ingest_jobs'],
+  }
+
+  return { type: 'status', data: normalized }
 }
 
 function normalizeSuggest(items: unknown[]): NormalizedResult {

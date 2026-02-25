@@ -196,6 +196,50 @@ export function Omnibox() {
         {/* Divider */}
         <div className="h-[22px] w-px shrink-0 bg-[rgba(175,215,255,0.12)]" />
 
+        {/* Options button */}
+        {hasOptions && (
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                setOptionsOpen((prev) => !prev)
+                setDropdownOpen(false)
+              }}
+              className={`flex shrink-0 items-center gap-1.5 bg-transparent px-2.5 py-2.5 text-[10px] font-semibold uppercase tracking-wider transition-colors duration-150 ${
+                optionsOpen ? 'text-[#ff9ec0]' : 'text-[#8787af] hover:text-[#afd7ff]'
+              }`}
+              title="Command options"
+            >
+              <svg
+                className="size-3.5 shrink-0"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="4" y1="21" x2="4" y2="14" />
+                <line x1="4" y1="10" x2="4" y2="3" />
+                <line x1="12" y1="21" x2="12" y2="12" />
+                <line x1="12" y1="8" x2="12" y2="3" />
+                <line x1="20" y1="21" x2="20" y2="16" />
+                <line x1="20" y1="12" x2="20" y2="3" />
+                <line x1="2" y1="14" x2="6" y2="14" />
+                <line x1="10" y1="8" x2="14" y2="8" />
+                <line x1="18" y1="16" x2="22" y2="16" />
+              </svg>
+              <span>Options</span>
+              {activeOptionCount > 0 && (
+                <span className="inline-flex min-w-[14px] items-center justify-center rounded-full border border-[rgba(255,135,175,0.35)] bg-[rgba(255,135,175,0.12)] px-1 text-[9px] text-[#ff9ec0]">
+                  {activeOptionCount}
+                </span>
+              )}
+            </button>
+            <div className="h-[22px] w-px shrink-0 bg-[rgba(175,215,255,0.12)]" />
+          </>
+        )}
+
         {/* Action label — click to execute */}
         <button
           type="button"
@@ -292,11 +336,21 @@ export function Omnibox() {
             )
           })}
         </div>
-      </div>
 
-      {hasOptions && (
-        <CommandOptionsPanel mode={mode} values={optionValues} onChange={setOptionValues} />
-      )}
+        {/* Options popover */}
+        {hasOptions && (
+          <div
+            className={`absolute right-0 top-[calc(100%+6px)] z-50 w-[min(560px,92vw)] rounded-xl border border-[rgba(175,215,255,0.15)] p-2 shadow-[0_16px_48px_rgba(0,0,0,0.5),0_0_0_1px_rgba(175,215,255,0.08)] backdrop-blur-xl transition-all duration-200 ${
+              optionsOpen
+                ? 'visible translate-y-0 opacity-100'
+                : 'invisible -translate-y-1 opacity-0'
+            }`}
+            style={{ background: 'rgba(15, 23, 42, 0.95)' }}
+          >
+            <CommandOptionsPanel mode={mode} values={optionValues} onChange={setOptionValues} />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

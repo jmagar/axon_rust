@@ -82,6 +82,7 @@ pub async fn start_server(port: u16) -> Result<(), Box<dyn Error>> {
         .route("/neural.js", get(serve_neural_js))
         .route("/app.js", get(serve_app_js))
         .route("/ws", get(ws_upgrade))
+        .route("/output/{*path}", get(serve_output_file))
         .with_state(state)
         .merge(download_routes);
 
@@ -162,6 +163,65 @@ async fn serve_app_js() -> impl IntoResponse {
         [("content-type", "application/javascript; charset=utf-8")],
         read_static("app.js"),
     )
+}
+
+// ── Output file serving ───────────────────────────────────────────────────────
+
+/// `GET /output/{*path}` — serve files from the CLI output directory.
+///
+/// Used to display screenshots and other generated assets in the browser.
+/// Path traversal is prevented via canonicalization + prefix check.
+async fn serve_output_file(
+    axum::extract::Path(file_path): axum::extract::Path<String>,
+) -> Response {
+    use axum::http::{HeaderMap, StatusCode, header};
+
+    // Reject obvious traversal
+    if file_path.contains("..") || file_path.contains('\0') {
+        return (StatusCode::BAD_REQUEST, "invalid path").into_response();
+    }
+
+    let base = execute::files::output_dir();
+    let full_path = base.join(&file_path);
+
+    // Canonicalize both and verify containment
+    let Ok(canonical_base) = tokio::fs::canonicalize(&base).await else {
+        return (StatusCode::NOT_FOUND, "output directory not found").into_response();
+    };
+    let Ok(canonical_file) = tokio::fs::canonicalize(&full_path).await else {
+        return (StatusCode::NOT_FOUND, "file not found").into_response();
+    };
+
+    if !canonical_file.starts_with(&canonical_base) {
+        return (StatusCode::FORBIDDEN, "path outside output directory").into_response();
+    }
+
+    let bytes = match tokio::fs::read(&canonical_file).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::NOT_FOUND, "file not found").into_response(),
+    };
+
+    // Sniff content type from extension
+    let content_type = match canonical_file.extension().and_then(|e| e.to_str()) {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        Some("md") => "text/markdown; charset=utf-8",
+        Some("html") => "text/html; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        _ => "application/octet-stream",
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
+    // Allow browser caching for 5 minutes (screenshots are immutable once written)
+    headers.insert(
+        header::CACHE_CONTROL,
+        "public, max-age=300".parse().unwrap(),
+    );
+
+    (headers, bytes).into_response()
 }
 
 // ── WebSocket handler ────────────────────────────────────────────────────────

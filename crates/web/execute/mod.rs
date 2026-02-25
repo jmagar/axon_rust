@@ -1,9 +1,10 @@
-mod files;
+pub(crate) mod files;
 mod polling;
 
 pub(crate) use files::handle_read_file;
 
 use serde_json::json;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -11,7 +12,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{Mutex, mpsc};
 
-use files::{send_scrape_file, send_screenshot_files};
+use files::send_scrape_file;
 use polling::poll_async_job;
 
 /// Known command modes — only these are allowed to prevent injection.
@@ -91,7 +92,8 @@ fn strip_ansi(s: &str) -> String {
 }
 
 /// Resolve the axon binary path.
-/// Uses `AXON_BIN` env var if set, otherwise `current_exe()`.
+/// Uses `AXON_BIN` env var if set, then tries known local build locations,
+/// then falls back to `axon` on PATH.
 fn resolve_exe() -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("AXON_BIN") {
         let path = PathBuf::from(&p);
@@ -100,19 +102,36 @@ fn resolve_exe() -> Result<PathBuf, String> {
         }
         return Err(format!("AXON_BIN={p} does not exist"));
     }
-    match std::env::current_exe() {
-        Ok(p) => {
-            if p.exists() {
-                Ok(p)
-            } else {
-                Err(format!(
-                    "current_exe() returned {} but file does not exist",
-                    p.display()
-                ))
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(current) = std::env::current_exe() {
+        candidates.push(current.clone());
+        if let Some(bin_dir) = current.parent() {
+            candidates.push(bin_dir.join("axon"));
+            if let Some(target_dir) = bin_dir.parent() {
+                candidates.push(target_dir.join("debug").join("axon"));
+                candidates.push(target_dir.join("release").join("axon"));
             }
         }
-        Err(e) => Err(format!("current_exe() failed: {e}")),
     }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("target").join("debug").join("axon"));
+        candidates.push(cwd.join("target").join("release").join("axon"));
+        candidates.push(cwd.join("scripts").join("axon"));
+    }
+
+    let mut seen = HashSet::new();
+    for candidate in candidates {
+        if seen.insert(candidate.clone()) && candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    // PATH fallback. This keeps the web server functional even if the
+    // original process binary was deleted after startup.
+    Ok(PathBuf::from("axon"))
 }
 
 /// Build the argument list from mode, input, and flags.
@@ -352,24 +371,55 @@ async fn handle_sync_command(
     let stderr = child.stderr.take();
     let stdout_tx = tx.clone();
     let stderr_tx = tx.clone();
+    let is_screenshot = mode == "screenshot";
 
     let stdout_task = tokio::spawn(async move {
-        let Some(stdout) = stdout else { return };
+        let Some(stdout) = stdout else {
+            return Vec::new();
+        };
         let mut lines = BufReader::new(stdout).lines();
+        // Collect screenshot JSON objects (have `path` + `size_bytes` + `url`)
+        // so we can send a screenshot_files message from deterministic data
+        // instead of relying on a fragile filesystem timestamp scan.
+        let mut screenshot_jsons: Vec<serde_json::Value> = Vec::new();
+        // Accumulate full stdout so pretty-printed JSON objects can be parsed
+        // after the stream ends (line-by-line parsing misses multiline JSON).
+        let mut stdout_accum = String::new();
+
         while let Ok(Some(line)) = lines.next_line().await {
             let clean = strip_ansi(&line);
             if clean.trim().is_empty() {
                 continue;
             }
+            if !stdout_accum.is_empty() {
+                stdout_accum.push('\n');
+            }
+            stdout_accum.push_str(&clean);
             // Try to parse as JSON for structured rendering; fall back to raw text.
             let msg = match serde_json::from_str::<serde_json::Value>(&clean) {
-                Ok(parsed) => json!({"type": "stdout_json", "data": parsed}).to_string(),
+                Ok(parsed) => {
+                    if is_screenshot {
+                        screenshot_jsons.push(parsed.clone());
+                    }
+                    json!({"type": "stdout_json", "data": parsed}).to_string()
+                }
                 Err(_) => json!({"type": "stdout_line", "line": clean}).to_string(),
             };
             if stdout_tx.send(msg).await.is_err() {
                 break;
             }
         }
+
+        // Final recovery pass for multiline pretty JSON output.
+        // If the full stdout parses, emit a single structured payload so the
+        // frontend can render rich components instead of raw JSON text.
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(stdout_accum.trim()) {
+            let _ = stdout_tx
+                .send(json!({"type": "stdout_json", "data": parsed}).to_string())
+                .await;
+        }
+
+        screenshot_jsons
     });
 
     let stderr_task = tokio::spawn(async move {
@@ -395,7 +445,8 @@ async fn handle_sync_command(
         }
     });
 
-    let _ = tokio::join!(stdout_task, stderr_task);
+    let (stdout_result, _) = tokio::join!(stdout_task, stderr_task);
+    let screenshot_jsons = stdout_result.unwrap_or_default();
 
     let status = child.wait().await;
     let elapsed = start.elapsed().as_millis() as u64;
@@ -409,7 +460,9 @@ async fn handle_sync_command(
                     send_scrape_file(tx).await;
                 }
                 if mode_owned == "screenshot" {
-                    send_screenshot_files(tx).await;
+                    // Build screenshot_files from captured stdout JSON
+                    // (deterministic — no filesystem timestamp scan)
+                    files::send_screenshot_files_from_json(&screenshot_jsons, tx).await;
                 }
                 let _ = tx
                     .send(

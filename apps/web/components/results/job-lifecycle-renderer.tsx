@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAxonWs } from '@/hooks/use-axon-ws'
+import { summarizeStructuredValue } from '@/lib/structured-text'
 import type { WsServerMsg } from '@/lib/ws-protocol'
 
 // ---------------------------------------------------------------------------
@@ -182,7 +183,7 @@ function JobCard({ job, commandMode }: { job: JobState; commandMode: string | nu
             <div key={key} className="flex justify-between py-0.5 text-[12px]">
               <span className="text-[#8787af]">{key}</span>
               <span className="max-w-[60%] truncate tabular-nums text-[#afd7ff]">
-                {typeof val === 'object' ? JSON.stringify(val) : String(val)}
+                {summarizeStructuredValue(val)}
               </span>
             </div>
           ))}

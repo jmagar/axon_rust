@@ -1,8 +1,8 @@
 'use client'
 
-import type { JSX } from 'react'
-
 import { CopyButton } from '@/components/ui/copy-button'
+import { StructuredDataView } from '@/components/results/structured-data-view'
+import { formatStructuredText } from '@/lib/structured-text'
 
 interface RawRendererProps {
   stdoutJson: unknown[]
@@ -13,6 +13,7 @@ interface RawRendererProps {
 export function RawRenderer({ stdoutJson, stdoutLines, isProcessing }: RawRendererProps) {
   const hasJson = stdoutJson.length > 0
   const hasLines = stdoutLines.length > 0
+  const parsedFromLines = hasJson ? null : parseStructuredLinePayload(stdoutLines)
 
   if (!hasJson && !hasLines) {
     if (isProcessing) {
@@ -29,8 +30,10 @@ export function RawRenderer({ stdoutJson, stdoutLines, isProcessing }: RawRender
   }
 
   const copyText = hasJson
-    ? stdoutJson.map((obj) => JSON.stringify(obj, null, 2)).join('\n')
-    : stdoutLines.join('\n')
+    ? stdoutJson.map((obj) => formatStructuredText(obj)).join('\n\n')
+    : parsedFromLines
+      ? formatStructuredText(parsedFromLines)
+      : stdoutLines.join('\n')
 
   return (
     <div className="relative">
@@ -38,9 +41,11 @@ export function RawRenderer({ stdoutJson, stdoutLines, isProcessing }: RawRender
       {hasJson ? (
         <div className="space-y-3">
           {stdoutJson.map((obj, i) => (
-            <JsonBlock key={i} data={obj} />
+            <StructuredDataView key={i} data={obj} />
           ))}
         </div>
+      ) : parsedFromLines ? (
+        <StructuredDataView data={parsedFromLines} />
       ) : (
         <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap font-mono text-[12px] leading-relaxed text-[#dce6f0]">
           {stdoutLines.join('\n')}
@@ -50,77 +55,30 @@ export function RawRenderer({ stdoutJson, stdoutLines, isProcessing }: RawRender
   )
 }
 
-function JsonBlock({ data }: { data: unknown }) {
-  const formatted = JSON.stringify(data, null, 2)
+function parseStructuredLinePayload(lines: string[]): unknown | null {
+  if (lines.length === 0) return null
 
-  return (
-    <pre
-      className="overflow-auto rounded-lg border border-[rgba(175,215,255,0.08)] p-3 font-mono text-[12px] leading-relaxed"
-      style={{ background: 'rgba(10, 18, 35, 0.4)' }}
-    >
-      {highlightJson(formatted)}
-    </pre>
-  )
-}
+  const joined = lines.join('\n').trim()
+  if (!joined) return null
 
-/**
- * Simple JSON syntax highlighter using regex + spans.
- * Keys get one color, strings another, numbers/booleans/null a third.
- */
-function highlightJson(json: string): (string | JSX.Element)[] {
-  const parts: (string | JSX.Element)[] = []
-  // Match JSON tokens: keys (quoted before colon), strings, numbers, booleans, null
-  const regex =
-    /("(?:[^"\\]|\\.)*")\s*:|("(?:[^"\\]|\\.)*")|(\b(?:true|false|null)\b)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g
-  let lastIndex = 0
-  let match: RegExpExecArray | null = null
-
-  match = regex.exec(json)
-  while (match !== null) {
-    // Push preceding plain text
-    if (match.index > lastIndex) {
-      parts.push(json.slice(lastIndex, match.index))
+  if (joined.startsWith('{') || joined.startsWith('[')) {
+    try {
+      return JSON.parse(joined)
+    } catch {
+      // fall through
     }
-
-    if (match[1] !== undefined) {
-      // Key (group 1 — quoted string before colon)
-      parts.push(
-        <span key={`k${match.index}`} className="text-[#87afff]">
-          {match[1]}
-        </span>,
-      )
-      parts.push(':')
-    } else if (match[2] !== undefined) {
-      // String value
-      parts.push(
-        <span key={`s${match.index}`} className="text-[#87d787]">
-          {match[2]}
-        </span>,
-      )
-    } else if (match[3] !== undefined) {
-      // Boolean / null
-      parts.push(
-        <span key={`b${match.index}`} className="text-[#ffaf87]">
-          {match[3]}
-        </span>,
-      )
-    } else if (match[4] !== undefined) {
-      // Number
-      parts.push(
-        <span key={`n${match.index}`} className="text-[#ffaf87]">
-          {match[4]}
-        </span>,
-      )
-    }
-
-    lastIndex = match.index + match[0].length
-    match = regex.exec(json)
   }
 
-  // Trailing text (closing braces, etc.)
-  if (lastIndex < json.length) {
-    parts.push(json.slice(lastIndex))
+  if (lines.length === 1) {
+    const line = lines[0].trim()
+    if (line.startsWith('{') || line.startsWith('[')) {
+      try {
+        return JSON.parse(line)
+      } catch {
+        return null
+      }
+    }
   }
 
-  return parts
+  return null
 }

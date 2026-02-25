@@ -25,7 +25,16 @@ export type WsServerMsg =
   | { type: 'command_start'; mode: string }
   | { type: 'stdout_json'; data: unknown }
   | { type: 'stdout_line'; line: string }
-  | { type: 'screenshot_files'; files: Array<{ path: string; name: string }> }
+  | {
+      type: 'screenshot_files'
+      files: Array<{
+        path: string
+        name: string
+        serve_url?: string
+        size_bytes?: number
+        url?: string
+      }>
+    }
   | {
       type: 'stats'
       aggregate: AggregateStats

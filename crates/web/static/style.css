@@ -230,20 +230,24 @@ body {
     position: absolute;
     top: calc(100% + 6px);
     right: 0;
-    left: 0;
+    left: auto;
+    width: min(560px, calc(100vw - 48px));
+    max-height: 56vh;
+    overflow-y: auto;
     background: rgba(15, 23, 42, 0.95);
     backdrop-filter: blur(20px);
     border: 1px solid rgba(175, 215, 255, 0.15);
     border-radius: 12px;
-    padding: 6px;
+    padding: 8px;
     z-index: 100;
     opacity: 0;
     visibility: hidden;
     transform: translateY(-4px);
+    transform-origin: top right;
     transition: all 0.2s ease;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 2px;
+    gap: 4px;
     box-shadow:
         0 16px 48px rgba(0, 0, 0, 0.5),
         0 0 0 1px rgba(175, 215, 255, 0.08);
@@ -262,10 +266,10 @@ body {
     padding: 10px 12px;
     background: transparent;
     border: none;
-    border-radius: 8px;
+    border-radius: 10px;
     color: #8787af;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 500;
     font-family: 'DM Sans', sans-serif;
     transition: all 0.15s ease;
@@ -938,7 +942,8 @@ body {
     }
 
     .mode-dropdown {
-        grid-template-columns: repeat(2, 1fr);
+        width: min(480px, calc(100vw - 32px));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .results-body {
@@ -1017,7 +1022,9 @@ body {
     }
 
     .mode-dropdown {
-        grid-template-columns: repeat(2, 1fr);
+        width: min(420px, calc(100vw - 24px));
+        right: -2px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .mode-option {

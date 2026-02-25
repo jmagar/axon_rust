@@ -10,6 +10,7 @@ import { CardsRenderer } from '@/components/results/cards-renderer'
 import { JobLifecycleRenderer } from '@/components/results/job-lifecycle-renderer'
 import { RawRenderer } from '@/components/results/raw-renderer'
 import { ReportRenderer } from '@/components/results/report-renderer'
+import { ScreenshotRenderer } from '@/components/results/screenshot-renderer'
 import { StatusRenderer } from '@/components/results/status-renderer'
 import { TableRenderer } from '@/components/results/table-renderer'
 import { useWsMessages } from '@/hooks/use-ws-messages'
@@ -38,6 +39,7 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
     stdoutLines,
     stdoutJson,
     commandMode,
+    screenshotFiles,
     currentJobId,
   } = useWsMessages()
   const [activeTab, setActiveTab] = useState<TabId>('content')
@@ -47,21 +49,63 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
     { id: 'recent', label: 'Recent' },
   ]
 
+  const effectiveCommandMode = commandMode ?? currentMode ?? null
   const isCrawlMode = currentMode === 'crawl'
+  const isScreenshotMode = effectiveCommandMode === 'screenshot'
   const hasCrawlFiles = crawlFiles.length > 0
   // Crawl and scrape use file-based rendering (markdown viewer + file explorer),
   // not the renderIntent dispatch. Crawl progress arrives via dedicated
   // crawl_progress messages, not stdout_json.
-  const isMarkdownMode = commandMode === null || commandMode === 'scrape' || commandMode === 'crawl'
+  const isMarkdownMode =
+    effectiveCommandMode === null ||
+    effectiveCommandMode === 'scrape' ||
+    effectiveCommandMode === 'crawl'
 
   const spec = useMemo(
-    () => (commandMode ? AXON_COMMAND_SPECS.find((s) => s.id === commandMode) : undefined),
-    [commandMode],
+    () =>
+      effectiveCommandMode ? AXON_COMMAND_SPECS.find((s) => s.id === effectiveCommandMode) : undefined,
+    [effectiveCommandMode],
   )
 
+  const fallbackJsonItems = useMemo(() => {
+    if (stdoutJson.length > 0 || stdoutLines.length === 0) return null
+
+    const joined = stdoutLines.join('\n')
+    const candidates = [joined.trim()]
+
+    // Also try parsing from the first opening bracket to the last closing bracket.
+    // This recovers when stdout has harmless prefix/suffix text around JSON.
+    const firstObj = joined.indexOf('{')
+    const lastObj = joined.lastIndexOf('}')
+    if (firstObj >= 0 && lastObj > firstObj) {
+      candidates.push(joined.slice(firstObj, lastObj + 1).trim())
+    }
+    const firstArr = joined.indexOf('[')
+    const lastArr = joined.lastIndexOf(']')
+    if (firstArr >= 0 && lastArr > firstArr) {
+      candidates.push(joined.slice(firstArr, lastArr + 1).trim())
+    }
+
+    for (const candidate of candidates) {
+      if (!candidate || (!candidate.startsWith('{') && !candidate.startsWith('['))) continue
+      try {
+        const parsed = JSON.parse(candidate)
+        return [parsed]
+      } catch {
+        // Try next candidate
+      }
+    }
+    return null
+  }, [stdoutJson, stdoutLines])
+
+  const normalizedItems = stdoutJson.length > 0 ? stdoutJson : (fallbackJsonItems ?? [])
+
   const normalized = useMemo(
-    () => (commandMode && stdoutJson.length > 0 ? normalizeResult(commandMode, stdoutJson) : null),
-    [commandMode, stdoutJson],
+    () =>
+      effectiveCommandMode && normalizedItems.length > 0
+        ? normalizeResult(effectiveCommandMode, normalizedItems)
+        : null,
+    [effectiveCommandMode, normalizedItems],
   )
 
   return (
@@ -115,7 +159,18 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
             className="flex max-h-[72vh] overflow-hidden rounded-[10px] border border-[rgba(175,215,255,0.1)]"
             style={{ background: 'rgba(3, 7, 18, 0.25)' }}
           >
-            {isMarkdownMode ? (
+            {isScreenshotMode ? (
+              <div className="flex-1 overflow-y-auto p-2 text-sm leading-[1.65] text-[#dce6f0] sm:p-3 md:p-4">
+                {errorMessage ? (
+                  <div className="font-mono text-[13px] leading-relaxed text-[#ef4444]">
+                    <span className="mb-2 block text-sm font-bold text-[#ff87af]">Error</span>
+                    {errorMessage}
+                  </div>
+                ) : (
+                  <ScreenshotRenderer files={screenshotFiles} isProcessing={isProcessing} />
+                )}
+              </div>
+            ) : isMarkdownMode ? (
               <>
                 {/* Crawl file explorer sidebar (drawer on mobile, inline on desktop) */}
                 {hasCrawlFiles && (
@@ -146,7 +201,7 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
                 {spec?.renderIntent === 'job-lifecycle' ? (
                   <JobLifecycleRenderer
                     stdoutJson={stdoutJson}
-                    commandMode={commandMode}
+                    commandMode={effectiveCommandMode}
                     isProcessing={isProcessing}
                     errorMessage={errorMessage}
                   />
@@ -160,7 +215,7 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
                 ) : normalized && spec?.renderIntent === 'cards' ? (
                   <CardsRenderer result={normalized} />
                 ) : normalized && spec?.renderIntent === 'report' ? (
-                  <ReportRenderer result={normalized} commandMode={commandMode} />
+                  <ReportRenderer result={normalized} commandMode={effectiveCommandMode} />
                 ) : normalized && spec?.renderIntent === 'status-summary' ? (
                   <StatusRenderer result={normalized} />
                 ) : (

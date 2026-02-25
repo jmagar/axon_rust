@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 /// Resolve the output directory for reading crawl results.
 /// Checks `AXON_WORKER_OUTPUT_DIR` first (host path to Docker bind mount),
 /// then `AXON_OUTPUT_DIR`, then the default relative path.
-pub(crate) fn output_dir() -> PathBuf {
+pub fn output_dir() -> PathBuf {
     std::env::var("AXON_WORKER_OUTPUT_DIR")
         .or_else(|_| std::env::var("AXON_OUTPUT_DIR"))
         .map(PathBuf::from)
@@ -69,9 +69,47 @@ pub(super) async fn send_scrape_file(tx: &mpsc::Sender<String>) {
     }
 }
 
+/// Build a `screenshot_files` message from captured stdout JSON objects.
+///
+/// Each screenshot JSON has shape `{url, path, size_bytes}`. We extract the
+/// filename from `path` and construct a serve URL so the frontend can display
+/// the image inline. This is deterministic — no filesystem timestamp scan.
+pub(super) async fn send_screenshot_files_from_json(
+    jsons: &[serde_json::Value],
+    tx: &mpsc::Sender<String>,
+) {
+    let mut files = Vec::new();
+    for obj in jsons {
+        let path_str = obj.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let size_bytes = obj.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0);
+        let url = obj.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        if path_str.is_empty() {
+            continue;
+        }
+        let name = Path::new(path_str)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        files.push(json!({
+            "path": path_str,
+            "name": name,
+            "serve_url": format!("/output/screenshots/{name}"),
+            "size_bytes": size_bytes,
+            "url": url,
+        }));
+    }
+    if !files.is_empty() {
+        let _ = tx
+            .send(json!({"type": "screenshot_files", "files": files}).to_string())
+            .await;
+    }
+}
+
 /// Send recently modified screenshot files to the frontend after a screenshot command.
 /// Globs `output_dir/screenshots/*.png` and sends paths for any files modified in
 /// the last 60 seconds (conservative window to catch the just-completed run).
+#[allow(dead_code)]
 pub(super) async fn send_screenshot_files(tx: &mpsc::Sender<String>) {
     let screenshots_dir = output_dir().join("screenshots");
     let Ok(mut entries) = tokio::fs::read_dir(&screenshots_dir).await else {
@@ -98,9 +136,12 @@ pub(super) async fn send_screenshot_files(tx: &mpsc::Sender<String>) {
                             .unwrap_or_default()
                             .to_string_lossy()
                             .into_owned();
+                        let size_bytes = meta.len();
                         files.push(json!({
                             "path": path.to_string_lossy(),
                             "name": name,
+                            "serve_url": format!("/output/screenshots/{name}"),
+                            "size_bytes": size_bytes,
                         }));
                     }
                 }

@@ -250,6 +250,20 @@
             case 'output':
                 handleOutput(msg);
                 break;
+            case 'stdout_json':
+                // Structured JSON from sync commands — render as rich content
+                if (msg.data) renderJsonOutput(msg.data);
+                break;
+            case 'stdout_line':
+                // Plain text from sync commands
+                if (msg.line) appendRawLine(msg.line);
+                break;
+            case 'command_start':
+                // Mode announced — no visual action needed
+                break;
+            case 'screenshot_files':
+                handleScreenshotFiles(msg);
+                break;
             case 'log':
                 handleLog(msg);
                 break;
@@ -359,8 +373,53 @@
         return configHits >= 2;
     }
 
+    // Render screenshot images inline when screenshot_files message arrives
+    function handleScreenshotFiles(msg) {
+        var files = msg.files || [];
+        if (files.length === 0) return;
+
+        // Clear any previously rendered JSON output for screenshots
+        // (the stdout_json with {url, path, size_bytes} is metadata — the image is what matters)
+        resultsBody.innerHTML = '';
+
+        files.forEach(function (file) {
+            var wrapper = document.createElement('div');
+            wrapper.style.marginBottom = '16px';
+
+            // Image
+            var imgContainer = document.createElement('div');
+            imgContainer.style.cssText = 'border-radius: 8px; overflow: hidden; border: 1px solid rgba(175,215,255,0.1); background: rgba(10,18,35,0.4);';
+            var img = document.createElement('img');
+            img.src = file.serve_url || ('/output/screenshots/' + file.name);
+            img.alt = 'Screenshot: ' + file.name;
+            img.style.cssText = 'width: 100%; display: block;';
+            img.loading = 'lazy';
+            imgContainer.appendChild(img);
+            wrapper.appendChild(imgContainer);
+
+            // Metadata bar
+            var meta = document.createElement('div');
+            meta.style.cssText = 'display: flex; gap: 12px; align-items: center; margin-top: 8px; font-size: 11px; color: #5f6b7a; font-family: "JetBrains Mono", monospace;';
+            meta.innerHTML = '<span>' + escapeHtml(file.name) + '</span>';
+            if (file.size_bytes) {
+                var kb = (file.size_bytes / 1024).toFixed(1);
+                meta.innerHTML += '<span>' + kb + ' KB</span>';
+            }
+            meta.innerHTML += '<a href="' + escapeHtml(file.serve_url || ('/output/screenshots/' + file.name)) + '" download="' + escapeHtml(file.name) + '" style="margin-left: auto; color: #87afff;">Download</a>';
+            wrapper.appendChild(meta);
+
+            resultsBody.appendChild(wrapper);
+        });
+        resultsBody.scrollTop = resultsBody.scrollHeight;
+    }
+
     // Extract and render markdown-rich content from JSON output
     function renderJsonOutput(obj) {
+        // Screenshot metadata ({url, path, size_bytes}) — suppress, image shown via screenshot_files
+        if (obj && obj.path && obj.size_bytes !== undefined && obj.url && currentMode === 'screenshot') {
+            return;
+        }
+
         // Config/options metadata → route to Stats tab
         if (isConfigObject(obj)) {
             var section = document.createElement('div');

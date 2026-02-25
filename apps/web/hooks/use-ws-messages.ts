@@ -30,6 +30,9 @@ export interface CrawlProgress {
 export interface ScreenshotFile {
   path: string
   name: string
+  serve_url?: string
+  size_bytes?: number
+  url?: string
 }
 
 interface WsMessagesContextValue {
@@ -75,8 +78,9 @@ export function useWsMessages() {
 
 export { WsMessagesContext }
 
-/** Cap stdout accumulators to prevent unbounded memory growth */
-const MAX_STDOUT_ITEMS = 5000
+/** Cap stdout accumulators to prevent unbounded memory growth.
+ * Status payloads can be very large JSON documents, so keep a larger window. */
+const MAX_STDOUT_ITEMS = 50000
 
 export function useWsMessagesProvider() {
   const { subscribe, send } = useAxonWs()
@@ -157,9 +161,20 @@ export function useWsMessagesProvider() {
           setScreenshotFiles(msg.files)
           setHasResults(true)
           break
-        case 'output':
+        case 'output': {
+          // Legacy server message shape: treat as stdout text so content renderers
+          // still work even if the backend emits `output` instead of `stdout_line`.
+          const line = (msg.line ?? '').toString()
+          if (!line.trim()) break
+          setStdoutLines((prev) => {
+            const next = [...prev, line]
+            return next.length > MAX_STDOUT_ITEMS ? next.slice(-MAX_STDOUT_ITEMS) : next
+          })
+          setHasResults(true)
+          break
+        }
         case 'stats':
-          // Handled by other consumers (DockerStats component for stats, legacy for output)
+          // Handled by DockerStats component
           break
         case 'done': {
           setIsProcessing(false)
