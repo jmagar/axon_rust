@@ -1,7 +1,7 @@
 'use client'
 
-import { CopyButton } from '@/components/ui/copy-button'
 import { StructuredDataView } from '@/components/results/structured-data-view'
+import { CopyButton } from '@/components/ui/copy-button'
 import { formatStructuredText } from '@/lib/structured-text'
 
 interface RawRendererProps {

@@ -1,6 +1,5 @@
 'use client'
 
-import { faker } from '@faker-js/faker'
 import { CopilotPlugin } from '@platejs/ai/react'
 import { serializeMd, stripMarkdown } from '@platejs/markdown'
 import type { TElement } from 'platejs'
@@ -28,11 +27,9 @@ export const CopilotKit = [
   - CRITICAL: Avoid starting a new block. Do not use block formatting like >, #, 1., 2., -, etc. The suggestion should continue in the same block as the context.
   - If no context is provided or you can't generate a continuation, return "0" without explanation.`,
         },
-        onError: () => {
-          // Mock the API response. Remove it when you implement the route /api/ai/copilot
-          api.copilot.setBlockSuggestion({
-            text: stripMarkdown(faker.lorem.sentence()),
-          })
+        onError: (error) => {
+          console.error('[Copilot] API error:', error)
+          api.copilot.setBlockSuggestion({ text: '' })
         },
         onFinish: (_, completion) => {
           if (completion === '0') return

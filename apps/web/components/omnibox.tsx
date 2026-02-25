@@ -6,6 +6,7 @@ import { useWsMessages } from '@/hooks/use-ws-messages'
 import { getCommandSpec } from '@/lib/axon-command-map'
 import type { ModeCategory, ModeDefinition, WsServerMsg } from '@/lib/ws-protocol'
 import {
+  isWorkspaceMode,
   MODE_CATEGORY_LABELS,
   MODE_CATEGORY_ORDER,
   MODES,
@@ -16,13 +17,15 @@ import { CommandOptionsPanel, type CommandOptionValues } from './command-options
 
 export function Omnibox() {
   const { send, subscribe } = useAxonWs()
-  const { startExecution } = useWsMessages()
+  const { startExecution, activateWorkspace, submitWorkspacePrompt } = useWsMessages()
   const [mode, setMode] = useState<ModeId>('scrape')
   const [input, setInput] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
   const [statusText, setStatusText] = useState('')
   const [statusType, setStatusType] = useState<'processing' | 'done' | 'error'>('processing')
   const [dropdownOpen, setDropdownOpen] = useState(false)
+  const [optionsOpen, setOptionsOpen] = useState(false)
+  const [mentionSuggestion, setMentionSuggestion] = useState<ModeDefinition | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const omniboxRef = useRef<HTMLDivElement>(null)
   const startTimeRef = useRef(0)
@@ -31,6 +34,10 @@ export function Omnibox() {
 
   const currentMode = MODES.find((m) => m.id === mode) ?? MODES[0]
   const hasOptions = (getCommandSpec(mode)?.commandOptions.length ?? 0) > 0
+  const activeOptionCount = useMemo(
+    () => Object.values(optionValues).filter((val) => val !== '' && val !== false).length,
+    [optionValues],
+  )
 
   // Group modes by category for the dropdown
   const groupedModes = useMemo(() => {
@@ -50,6 +57,7 @@ export function Omnibox() {
     function handleClick(e: MouseEvent) {
       if (omniboxRef.current && !omniboxRef.current.contains(e.target as Node)) {
         setDropdownOpen(false)
+        setOptionsOpen(false)
       }
     }
     document.addEventListener('mousedown', handleClick)
@@ -74,9 +82,56 @@ export function Omnibox() {
     })
   }, [subscribe])
 
+  // Global "/" shortcut to focus the omnibox.
+  useEffect(() => {
+    function isEditableElement(target: EventTarget | null): boolean {
+      if (!(target instanceof HTMLElement)) return false
+      if (target.isContentEditable) return true
+      const tag = target.tagName.toLowerCase()
+      return tag === 'input' || tag === 'textarea' || tag === 'select'
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return
+      if (isEditableElement(event.target)) return
+      event.preventDefault()
+      inputRef.current?.focus()
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  // Mention-to-mode suggestion. Example: "@c" => "crawl".
+  useEffect(() => {
+    const trimmed = input.trim()
+    if (!trimmed.startsWith('@')) {
+      setMentionSuggestion(null)
+      return
+    }
+
+    const rawToken = trimmed.slice(1).toLowerCase()
+    if (!rawToken) {
+      setMentionSuggestion(null)
+      return
+    }
+
+    const suggestion =
+      MODES.find((m) => m.id.toLowerCase().startsWith(rawToken)) ??
+      MODES.find((m) => m.label.toLowerCase().startsWith(rawToken)) ??
+      null
+
+    setMentionSuggestion(suggestion)
+  }, [input])
+
   const executeCommand = useCallback(
     (execMode: ModeId, execInput: string) => {
       if (isProcessing) return
+      if (isWorkspaceMode(execMode)) {
+        activateWorkspace(execMode)
+        if (execInput.trim()) submitWorkspacePrompt(execInput.trim())
+        return
+      }
       if (!execInput.trim() && !NO_INPUT_MODES.has(execMode)) return
 
       execIdRef.current += 1
@@ -101,7 +156,7 @@ export function Omnibox() {
 
       startExecution(execMode, execInput.trim())
     },
-    [isProcessing, send, startExecution, optionValues],
+    [isProcessing, activateWorkspace, submitWorkspacePrompt, send, startExecution, optionValues],
   )
 
   const execute = useCallback(() => {
@@ -122,8 +177,11 @@ export function Omnibox() {
     (id: ModeId) => {
       setMode(id)
       setDropdownOpen(false)
+      setOptionsOpen(false)
       setOptionValues({})
-      if (NO_INPUT_MODES.has(id)) {
+      if (isWorkspaceMode(id)) {
+        activateWorkspace(id)
+      } else if (NO_INPUT_MODES.has(id)) {
         setTimeout(() => {
           executeCommand(id, '')
         }, 0)
@@ -131,20 +189,38 @@ export function Omnibox() {
         inputRef.current?.focus()
       }
     },
-    [executeCommand],
+    [activateWorkspace, executeCommand],
   )
+
+  const applyMentionMode = useCallback(() => {
+    if (!mentionSuggestion) return false
+    selectMode(mentionSuggestion.id as ModeId)
+    setInput('')
+    return true
+  }, [mentionSuggestion, selectMode])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (e.key === 'Tab' && mentionSuggestion && input.trim().startsWith('@')) {
+        e.preventDefault()
+        applyMentionMode()
+        return
+      }
       if (e.key === 'Enter') {
+        if (mentionSuggestion && input.trim().startsWith('@')) {
+          e.preventDefault()
+          applyMentionMode()
+          return
+        }
         e.preventDefault()
         execute()
       }
       if (e.key === 'Escape') {
         setDropdownOpen(false)
+        setOptionsOpen(false)
       }
     },
-    [execute],
+    [applyMentionMode, execute, input, mentionSuggestion],
   )
 
   return (
@@ -351,6 +427,13 @@ export function Omnibox() {
           </div>
         )}
       </div>
+      {mentionSuggestion && input.trim().startsWith('@') && (
+        <div className="px-1 text-[11px] text-[#8787af]">
+          Mode suggestion:
+          <span className="ml-1 font-semibold text-[#afd7ff]">@{mentionSuggestion.id}</span>
+          <span className="ml-2 text-[#5f87af]">Press Tab</span>
+        </div>
+      )}
     </div>
   )
 }

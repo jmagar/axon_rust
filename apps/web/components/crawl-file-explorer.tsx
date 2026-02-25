@@ -301,13 +301,14 @@ export function CrawlFileExplorer({
       {/* Mobile: animated overlay drawer (always mounted, driven by translate) */}
       <div className="contents md:hidden">
         {/* Backdrop */}
-        <div
+        <button
+          type="button"
+          aria-label="Close file explorer"
           className={`fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${
             open ? 'opacity-100' : 'pointer-events-none opacity-0'
           }`}
           onClick={() => setOpen(false)}
           onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}
-          role="presentation"
         />
         {/* Drawer */}
         <div

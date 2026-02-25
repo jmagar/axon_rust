@@ -104,8 +104,12 @@ function normalizeStatus(items: unknown[]): NormalizedResult {
   if (!isRecord(obj)) return { type: 'raw', data: items }
   // Accept both canonical and relaxed status payload shapes.
   // Canonical: local_*_jobs keys from `axon status --json`.
-  const hasCanonicalKeys = ['local_crawl_jobs', 'local_extract_jobs', 'local_embed_jobs', 'local_ingest_jobs']
-    .some((k) => Array.isArray(obj[k]))
+  const hasCanonicalKeys = [
+    'local_crawl_jobs',
+    'local_extract_jobs',
+    'local_embed_jobs',
+    'local_ingest_jobs',
+  ].some((k) => Array.isArray(obj[k]))
 
   // Relaxed: any "*_jobs" array key (forward/backward compatibility).
   const hasAnyJobsArray = Object.keys(obj).some((k) => k.endsWith('_jobs') && Array.isArray(obj[k]))
@@ -114,10 +118,18 @@ function normalizeStatus(items: unknown[]): NormalizedResult {
 
   // Normalize into the renderer's expected shape so missing keys don't break UI.
   const normalized: StatusResult = {
-    local_crawl_jobs: ((obj.local_crawl_jobs as unknown[]) ?? ((obj.crawl_jobs as unknown[]) ?? [])) as StatusResult['local_crawl_jobs'],
-    local_extract_jobs: ((obj.local_extract_jobs as unknown[]) ?? ((obj.extract_jobs as unknown[]) ?? [])) as StatusResult['local_extract_jobs'],
-    local_embed_jobs: ((obj.local_embed_jobs as unknown[]) ?? ((obj.embed_jobs as unknown[]) ?? [])) as StatusResult['local_embed_jobs'],
-    local_ingest_jobs: ((obj.local_ingest_jobs as unknown[]) ?? ((obj.ingest_jobs as unknown[]) ?? [])) as StatusResult['local_ingest_jobs'],
+    local_crawl_jobs: ((obj.local_crawl_jobs as unknown[]) ??
+      (obj.crawl_jobs as unknown[]) ??
+      []) as StatusResult['local_crawl_jobs'],
+    local_extract_jobs: ((obj.local_extract_jobs as unknown[]) ??
+      (obj.extract_jobs as unknown[]) ??
+      []) as StatusResult['local_extract_jobs'],
+    local_embed_jobs: ((obj.local_embed_jobs as unknown[]) ??
+      (obj.embed_jobs as unknown[]) ??
+      []) as StatusResult['local_embed_jobs'],
+    local_ingest_jobs: ((obj.local_ingest_jobs as unknown[]) ??
+      (obj.ingest_jobs as unknown[]) ??
+      []) as StatusResult['local_ingest_jobs'],
   }
 
   return { type: 'status', data: normalized }

@@ -65,6 +65,11 @@ interface WsMessagesContextValue {
   screenshotFiles: ScreenshotFile[]
   /** Job ID for the current/last crawl (used for download routes) */
   currentJobId: string | null
+  workspaceMode: string | null
+  workspacePrompt: string | null
+  activateWorkspace: (mode: string) => void
+  submitWorkspacePrompt: (prompt: string) => void
+  deactivateWorkspace: () => void
   startExecution: (mode: string, input?: string) => void
 }
 
@@ -102,6 +107,8 @@ export function useWsMessagesProvider() {
   const [commandMode, setCommandMode] = useState<string | null>(null)
   const [screenshotFiles, setScreenshotFiles] = useState<ScreenshotFile[]>([])
   const [currentJobId, setCurrentJobId] = useState<string | null>(null)
+  const [workspaceMode, setWorkspaceMode] = useState<string | null>(null)
+  const [workspacePrompt, setWorkspacePrompt] = useState<string | null>(null)
 
   useEffect(() => {
     return subscribe((msg: WsServerMsg) => {
@@ -239,6 +246,22 @@ export function useWsMessagesProvider() {
     setCommandMode(null)
     setScreenshotFiles([])
     setCurrentJobId(null)
+    setWorkspaceMode(null)
+    setWorkspacePrompt(null)
+  }, [])
+
+  const activateWorkspace = useCallback((mode: string) => {
+    setWorkspaceMode(mode)
+    setWorkspacePrompt(null)
+  }, [])
+
+  const submitWorkspacePrompt = useCallback((prompt: string) => {
+    setWorkspacePrompt(prompt)
+  }, [])
+
+  const deactivateWorkspace = useCallback(() => {
+    setWorkspaceMode(null)
+    setWorkspacePrompt(null)
   }, [])
 
   return {
@@ -258,6 +281,11 @@ export function useWsMessagesProvider() {
     commandMode,
     screenshotFiles,
     currentJobId,
+    workspaceMode,
+    workspacePrompt,
+    activateWorkspace,
+    submitWorkspacePrompt,
+    deactivateWorkspace,
     startExecution,
   }
 }

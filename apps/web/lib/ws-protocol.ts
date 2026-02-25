@@ -67,7 +67,7 @@ export type WsStatus = 'connected' | 'reconnecting' | 'disconnected'
 // Mode definitions — must match ALLOWED_MODES in crates/web/execute.rs
 // Grouped by AxonCommandCategory for the mode picker dropdown.
 
-export type ModeCategory = 'content' | 'rag' | 'ingest' | 'ops' | 'service'
+export type ModeCategory = 'content' | 'rag' | 'ingest' | 'ops' | 'service' | 'workspace'
 
 export interface ModeDefinition {
   id: string
@@ -224,6 +224,13 @@ export const MODES: readonly ModeDefinition[] = [
     category: 'service',
     icon: 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
   },
+  // --- workspace ---
+  {
+    id: 'pulse',
+    label: 'Pulse',
+    category: 'workspace',
+    icon: 'M13 10V3L4 14h7v7l9-11h-7z',
+  },
 ] as const
 
 export type ModeId = (typeof MODES)[number]['id']
@@ -235,6 +242,7 @@ export const MODE_CATEGORY_LABELS: Record<ModeCategory, string> = {
   ingest: 'Ingest',
   ops: 'Ops',
   service: 'Service',
+  workspace: 'Workspace',
 }
 
 /** Category display order. */
@@ -244,6 +252,7 @@ export const MODE_CATEGORY_ORDER: readonly ModeCategory[] = [
   'ingest',
   'ops',
   'service',
+  'workspace',
 ]
 
 // Modes that auto-execute without input.
@@ -258,3 +267,9 @@ export const NO_INPUT_MODES: ReadonlySet<string> = new Set([
   'sessions',
   'dedupe',
 ])
+
+/** Modes in the workspace category bypass the WS executor entirely. */
+export function isWorkspaceMode(id: string): boolean {
+  const mode = MODES.find((m) => m.id === id)
+  return mode?.category === 'workspace'
+}

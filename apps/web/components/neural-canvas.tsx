@@ -36,6 +36,100 @@ function rgba(c: RGB, a: number): string {
   return `rgba(${c.r},${c.g},${c.b},${a})`
 }
 
+function mixColor(a: RGB, b: RGB, t: number): RGB {
+  const v = Math.max(0, Math.min(1, t))
+  return {
+    r: Math.round(a.r + (b.r - a.r) * v),
+    g: Math.round(a.g + (b.g - a.g) * v),
+    b: Math.round(a.b + (b.b - a.b) * v),
+  }
+}
+
+interface RenderAssets {
+  neuronOuterGlow: HTMLCanvasElement
+  neuronMidGlow: HTMLCanvasElement
+  neuronInnerGlow: HTMLCanvasElement
+  neuronFlashGlow: HTMLCanvasElement
+  actionPotentialGlow: HTMLCanvasElement
+  particleGlow: HTMLCanvasElement
+  spineGlow: HTMLCanvasElement
+}
+
+function createGlowSprite(
+  size: number,
+  colorStops: Array<{ offset: number; color: string }>,
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return canvas
+  const c = size / 2
+  const g = ctx.createRadialGradient(c, c, 0, c, c, c)
+  colorStops.forEach((stop) => g.addColorStop(stop.offset, stop.color))
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, size, size)
+  return canvas
+}
+
+function createRenderAssets(): RenderAssets {
+  return {
+    neuronOuterGlow: createGlowSprite(256, [
+      { offset: 0, color: rgba(COLORS.bright, 0.2) },
+      { offset: 0.3, color: rgba(COLORS.mid, 0.08) },
+      { offset: 0.65, color: rgba(COLORS.dim, 0.03) },
+      { offset: 1, color: 'rgba(0,0,0,0)' },
+    ]),
+    neuronMidGlow: createGlowSprite(192, [
+      { offset: 0, color: rgba(COLORS.core, 0.25) },
+      { offset: 0.35, color: rgba(COLORS.bright, 0.13) },
+      { offset: 0.75, color: rgba(COLORS.mid, 0.03) },
+      { offset: 1, color: 'rgba(0,0,0,0)' },
+    ]),
+    neuronInnerGlow: createGlowSprite(128, [
+      { offset: 0, color: rgba(COLORS.core, 0.35) },
+      { offset: 0.45, color: rgba(COLORS.bright, 0.16) },
+      { offset: 1, color: 'rgba(0,0,0,0)' },
+    ]),
+    neuronFlashGlow: createGlowSprite(320, [
+      { offset: 0, color: rgba(COLORS.core, 0.28) },
+      { offset: 0.2, color: rgba(COLORS.bright, 0.14) },
+      { offset: 0.5, color: rgba(COLORS.mid, 0.05) },
+      { offset: 1, color: 'rgba(0,0,0,0)' },
+    ]),
+    actionPotentialGlow: createGlowSprite(48, [
+      { offset: 0, color: rgba(COLORS.core, 0.35) },
+      { offset: 0.35, color: rgba(COLORS.bright, 0.12) },
+      { offset: 1, color: 'rgba(0,0,0,0)' },
+    ]),
+    particleGlow: createGlowSprite(64, [
+      { offset: 0, color: rgba(COLORS.bright, 0.12) },
+      { offset: 0.5, color: rgba(COLORS.mid, 0.04) },
+      { offset: 1, color: 'rgba(0,0,0,0)' },
+    ]),
+    spineGlow: createGlowSprite(32, [
+      { offset: 0, color: rgba(COLORS.bright, 0.24) },
+      { offset: 1, color: 'rgba(0,0,0,0)' },
+    ]),
+  }
+}
+
+function drawSprite(
+  ctx: CanvasRenderingContext2D,
+  sprite: HTMLCanvasElement,
+  x: number,
+  y: number,
+  radius: number,
+  alpha: number,
+) {
+  if (alpha <= 0 || radius <= 0) return
+  const d = radius * 2
+  ctx.save()
+  ctx.globalAlpha = alpha
+  ctx.drawImage(sprite, x - radius, y - radius, d, d)
+  ctx.restore()
+}
+
 // ---------------------------------------------------------------------------
 // Simplex-like drift (multi-octave sine)
 // ---------------------------------------------------------------------------
@@ -139,6 +233,7 @@ class Dendrite {
     time: number,
     depthScale = 1,
     skipSpines = false,
+    assets?: RenderAssets,
   ) {
     const alpha = opacity * (1 - this.depth * 0.18)
     const sway = Math.sin(time * this.waveSpeed + this.waveOffset) * 2
@@ -190,16 +285,23 @@ class Dendrite {
 
         // Spine head glow
         const headR = 1.5 * depthScale
-        ctx.save()
-        ctx.globalCompositeOperation = 'lighter'
-        const sg = ctx.createRadialGradient(sx, sy, 0, sx, sy, headR * 4)
-        sg.addColorStop(0, rgba(COLORS.bright, alpha * 0.2))
-        sg.addColorStop(1, rgba(COLORS.bright, 0))
-        ctx.beginPath()
-        ctx.arc(sx, sy, headR * 4, 0, Math.PI * 2)
-        ctx.fillStyle = sg
-        ctx.fill()
-        ctx.restore()
+        if (assets) {
+          ctx.save()
+          ctx.globalCompositeOperation = 'lighter'
+          drawSprite(ctx, assets.spineGlow, sx, sy, headR * 4, alpha * 0.7)
+          ctx.restore()
+        } else {
+          ctx.save()
+          ctx.globalCompositeOperation = 'lighter'
+          const sg = ctx.createRadialGradient(sx, sy, 0, sx, sy, headR * 4)
+          sg.addColorStop(0, rgba(COLORS.bright, alpha * 0.2))
+          sg.addColorStop(1, rgba(COLORS.bright, 0))
+          ctx.beginPath()
+          ctx.arc(sx, sy, headR * 4, 0, Math.PI * 2)
+          ctx.fillStyle = sg
+          ctx.fill()
+          ctx.restore()
+        }
 
         ctx.beginPath()
         ctx.arc(sx, sy, headR, 0, Math.PI * 2)
@@ -208,7 +310,9 @@ class Dendrite {
       }
     }
 
-    this.branches.forEach((branch) => branch.draw(ctx, opacity, time, depthScale, skipSpines))
+    this.branches.forEach((branch) =>
+      branch.draw(ctx, opacity, time, depthScale, skipSpines, assets),
+    )
   }
 
   getTip(): { x: number; y: number } {
@@ -693,6 +797,8 @@ class SynapticConnection {
   preTerminal: { x: number; y: number }
   dendriteTip: { x: number; y: number }
   strength: number
+  baseAlpha: number
+  bucket: 0 | 1 | 2
 
   constructor(
     preNeuron: Neuron,
@@ -705,6 +811,12 @@ class SynapticConnection {
     this.preTerminal = preTerminal
     this.dendriteTip = dendriteTip
     this.strength = 0.3 + Math.random() * 0.7
+
+    const dx = dendriteTip.x - preTerminal.x
+    const dy = dendriteTip.y - preTerminal.y
+    const distNorm = Math.min(1, Math.sqrt(dx * dx + dy * dy) / CONNECTION_MAX_DIST)
+    this.baseAlpha = (1 - distNorm) * 0.18 * this.strength
+    this.bucket = this.baseAlpha > 0.12 ? 0 : this.baseAlpha > 0.06 ? 1 : 2
   }
 }
 
@@ -760,7 +872,7 @@ class ActionPotential {
     }
   }
 
-  draw(ctx: CanvasRenderingContext2D, withGlow = true) {
+  draw(ctx: CanvasRenderingContext2D, assets: RenderAssets, withGlow = true) {
     if (!this.active) return
 
     let x: number | undefined
@@ -789,14 +901,7 @@ class ActionPotential {
     if (withGlow) {
       ctx.save()
       ctx.globalCompositeOperation = 'lighter'
-      const g = ctx.createRadialGradient(x, y, 0, x, y, 10)
-      g.addColorStop(0, rgba(COLORS.core, 0.35))
-      g.addColorStop(0.3, rgba(COLORS.bright, 0.12))
-      g.addColorStop(1, 'rgba(0,0,0,0)')
-      ctx.beginPath()
-      ctx.arc(x, y, 10, 0, Math.PI * 2)
-      ctx.fillStyle = g
-      ctx.fill()
+      drawSprite(ctx, assets.actionPotentialGlow, x, y, 10, 0.85)
       ctx.restore()
     }
 
@@ -843,28 +948,28 @@ class BackgroundParticle {
     if (this.y > height + 20) this.y = -20
   }
 
-  draw(ctx: CanvasRenderingContext2D, time: number, withGlow = true) {
+  draw(
+    ctx: CanvasRenderingContext2D,
+    time: number,
+    assets: RenderAssets,
+    withGlow = true,
+    snap = false,
+  ) {
     const pulse = Math.sin(time * this.pulseSpeed + this.pulseOffset) * 0.2 + 0.8
     const alpha = this.brightness * pulse
     const sz = this.baseSize * (0.5 + this.z * 0.5) * pulse
+    const x = snap ? Math.round(this.x) : this.x
+    const y = snap ? Math.round(this.y) : this.y
 
     if (withGlow && this.brightness > 0.2) {
       ctx.save()
       ctx.globalCompositeOperation = 'lighter'
-      const glowSz = sz * 6
-      const g = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, glowSz)
-      g.addColorStop(0, rgba(COLORS.bright, alpha * 0.12))
-      g.addColorStop(0.5, rgba(COLORS.mid, alpha * 0.04))
-      g.addColorStop(1, 'rgba(0,0,0,0)')
-      ctx.beginPath()
-      ctx.arc(this.x, this.y, glowSz, 0, Math.PI * 2)
-      ctx.fillStyle = g
-      ctx.fill()
+      drawSprite(ctx, assets.particleGlow, x, y, sz * 6, alpha * 0.9)
       ctx.restore()
     }
 
     ctx.beginPath()
-    ctx.arc(this.x, this.y, sz, 0, Math.PI * 2)
+    ctx.arc(x, y, sz, 0, Math.PI * 2)
     ctx.fillStyle = rgba(COLORS.core, alpha * 0.7)
     ctx.fill()
   }
@@ -874,46 +979,53 @@ class BackgroundParticle {
 // Batched connection renderer
 // ---------------------------------------------------------------------------
 
+interface ConnectionBuckets {
+  strong: SynapticConnection[]
+  medium: SynapticConnection[]
+  faint: SynapticConnection[]
+}
+
+function buildConnectionBuckets(conns: SynapticConnection[]): ConnectionBuckets {
+  const strong: SynapticConnection[] = []
+  const medium: SynapticConnection[] = []
+  const faint: SynapticConnection[] = []
+  for (let i = 0; i < conns.length; i++) {
+    const c = conns[i]
+    if (c.bucket === 0) strong.push(c)
+    else if (c.bucket === 1) medium.push(c)
+    else faint.push(c)
+  }
+  return { strong, medium, faint }
+}
+
 function drawConnections(
   ctx: CanvasRenderingContext2D,
-  conns: SynapticConnection[],
+  buckets: ConnectionBuckets,
   neuralIntensity: number,
+  time: number,
   stride = 1,
 ) {
-  const buckets: SynapticConnection[][] = [[], [], []]
-
-  for (let i = 0; i < conns.length; i++) {
-    if (stride > 1 && i % stride !== 0) continue
-    const c = conns[i]
-    const dx = c.dendriteTip.x - c.preTerminal.x
-    const dy = c.dendriteTip.y - c.preTerminal.y
-    const distSq = dx * dx + dy * dy
-    if (distSq > CONNECTION_MAX_DIST_SQ) continue
-    const distNorm = Math.sqrt(distSq) / CONNECTION_MAX_DIST
-
-    const baseAlpha = (1 - distNorm) * 0.18 * c.strength
-    const alpha = baseAlpha + neuralIntensity * baseAlpha * 1.5
-
-    if (alpha > 0.12) buckets[0].push(c)
-    else if (alpha > 0.06) buckets[1].push(c)
-    else buckets[2].push(c)
-  }
+  const grouped = [buckets.strong, buckets.medium, buckets.faint]
 
   const alphas = [0.12, 0.06, 0.03]
   const widths = [0.6, 0.4, 0.3]
   const glowWidths = [3, 2, 1.5]
-  const boost = 1 + neuralIntensity * 2
+  const pulse = 0.9 + 0.1 * Math.sin(time * 0.004)
+  const boost = (1 + neuralIntensity * 2) * pulse
+  const glowColor = mixColor(COLORS.dim, COLORS.mid, neuralIntensity * 0.75)
+  const fiberColor = mixColor(COLORS.mid, COLORS.core, neuralIntensity * 0.5)
 
   // Glow pass (additive)
   ctx.save()
   ctx.globalCompositeOperation = 'lighter'
   for (let b = 0; b < 3; b++) {
-    if (buckets[b].length === 0) continue
-    ctx.strokeStyle = rgba(COLORS.dim, Math.min(alphas[b] * boost * 0.5, 0.15))
+    if (grouped[b].length === 0) continue
+    ctx.strokeStyle = rgba(glowColor, Math.min(alphas[b] * boost * 0.5, 0.15))
     ctx.lineWidth = glowWidths[b]
     ctx.beginPath()
-    for (let i = 0; i < buckets[b].length; i++) {
-      const c = buckets[b][i]
+    for (let i = 0; i < grouped[b].length; i++) {
+      if (stride > 1 && i % stride !== 0) continue
+      const c = grouped[b][i]
       ctx.moveTo(c.preTerminal.x, c.preTerminal.y)
       ctx.lineTo(c.dendriteTip.x, c.dendriteTip.y)
     }
@@ -923,12 +1035,13 @@ function drawConnections(
 
   // Crisp fiber pass
   for (let b = 0; b < 3; b++) {
-    if (buckets[b].length === 0) continue
-    ctx.strokeStyle = rgba(COLORS.mid, Math.min(alphas[b] * boost, 0.25))
+    if (grouped[b].length === 0) continue
+    ctx.strokeStyle = rgba(fiberColor, Math.min(alphas[b] * boost, 0.25))
     ctx.lineWidth = widths[b]
     ctx.beginPath()
-    for (let i = 0; i < buckets[b].length; i++) {
-      const c = buckets[b][i]
+    for (let i = 0; i < grouped[b].length; i++) {
+      if (stride > 1 && i % stride !== 0) continue
+      const c = grouped[b][i]
       ctx.moveTo(c.preTerminal.x, c.preTerminal.y)
       ctx.lineTo(c.dendriteTip.x, c.dendriteTip.y)
     }
@@ -943,9 +1056,14 @@ function drawConnections(
 interface AnimState {
   neurons: Neuron[]
   connections: SynapticConnection[]
+  connectionBuckets: ConnectionBuckets
   signals: ActionPotential[]
   particles: BackgroundParticle[]
   densityLayer: HTMLCanvasElement
+  backgroundLayer: HTMLCanvasElement
+  backgroundNeedsRefresh: boolean
+  backgroundInterval: number
+  renderAssets: RenderAssets
   intensity: number
   targetIntensity: number
   frameId: number
@@ -985,6 +1103,13 @@ function createDensityLayer(
     layerCtx.fill()
   }
 
+  return layer
+}
+
+function createBackgroundLayer(width: number, height: number): HTMLCanvasElement {
+  const layer = document.createElement('canvas')
+  layer.width = width
+  layer.height = height
   return layer
 }
 
@@ -1038,12 +1163,19 @@ function createAnimState(
   // Sort by depth for painter's algorithm (back to front)
   neurons.sort((a, b) => a.depth - b.depth)
 
+  const connectionBuckets = buildConnectionBuckets(connections)
+
   return {
     neurons,
     connections,
+    connectionBuckets,
     signals: [],
     particles,
     densityLayer: createDensityLayer(width, height, reducedMotion),
+    backgroundLayer: createBackgroundLayer(width, height),
+    backgroundNeedsRefresh: true,
+    backgroundInterval: reducedMotion ? 3 : 2,
+    renderAssets: createRenderAssets(),
     intensity: 0,
     targetIntensity: 0,
     frameId: 0,

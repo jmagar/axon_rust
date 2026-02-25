@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
 import { BrainCircuit, Clock3, Database, MessageSquareQuote, Search, Sparkles } from 'lucide-react'
+import { useState } from 'react'
 import { DoctorReport } from '@/components/results/doctor-report'
 import { MarkdownBlock } from '@/components/results/markdown-block'
+import { StructuredDataView } from '@/components/results/structured-data-view'
 import type {
   AskDiagnostics,
   AskResult,
@@ -11,7 +12,6 @@ import type {
   EvaluateResult,
   NormalizedResult,
 } from '@/lib/result-types'
-import { StructuredDataView } from '@/components/results/structured-data-view'
 import { formatStructuredText } from '@/lib/structured-text'
 import { fmtMs, fmtNum } from './shared'
 
@@ -180,7 +180,11 @@ function AskReport({ data }: { data: AskResult }) {
           </p>
           <AskPill label="total" value={fmtMs(data.timing_ms.total)} icon={<Clock3 size={9} />} />
           <AskPill label="ret" value={fmtMs(data.timing_ms.retrieval)} icon={<Search size={9} />} />
-          <AskPill label="ctx" value={fmtMs(data.timing_ms.context_build)} icon={<Database size={9} />} />
+          <AskPill
+            label="ctx"
+            value={fmtMs(data.timing_ms.context_build)}
+            icon={<Database size={9} />}
+          />
           <AskPill label="llm" value={fmtMs(data.timing_ms.llm)} icon={<BrainCircuit size={9} />} />
           {diag && <AskPill label="chunks" value={fmtNum(diag.chunks_selected)} />}
           {diag && <AskPill label="docs" value={fmtNum(diag.full_docs_selected)} />}
