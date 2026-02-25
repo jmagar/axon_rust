@@ -25,7 +25,9 @@ export function Omnibox() {
   const [statusType, setStatusType] = useState<'processing' | 'done' | 'error'>('processing')
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [optionsOpen, setOptionsOpen] = useState(false)
-  const [mentionSuggestion, setMentionSuggestion] = useState<ModeDefinition | null>(null)
+  const [mentionSuggestions, setMentionSuggestions] = useState<ModeDefinition[]>([])
+  const [mentionSelectionIndex, setMentionSelectionIndex] = useState(0)
+  const [modeAppliedLabel, setModeAppliedLabel] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const omniboxRef = useRef<HTMLDivElement>(null)
   const startTimeRef = useRef(0)
@@ -102,26 +104,31 @@ export function Omnibox() {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  // Mention-to-mode suggestion. Example: "@c" => "crawl".
+  // Mention-to-mode suggestions. Example: "@c" => ["crawl", ...].
   useEffect(() => {
     const trimmed = input.trim()
     if (!trimmed.startsWith('@')) {
-      setMentionSuggestion(null)
+      setMentionSuggestions([])
       return
     }
 
     const rawToken = trimmed.slice(1).toLowerCase()
     if (!rawToken) {
-      setMentionSuggestion(null)
+      setMentionSuggestions([])
       return
     }
 
-    const suggestion =
-      MODES.find((m) => m.id.toLowerCase().startsWith(rawToken)) ??
-      MODES.find((m) => m.label.toLowerCase().startsWith(rawToken)) ??
-      null
+    const startsWithMatches = MODES.filter(
+      (m) => m.id.toLowerCase().startsWith(rawToken) || m.label.toLowerCase().startsWith(rawToken),
+    )
+    const containsMatches = MODES.filter(
+      (m) =>
+        !startsWithMatches.some((s) => s.id === m.id) &&
+        (m.id.toLowerCase().includes(rawToken) || m.label.toLowerCase().includes(rawToken)),
+    )
 
-    setMentionSuggestion(suggestion)
+    setMentionSuggestions([...startsWithMatches, ...containsMatches].slice(0, 3))
+    setMentionSelectionIndex(0)
   }, [input])
 
   const executeCommand = useCallback(
@@ -192,22 +199,53 @@ export function Omnibox() {
     [activateWorkspace, executeCommand],
   )
 
+  const applyMentionCandidate = useCallback(
+    (candidate: ModeDefinition) => {
+      selectMode(candidate.id as ModeId)
+      setInput('')
+      setMentionSuggestions([])
+      setMentionSelectionIndex(0)
+      setModeAppliedLabel(candidate.label)
+      return true
+    },
+    [selectMode],
+  )
+
   const applyMentionMode = useCallback(() => {
-    if (!mentionSuggestion) return false
-    selectMode(mentionSuggestion.id as ModeId)
-    setInput('')
+    const selected = mentionSuggestions[mentionSelectionIndex]
+    if (!selected) return false
+    applyMentionCandidate(selected)
     return true
-  }, [mentionSuggestion, selectMode])
+  }, [applyMentionCandidate, mentionSelectionIndex, mentionSuggestions])
+
+  useEffect(() => {
+    if (!modeAppliedLabel) return
+    const timer = setTimeout(() => setModeAppliedLabel(null), 900)
+    return () => clearTimeout(timer)
+  }, [modeAppliedLabel])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'Tab' && mentionSuggestion && input.trim().startsWith('@')) {
+      const hasMentionSelection = mentionSuggestions.length > 0 && input.trim().startsWith('@')
+      if (e.key === 'ArrowDown' && hasMentionSelection) {
+        e.preventDefault()
+        setMentionSelectionIndex((prev) => (prev + 1) % mentionSuggestions.length)
+        return
+      }
+      if (e.key === 'ArrowUp' && hasMentionSelection) {
+        e.preventDefault()
+        setMentionSelectionIndex(
+          (prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length,
+        )
+        return
+      }
+      if (e.key === 'Tab' && hasMentionSelection) {
         e.preventDefault()
         applyMentionMode()
         return
       }
       if (e.key === 'Enter') {
-        if (mentionSuggestion && input.trim().startsWith('@')) {
+        if (hasMentionSelection) {
           e.preventDefault()
           applyMentionMode()
           return
@@ -218,9 +256,10 @@ export function Omnibox() {
       if (e.key === 'Escape') {
         setDropdownOpen(false)
         setOptionsOpen(false)
+        setMentionSuggestions([])
       }
     },
-    [applyMentionMode, execute, input, mentionSuggestion],
+    [applyMentionMode, execute, input, mentionSuggestions],
   )
 
   return (
@@ -321,7 +360,11 @@ export function Omnibox() {
           type="button"
           onClick={isProcessing ? cancel : execute}
           disabled={!isProcessing && !input.trim() && !NO_INPUT_MODES.has(mode)}
-          className="flex shrink-0 items-center gap-1.5 bg-transparent px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-[#afd7ff] transition-colors duration-150 hover:text-white disabled:opacity-40 disabled:hover:text-[#afd7ff]"
+          className={`flex shrink-0 items-center gap-1.5 bg-transparent px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider transition-all duration-150 ${
+            modeAppliedLabel
+              ? 'text-[#ff87af] drop-shadow-[0_0_6px_rgba(255,135,175,0.45)]'
+              : 'text-[#afd7ff] hover:text-white'
+          } disabled:opacity-40 disabled:hover:text-[#afd7ff]`}
           title={isProcessing ? 'Cancel' : 'Execute'}
         >
           {isProcessing ? (
@@ -427,11 +470,33 @@ export function Omnibox() {
           </div>
         )}
       </div>
-      {mentionSuggestion && input.trim().startsWith('@') && (
-        <div className="px-1 text-[11px] text-[#8787af]">
-          Mode suggestion:
-          <span className="ml-1 font-semibold text-[#afd7ff]">@{mentionSuggestion.id}</span>
-          <span className="ml-2 text-[#5f87af]">Press Tab</span>
+      {mentionSuggestions.length > 0 && input.trim().startsWith('@') && (
+        <div className="rounded-lg border border-[rgba(175,215,255,0.14)] bg-[rgba(10,18,35,0.45)] px-2 py-1.5">
+          <div className="mb-1 text-[10px] uppercase tracking-wider text-[#5f87af]">
+            Mode Select
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {mentionSuggestions.map((candidate, idx) => (
+              <button
+                key={candidate.id}
+                type="button"
+                onClick={() => applyMentionCandidate(candidate)}
+                className={`rounded-md border px-2 py-1 text-[11px] transition-all ${
+                  idx === mentionSelectionIndex
+                    ? 'border-[rgba(255,135,175,0.5)] bg-[rgba(255,135,175,0.18)] text-[#ffd1e1]'
+                    : 'border-[rgba(175,215,255,0.25)] bg-[rgba(175,215,255,0.08)] text-[#afd7ff] hover:bg-[rgba(175,215,255,0.14)]'
+                }`}
+              >
+                @{candidate.id}
+              </button>
+            ))}
+          </div>
+          <div className="mt-1 text-[10px] text-[#5f87af]">Tab/Enter apply · ↑/↓ change</div>
+        </div>
+      )}
+      {modeAppliedLabel && (
+        <div className="rounded-md border border-[rgba(255,135,175,0.35)] bg-[rgba(255,135,175,0.1)] px-2 py-1 text-[11px] text-[#ffd1e1]">
+          Mode selected: <span className="font-semibold text-[#ff87af]">{modeAppliedLabel}</span>
         </div>
       )}
     </div>

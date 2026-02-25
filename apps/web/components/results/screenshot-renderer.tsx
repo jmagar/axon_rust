@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import type { ScreenshotFile } from '@/hooks/use-ws-messages'
 
 interface ScreenshotRendererProps {
@@ -48,11 +49,13 @@ export function ScreenshotRenderer({ files, isProcessing }: ScreenshotRendererPr
             className="overflow-hidden rounded-lg border border-[rgba(175,215,255,0.1)]"
             style={{ background: 'rgba(10, 18, 35, 0.4)' }}
           >
-            <img
+            <Image
               src={file.serve_url ?? `/output/screenshots/${file.name}`}
               alt={`Screenshot of ${file.url || file.name}`}
-              className="w-full"
-              loading="lazy"
+              className="h-auto w-full"
+              width={1600}
+              height={900}
+              unoptimized
             />
           </div>
 

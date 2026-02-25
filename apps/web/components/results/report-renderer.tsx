@@ -51,33 +51,6 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
   )
 }
 
-function IconSectionHeader({
-  icon,
-  children,
-  glow = 'blue',
-}: {
-  icon: React.ReactNode
-  children: React.ReactNode
-  glow?: 'blue' | 'pink'
-}) {
-  return (
-    <div className="mb-1.5 flex items-center gap-2">
-      <span
-        className={`inline-flex size-4 items-center justify-center rounded-[6px] border ${
-          glow === 'pink'
-            ? 'border-[rgba(255,135,175,0.3)] bg-[rgba(255,135,175,0.12)] text-[#ff9ec0]'
-            : 'border-[rgba(175,215,255,0.26)] bg-[rgba(175,215,255,0.12)] text-[#95cbff]'
-        }`}
-      >
-        {icon}
-      </span>
-      <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[#7ea7d8]">
-        {children}
-      </h3>
-    </div>
-  )
-}
-
 function AskPill({ label, value, icon }: { label: string; value: string; icon?: React.ReactNode }) {
   return (
     <span className="inline-flex items-center gap-1 rounded-md border border-[rgba(175,215,255,0.2)] bg-[rgba(14,25,48,0.62)] px-2 py-0.5 font-mono text-[8px] text-[#b8d6ff]">
