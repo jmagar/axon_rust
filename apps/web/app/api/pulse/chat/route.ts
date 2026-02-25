@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { validateDocOperations } from '@/lib/pulse/doc-ops'
 import { checkPermission } from '@/lib/pulse/permissions'
 import { buildPulseSystemPrompt, retrieveFromCollections } from '@/lib/pulse/rag'
+import { ensureRepoRootEnvLoaded } from '@/lib/pulse/server-env'
 import {
   DocOperationSchema,
   PulseChatRequestSchema,
@@ -9,13 +10,20 @@ import {
 } from '@/lib/pulse/types'
 
 export async function POST(request: Request) {
+  ensureRepoRootEnvLoaded()
+
   const baseUrl = process.env.OPENAI_BASE_URL
   const apiKey = process.env.OPENAI_API_KEY
   const model = process.env.OPENAI_MODEL ?? 'gpt-4o-mini'
 
   if (!baseUrl || !apiKey) {
+    const missing = [...(baseUrl ? [] : ['OPENAI_BASE_URL']), ...(apiKey ? [] : ['OPENAI_API_KEY'])]
     return NextResponse.json(
-      { error: 'OPENAI_BASE_URL and OPENAI_API_KEY must be set' },
+      {
+        error: `${missing.join(', ')} must be set`,
+        missing,
+        hint: 'Set these in apps/web/.env.local (or export them before starting next dev).',
+      },
       { status: 503 },
     )
   }

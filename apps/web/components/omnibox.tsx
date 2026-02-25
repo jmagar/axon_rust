@@ -4,6 +4,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAxonWs } from '@/hooks/use-axon-ws'
 import { useWsMessages } from '@/hooks/use-ws-messages'
 import { getCommandSpec } from '@/lib/axon-command-map'
+import {
+  deriveOmniboxPhase,
+  extractActiveMention,
+  extractMentionLabels,
+  getMentionKind,
+  type LocalDocFile,
+  type MentionKind,
+  rankFileSuggestions,
+  rankModeSuggestions,
+  replaceActiveMention,
+} from '@/lib/omnibox'
 import type { ModeCategory, ModeDefinition, WsServerMsg } from '@/lib/ws-protocol'
 import {
   isWorkspaceMode,
@@ -26,8 +37,12 @@ export function Omnibox() {
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [optionsOpen, setOptionsOpen] = useState(false)
   const [mentionSuggestions, setMentionSuggestions] = useState<ModeDefinition[]>([])
+  const [fileSuggestions, setFileSuggestions] = useState<LocalDocFile[]>([])
   const [mentionSelectionIndex, setMentionSelectionIndex] = useState(0)
   const [modeAppliedLabel, setModeAppliedLabel] = useState<string | null>(null)
+  const [localDocFiles, setLocalDocFiles] = useState<LocalDocFile[]>([])
+  const [fileContextMentions, setFileContextMentions] = useState<Record<string, LocalDocFile>>({})
+  const [recentFileSelections, setRecentFileSelections] = useState<Record<string, number>>({})
   const inputRef = useRef<HTMLInputElement>(null)
   const omniboxRef = useRef<HTMLDivElement>(null)
   const startTimeRef = useRef(0)
@@ -39,6 +54,22 @@ export function Omnibox() {
   const activeOptionCount = useMemo(
     () => Object.values(optionValues).filter((val) => val !== '' && val !== false).length,
     [optionValues],
+  )
+  const activeMentionToken = useMemo(() => extractActiveMention(input), [input])
+  const mentionKind: MentionKind = useMemo(
+    () => getMentionKind(input, activeMentionToken),
+    [input, activeMentionToken],
+  )
+  const activeSuggestions = mentionKind === 'mode' ? mentionSuggestions : fileSuggestions
+  const omniboxPhase = useMemo(
+    () =>
+      deriveOmniboxPhase({
+        isProcessing,
+        input,
+        mentionKind,
+        hasModeFeedback: Boolean(modeAppliedLabel),
+      }),
+    [input, isProcessing, mentionKind, modeAppliedLabel],
   )
 
   // Group modes by category for the dropdown
@@ -104,42 +135,108 @@ export function Omnibox() {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  // Mention-to-mode suggestions. Example: "@c" => ["crawl", ...].
   useEffect(() => {
-    const trimmed = input.trim()
-    if (!trimmed.startsWith('@')) {
+    let cancelled = false
+
+    fetch('/api/omnibox/files')
+      .then((res) => res.json())
+      .then((data: { files?: LocalDocFile[] }) => {
+        if (cancelled) return
+        setLocalDocFiles(Array.isArray(data.files) ? data.files : [])
+      })
+      .catch(() => {
+        if (!cancelled) setLocalDocFiles([])
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Mention suggestions: "@mode" from beginning, "... @file" for local docs.
+  useEffect(() => {
+    if (!activeMentionToken) {
       setMentionSuggestions([])
+      setFileSuggestions([])
+      setMentionSelectionIndex(0)
       return
     }
 
-    const rawToken = trimmed.slice(1).toLowerCase()
-    if (!rawToken) {
-      setMentionSuggestions([])
+    if (mentionKind === 'mode') {
+      const matches = rankModeSuggestions(MODES, activeMentionToken.query, 3)
+      setMentionSuggestions(matches)
+      setFileSuggestions([])
+      setMentionSelectionIndex(0)
       return
     }
 
-    const startsWithMatches = MODES.filter(
-      (m) => m.id.toLowerCase().startsWith(rawToken) || m.label.toLowerCase().startsWith(rawToken),
+    const matches = rankFileSuggestions(
+      localDocFiles,
+      activeMentionToken.query,
+      recentFileSelections,
+      3,
     )
-    const containsMatches = MODES.filter(
-      (m) =>
-        !startsWithMatches.some((s) => s.id === m.id) &&
-        (m.id.toLowerCase().includes(rawToken) || m.label.toLowerCase().includes(rawToken)),
-    )
-
-    setMentionSuggestions([...startsWithMatches, ...containsMatches].slice(0, 3))
+    setFileSuggestions(matches)
+    setMentionSuggestions([])
     setMentionSelectionIndex(0)
-  }, [input])
+  }, [activeMentionToken, localDocFiles, mentionKind, recentFileSelections])
+
+  const buildInputWithFileContext = useCallback(
+    async (rawInput: string) => {
+      const mentionLabels = extractMentionLabels(rawInput)
+      const matchingFiles = mentionLabels
+        .map((label) => fileContextMentions[label.toLowerCase()])
+        .filter((file): file is LocalDocFile => Boolean(file))
+        .slice(0, 3)
+
+      if (matchingFiles.length === 0) {
+        return { enrichedInput: rawInput.trim(), contextFileLabels: [] as string[] }
+      }
+
+      const contextBlocks = await Promise.all(
+        matchingFiles.map(async (file) => {
+          try {
+            const res = await fetch(`/api/omnibox/files?id=${encodeURIComponent(file.id)}`)
+            if (!res.ok) return null
+            const data = (await res.json()) as { file?: { content?: string; label?: string } }
+            const content = data.file?.content?.trim()
+            if (!content) return null
+            const label = data.file?.label ?? file.label
+            return `### ${label}\n${content.slice(0, 2400)}`
+          } catch {
+            return null
+          }
+        }),
+      )
+
+      const usableBlocks = contextBlocks.filter((block): block is string => Boolean(block))
+      if (usableBlocks.length === 0) {
+        return { enrichedInput: rawInput.trim(), contextFileLabels: [] as string[] }
+      }
+
+      const contextSection = `\n\nLocal file context:\n${usableBlocks.join('\n\n---\n\n')}`
+      return {
+        enrichedInput: `${rawInput.trim()}${contextSection}`,
+        contextFileLabels: matchingFiles.map((file) => file.label),
+      }
+    },
+    [fileContextMentions],
+  )
 
   const executeCommand = useCallback(
-    (execMode: ModeId, execInput: string) => {
+    async (execMode: ModeId, execInput: string) => {
       if (isProcessing) return
+
+      const trimmedInput = execInput.trim()
+      if (!trimmedInput && !NO_INPUT_MODES.has(execMode)) return
+
+      const { enrichedInput, contextFileLabels } = await buildInputWithFileContext(trimmedInput)
+
       if (isWorkspaceMode(execMode)) {
         activateWorkspace(execMode)
-        if (execInput.trim()) submitWorkspacePrompt(execInput.trim())
+        if (enrichedInput) submitWorkspacePrompt(enrichedInput)
         return
       }
-      if (!execInput.trim() && !NO_INPUT_MODES.has(execMode)) return
 
       execIdRef.current += 1
       setIsProcessing(true)
@@ -153,21 +250,32 @@ export function Omnibox() {
         if (val === '' || val === false) continue
         flags[key] = String(val)
       }
+      if (contextFileLabels.length > 0) {
+        flags.context_files = contextFileLabels.join(',')
+      }
 
       send({
         type: 'execute',
         mode: execMode,
-        input: execInput.trim(),
+        input: enrichedInput,
         flags,
       })
 
-      startExecution(execMode, execInput.trim())
+      startExecution(execMode, enrichedInput)
     },
-    [isProcessing, activateWorkspace, submitWorkspacePrompt, send, startExecution, optionValues],
+    [
+      isProcessing,
+      buildInputWithFileContext,
+      activateWorkspace,
+      submitWorkspacePrompt,
+      send,
+      startExecution,
+      optionValues,
+    ],
   )
 
   const execute = useCallback(() => {
-    executeCommand(mode, input)
+    void executeCommand(mode, input)
   }, [executeCommand, mode, input])
 
   const cancel = useCallback(() => {
@@ -190,7 +298,7 @@ export function Omnibox() {
         activateWorkspace(id)
       } else if (NO_INPUT_MODES.has(id)) {
         setTimeout(() => {
-          executeCommand(id, '')
+          void executeCommand(id, '')
         }, 0)
       } else {
         inputRef.current?.focus()
@@ -199,11 +307,12 @@ export function Omnibox() {
     [activateWorkspace, executeCommand],
   )
 
-  const applyMentionCandidate = useCallback(
+  const applyModeMentionCandidate = useCallback(
     (candidate: ModeDefinition) => {
       selectMode(candidate.id as ModeId)
       setInput('')
       setMentionSuggestions([])
+      setFileSuggestions([])
       setMentionSelectionIndex(0)
       setModeAppliedLabel(candidate.label)
       return true
@@ -211,12 +320,35 @@ export function Omnibox() {
     [selectMode],
   )
 
-  const applyMentionMode = useCallback(() => {
-    const selected = mentionSuggestions[mentionSelectionIndex]
+  const applyFileMentionCandidate = useCallback(
+    (candidate: LocalDocFile) => {
+      if (!activeMentionToken) return false
+      const nextInput = replaceActiveMention(input, activeMentionToken, `@${candidate.label} `)
+      setInput(nextInput)
+      setFileSuggestions([])
+      setMentionSuggestions([])
+      setMentionSelectionIndex(0)
+      setFileContextMentions((prev) => ({ ...prev, [candidate.label.toLowerCase()]: candidate }))
+      setRecentFileSelections((prev) => ({ ...prev, [candidate.id]: Date.now() }))
+      return true
+    },
+    [activeMentionToken, input],
+  )
+
+  const applyActiveSuggestion = useCallback(() => {
+    const selected = activeSuggestions[mentionSelectionIndex]
     if (!selected) return false
-    applyMentionCandidate(selected)
-    return true
-  }, [applyMentionCandidate, mentionSelectionIndex, mentionSuggestions])
+    if (mentionKind === 'mode') {
+      return applyModeMentionCandidate(selected as ModeDefinition)
+    }
+    return applyFileMentionCandidate(selected as LocalDocFile)
+  }, [
+    activeSuggestions,
+    mentionSelectionIndex,
+    mentionKind,
+    applyModeMentionCandidate,
+    applyFileMentionCandidate,
+  ])
 
   useEffect(() => {
     if (!modeAppliedLabel) return
@@ -226,28 +358,28 @@ export function Omnibox() {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      const hasMentionSelection = mentionSuggestions.length > 0 && input.trim().startsWith('@')
+      const hasMentionSelection = activeSuggestions.length > 0 && mentionKind !== 'none'
       if (e.key === 'ArrowDown' && hasMentionSelection) {
         e.preventDefault()
-        setMentionSelectionIndex((prev) => (prev + 1) % mentionSuggestions.length)
+        setMentionSelectionIndex((prev) => (prev + 1) % activeSuggestions.length)
         return
       }
       if (e.key === 'ArrowUp' && hasMentionSelection) {
         e.preventDefault()
         setMentionSelectionIndex(
-          (prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length,
+          (prev) => (prev - 1 + activeSuggestions.length) % activeSuggestions.length,
         )
         return
       }
       if (e.key === 'Tab' && hasMentionSelection) {
         e.preventDefault()
-        applyMentionMode()
+        applyActiveSuggestion()
         return
       }
       if (e.key === 'Enter') {
         if (hasMentionSelection) {
           e.preventDefault()
-          applyMentionMode()
+          applyActiveSuggestion()
           return
         }
         e.preventDefault()
@@ -257,9 +389,10 @@ export function Omnibox() {
         setDropdownOpen(false)
         setOptionsOpen(false)
         setMentionSuggestions([])
+        setFileSuggestions([])
       }
     },
-    [applyMentionMode, execute, input, mentionSuggestions],
+    [activeSuggestions, mentionKind, applyActiveSuggestion, execute],
   )
 
   return (
@@ -470,28 +603,72 @@ export function Omnibox() {
           </div>
         )}
       </div>
-      {mentionSuggestions.length > 0 && input.trim().startsWith('@') && (
+      {activeSuggestions.length > 0 && mentionKind !== 'none' && (
         <div className="rounded-lg border border-[rgba(175,215,255,0.14)] bg-[rgba(10,18,35,0.45)] px-2 py-1.5">
-          <div className="mb-1 text-[10px] uppercase tracking-wider text-[#5f87af]">
-            Mode Select
+          <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wider text-[#5f87af]">
+            <span>{mentionKind === 'mode' ? 'Mode Select' : 'File Context'}</span>
+            <span className="text-[#4f6f95]">{omniboxPhase.replace('-', ' ')}</span>
           </div>
           <div className="flex flex-wrap gap-1.5">
-            {mentionSuggestions.map((candidate, idx) => (
+            {activeSuggestions.map((candidate, idx) => {
+              const key =
+                mentionKind === 'mode'
+                  ? (candidate as ModeDefinition).id
+                  : (candidate as LocalDocFile).id
+              const label =
+                mentionKind === 'mode'
+                  ? `@${(candidate as ModeDefinition).id}`
+                  : `@${(candidate as LocalDocFile).label}`
+
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => {
+                    setMentionSelectionIndex(idx)
+                    if (mentionKind === 'mode') {
+                      void applyModeMentionCandidate(candidate as ModeDefinition)
+                      return
+                    }
+                    void applyFileMentionCandidate(candidate as LocalDocFile)
+                  }}
+                  className={`rounded-md border px-2 py-1 text-[11px] transition-all ${
+                    idx === mentionSelectionIndex
+                      ? 'border-[rgba(255,135,175,0.5)] bg-[rgba(255,135,175,0.18)] text-[#ffd1e1]'
+                      : 'border-[rgba(175,215,255,0.25)] bg-[rgba(175,215,255,0.08)] text-[#afd7ff] hover:bg-[rgba(175,215,255,0.14)]'
+                  }`}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+          <div className="mt-1 text-[10px] text-[#5f87af]">Tab/Enter apply · ↑/↓ change</div>
+        </div>
+      )}
+      {Object.keys(fileContextMentions).length > 0 && (
+        <div className="rounded-lg border border-[rgba(95,135,175,0.35)] bg-[rgba(30,41,59,0.35)] px-2 py-1.5">
+          <div className="mb-1 text-[10px] uppercase tracking-wider text-[#6f9fcf]">
+            Attached Context
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {Object.entries(fileContextMentions).map(([label]) => (
               <button
-                key={candidate.id}
+                key={label}
                 type="button"
-                onClick={() => applyMentionCandidate(candidate)}
-                className={`rounded-md border px-2 py-1 text-[11px] transition-all ${
-                  idx === mentionSelectionIndex
-                    ? 'border-[rgba(255,135,175,0.5)] bg-[rgba(255,135,175,0.18)] text-[#ffd1e1]'
-                    : 'border-[rgba(175,215,255,0.25)] bg-[rgba(175,215,255,0.08)] text-[#afd7ff] hover:bg-[rgba(175,215,255,0.14)]'
-                }`}
+                onClick={() => {
+                  setFileContextMentions((prev) => {
+                    const next = { ...prev }
+                    delete next[label]
+                    return next
+                  })
+                }}
+                className="rounded-md border border-[rgba(95,135,175,0.45)] bg-[rgba(95,135,175,0.12)] px-2 py-1 text-[11px] text-[#afd7ff]"
               >
-                @{candidate.id}
+                @{label} ×
               </button>
             ))}
           </div>
-          <div className="mt-1 text-[10px] text-[#5f87af]">Tab/Enter apply · ↑/↓ change</div>
         </div>
       )}
       {modeAppliedLabel && (

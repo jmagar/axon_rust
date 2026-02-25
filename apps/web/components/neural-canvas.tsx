@@ -1377,9 +1377,9 @@ const NeuralCanvas = forwardRef<NeuralCanvasHandle, NeuralCanvasProps>(function 
       const lerpRate =
         intensityDelta > 0
           ? 0.12
-          : (0.008 +
-              Math.min(1, Math.abs(intensityDelta)) ** 2 *
-                (0.02 / Math.max(0.5, state.visual.calmRecovery)))
+          : 0.008 +
+            Math.min(1, Math.abs(intensityDelta)) ** 2 *
+              (0.02 / Math.max(0.5, state.visual.calmRecovery))
       state.intensity += (state.targetIntensity - state.intensity) * lerpRate
       state.burstCooldown = Math.max(0, state.burstCooldown - dt)
 

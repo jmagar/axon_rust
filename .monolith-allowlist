@@ -29,3 +29,5 @@ crates/web/execute.rs
 crates/web/static/app.js
 # 743 lines — vanilla JS neural canvas animation, no bundler (2026-02-24)
 crates/web/static/neural.js
+# 630 lines — omnibox command/file suggestions + keyboard interaction state machine (2026-02-25)
+apps/web/components/omnibox.tsx
