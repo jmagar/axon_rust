@@ -214,6 +214,9 @@ services:
       - ./apps/web:/app               # bind-mount source for hot reload
       - /app/node_modules             # anonymous vol: preserves container's node_modules
       - /app/.next                    # anonymous vol: preserves Next.js build cache
+      - ${HOST_HOME:-${HOME}}/.local/share/claude/versions/2.1.61:/usr/local/bin/claude:ro
+      - ${HOST_HOME:-${HOME}}/.claude:/root/.claude:ro
+      - ${HOST_HOME:-${HOME}}/.claude.json:/root/.claude.json:ro
     depends_on:
       axon-workers:
         condition: service_healthy

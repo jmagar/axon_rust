@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { NextResponse } from 'next/server'
 import { fallbackAssistantText, parseClaudeAssistantPayload } from '@/lib/pulse/claude-response'
-import { validateDocOperations } from '@/lib/pulse/doc-ops'
+import { resolveConversationMemoryAnswer } from '@/lib/pulse/conversation-memory'
 import { checkPermission } from '@/lib/pulse/permissions'
 import { buildPulseSystemPrompt, retrieveFromCollections } from '@/lib/pulse/rag'
 import { ensureRepoRootEnvLoaded } from '@/lib/pulse/server-env'
@@ -164,7 +164,11 @@ function runClaudeStream(args: string[]): Promise<ClaudeStreamResult> {
             }
             if (block.type === 'tool_use' && block.name) {
               const idx = blocks.length
-              blocks.push({ type: 'tool_use', name: block.name, input: block.input ?? {} })
+              blocks.push({
+                type: 'tool_use',
+                name: block.name,
+                input: block.input ?? {},
+              })
               if (block.id) toolUseIdToIdx.set(block.id, idx)
               toolUses.push({ name: block.name, input: block.input ?? {} })
             }
@@ -276,6 +280,10 @@ export async function POST(request: Request) {
       '--verbose',
       '--system-prompt',
       systemPrompt,
+      // Disable all MCP servers — the subprocess runs in a container where
+      // none of the globally-configured MCPs are reachable. Without this flag
+      // the CLI hangs trying to connect to all servers before answering.
+      '--strict-mcp-config',
     ]
     const modelArg = CLAUDE_MODEL_ARG[req.model]
     if (modelArg) {
@@ -288,6 +296,47 @@ export async function POST(request: Request) {
 
     const llmResult = await runClaudeStream(args)
     if (!llmResult.ok) {
+      const memoryFallbackText = resolveConversationMemoryAnswer(
+        req.prompt,
+        req.conversationHistory,
+      )
+      if (memoryFallbackText) {
+        const citationChars = citations.reduce(
+          (total, citation) => total + citation.snippet.length,
+          0,
+        )
+        const threadSourceChars = req.threadSources.reduce(
+          (total, source) => total + source.length,
+          0,
+        )
+        const conversationChars = req.conversationHistory.reduce(
+          (total, entry) => total + entry.content.length,
+          0,
+        )
+        const contextCharsTotal =
+          GLOBAL_CLAUDE_MD_CHARS +
+          systemPromptChars +
+          req.prompt.length +
+          req.documentMarkdown.length +
+          conversationChars +
+          citationChars +
+          threadSourceChars
+
+        return NextResponse.json({
+          text: memoryFallbackText,
+          sessionId: undefined,
+          citations,
+          operations: [],
+          toolUses: [],
+          blocks: [],
+          metadata: {
+            model: req.model,
+            elapsedMs: Date.now() - startedAt,
+            contextCharsTotal,
+            contextBudgetChars: MODEL_CONTEXT_BUDGET_CHARS,
+          },
+        } satisfies PulseChatResponse)
+      }
       return NextResponse.json({ error: llmResult.error ?? 'Claude chat failed' }, { status: 502 })
     }
 

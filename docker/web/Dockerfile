@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:24-alpine
+FROM node:24-slim
 WORKDIR /app
 # corepack ships with Node 24 — use it to install pnpm without a separate npm call
 RUN corepack enable && corepack prepare pnpm@latest --activate
