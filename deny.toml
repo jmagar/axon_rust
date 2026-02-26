@@ -1,7 +1,14 @@
 [advisories]
-vulnerabilities = "deny"
+# vulnerability = "deny" is the default in cargo-deny 0.19+ (no need to specify)
+# unmaintained = "workspace" limits unmaintained checks to workspace-local crates only,
+# avoiding noise from transitive dependency churn in the spider/octocrab ecosystem.
 unmaintained = "workspace"
-ignore = []
+ignore = [
+    # RUSTSEC-2023-0071: Marvin Attack timing side-channel in the `rsa` crate.
+    # Source: octocrab -> jsonwebtoken -> rsa v0.9.x; no upgrade path available.
+    # Risk is low for our usage (JWT verification, not key generation/export).
+    "RUSTSEC-2023-0071",
+]
 
 [licenses]
 allow = [
@@ -15,6 +22,9 @@ allow = [
     "Unicode-DFS-2016",
     "Zlib",
     "OpenSSL",
+    "MPL-2.0",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]

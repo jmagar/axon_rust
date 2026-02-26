@@ -125,6 +125,9 @@ jobs:
       - name: cargo test
         run: cargo test --all
 
+      - name: ask quality regression fixtures
+        run: ./scripts/test-ask-quality-regressions.sh
+
   security:
     name: security
     runs-on: ubuntu-latest

@@ -174,24 +174,16 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         .execute(&mut *tx)
         .await?;
 
-        // Add CHECK constraint to existing tables that were created before this constraint was added.
-        // This is a no-op if the constraint already exists (catches the 42710 duplicate_object error).
-        let add_check = sqlx::query(
-            r#"
-            ALTER TABLE axon_crawl_jobs
-            ADD CONSTRAINT axon_crawl_jobs_status_check
-            CHECK (status IN ('pending','running','completed','failed','canceled'))
-            "#,
+        // Add CHECK constraint to existing tables (idempotent via IF NOT EXISTS pattern).
+        sqlx::query(
+            r#"DO $$ BEGIN
+                ALTER TABLE axon_crawl_jobs ADD CONSTRAINT axon_crawl_jobs_status_check
+                    CHECK (status IN ('pending','running','completed','failed','canceled'));
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END $$"#,
         )
         .execute(&mut *tx)
-        .await;
-        match add_check {
-            Ok(_) => {}
-            Err(sqlx::Error::Database(ref db_err)) if db_err.code().as_deref() == Some("42710") => {
-                // Constraint already exists — expected for tables created with inline CHECK.
-            }
-            Err(err) => return Err(err),
-        }
+        .await?;
     }
 
     tx.commit().await?;

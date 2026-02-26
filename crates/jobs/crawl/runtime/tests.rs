@@ -63,6 +63,13 @@ fn pg_url() -> Option<String> {
         .filter(|v| !v.trim().is_empty())
 }
 
+fn amqp_url() -> Option<String> {
+    env::var("AXON_TEST_AMQP_URL")
+        .ok()
+        .or_else(|| env::var("AXON_AMQP_URL").ok())
+        .filter(|v| !v.trim().is_empty())
+}
+
 #[tokio::test]
 async fn crawl_start_job_dedupes_active_pending_job() -> Result<(), Box<dyn Error>> {
     let Some(pg_url) = pg_url() else {
@@ -160,6 +167,9 @@ async fn crawl_worker_e2e_processes_pending_job_to_terminal_status() -> Result<(
     local
         .run_until(async {
             let Some(pg_url) = pg_url() else {
+                return Ok(());
+            };
+            let Some(_) = amqp_url() else {
                 return Ok(());
             };
             let cfg = test_config(&pg_url);

@@ -85,6 +85,9 @@ async fn reclaim_stale_running_jobs_two_pass_flow_marks_then_reclaims() -> Resul
         .connect(&pg_url)
         .await?;
 
+    // Use the same advisory lock key as embed::ensure_schema (0xA804_0002) to avoid
+    // concurrent-DDL races with the embed schema migration that runs in parallel tests.
+    let mut tx = begin_schema_migration_tx(&pool, 0xA804_0002).await?;
     sqlx::query(
         r#"
             CREATE TABLE IF NOT EXISTS axon_embed_jobs (
@@ -96,14 +99,14 @@ async fn reclaim_stale_running_jobs_two_pass_flow_marks_then_reclaims() -> Resul
                 finished_at TIMESTAMPTZ,
                 error_text TEXT,
                 input_text TEXT NOT NULL,
-                result_json JSONB
-                ,
+                result_json JSONB,
                 config_json JSONB NOT NULL
             )
             "#,
     )
-    .execute(&pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     let job_id = Uuid::new_v4();
     sqlx::query(
@@ -157,6 +160,9 @@ async fn claim_and_fail_lifecycle_transitions_are_state_guarded() -> Result<()> 
         .connect(&pg_url)
         .await?;
 
+    // Use the same advisory lock key as embed::ensure_schema (0xA804_0002) to avoid
+    // concurrent-DDL races with the embed schema migration that runs in parallel tests.
+    let mut tx = begin_schema_migration_tx(&pool, 0xA804_0002).await?;
     sqlx::query(
         r#"
             CREATE TABLE IF NOT EXISTS axon_embed_jobs (
@@ -173,8 +179,9 @@ async fn claim_and_fail_lifecycle_transitions_are_state_guarded() -> Result<()> 
             )
             "#,
     )
-    .execute(&pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     let pending_id = Uuid::new_v4();
     let already_running_id = Uuid::new_v4();
