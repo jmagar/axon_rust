@@ -241,6 +241,7 @@ jobs:
           AXON_PG_URL: postgresql://axon:postgres@127.0.0.1:53432/axon
           AXON_REDIS_URL: redis://:axonredis@127.0.0.1:53379
           AXON_AMQP_URL: amqp://axon:axonrabbit@127.0.0.1:45535/%2f
+          AXON_EMBED_STRICT_PREDELETE: "false"
         run: ./target/release/axon embed "docs/MCP.md" --wait true --json
 
       - name: Run MCP mcporter smoke script
