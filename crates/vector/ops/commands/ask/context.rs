@@ -5,7 +5,7 @@ use crate::crates::vector::ops::{qdrant, ranking, tei};
 use anyhow::{Result, anyhow};
 use futures_util::stream::{self, StreamExt};
 use spider::url::Url;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 fn push_context_entry(
@@ -90,6 +90,41 @@ fn url_matches_domain_list(url: &str, domains: &[String]) -> bool {
     })
 }
 
+fn host_from_url(url: &str) -> Option<String> {
+    Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(|h| h.to_ascii_lowercase()))
+}
+
+fn top_domains(candidates: &[ranking::AskCandidate], limit: usize) -> Vec<String> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for candidate in candidates {
+        if let Some(host) = host_from_url(&candidate.url) {
+            *counts.entry(host).or_insert(0) += 1;
+        }
+    }
+    let mut entries = counts.into_iter().collect::<Vec<_>>();
+    entries.sort_by(|(domain_a, count_a), (domain_b, count_b)| {
+        count_b.cmp(count_a).then_with(|| domain_a.cmp(domain_b))
+    });
+    entries
+        .into_iter()
+        .take(limit)
+        .map(|(domain, count)| format!("{domain}:{count}"))
+        .collect()
+}
+
+fn authoritative_ratio(candidates: &[ranking::AskCandidate], domains: &[String]) -> f64 {
+    if candidates.is_empty() {
+        return 0.0;
+    }
+    let authoritative = candidates
+        .iter()
+        .filter(|candidate| url_matches_domain_list(&candidate.url, domains))
+        .count();
+    authoritative as f64 / candidates.len() as f64
+}
+
 fn candidate_topical_overlap_count(
     candidate: &ranking::AskCandidate,
     query_tokens: &[String],
@@ -131,6 +166,9 @@ pub(crate) struct AskContext {
     pub context_elapsed_ms: u128,
     /// Pre-built source descriptions for diagnostics display.
     pub diagnostic_sources: Vec<String>,
+    pub top_domains: Vec<String>,
+    pub authoritative_ratio: f64,
+    pub dropped_by_allowlist: usize,
 }
 
 struct AskRetrieval {
@@ -139,6 +177,9 @@ struct AskRetrieval {
     top_chunk_indices: Vec<usize>,
     top_full_doc_indices: Vec<usize>,
     retrieval_elapsed_ms: u128,
+    top_domains: Vec<String>,
+    authoritative_ratio: f64,
+    dropped_by_allowlist: usize,
 }
 
 struct BuiltAskContext {
@@ -170,6 +211,9 @@ pub(crate) async fn build_ask_context(cfg: &Config, query: &str) -> Result<AskCo
         retrieval_elapsed_ms: retrieval.retrieval_elapsed_ms,
         context_elapsed_ms: built.context_elapsed_ms,
         diagnostic_sources: built.diagnostic_sources,
+        top_domains: retrieval.top_domains,
+        authoritative_ratio: retrieval.authoritative_ratio,
+        dropped_by_allowlist: retrieval.dropped_by_allowlist,
     })
 }
 
@@ -188,6 +232,7 @@ async fn retrieve_ask_candidates(cfg: &Config, query: &str) -> Result<AskRetriev
         .await
         .map_err(|e| anyhow!(e.to_string()))?;
     let mut candidates = Vec::new();
+    let mut dropped_by_allowlist = 0usize;
     for hit in hits {
         let url = qdrant::payload_url_typed(&hit.payload).to_string();
         let chunk_text = qdrant::payload_text_typed(&hit.payload).to_string();
@@ -200,6 +245,7 @@ async fn retrieve_ask_candidates(cfg: &Config, query: &str) -> Result<AskRetriev
         if !cfg.ask_authoritative_allowlist.is_empty()
             && !url_matches_domain_list(&url, &cfg.ask_authoritative_allowlist)
         {
+            dropped_by_allowlist += 1;
             continue;
         }
         let path = ranking::extract_path_from_url(&url);
@@ -237,6 +283,9 @@ async fn retrieve_ask_candidates(cfg: &Config, query: &str) -> Result<AskRetriev
     Ok(AskRetrieval {
         top_chunk_indices: ranking::select_diverse_candidates(&reranked, cfg.ask_chunk_limit, 1),
         top_full_doc_indices: ranking::select_diverse_candidates(&reranked, cfg.ask_full_docs, 1),
+        top_domains: top_domains(&reranked, 5),
+        authoritative_ratio: authoritative_ratio(&reranked, &cfg.ask_authoritative_domains),
+        dropped_by_allowlist,
         candidates,
         reranked,
         retrieval_elapsed_ms: retrieval_started.elapsed().as_millis(),

@@ -188,11 +188,17 @@ The `ask` command retrieves chunks from Qdrant, reranks them, and builds a conte
 | `AXON_ASK_AUTHORITATIVE_DOMAINS` | `` | — | Optional comma-separated domain list to boost during reranking (exact host or suffix match). Example: `docs.claude.com,developers.openai.com`. |
 | `AXON_ASK_AUTHORITATIVE_BOOST` | `0.0` | `0.0`–`0.5` | Extra rerank score added when a candidate matches `AXON_ASK_AUTHORITATIVE_DOMAINS`. |
 | `AXON_ASK_AUTHORITATIVE_ALLOWLIST` | `` | — | Optional comma-separated strict domain allowlist. When set, ask retrieval excludes candidates outside these domains. |
+| `AXON_ASK_MIN_CITATIONS_NONTRIVIAL` | `2` | `1`–`5` | Minimum unique citations required for non-trivial answers; if not met, `ask` returns structured insufficient-evidence output. |
 
 Notes:
 - Container runtime uses service DNS names (`axon-postgres`, `axon-redis`, etc.).
 - Local runtime rewrites those to mapped localhost ports automatically.
 - `./scripts/axon` sources `.env`; running `cargo run --bin axon -- ...` directly does not.
+- `ask` now enforces citation-quality gates:
+  - Non-trivial responses require multiple unique citations.
+  - Procedural queries require at least one official-docs citation.
+  - Config/schema queries require at least one exact-page citation.
+  - If gates fail, output is forced to structured insufficient-evidence format.
 
 ## Worker Model (s6 Supervised)
 

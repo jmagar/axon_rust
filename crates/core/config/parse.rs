@@ -411,6 +411,12 @@ fn into_config(cli: Cli) -> Result<Config, String> {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default(),
+        ask_min_citations_nontrivial: performance::env_usize_clamped(
+            "AXON_ASK_MIN_CITATIONS_NONTRIVIAL",
+            2,
+            1,
+            5,
+        ),
         cron_every_seconds: global.cron_every_seconds.filter(|value| *value > 0),
         cron_max_runs: global.cron_max_runs.filter(|value| *value > 0),
         watchdog_stale_timeout_secs: global.watchdog_stale_timeout_secs.max(30),

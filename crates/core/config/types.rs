@@ -424,6 +424,10 @@ pub struct Config {
     /// Env: `AXON_ASK_AUTHORITATIVE_ALLOWLIST` (comma-separated). Default: empty.
     pub ask_authoritative_allowlist: Vec<String>,
 
+    /// Minimum unique citations required for non-trivial ask responses.
+    /// Env: `AXON_ASK_MIN_CITATIONS_NONTRIVIAL` (clamped 1–5). Default: 2.
+    pub ask_min_citations_nontrivial: usize,
+
     /// Run the command on a recurring schedule every N seconds (`None` = one-shot). Flag: `--cron-every-seconds`.
     pub cron_every_seconds: Option<u64>,
 
@@ -614,6 +618,7 @@ impl Default for Config {
             ask_authoritative_domains: vec![],
             ask_authoritative_boost: 0.0,
             ask_authoritative_allowlist: vec![],
+            ask_min_citations_nontrivial: 2,
             cron_every_seconds: None,
             cron_max_runs: None,
             watchdog_stale_timeout_secs: 300,
@@ -740,6 +745,10 @@ impl fmt::Debug for Config {
                 "ask_authoritative_allowlist",
                 &self.ask_authoritative_allowlist,
             )
+            .field(
+                "ask_min_citations_nontrivial",
+                &self.ask_min_citations_nontrivial,
+            )
             .field("cron_every_seconds", &self.cron_every_seconds)
             .field("cron_max_runs", &self.cron_max_runs)
             .field(
@@ -832,6 +841,7 @@ mod tests {
         assert!(cfg.ask_authoritative_domains.is_empty());
         assert!((cfg.ask_authoritative_boost - 0.0).abs() < f64::EPSILON);
         assert!(cfg.ask_authoritative_allowlist.is_empty());
+        assert_eq!(cfg.ask_min_citations_nontrivial, 2);
     }
 
     #[test]
