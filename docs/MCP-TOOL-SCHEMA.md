@@ -6,7 +6,7 @@ Last Modified: 2026-02-25
 - Tool count: `1`
 - Tool name: `axon`
 - Primary route field: `action`
-- Optional route field: `subaction` (required for lifecycle actions)
+- Canonical route form: `action` + optional `subaction`
 - Response control field: `response_mode` (`path|inline|both`, default `path`)
 
 Code references:
@@ -23,26 +23,27 @@ Code references:
 }
 ```
 
-## Parser Shim Rules
-Incoming request map is normalized before serde validation:
+## Parser Rules
+Incoming request map is parsed strictly with serde:
 
-- If `action` missing, fallback keys: `command`, `op`, `operation`
-- Token normalization: lowercase, `-` -> `_`, spaces -> `_`
-- `response_mode` token normalization also applied
-- Defaults:
-  - `crawl|extract|embed|ingest` -> `subaction=start` when omitted
-  - `rag` -> `subaction=query` unless `url` provided (`retrieve`)
-  - `discover` -> `subaction=search` when `query` present, else `scrape`
-  - `ops` -> `subaction=doctor` when omitted
-  - `artifacts` -> `subaction=head` when omitted
-- Alias actions:
-  - `query` -> `rag.query`
-  - `retrieve` -> `rag.retrieve`
-  - `search` -> `discover.search`
-  - `map` -> `discover.map`
-  - `doctor|domains|sources|stats` -> `ops.<same>`
-  - `head|grep|wc|read` -> `artifacts.<same>`
-  - `github|reddit|youtube|sessions` -> `ingest.start` + `source_type=<same>`
+- `action` is required and must match canonical schema names
+- `subaction` is required for lifecycle families (`crawl|extract|embed|ingest|artifacts`)
+- No fallback fields (`command`, `op`, `operation`)
+- No token normalization or case folding
+- No action alias remapping
+
+## Preferred Client Actions
+Use CLI-identical top-level actions:
+- `ingest`, `extract`, `embed`, `crawl`
+- `query`, `retrieve`
+- `doctor`, `domains`, `sources`, `stats`
+- `search`, `map`, `scrape`, `research`, `ask`, `screenshot`, `help`, `status`
+
+For lifecycle management (`status|cancel|list|cleanup|clear|recover`), use canonical families with `subaction`:
+
+```json
+{ "action": "ingest", "subaction": "status", "job_id": "..." }
+```
 
 ## Response Policy (Context-Safe Defaults)
 - Default is artifact-first (`response_mode=path`).
@@ -53,65 +54,27 @@ Incoming request map is normalized before serde validation:
 
 ## Direct Actions
 These actions do not require `subaction`:
-
-### `help`
-Request:
-```json
-{ "action": "help" }
-```
-Returns current actions/subactions/resources.
-
-### `scrape`
-Request:
-```json
-{ "action": "scrape", "url": "https://example.com" }
-```
-
-### `research`
-Request:
-```json
-{ "action": "research", "query": "rust mcp sdk", "limit": 5 }
-```
-
-### `ask`
-Request:
-```json
-{ "action": "ask", "query": "how does rmcp tool routing work?" }
-```
-
-### `screenshot`
-Request:
-```json
-{ "action": "screenshot", "url": "https://example.com", "full_page": true }
-```
-Optional fields: `viewport` (`"1920x1080"`), `output` (path).
+- `help`
+- `scrape`
+- `research`
+- `ask`
+- `screenshot`
 
 ## Lifecycle Action Families
-
-### `crawl`
-Subactions: `start|status|cancel|list|cleanup|clear|recover`
-
-### `extract`
-Subactions: `start|status|cancel|list|cleanup|clear|recover`
-
-### `embed`
-Subactions: `start|status|cancel|list|cleanup|clear|recover`
-
-### `ingest`
-Subactions: `start|status|cancel|list|cleanup|clear|recover`
-`start` accepts `source_type` and `target`/`sessions` options.
-
-### `rag`
-Subactions: `query|retrieve`
-
-### `discover`
-Subactions: `scrape|map|search`
-
-### `ops`
-Subactions: `doctor|domains|sources|stats`
-
-### `artifacts`
-Subactions: `head|grep|wc|read`
+- `crawl`: `start|status|cancel|list|cleanup|clear|recover`
+- `extract`: `start|status|cancel|list|cleanup|clear|recover`
+- `embed`: `start|status|cancel|list|cleanup|clear|recover`
+- `ingest`: `start|status|cancel|list|cleanup|clear|recover`
+- `query`: `query`
+- `retrieve`: `retrieve`
+- `search`: `search`
+- `map`: `map`
+- `scrape`: `scrape`
+- `doctor`: `doctor`
+- `domains`: `domains`
+- `sources`: `sources`
+- `stats`: `stats`
+- `artifacts`: `head|grep|wc|read`
 
 `artifacts` fields:
 - `path` (required)

@@ -7,7 +7,7 @@ Last Modified: 2026-02-25
 - Transport: stdio
 - Tool count: 1
 - Tool name: `axon`
-- Routing fields: `action` + optional `subaction`
+- Routing fields: `action` + `subaction` for lifecycle families
 - Response behavior field: `response_mode` (`path|inline|both`, default `path`)
 
 Canonical schema and action contract:
@@ -33,15 +33,6 @@ It reuses existing stack env vars (no MCP-only env namespace):
 - `OPENAI_MODEL`
 - `TAVILY_API_KEY`
 
-## Context-Safe Output Defaults
-Default behavior is artifact-first to minimize context/token waste.
-
-- Default `response_mode`: `path`
-- Artifact directory: `.cache/axon-mcp/`
-- Heavy actions write artifacts and return compact metadata:
-  - `path`, `bytes`, `line_count`, `sha256`, `preview`, `preview_truncated`
-- `response_mode=inline|both` is allowed, but inline payloads are capped/truncated and include artifact pointers.
-
 ## Request Pattern
 Primary pattern:
 
@@ -52,35 +43,38 @@ Primary pattern:
 }
 ```
 
-Lifecycle pattern (job-backed operations):
+Lifecycle pattern when needed:
 
 ```json
 {
-  "action": "crawl|extract|embed|ingest",
+  "action": "ingest|extract|embed|crawl",
   "subaction": "start|status|cancel|list|cleanup|clear|recover",
   "...": "subaction fields"
 }
 ```
 
-## Parser Shim
-The server normalizes friendly aliases before validation.
+## Preferred Action Names (Top-Level)
+Use CLI-identical action names:
+- `ingest`, `extract`, `embed`, `crawl`
+- `query`, `retrieve`
+- `doctor`, `domains`, `sources`, `stats`
+- `search`, `map`
+- `artifacts` (with subactions `head|grep|wc|read`)
+- `scrape`, `research`, `ask`, `screenshot`, `help`, `status`
 
 Examples:
-- `action: "crawl"` -> defaults to `subaction: "start"`
-- `action: "query"` -> normalized to `action: "rag", subaction: "query"`
-- `action: "retrieve"` -> normalized to `action: "rag", subaction: "retrieve"`
-- `action: "doctor"` -> normalized to `action: "ops", subaction: "doctor"`
-- `action: "head"` -> normalized to `action: "artifacts", subaction: "head"`
-- missing `action` with `command|op|operation` -> normalized into `action`
+- `action: "ingest", subaction: "start"`
+- `action: "extract", subaction: "list"`
+- `action: "query"`
+- `action: "doctor"`
 
-This allows client UX like:
-- `axon crawl`
-- `axon scrape`
-- `axon research`
-- `axon ask`
-- `axon screenshot`
-
-while still routing to one typed contract internally.
+## Parser Rules
+The server uses strict deserialization:
+- `action` is required and must match canonical schema names exactly
+- `subaction` is required for lifecycle families (`crawl|extract|embed|ingest|artifacts`)
+- No fallback fields (`command|op|operation`)
+- No action alias remapping
+- No token normalization (`-`/spaces/case are not rewritten)
 
 ## Online Operations
 Direct actions:
@@ -90,23 +84,13 @@ Direct actions:
 - `ask`
 - `screenshot`
 
-Lifecycle/domain actions:
-- `crawl.*`
-- `extract.*`
-- `embed.*`
-- `ingest.*`
-- `rag.query`
-- `rag.retrieve`
-- `discover.scrape|map|search`
-- `ops.doctor|domains|sources|stats`
-- `artifacts.head|grep|wc|read`
+Lifecycle families:
+- `crawl`: `start|status|cancel|list|cleanup|clear|recover`
+- `extract`: `start|status|cancel|list|cleanup|clear|recover`
+- `embed`: `start|status|cancel|list|cleanup|clear|recover`
+- `ingest`: `start|status|cancel|list|cleanup|clear|recover`
 
-## Pagination
-List/search style endpoints support `limit` + `offset`, with low defaults.
-
-## MCP Resources
-Exposed resources:
-- `axon://schema/mcp-tool`
+No top-level aliases are supported.
 
 ## Response Pattern
 Success responses are normalized:
@@ -120,30 +104,21 @@ Success responses are normalized:
 }
 ```
 
-Errors:
-- bad input -> MCP `invalid_params`
-- runtime failure -> MCP `internal_error`
-
-## Build and Run
-```bash
-cargo build --bin axon-mcp
-./target/debug/axon-mcp
-```
-
 ## mcporter Smoke Tests
 ```bash
+# Comprehensive script (includes resource checks via help + schema)
+./scripts/test-mcp-tools-mcporter.sh
+
+# Optional expanded run (network-heavy/side-effect actions)
+./scripts/test-mcp-tools-mcporter.sh --full
+
+# Individual calls
 mcporter list axon --schema
 mcporter call axon.axon action:help
-mcporter call axon.axon action:ops
+mcporter call axon.axon action:doctor
 mcporter call axon.axon action:scrape url:https://example.com
-mcporter call axon.axon action:research query:'rust mcp sdk' limit:5
-mcporter call axon.axon action:ask query:'what is rmcp tool router?'
-mcporter call axon.axon action:screenshot url:https://example.com
+mcporter call axon.axon action:query query:'rust mcp sdk'
+mcporter call axon.axon action:ingest source_type:github target:owner/repo
 mcporter call axon.axon action:crawl subaction:list limit:5 offset:0
 mcporter call axon.axon action:artifacts subaction:head path:.cache/axon-mcp/help-actions.json limit:20
 ```
-
-## Notes
-- `crawl/extract/embed/ingest` are queue-first and non-blocking by design.
-- `screenshot` requires configured Chrome remote endpoint (`AXON_CHROME_REMOTE_URL`).
-- Keep all schema/routing/doc changes in sync in the same PR.

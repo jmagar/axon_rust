@@ -1,8 +1,100 @@
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::log_done;
 use crate::crates::core::ui::{muted, primary, print_phase};
-use spider_agent::{Agent, ResearchOptions, SearchOptions};
+use spider_agent::{Agent, ResearchOptions, SearchOptions, TimeRange};
 use std::error::Error;
+
+pub async fn research_payload(
+    cfg: &Config,
+    query: &str,
+    limit: usize,
+    offset: usize,
+    time_range: Option<TimeRange>,
+) -> Result<serde_json::Value, Box<dyn Error>> {
+    if cfg.tavily_api_key.is_empty() {
+        return Err("research requires TAVILY_API_KEY — set it in .env".into());
+    }
+    if cfg.openai_base_url.is_empty() || cfg.openai_model.is_empty() {
+        return Err("research requires OPENAI_BASE_URL and OPENAI_MODEL — set them in .env".into());
+    }
+
+    let base = cfg.openai_base_url.trim_end_matches('/');
+    if base.ends_with("/chat/completions") {
+        return Err(
+            "OPENAI_BASE_URL should not include /chat/completions — set the base URL only (e.g. http://host/v1)".into()
+        );
+    }
+    let _ = spider::url::Url::parse(base)
+        .map_err(|e| format!("invalid OPENAI_BASE_URL '{base}': {e}"))?;
+    let llm_url = format!("{base}/chat/completions");
+
+    let agent = Agent::builder()
+        .with_openai_compatible(llm_url, &cfg.openai_api_key, &cfg.openai_model)
+        .with_search_tavily(&cfg.tavily_api_key)
+        .build()?;
+
+    let extraction_prompt =
+        format!("Extract key facts, details, and insights relevant to: {query}");
+    let mut search_options = SearchOptions::new().with_limit((limit + offset).clamp(1, 100));
+    if let Some(tr) = time_range {
+        search_options = search_options.with_time_range(tr);
+    }
+
+    let research = agent
+        .research(
+            query,
+            ResearchOptions::new()
+                .with_max_pages((limit + offset).clamp(1, 100))
+                .with_search_options(search_options)
+                .with_extraction_prompt(extraction_prompt)
+                .with_synthesize(true),
+        )
+        .await?;
+
+    let search_results = research
+        .search_results
+        .results
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|r| {
+            serde_json::json!({
+                "position": r.position,
+                "title": r.title,
+                "url": r.url,
+                "snippet": r.snippet,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let extractions = research
+        .extractions
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|e| {
+            serde_json::json!({
+                "url": e.url,
+                "title": e.title,
+                "extracted": e.extracted,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(serde_json::json!({
+        "query": query,
+        "limit": limit,
+        "offset": offset,
+        "search_results": search_results,
+        "extractions": extractions,
+        "summary": research.summary,
+        "usage": {
+            "prompt_tokens": research.usage.prompt_tokens,
+            "completion_tokens": research.usage.completion_tokens,
+            "total_tokens": research.usage.total_tokens,
+        }
+    }))
+}
 
 pub async fn run_research(cfg: &Config) -> Result<(), Box<dyn Error>> {
     if cfg.tavily_api_key.is_empty() {
@@ -24,57 +116,32 @@ pub async fn run_research(cfg: &Config) -> Result<(), Box<dyn Error>> {
     println!("  {} {}", muted("provider=tavily model="), cfg.openai_model);
     println!();
 
-    // Validate OPENAI_BASE_URL before constructing the LLM endpoint.
-    let base = cfg.openai_base_url.trim_end_matches('/');
-    if base.ends_with("/chat/completions") {
-        return Err(
-            "OPENAI_BASE_URL should not include /chat/completions — set the base URL only (e.g. http://host/v1)".into()
-        );
-    }
-    let _ = spider::url::Url::parse(base)
-        .map_err(|e| format!("invalid OPENAI_BASE_URL '{base}': {e}"))?;
+    let payload = research_payload(cfg, &query, cfg.search_limit, 0, None).await?;
+    let search_results = payload["search_results"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let extractions = payload["extractions"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let summary = payload["summary"].as_str();
+    let prompt_tokens = payload["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
+    let completion_tokens = payload["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+    let total_tokens = payload["usage"]["total_tokens"].as_u64().unwrap_or(0);
 
-    // spider_agent's with_openai_compatible expects the full endpoint URL.
-    let llm_url = format!("{base}/chat/completions");
-
-    let agent = Agent::builder()
-        .with_openai_compatible(llm_url, &cfg.openai_api_key, &cfg.openai_model)
-        .with_search_tavily(&cfg.tavily_api_key)
-        .build()?;
-
-    let extraction_prompt =
-        format!("Extract key facts, details, and insights relevant to: {query}");
-
-    // TODO: cfg.research_depth — ResearchOptions::with_depth not available in current spider_agent version
-    let research = agent
-        .research(
-            &query,
-            ResearchOptions::new()
-                .with_max_pages(cfg.search_limit)
-                .with_search_options(SearchOptions::new().with_limit(cfg.search_limit))
-                .with_extraction_prompt(extraction_prompt)
-                .with_synthesize(true),
-        )
-        .await?;
-
-    println!(
-        "{} {}",
-        primary("Search Results:"),
-        research.search_results.results.len()
-    );
+    println!("{} {}", primary("Search Results:"), search_results.len());
     println!();
 
-    println!(
-        "{} {}",
-        primary("Pages Extracted:"),
-        research.extractions.len()
-    );
+    println!("{} {}", primary("Pages Extracted:"), extractions.len());
     println!();
 
-    for (i, extraction) in research.extractions.iter().enumerate() {
-        println!("{}. {}", i + 1, primary(&extraction.title));
-        println!("   {}", muted(&extraction.url));
-        let preview = serde_json::to_string(&extraction.extracted)
+    for (i, extraction) in extractions.iter().enumerate() {
+        let title = extraction["title"].as_str().unwrap_or("");
+        let url = extraction["url"].as_str().unwrap_or("");
+        println!("{}. {}", i + 1, primary(title));
+        println!("   {}", muted(url));
+        let preview = serde_json::to_string(&extraction["extracted"])
             .unwrap_or_default()
             .chars()
             .take(200)
@@ -88,19 +155,19 @@ pub async fn run_research(cfg: &Config) -> Result<(), Box<dyn Error>> {
         println!();
     }
 
-    if let Some(summary) = &research.summary {
+    if let Some(summary) = summary {
         println!("{}", primary("=== Summary ==="));
         println!("{summary}");
         println!();
     }
 
-    if research.usage.total_tokens > 0 {
+    if total_tokens > 0 {
         println!(
             "  {} prompt={} completion={} total={}",
             muted("tokens"),
-            research.usage.prompt_tokens,
-            research.usage.completion_tokens,
-            research.usage.total_tokens
+            prompt_tokens,
+            completion_tokens,
+            total_tokens
         );
     }
 

@@ -1,6 +1,9 @@
 pre-commit:
   parallel: true
   commands:
+    skills-ref:
+      glob: "skills/**"
+      run: ./scripts/validate_skills_ref.sh
     monolith:
       run: if [ -f "$HOME/.claude/hooks/enforce_monoliths.py" ]; then python3 "$HOME/.claude/hooks/enforce_monoliths.py" --staged; else echo "[skip] global monolith enforcer not found at ~/.claude/hooks/enforce_monoliths.py"; fi
     rustfmt:

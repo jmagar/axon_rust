@@ -10,7 +10,7 @@ pub async fn run_stats_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     run_stats_native_impl(cfg).await
 }
 
-async fn run_stats_native_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
+pub async fn stats_payload(cfg: &Config) -> Result<serde_json::Value, Box<dyn Error>> {
     let client = http_client()?;
     let (info, count, docs_count) = qdrant_fetch::fetch_qdrant_snapshots(cfg, client).await?;
 
@@ -33,7 +33,7 @@ async fn run_stats_native_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let payload_fields_count = payload_fields.len();
     let pg = pg::collect_postgres_metrics(cfg).await;
 
-    let stats = serde_json::json!({
+    Ok(serde_json::json!({
         "collection": cfg.collection,
         "status": info["result"]["status"],
         "indexed_vectors_count": indexed_vectors,
@@ -67,7 +67,11 @@ async fn run_stats_native_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
             "maps": pg.map_count,
             "searches": pg.search_count
         }
-    });
+    }))
+}
+
+async fn run_stats_native_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
+    let stats = stats_payload(cfg).await?;
     if cfg.json_output {
         println!("{}", serde_json::to_string_pretty(&stats)?);
     } else {

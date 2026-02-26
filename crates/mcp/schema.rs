@@ -10,9 +10,14 @@ pub enum AxonRequest {
     Extract(ExtractRequest),
     Embed(EmbedRequest),
     Ingest(IngestRequest),
-    Rag(RagRequest),
-    Discover(DiscoverRequest),
-    Ops(OpsRequest),
+    Query(QueryRequest),
+    Retrieve(RetrieveRequest),
+    Search(SearchRequest),
+    Map(MapRequest),
+    Doctor(DoctorRequest),
+    Domains(DomainsRequest),
+    Sources(SourcesRequest),
+    Stats(StatsRequest),
     Help(HelpRequest),
     Artifacts(ArtifactsRequest),
     Scrape(ScrapeRequest),
@@ -159,60 +164,12 @@ pub struct SessionsIngestOptions {
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RagRequest {
-    pub subaction: RagSubaction,
-    pub query: Option<String>,
-    pub url: Option<String>,
-    pub limit: Option<usize>,
-    pub offset: Option<usize>,
-    pub max_points: Option<usize>,
-    pub response_mode: Option<ResponseMode>,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RagSubaction {
-    Query,
-    Retrieve,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct DiscoverRequest {
-    pub subaction: DiscoverSubaction,
-    pub url: Option<String>,
-    pub query: Option<String>,
-    pub limit: Option<usize>,
-    pub offset: Option<usize>,
-    pub search_time_range: Option<SearchTimeRange>,
-    pub response_mode: Option<ResponseMode>,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum DiscoverSubaction {
-    Scrape,
-    Map,
-    Search,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchTimeRange {
     Day,
     Week,
     Month,
     Year,
-}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct OpsRequest {
-    pub subaction: OpsSubaction,
-    pub limit: Option<usize>,
-    pub offset: Option<usize>,
-    pub response_mode: Option<ResponseMode>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -245,13 +202,64 @@ pub enum ArtifactsSubaction {
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum OpsSubaction {
-    Doctor,
-    Domains,
-    Sources,
-    Stats,
+#[serde(deny_unknown_fields)]
+pub struct QueryRequest {
+    pub query: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+    pub response_mode: Option<ResponseMode>,
 }
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RetrieveRequest {
+    pub url: Option<String>,
+    pub max_points: Option<usize>,
+    pub response_mode: Option<ResponseMode>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchRequest {
+    pub query: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+    pub search_time_range: Option<SearchTimeRange>,
+    pub response_mode: Option<ResponseMode>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MapRequest {
+    pub url: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+    pub response_mode: Option<ResponseMode>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DoctorRequest {}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DomainsRequest {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+    pub response_mode: Option<ResponseMode>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SourcesRequest {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+    pub response_mode: Option<ResponseMode>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsRequest {}
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -307,141 +315,6 @@ impl AxonToolResponse {
     }
 }
 
-fn normalize_token(value: &str) -> String {
-    value.trim().to_ascii_lowercase().replace(['-', ' '], "_")
-}
-
-fn ensure_string_field(raw: &mut Map<String, Value>, key: &str, value: &str) {
-    raw.insert(key.to_string(), Value::String(value.to_string()));
-}
-
-fn resolve_action(raw: &mut Map<String, Value>) -> Result<String, String> {
-    let direct = raw
-        .get("action")
-        .and_then(Value::as_str)
-        .map(normalize_token);
-    if let Some(action) = direct {
-        return Ok(action);
-    }
-
-    for alias in ["command", "op", "operation"] {
-        if let Some(action) = raw.get(alias).and_then(Value::as_str).map(normalize_token) {
-            ensure_string_field(raw, "action", &action);
-            return Ok(action);
-        }
-    }
-
-    Err("missing required field: action".to_string())
-}
-
-fn ensure_default_subaction(raw: &mut Map<String, Value>, default_value: &str) {
-    if !raw.contains_key("subaction") {
-        ensure_string_field(raw, "subaction", default_value);
-    }
-}
-
-fn normalize_action_aliases(raw: &mut Map<String, Value>, action: &str) -> Result<String, String> {
-    let normalized = match action {
-        "query" => {
-            ensure_string_field(raw, "subaction", "query");
-            "rag"
-        }
-        "retrieve" => {
-            ensure_string_field(raw, "subaction", "retrieve");
-            "rag"
-        }
-        "map" => {
-            ensure_string_field(raw, "subaction", "map");
-            "discover"
-        }
-        "search" => {
-            ensure_string_field(raw, "subaction", "search");
-            "discover"
-        }
-        "doctor" | "domains" | "sources" | "stats" => {
-            ensure_string_field(raw, "subaction", action);
-            "ops"
-        }
-        "head" | "grep" | "wc" | "read" => {
-            ensure_string_field(raw, "subaction", action);
-            "artifacts"
-        }
-        "github" => {
-            ensure_string_field(raw, "subaction", "start");
-            ensure_string_field(raw, "source_type", "github");
-            "ingest"
-        }
-        "reddit" => {
-            ensure_string_field(raw, "subaction", "start");
-            ensure_string_field(raw, "source_type", "reddit");
-            "ingest"
-        }
-        "youtube" => {
-            ensure_string_field(raw, "subaction", "start");
-            ensure_string_field(raw, "source_type", "youtube");
-            "ingest"
-        }
-        "sessions" => {
-            ensure_string_field(raw, "subaction", "start");
-            ensure_string_field(raw, "source_type", "sessions");
-            "ingest"
-        }
-        other => other,
-    };
-
-    match normalized {
-        "crawl" | "extract" | "embed" | "ingest" => ensure_default_subaction(raw, "start"),
-        "rag" => {
-            if !raw.contains_key("subaction") {
-                let default_subaction = if raw.get("url").and_then(Value::as_str).is_some() {
-                    "retrieve"
-                } else {
-                    "query"
-                };
-                ensure_string_field(raw, "subaction", default_subaction);
-            }
-        }
-        "discover" => {
-            if !raw.contains_key("subaction") {
-                let default_subaction = if raw.get("query").and_then(Value::as_str).is_some() {
-                    "search"
-                } else {
-                    "scrape"
-                };
-                ensure_string_field(raw, "subaction", default_subaction);
-            }
-        }
-        "ops" => ensure_default_subaction(raw, "doctor"),
-        "artifacts" => ensure_default_subaction(raw, "head"),
-        "status" | "help" | "scrape" | "research" | "ask" | "screenshot" => {}
-        unsupported => {
-            return Err(format!("unsupported action: {unsupported}"));
-        }
-    }
-
-    Ok(normalized.to_string())
-}
-
-pub fn parse_axon_request(mut raw: Map<String, Value>) -> Result<AxonRequest, String> {
-    let action = resolve_action(&mut raw)?;
-    let normalized = normalize_action_aliases(&mut raw, &action)?;
-    ensure_string_field(&mut raw, "action", &normalized);
-    if let Some(subaction) = raw
-        .get("subaction")
-        .and_then(Value::as_str)
-        .map(normalize_token)
-    {
-        ensure_string_field(&mut raw, "subaction", &subaction);
-    }
-    if let Some(response_mode) = raw
-        .get("response_mode")
-        .and_then(Value::as_str)
-        .map(normalize_token)
-    {
-        ensure_string_field(&mut raw, "response_mode", &response_mode);
-    }
-    raw.remove("command");
-    raw.remove("op");
-    raw.remove("operation");
+pub fn parse_axon_request(raw: Map<String, Value>) -> Result<AxonRequest, String> {
     serde_json::from_value(Value::Object(raw)).map_err(|e| format!("invalid request shape: {e}"))
 }

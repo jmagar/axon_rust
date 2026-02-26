@@ -35,9 +35,14 @@ Domains (`action`):
 - `extract`
 - `embed`
 - `ingest`
-- `rag`
-- `discover`
-- `ops`
+- `query`
+- `retrieve`
+- `search`
+- `map`
+- `doctor`
+- `domains`
+- `sources`
+- `stats`
 - `artifacts`
 
 This pattern is mandatory. Do not add separate MCP tools for each operation.
@@ -60,16 +65,13 @@ This pattern is mandatory. Do not add separate MCP tools for each operation.
 - `start`, `status`, `cancel`, `list`, `cleanup`, `clear`, `recover`
 - Integration: `crates/jobs/ingest.rs`
 
-### `rag`
-- `query`, `retrieve`
+### `query` / `retrieve`
 - Integration: `crates/vector/ops/tei.rs`, `crates/vector/ops/qdrant/*`
 
-### `discover`
-- `scrape`, `map`, `search`
+### `search` / `map` / `scrape`
 - Integration: `crates/core/http.rs`, `crates/core/content.rs`, `crates/crawl/engine.rs`, `spider_agent`
 
-### `ops`
-- `doctor`, `domains`, `sources`, `stats`
+### `doctor` / `domains` / `sources` / `stats`
 - Integration: lightweight probes + qdrant endpoints
 
 ### `artifacts`
@@ -142,8 +144,8 @@ mcporter list axon --schema
 Smoke calls:
 
 ```bash
-mcporter call axon.axon action:ops subaction:doctor
-mcporter call axon.axon action:ops subaction:sources limit:5
+mcporter call axon.axon action:doctor
+mcporter call axon.axon action:sources limit:5
 mcporter call axon.axon action:crawl subaction:list limit:5
 ```
 

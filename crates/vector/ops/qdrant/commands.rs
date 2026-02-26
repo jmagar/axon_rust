@@ -15,9 +15,12 @@ use super::utils::{
     retrieve_max_points,
 };
 
-pub async fn run_retrieve_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let target = cfg.positional.first().ok_or("retrieve requires URL")?;
-    let max_points = retrieve_max_points(None);
+pub async fn retrieve_result(
+    cfg: &Config,
+    target: &str,
+    max_points: Option<usize>,
+) -> Result<(usize, String), Box<dyn Error>> {
+    let max_points = retrieve_max_points(max_points);
     let candidates = crate::crates::vector::ops::input::url_lookup_candidates(target);
 
     let mut lookups: FuturesUnordered<_> = candidates
@@ -54,12 +57,20 @@ pub async fn run_retrieve_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         }
     }
     if points.is_empty() {
+        return Ok((0, String::new()));
+    }
+    let chunk_count = points.len();
+    let out = render_full_doc_from_points(points);
+    Ok((chunk_count, out))
+}
+
+pub async fn run_retrieve_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
+    let target = cfg.positional.first().ok_or("retrieve requires URL")?;
+    let (chunk_count, out) = retrieve_result(cfg, target, None).await?;
+    if chunk_count == 0 {
         println!("No content found for URL: {}", target);
         return Ok(());
     }
-
-    let chunk_count = points.len();
-    let out = render_full_doc_from_points(points);
     if cfg.json_output {
         println!(
             "{}",
@@ -102,6 +113,46 @@ pub async fn run_sources_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
+}
+
+pub async fn sources_payload(
+    cfg: &Config,
+    limit: usize,
+    offset: usize,
+) -> Result<serde_json::Value, Box<dyn Error>> {
+    let sources = qdrant_url_facets(cfg, (limit + offset).clamp(1, 500)).await?;
+    let total = sources.len();
+    let urls = sources
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|(url, _chunks)| url)
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "count": total,
+        "limit": limit,
+        "offset": offset,
+        "urls": urls,
+    }))
+}
+
+pub async fn domains_payload(
+    cfg: &Config,
+    limit: usize,
+    offset: usize,
+) -> Result<serde_json::Value, Box<dyn Error>> {
+    let domains = qdrant_domain_facets(cfg, (limit + offset).clamp(1, 500)).await?;
+    let values = domains
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|(domain, vectors)| serde_json::json!({ "domain": domain, "vectors": vectors }))
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "domains": values,
+        "limit": limit,
+        "offset": offset,
+    }))
 }
 
 fn domains_detailed_mode() -> bool {

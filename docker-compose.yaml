@@ -98,8 +98,8 @@ services:
         ]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 12
+      start_period: 120s
 
   axon-chrome:
     # headless_browser manager + chrome-headless-shell

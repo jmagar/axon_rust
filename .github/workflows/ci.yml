@@ -133,3 +133,100 @@ jobs:
 
       - name: cargo deny check
         run: cargo deny check
+
+  mcp-smoke:
+    name: mcp-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Install mcporter
+        run: cargo install --locked mcporter
+
+      - name: Restore Hugging Face cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/huggingface
+          key: hf-tei-${{ runner.os }}-BAAI-bge-small-en-v1.5-v1
+
+      - name: Build axon binaries (release)
+        run: cargo build --release --bin axon --bin axon-mcp
+
+      - name: Write CI mcporter config
+        run: |
+          cat > config/mcporter.json <<EOF
+          {
+            "mcpServers": {
+              "axon": {
+                "command": "${{ github.workspace }}/target/release/axon-mcp"
+              }
+            },
+            "imports": []
+          }
+          EOF
+
+      - name: Start Axon infra
+        run: docker compose up -d axon-postgres axon-redis axon-rabbitmq axon-qdrant
+
+      - name: Start TEI
+        run: |
+          mkdir -p .cache/huggingface
+          docker run -d --name axon-tei -p 52000:80 \
+            -v "$PWD/.cache/huggingface:/hf-cache" \
+            -e HF_HOME=/hf-cache \
+            -e HF_HUB_CACHE=/hf-cache/hub \
+            ghcr.io/huggingface/text-embeddings-inference:cpu-latest \
+            --model-id BAAI/bge-small-en-v1.5
+
+      - name: Wait for Qdrant and TEI
+        run: |
+          for i in {1..90}; do
+            if curl -fsS http://127.0.0.1:53333/healthz >/dev/null 2>&1 && \
+               curl -fsS http://127.0.0.1:52000/health >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Timed out waiting for Qdrant/TEI readiness" >&2
+          exit 1
+
+      - name: Seed retrieve fixture
+        env:
+          TEI_URL: http://127.0.0.1:52000
+          QDRANT_URL: http://127.0.0.1:53333
+          AXON_PG_URL: postgresql://axon:postgres@127.0.0.1:53432/axon
+          AXON_REDIS_URL: redis://127.0.0.1:53379
+          AXON_AMQP_URL: amqp://axon:axonrabbit@127.0.0.1:45535/%2f
+        run: ./target/release/axon embed "docs/MCP.md" --wait true --json
+
+      - name: Run MCP mcporter smoke script
+        env:
+          TEI_URL: http://127.0.0.1:52000
+          QDRANT_URL: http://127.0.0.1:53333
+          AXON_PG_URL: postgresql://axon:postgres@127.0.0.1:53432/axon
+          AXON_REDIS_URL: redis://127.0.0.1:53379
+          AXON_AMQP_URL: amqp://axon:axonrabbit@127.0.0.1:45535/%2f
+        run: ./scripts/test-mcp-tools-mcporter.sh
+
+      - name: Upload mcporter logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-smoke-logs
+          path: .cache/mcporter-test/
+
+      - name: Teardown infra
+        if: always()
+        run: |
+          docker rm -f axon-tei || true
+          docker compose down || true

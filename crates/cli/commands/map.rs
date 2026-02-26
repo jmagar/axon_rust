@@ -6,6 +6,53 @@ use crate::crates::core::ui::{Spinner, muted, primary, print_option, print_phase
 use crate::crates::crawl::engine::crawl_and_collect_map;
 use std::error::Error;
 
+pub async fn map_payload(
+    cfg: &Config,
+    start_url: &str,
+) -> Result<serde_json::Value, Box<dyn Error>> {
+    validate_url(start_url)?;
+
+    let initial_mode = match cfg.render_mode {
+        RenderMode::AutoSwitch => RenderMode::Http,
+        m => m,
+    };
+
+    let (mut final_summary, mut final_urls) =
+        crawl_and_collect_map(cfg, start_url, initial_mode).await?;
+
+    if matches!(cfg.render_mode, RenderMode::AutoSwitch) && final_summary.pages_seen == 0 {
+        if let Ok((chrome_summary, chrome_urls)) =
+            crawl_and_collect_map(cfg, start_url, RenderMode::Chrome).await
+        {
+            final_summary = chrome_summary;
+            final_urls = chrome_urls;
+        }
+    }
+
+    if cfg.discover_sitemaps {
+        let mut sitemap = discover_sitemap_urls_with_robots(cfg, start_url)
+            .await?
+            .urls;
+        final_urls.append(&mut sitemap);
+        final_urls.sort();
+        final_urls.dedup();
+    }
+
+    let sitemap_url_count = final_urls
+        .len()
+        .saturating_sub(final_summary.pages_seen as usize);
+
+    Ok(serde_json::json!({
+        "url": start_url,
+        "mapped_urls": final_urls.len(),
+        "sitemap_urls": sitemap_url_count,
+        "pages_seen": final_summary.pages_seen,
+        "thin_pages": final_summary.thin_pages,
+        "elapsed_ms": final_summary.elapsed_ms,
+        "urls": final_urls,
+    }))
+}
+
 pub async fn run_map(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
     validate_url(start_url)?;
     if !cfg.json_output {

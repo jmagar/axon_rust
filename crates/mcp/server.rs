@@ -1,20 +1,21 @@
 use super::config::load_mcp_config;
 use super::schema::{
     ArtifactsRequest, ArtifactsSubaction, AskRequest, AxonRequest, AxonToolResponse, CrawlRequest,
-    CrawlSubaction, DiscoverRequest, DiscoverSubaction, EmbedRequest, EmbedSubaction,
-    ExtractRequest, ExtractSubaction, HelpRequest, IngestRequest, IngestSourceType,
-    IngestSubaction, McpRenderMode, OpsRequest, OpsSubaction, RagRequest, RagSubaction,
-    ResearchRequest, ResponseMode, ScrapeRequest, ScreenshotRequest, SearchTimeRange,
-    SessionsIngestOptions, StatusRequest, parse_axon_request,
+    CrawlSubaction, DoctorRequest, DomainsRequest, EmbedRequest, EmbedSubaction, ExtractRequest,
+    ExtractSubaction, HelpRequest, IngestRequest, IngestSourceType, IngestSubaction, MapRequest,
+    McpRenderMode, QueryRequest, ResearchRequest, ResponseMode, RetrieveRequest, ScrapeRequest,
+    ScreenshotRequest, SearchRequest, SearchTimeRange, SessionsIngestOptions, SourcesRequest,
+    StatsRequest, StatusRequest, parse_axon_request,
 };
-use crate::crates::cli::commands::crawl::discover_sitemap_urls_with_robots;
+use crate::crates::cli::commands::map::map_payload;
+use crate::crates::cli::commands::research::research_payload;
+use crate::crates::cli::commands::scrape::scrape_payload as cli_scrape_payload;
 use crate::crates::cli::commands::screenshot::{
     cdp_screenshot, resolve_browser_ws_url, url_to_screenshot_filename,
 };
+use crate::crates::cli::commands::search::search_results;
 use crate::crates::core::config::{Config, RenderMode};
-use crate::crates::core::content::{extract_meta_description, find_between, to_markdown};
-use crate::crates::core::http::{fetch_html, http_client, normalize_url, validate_url};
-use crate::crates::crawl::engine::crawl_and_collect_map;
+use crate::crates::core::http::{normalize_url, validate_url};
 use crate::crates::jobs::crawl::{
     cancel_job, cleanup_jobs, clear_jobs, get_job, list_jobs, recover_stale_crawl_jobs,
     start_crawl_job, start_crawl_jobs_batch,
@@ -31,12 +32,9 @@ use crate::crates::jobs::ingest::{
     IngestSource, cancel_ingest_job, cleanup_ingest_jobs, clear_ingest_jobs, get_ingest_job,
     list_ingest_jobs, recover_stale_ingest_jobs, start_ingest_job,
 };
-use crate::crates::vector::ops::input::url_lookup_candidates;
-use crate::crates::vector::ops::qdrant::{
-    qdrant_base, qdrant_domain_facets, qdrant_retrieve_by_url, qdrant_search, query_snippet,
-    render_full_doc_from_points,
-};
-use crate::crates::vector::ops::tei::tei_embed;
+use crate::crates::vector::ops::commands::query_results;
+use crate::crates::vector::ops::qdrant::{domains_payload, retrieve_result, sources_payload};
+use crate::crates::vector::ops::stats_payload;
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -50,7 +48,7 @@ use rmcp::{
     transport::stdio,
 };
 use sha2::{Digest, Sha256};
-use spider_agent::{Agent, SearchOptions, TimeRange};
+use spider_agent::TimeRange;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -67,22 +65,9 @@ pub struct AxonMcpServer {
 
 impl AxonMcpServer {
     async fn scrape_payload(&self, url: &str) -> Result<serde_json::Value, ErrorData> {
-        validate_url(url).map_err(|e| invalid_params(e.to_string()))?;
-        let client = http_client().map_err(|e| internal_error(e.to_string()))?;
-        let html = fetch_html(client, url)
+        cli_scrape_payload(self.cfg.as_ref(), url)
             .await
-            .map_err(|e| internal_error(e.to_string()))?;
-        let markdown = to_markdown(&html);
-        let title = find_between(&html, "<title>", "</title>")
-            .unwrap_or("")
-            .to_string();
-        let description = extract_meta_description(&html).unwrap_or_default();
-        Ok(serde_json::json!({
-            "url": url,
-            "title": title,
-            "description": description,
-            "markdown": markdown,
-        }))
+            .map_err(|e| invalid_params(e.to_string()))
     }
 
     fn parse_viewport(viewport: Option<&str>, fallback_w: u32, fallback_h: u32) -> (u32, u32) {
@@ -352,7 +337,7 @@ fn map_search_time_range(range: &SearchTimeRange) -> TimeRange {
 impl AxonMcpServer {
     #[tool(
         name = "axon",
-        description = "Unified Axon MCP tool. Use action/subaction routing. Use action:help to list actions/subactions/defaults. Exposes schema resource axon://schema/mcp-tool. Actions: status, help, crawl, extract, embed, ingest, rag, discover, ops, artifacts, scrape, research, ask, screenshot."
+        description = "Unified Axon MCP tool. Use action/subaction routing. Use action:help to list actions/subactions/defaults. Exposes schema resource axon://schema/mcp-tool. Actions: status, help, crawl, extract, embed, ingest, query, retrieve, search, map, doctor, domains, sources, stats, artifacts, scrape, research, ask, screenshot."
     )]
     async fn axon(
         &self,
@@ -366,9 +351,14 @@ impl AxonMcpServer {
             AxonRequest::Extract(req) => self.handle_extract(req).await?,
             AxonRequest::Embed(req) => self.handle_embed(req).await?,
             AxonRequest::Ingest(req) => self.handle_ingest(req).await?,
-            AxonRequest::Rag(req) => self.handle_rag(req).await?,
-            AxonRequest::Discover(req) => self.handle_discover(req).await?,
-            AxonRequest::Ops(req) => self.handle_ops(req).await?,
+            AxonRequest::Query(req) => self.handle_query(req).await?,
+            AxonRequest::Retrieve(req) => self.handle_retrieve(req).await?,
+            AxonRequest::Search(req) => self.handle_search(req).await?,
+            AxonRequest::Map(req) => self.handle_map(req).await?,
+            AxonRequest::Doctor(req) => self.handle_doctor(req).await?,
+            AxonRequest::Domains(req) => self.handle_domains(req).await?,
+            AxonRequest::Sources(req) => self.handle_sources(req).await?,
+            AxonRequest::Stats(req) => self.handle_stats(req).await?,
             AxonRequest::Help(req) => self.handle_help(req).await?,
             AxonRequest::Artifacts(req) => self.handle_artifacts(req).await?,
             AxonRequest::Scrape(req) => self.handle_scrape(req).await?,
@@ -385,33 +375,13 @@ impl AxonMcpServer {
         let json = crate::crates::cli::commands::status::status_snapshot(self.cfg.as_ref())
             .await
             .map_err(|e| internal_error(e.to_string()))?;
-
-        let axon_bin = std::env::current_exe()
-            .map_err(|e| internal_error(e.to_string()))?
-            .with_file_name("axon");
-        let output = Command::new(&axon_bin)
-            .arg("status")
-            .output()
+        let text = crate::crates::cli::commands::status::status_text(self.cfg.as_ref())
             .await
-            .map_err(|e| internal_error(format!("failed to execute {:?}: {e}", axon_bin)))?;
-        if !output.status.success() {
-            return Err(internal_error(format!(
-                "status command failed with code {:?}",
-                output.status.code()
-            )));
-        }
-        let mut text = String::from_utf8(output.stdout)
-            .map_err(|e| internal_error(format!("invalid utf8 from status output: {e}")))?;
-        if text.ends_with('\n') {
-            text.pop();
-            if text.ends_with('\r') {
-                text.pop();
-            }
-        }
+            .map_err(|e| internal_error(e.to_string()))?;
 
         Ok(AxonToolResponse::ok(
             "status",
-            "run",
+            "status",
             serde_json::json!({
                 "text": text,
                 "json": json,
@@ -842,205 +812,121 @@ impl AxonMcpServer {
         }
     }
 
-    async fn handle_rag(&self, req: RagRequest) -> Result<AxonToolResponse, ErrorData> {
-        match req.subaction {
-            RagSubaction::Query => {
-                let query = req
-                    .query
-                    .ok_or_else(|| invalid_params("query is required for rag.query"))?;
-                if self.cfg.tei_url.is_empty() {
-                    return Err(invalid_params("TEI_URL is required for rag.query"));
-                }
-                let limit = req.limit.unwrap_or(self.cfg.search_limit).clamp(1, 100);
-                let offset = parse_offset(req.offset);
-                let fetch_limit = (limit + offset).clamp(1, 200);
-                let response_mode = parse_response_mode(req.response_mode);
-                let mut vectors = tei_embed(self.cfg.as_ref(), std::slice::from_ref(&query))
-                    .await
-                    .map_err(|e| internal_error(e.to_string()))?;
-                if vectors.is_empty() {
-                    return Err(internal_error("TEI returned no vector for query"));
-                }
-                let vector = vectors.remove(0);
-                let hits = qdrant_search(self.cfg.as_ref(), &vector, fetch_limit)
-                    .await
-                    .map_err(|e| internal_error(e.to_string()))?;
-                let results = hits
-                    .into_iter()
-                    .skip(offset)
-                    .take(limit)
-                    .map(|h| {
-                        serde_json::json!({
-                            "url": h.payload.url,
-                            "score": h.score,
-                            "snippet": query_snippet(&h.payload),
-                            "chunk_index": h.payload.chunk_index,
-                        })
-                    })
-                    .collect::<Vec<_>>();
+    async fn handle_query(&self, req: QueryRequest) -> Result<AxonToolResponse, ErrorData> {
+        let query = req
+            .query
+            .ok_or_else(|| invalid_params("query is required for query"))?;
+        let limit = req.limit.unwrap_or(self.cfg.search_limit).clamp(1, 100);
+        let offset = parse_offset(req.offset);
+        let response_mode = parse_response_mode(req.response_mode);
+        let results = query_results(self.cfg.as_ref(), &query, limit, offset)
+            .await
+            .map_err(|e| internal_error(e.to_string()))?;
 
-                respond_with_mode(
-                    "rag",
-                    "query",
-                    response_mode,
-                    &format!("rag-query-{}", slugify(&query, 56)),
-                    serde_json::json!({
-                        "query": query,
-                        "limit": limit,
-                        "offset": offset,
-                        "results": results,
-                    }),
-                )
-            }
-            RagSubaction::Retrieve => {
-                let target = req
-                    .url
-                    .ok_or_else(|| invalid_params("url is required for rag.retrieve"))?;
-                let response_mode = parse_response_mode(req.response_mode);
-                let max_points = req.max_points;
-                let candidates = url_lookup_candidates(&target);
-
-                let mut points = Vec::new();
-                for candidate in &candidates {
-                    let fetched = qdrant_retrieve_by_url(self.cfg.as_ref(), candidate, max_points)
-                        .await
-                        .map_err(|e| internal_error(e.to_string()))?;
-                    if !fetched.is_empty() {
-                        points = fetched;
-                        break;
-                    }
-                }
-
-                let chunk_count = points.len();
-                let content = if points.is_empty() {
-                    String::new()
-                } else {
-                    render_full_doc_from_points(points)
-                };
-
-                respond_with_mode(
-                    "rag",
-                    "retrieve",
-                    response_mode,
-                    &format!("rag-retrieve-{}", slugify(&target, 56)),
-                    serde_json::json!({
-                        "url": target,
-                        "chunks": chunk_count,
-                        "content": content,
-                    }),
-                )
-            }
-        }
+        respond_with_mode(
+            "query",
+            "query",
+            response_mode,
+            &format!("query-{}", slugify(&query, 56)),
+            serde_json::json!({
+                "query": query,
+                "limit": limit,
+                "offset": offset,
+                "results": results,
+            }),
+        )
     }
 
-    async fn handle_discover(&self, req: DiscoverRequest) -> Result<AxonToolResponse, ErrorData> {
-        match req.subaction {
-            DiscoverSubaction::Scrape => {
-                let url = req
-                    .url
-                    .ok_or_else(|| invalid_params("url is required for discover.scrape"))?;
-                let payload = self.scrape_payload(&url).await?;
-                respond_with_mode(
-                    "discover",
-                    "scrape",
-                    parse_response_mode(req.response_mode),
-                    &format!("discover-scrape-{}", slugify(&url, 56)),
-                    payload,
-                )
-            }
-            DiscoverSubaction::Map => {
-                let url = req
-                    .url
-                    .ok_or_else(|| invalid_params("url is required for discover.map"))?;
-                let response_mode = parse_response_mode(req.response_mode);
-                let limit = parse_limit_usize(req.limit, 25, 500);
-                let offset = parse_offset(req.offset);
-                validate_url(&url).map_err(|e| invalid_params(e.to_string()))?;
-                let mut cfg = self.cfg.as_ref().clone();
-                cfg.render_mode = RenderMode::Http;
-                let (summary, mut urls) = crawl_and_collect_map(&cfg, &url, RenderMode::Http)
-                    .await
-                    .map_err(|e| internal_error(e.to_string()))?;
-                if cfg.discover_sitemaps {
-                    let mut sitemap = discover_sitemap_urls_with_robots(&cfg, &url)
-                        .await
-                        .map_err(|e| internal_error(e.to_string()))?
-                        .urls;
-                    urls.append(&mut sitemap);
-                    urls.sort();
-                    urls.dedup();
-                }
-                let paged_urls = paginate_vec(&urls, offset, limit);
-                respond_with_mode(
-                    "discover",
-                    "map",
-                    response_mode,
-                    &format!("discover-map-{}", slugify(&url, 56)),
-                    serde_json::json!({
-                        "url": url,
-                        "pages_seen": summary.pages_seen,
-                        "elapsed_ms": summary.elapsed_ms,
-                        "limit": limit,
-                        "offset": offset,
-                        "total_urls": urls.len(),
-                        "urls": paged_urls,
-                    }),
-                )
-            }
-            DiscoverSubaction::Search => {
-                let query = req
-                    .query
-                    .ok_or_else(|| invalid_params("query is required for discover.search"))?;
-                let response_mode = parse_response_mode(req.response_mode);
-                let limit = parse_limit_usize(req.limit, 10, 50);
-                let offset = parse_offset(req.offset);
-                if self.cfg.tavily_api_key.is_empty() {
-                    return Err(invalid_params(
-                        "TAVILY_API_KEY is required for discover.search",
-                    ));
-                }
-                let mut options = SearchOptions::new().with_limit((limit + offset).clamp(1, 100));
-                if let Some(range) = req.search_time_range.as_ref() {
-                    options = options.with_time_range(map_search_time_range(range));
-                }
-                let agent = Agent::builder()
-                    .with_search_tavily(&self.cfg.tavily_api_key)
-                    .build()
-                    .map_err(|e| internal_error(e.to_string()))?;
-                let results = agent
-                    .search_with_options(&query, options)
-                    .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+    async fn handle_retrieve(&self, req: RetrieveRequest) -> Result<AxonToolResponse, ErrorData> {
+        let target = req
+            .url
+            .ok_or_else(|| invalid_params("url is required for retrieve"))?;
+        let response_mode = parse_response_mode(req.response_mode);
+        let (chunk_count, content) = retrieve_result(self.cfg.as_ref(), &target, req.max_points)
+            .await
+            .map_err(|e| internal_error(e.to_string()))?;
 
-                let out = results
-                    .results
-                    .iter()
-                    .skip(offset)
-                    .take(limit)
-                    .map(|r| {
-                        serde_json::json!({
-                            "position": r.position,
-                            "title": r.title,
-                            "url": r.url,
-                            "snippet": r.snippet,
-                        })
-                    })
-                    .collect::<Vec<_>>();
+        respond_with_mode(
+            "retrieve",
+            "retrieve",
+            response_mode,
+            &format!("retrieve-{}", slugify(&target, 56)),
+            serde_json::json!({
+                "url": target,
+                "chunks": chunk_count,
+                "content": content,
+            }),
+        )
+    }
 
-                respond_with_mode(
-                    "discover",
-                    "search",
-                    response_mode,
-                    &format!("discover-search-{}", slugify(&query, 56)),
-                    serde_json::json!({
-                        "query": query,
-                        "limit": limit,
-                        "offset": offset,
-                        "results": out,
-                    }),
-                )
-            }
+    async fn handle_map(&self, req: MapRequest) -> Result<AxonToolResponse, ErrorData> {
+        let url = req
+            .url
+            .ok_or_else(|| invalid_params("url is required for map"))?;
+        let response_mode = parse_response_mode(req.response_mode);
+        let limit = parse_limit_usize(req.limit, 25, 500);
+        let offset = parse_offset(req.offset);
+        let payload = map_payload(self.cfg.as_ref(), &url)
+            .await
+            .map_err(|e| internal_error(e.to_string()))?;
+        let urls = payload["urls"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|v| v.as_str().map(ToString::to_string))
+            .collect::<Vec<_>>();
+        let paged_urls = paginate_vec(&urls, offset, limit);
+        respond_with_mode(
+            "map",
+            "map",
+            response_mode,
+            &format!("map-{}", slugify(&url, 56)),
+            serde_json::json!({
+                "url": url,
+                "pages_seen": payload["pages_seen"].as_u64().unwrap_or(0),
+                "elapsed_ms": payload["elapsed_ms"].as_u64().unwrap_or(0),
+                "thin_pages": payload["thin_pages"].as_u64().unwrap_or(0),
+                "limit": limit,
+                "offset": offset,
+                "total_urls": urls.len(),
+                "urls": paged_urls,
+            }),
+        )
+    }
+
+    async fn handle_search(&self, req: SearchRequest) -> Result<AxonToolResponse, ErrorData> {
+        let query = req
+            .query
+            .ok_or_else(|| invalid_params("query is required for search"))?;
+        let response_mode = parse_response_mode(req.response_mode);
+        let limit = parse_limit_usize(req.limit, 10, 50);
+        let offset = parse_offset(req.offset);
+        if self.cfg.tavily_api_key.is_empty() {
+            return Err(invalid_params("TAVILY_API_KEY is required for search"));
         }
+        let out = search_results(
+            self.cfg.as_ref(),
+            &query,
+            limit,
+            offset,
+            req.search_time_range.as_ref().map(map_search_time_range),
+        )
+        .await
+        .map_err(|e| internal_error(e.to_string()))?;
+
+        respond_with_mode(
+            "search",
+            "search",
+            response_mode,
+            &format!("search-{}", slugify(&query, 56)),
+            serde_json::json!({
+                "query": query,
+                "limit": limit,
+                "offset": offset,
+                "results": out,
+            }),
+        )
     }
 
     async fn handle_scrape(&self, req: ScrapeRequest) -> Result<AxonToolResponse, ErrorData> {
@@ -1050,7 +936,7 @@ impl AxonMcpServer {
         let payload = self.scrape_payload(&url).await?;
         respond_with_mode(
             "scrape",
-            "run",
+            "scrape",
             parse_response_mode(req.response_mode),
             &format!("scrape-{}", slugify(&url, 56)),
             payload,
@@ -1073,87 +959,22 @@ impl AxonMcpServer {
         let limit = parse_limit_usize(req.limit, 10, 50);
         let offset = parse_offset(req.offset);
 
-        let base = self.cfg.openai_base_url.trim_end_matches('/');
-        if base.ends_with("/chat/completions") {
-            return Err(invalid_params(
-                "OPENAI_BASE_URL should not include /chat/completions",
-            ));
-        }
-
-        let llm_url = format!("{base}/chat/completions");
-        let mut search_options = SearchOptions::new().with_limit((limit + offset).clamp(1, 100));
-        if let Some(range) = req.search_time_range.as_ref() {
-            search_options = search_options.with_time_range(map_search_time_range(range));
-        }
-        let agent = Agent::builder()
-            .with_openai_compatible(llm_url, &self.cfg.openai_api_key, &self.cfg.openai_model)
-            .with_search_tavily(&self.cfg.tavily_api_key)
-            .build()
-            .map_err(|e| internal_error(e.to_string()))?;
-
-        let extraction_prompt =
-            format!("Extract key facts, details, and insights relevant to: {query}");
-
-        let research = agent
-            .research(
-                &query,
-                spider_agent::ResearchOptions::new()
-                    .with_max_pages((limit + offset).clamp(1, 100))
-                    .with_search_options(search_options)
-                    .with_extraction_prompt(extraction_prompt)
-                    .with_synthesize(true),
-            )
-            .await
-            .map_err(|e| internal_error(e.to_string()))?;
-
-        let search_results = research
-            .search_results
-            .results
-            .iter()
-            .skip(offset)
-            .take(limit)
-            .map(|r| {
-                serde_json::json!({
-                    "position": r.position,
-                    "title": r.title,
-                    "url": r.url,
-                    "snippet": r.snippet,
-                })
-            })
-            .collect::<Vec<_>>();
-
-        let extractions = research
-            .extractions
-            .iter()
-            .skip(offset)
-            .take(limit)
-            .map(|e| {
-                serde_json::json!({
-                    "url": e.url,
-                    "title": e.title,
-                    "extracted": e.extracted,
-                })
-            })
-            .collect::<Vec<_>>();
+        let payload = research_payload(
+            self.cfg.as_ref(),
+            &query,
+            limit,
+            offset,
+            req.search_time_range.as_ref().map(map_search_time_range),
+        )
+        .await
+        .map_err(|e| invalid_params(e.to_string()))?;
 
         respond_with_mode(
             "research",
-            "run",
+            "research",
             response_mode,
             &format!("research-{}", slugify(&query, 56)),
-            serde_json::json!({
-                "query": query,
-                "limit": limit,
-                "offset": offset,
-                "search_results": search_results,
-                "extractions": extractions,
-                "summary": research.summary,
-                "usage": {
-                    "prompt_tokens": research.usage.prompt_tokens,
-                    "completion_tokens": research.usage.completion_tokens,
-                    "total_tokens": research.usage.total_tokens,
-                }
-            }),
+            payload,
         )
     }
 
@@ -1162,113 +983,32 @@ impl AxonMcpServer {
             .query
             .ok_or_else(|| invalid_params("query is required for ask"))?;
         let response_mode = parse_response_mode(req.response_mode);
-        if self.cfg.openai_base_url.trim().is_empty() || self.cfg.openai_model.trim().is_empty() {
-            return Err(invalid_params(
-                "OPENAI_BASE_URL and OPENAI_MODEL are required for ask",
-            ));
-        }
-        if self.cfg.tei_url.trim().is_empty() {
-            return Err(invalid_params("TEI_URL is required for ask"));
-        }
-
-        let mut query_vectors = tei_embed(self.cfg.as_ref(), std::slice::from_ref(&query))
-            .await
-            .map_err(|e| internal_error(e.to_string()))?;
-        if query_vectors.is_empty() {
-            return Err(internal_error("TEI returned no vector for ask query"));
-        }
-        let vector = query_vectors.remove(0);
-        let candidate_limit = self.cfg.search_limit.clamp(1, 50);
-        let hits = qdrant_search(self.cfg.as_ref(), &vector, candidate_limit)
-            .await
-            .map_err(|e| internal_error(e.to_string()))?;
-        let sources = hits
-            .iter()
-            .enumerate()
-            .map(|(idx, hit)| {
-                serde_json::json!({
-                    "source": format!("S{}", idx + 1),
-                    "url": hit.payload.url,
-                    "score": hit.score,
-                    "snippet": query_snippet(&hit.payload),
-                })
-            })
-            .collect::<Vec<_>>();
-        let context = hits
-            .iter()
-            .enumerate()
-            .map(|(idx, hit)| {
-                format!(
-                    "[S{}] {}\n{}\n",
-                    idx + 1,
-                    hit.payload.url,
-                    query_snippet(&hit.payload)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let mut llm_req = http_client()
+        let axon_bin = std::env::current_exe()
             .map_err(|e| internal_error(e.to_string()))?
-            .post(format!(
-                "{}/chat/completions",
-                self.cfg.openai_base_url.trim_end_matches('/')
-            ));
-        if !self.cfg.openai_api_key.trim().is_empty() {
-            llm_req = llm_req.bearer_auth(&self.cfg.openai_api_key);
+            .with_file_name("axon");
+        let output = Command::new(&axon_bin)
+            .arg("ask")
+            .arg("--json")
+            .arg("--query")
+            .arg(&query)
+            .output()
+            .await
+            .map_err(|e| internal_error(format!("failed to execute {:?}: {e}", axon_bin)))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(internal_error(format!(
+                "ask command failed with code {:?}: {}",
+                output.status.code(),
+                stderr.trim()
+            )));
         }
-        let answer_json = llm_req
-            .json(&serde_json::json!({
-                "model": self.cfg.openai_model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "Answer the question using the provided context. Cite sources inline as [S#] and include a short Sources list."
-                    },
-                    {
-                        "role": "user",
-                        "content": format!("Question: {}\n\nContext:\n{}", query, context)
-                    }
-                ],
-                "temperature": 0.1
-            }))
-            .send()
-            .await
-            .map_err(|e| internal_error(e.to_string()))?
-            .error_for_status()
-            .map_err(|e| internal_error(e.to_string()))?
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|e| internal_error(e.to_string()))?;
-        let answer = answer_json["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("(no answer)")
-            .to_string();
-
-        let payload = if matches!(response_mode, ResponseMode::Path) {
-            serde_json::json!({
-                "query": query,
-                "answer": answer,
-                "diagnostics": {
-                    "candidate_pool": sources.len(),
-                    "context_chars": context.len(),
-                },
-                "source_count": sources.len(),
-            })
-        } else {
-            serde_json::json!({
-                "query": query,
-                "answer": answer,
-                "diagnostics": {
-                    "candidate_pool": sources.len(),
-                    "context_chars": context.len(),
-                },
-                "sources": sources,
-            })
-        };
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|e| internal_error(format!("invalid utf8 from ask output: {e}")))?;
+        let payload = serde_json::from_str::<serde_json::Value>(&stdout)
+            .map_err(|e| internal_error(format!("invalid ask json output: {e}")))?;
         respond_with_mode(
             "ask",
-            "run",
+            "ask",
             response_mode,
             &format!("ask-{}", slugify(&query, 56)),
             payload,
@@ -1329,7 +1069,7 @@ impl AxonMcpServer {
 
         Ok(AxonToolResponse::ok(
             "screenshot",
-            "run",
+            "screenshot",
             serde_json::json!({
                 "url": normalized,
                 "path": path,
@@ -1353,7 +1093,7 @@ impl AxonMcpServer {
                 let limit = parse_limit_usize(req.limit, 25, 500);
                 let head = text.lines().take(limit).collect::<Vec<_>>().join("\n");
                 Ok(AxonToolResponse::ok(
-                    "artifacts",
+                    "head",
                     "head",
                     serde_json::json!({
                         "path": path,
@@ -1379,7 +1119,7 @@ impl AxonMcpServer {
                     .map(|(idx, line)| serde_json::json!({ "line": idx + 1, "text": line }))
                     .collect::<Vec<_>>();
                 Ok(AxonToolResponse::ok(
-                    "artifacts",
+                    "grep",
                     "grep",
                     serde_json::json!({
                         "path": path,
@@ -1391,7 +1131,7 @@ impl AxonMcpServer {
                 ))
             }
             ArtifactsSubaction::Wc => Ok(AxonToolResponse::ok(
-                "artifacts",
+                "wc",
                 "wc",
                 serde_json::json!({
                     "path": path,
@@ -1410,7 +1150,7 @@ impl AxonMcpServer {
                     .collect::<Vec<_>>()
                     .join("\n");
                 Ok(AxonToolResponse::ok(
-                    "artifacts",
+                    "read",
                     "read",
                     serde_json::json!({
                         "path": path,
@@ -1426,7 +1166,7 @@ impl AxonMcpServer {
     async fn handle_help(&self, req: HelpRequest) -> Result<AxonToolResponse, ErrorData> {
         respond_with_mode(
             "help",
-            "run",
+            "help",
             parse_response_mode(req.response_mode),
             "help-actions",
             serde_json::json!({
@@ -1434,18 +1174,26 @@ impl AxonMcpServer {
                 "actions": {
                     "status": [],
                     "help": [],
-                    "scrape": ["run"],
-                    "research": ["run"],
-                    "ask": ["run"],
-                    "screenshot": ["run"],
+                    "scrape": ["scrape"],
+                    "research": ["research"],
+                    "ask": ["ask"],
+                    "screenshot": ["screenshot"],
                     "crawl": ["start", "status", "cancel", "list", "cleanup", "clear", "recover"],
                     "extract": ["start", "status", "cancel", "list", "cleanup", "clear", "recover"],
                     "embed": ["start", "status", "cancel", "list", "cleanup", "clear", "recover"],
                     "ingest": ["start", "status", "cancel", "list", "cleanup", "clear", "recover"],
-                    "rag": ["query", "retrieve"],
-                    "discover": ["scrape", "map", "search"],
-                    "ops": ["doctor", "domains", "sources", "stats"],
-                    "artifacts": ["head", "grep", "wc", "read"]
+                    "query": ["query"],
+                    "retrieve": ["retrieve"],
+                    "search": ["search"],
+                    "map": ["map"],
+                    "doctor": ["doctor"],
+                    "domains": ["domains"],
+                    "sources": ["sources"],
+                    "stats": ["stats"],
+                    "head": ["head"],
+                    "grep": ["grep"],
+                    "wc": ["wc"],
+                    "read": ["read"]
                 },
                 "resources": [
                     MCP_TOOL_SCHEMA_URI
@@ -1458,141 +1206,68 @@ impl AxonMcpServer {
         )
     }
 
-    async fn handle_ops(&self, req: OpsRequest) -> Result<AxonToolResponse, ErrorData> {
-        match req.subaction {
-            OpsSubaction::Doctor => {
-                let client = http_client().map_err(|e| internal_error(e.to_string()))?;
-                let qdrant_ok = client
-                    .get(format!("{}/collections", qdrant_base(self.cfg.as_ref())))
-                    .send()
-                    .await
-                    .map(|r| r.status().is_success())
-                    .unwrap_or(false);
-
-                let tei_ok = if self.cfg.tei_url.is_empty() {
-                    false
-                } else {
-                    client
-                        .post(format!("{}/embed", self.cfg.tei_url.trim_end_matches('/')))
-                        .json(&serde_json::json!({ "inputs": ["healthcheck"] }))
-                        .send()
-                        .await
-                        .map(|r| r.status().is_success())
-                        .unwrap_or(false)
-                };
-
-                let llm_ok = if self.cfg.openai_base_url.is_empty() {
-                    false
-                } else {
-                    client
-                        .get(format!(
-                            "{}/models",
-                            self.cfg.openai_base_url.trim_end_matches('/')
-                        ))
-                        .send()
-                        .await
-                        .map(|r| r.status().is_success())
-                        .unwrap_or(false)
-                };
-
-                Ok(AxonToolResponse::ok(
-                    "ops",
-                    "doctor",
-                    serde_json::json!({
-                        "qdrant_ok": qdrant_ok,
-                        "tei_ok": tei_ok,
-                        "llm_ok": llm_ok,
-                        "pg_configured": !self.cfg.pg_url.is_empty(),
-                        "redis_configured": !self.cfg.redis_url.is_empty(),
-                        "amqp_configured": !self.cfg.amqp_url.is_empty(),
-                    }),
-                ))
-            }
-            OpsSubaction::Domains => {
-                let limit = parse_limit_usize(req.limit, 25, 500);
-                let offset = parse_offset(req.offset);
-                let domains =
-                    qdrant_domain_facets(self.cfg.as_ref(), (limit + offset).clamp(1, 500))
-                        .await
-                        .map_err(|e| internal_error(e.to_string()))?;
-                let values = domains
-                    .into_iter()
-                    .skip(offset)
-                    .take(limit)
-                    .map(|(domain, vectors)| {
-                        serde_json::json!({ "domain": domain, "vectors": vectors })
-                    })
-                    .collect::<Vec<_>>();
-                respond_with_mode(
-                    "ops",
-                    "domains",
-                    parse_response_mode(req.response_mode),
-                    "ops-domains",
-                    serde_json::json!({ "domains": values, "limit": limit, "offset": offset }),
-                )
-            }
-            OpsSubaction::Sources => {
-                let limit = parse_limit_usize(req.limit, 25, 500);
-                let offset = parse_offset(req.offset);
-                let urls = crate::crates::vector::ops::qdrant::qdrant_indexed_urls(
-                    self.cfg.as_ref(),
-                    Some((limit + offset).clamp(1, 500)),
-                )
-                .await
-                .map_err(|e| internal_error(e.to_string()))?;
-                let total = urls.len();
-                let urls = urls
-                    .into_iter()
-                    .skip(offset)
-                    .take(limit)
-                    .collect::<Vec<_>>();
-                respond_with_mode(
-                    "ops",
-                    "sources",
-                    parse_response_mode(req.response_mode),
-                    "ops-sources",
-                    serde_json::json!({ "count": total, "limit": limit, "offset": offset, "urls": urls }),
-                )
-            }
-            OpsSubaction::Stats => {
-                let client = http_client().map_err(|e| internal_error(e.to_string()))?;
-                let info = client
-                    .get(format!(
-                        "{}/collections/{}",
-                        qdrant_base(self.cfg.as_ref()),
-                        self.cfg.collection
-                    ))
-                    .send()
-                    .await
-                    .map_err(|e| internal_error(e.to_string()))?
-                    .error_for_status()
-                    .map_err(|e| internal_error(e.to_string()))?
-                    .json::<serde_json::Value>()
-                    .await
-                    .map_err(|e| internal_error(e.to_string()))?;
-                let count = client
-                    .post(format!(
-                        "{}/collections/{}/points/count",
-                        qdrant_base(self.cfg.as_ref()),
-                        self.cfg.collection
-                    ))
-                    .json(&serde_json::json!({"exact": true}))
-                    .send()
-                    .await
-                    .map_err(|e| internal_error(e.to_string()))?
-                    .error_for_status()
-                    .map_err(|e| internal_error(e.to_string()))?
-                    .json::<serde_json::Value>()
-                    .await
-                    .map_err(|e| internal_error(e.to_string()))?;
-
-                Ok(AxonToolResponse::ok(
-                    "ops",
-                    "stats",
-                    serde_json::json!({ "collection_info": info, "count": count }),
-                ))
-            }
+    async fn handle_doctor(&self, _req: DoctorRequest) -> Result<AxonToolResponse, ErrorData> {
+        let axon_bin = std::env::current_exe()
+            .map_err(|e| internal_error(e.to_string()))?
+            .with_file_name("axon");
+        let output = Command::new(&axon_bin)
+            .arg("doctor")
+            .arg("--json")
+            .output()
+            .await
+            .map_err(|e| internal_error(format!("failed to execute {:?}: {e}", axon_bin)))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(internal_error(format!(
+                "doctor command failed with code {:?}: {}",
+                output.status.code(),
+                stderr.trim()
+            )));
         }
+        let stdout = String::from_utf8(output.stdout)
+            .map_err(|e| internal_error(format!("invalid utf8 from doctor output: {e}")))?;
+        let payload = serde_json::from_str::<serde_json::Value>(&stdout)
+            .map_err(|e| internal_error(format!("invalid doctor json output: {e}")))?;
+
+        Ok(AxonToolResponse::ok("doctor", "doctor", payload))
+    }
+
+    async fn handle_domains(&self, req: DomainsRequest) -> Result<AxonToolResponse, ErrorData> {
+        let limit = parse_limit_usize(req.limit, 25, 500);
+        let offset = parse_offset(req.offset);
+        let payload = domains_payload(self.cfg.as_ref(), limit, offset)
+            .await
+            .map_err(|e| internal_error(e.to_string()))?;
+        respond_with_mode(
+            "domains",
+            "domains",
+            parse_response_mode(req.response_mode),
+            "domains",
+            payload,
+        )
+    }
+
+    async fn handle_sources(&self, req: SourcesRequest) -> Result<AxonToolResponse, ErrorData> {
+        let limit = parse_limit_usize(req.limit, 25, 500);
+        let offset = parse_offset(req.offset);
+        let payload = sources_payload(self.cfg.as_ref(), limit, offset)
+            .await
+            .map_err(|e| internal_error(e.to_string()))?;
+        respond_with_mode(
+            "sources",
+            "sources",
+            parse_response_mode(req.response_mode),
+            "sources",
+            payload,
+        )
+    }
+
+    async fn handle_stats(&self, _req: StatsRequest) -> Result<AxonToolResponse, ErrorData> {
+        let stats = stats_payload(self.cfg.as_ref())
+            .await
+            .map_err(|e| internal_error(e.to_string()))?;
+
+        Ok(AxonToolResponse::ok("stats", "stats", stats))
     }
 }
 
@@ -1600,7 +1275,7 @@ fn mcp_tool_schema_markdown() -> String {
     let schema = rmcp::schemars::schema_for!(AxonRequest);
     let schema_json = serde_json::to_string_pretty(&schema).unwrap_or_else(|_| "{}".to_string());
     format!(
-        "# Axon MCP Tool Schema\n\nURI: `{}`\n\nSingle tool name: `axon`\n\nRouting contract:\n- `action` is required\n- `subaction` is required for lifecycle actions and defaulted by parser shim where omitted\n- `response_mode` supports `path|inline|both` and defaults to `path`\n\n## JSON Schema\n\n```json\n{}\n```\n",
+        "# Axon MCP Tool Schema\n\nURI: `{}`\n\nSingle tool name: `axon`\n\nRouting contract:\n- `action` is required\n- `subaction` is required for lifecycle actions\n- `response_mode` supports `path|inline|both` and defaults to `path`\n\n## JSON Schema\n\n```json\n{}\n```\n",
         MCP_TOOL_SCHEMA_URI, schema_json
     )
 }

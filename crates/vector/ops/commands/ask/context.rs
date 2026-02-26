@@ -2,9 +2,9 @@ use crate::crates::core::config::Config;
 use crate::crates::core::logging::log_warn;
 use crate::crates::vector::ops::source_display::display_source;
 use crate::crates::vector::ops::{qdrant, ranking, tei};
+use anyhow::{Result, anyhow};
 use futures_util::stream::{self, StreamExt};
 use std::collections::HashSet;
-use std::error::Error;
 use std::sync::Arc;
 
 fn push_context_entry(
@@ -57,10 +57,7 @@ struct BuiltAskContext {
     diagnostic_sources: Vec<String>,
 }
 
-pub(crate) async fn build_ask_context(
-    cfg: &Config,
-    query: &str,
-) -> Result<AskContext, Box<dyn Error>> {
+pub(crate) async fn build_ask_context(cfg: &Config, query: &str) -> Result<AskContext> {
     let retrieval = retrieve_ask_candidates(cfg, query).await?;
     let built = build_context_from_candidates(
         cfg,
@@ -83,18 +80,19 @@ pub(crate) async fn build_ask_context(
     })
 }
 
-async fn retrieve_ask_candidates(
-    cfg: &Config,
-    query: &str,
-) -> Result<AskRetrieval, Box<dyn Error>> {
+async fn retrieve_ask_candidates(cfg: &Config, query: &str) -> Result<AskRetrieval> {
     let retrieval_started = std::time::Instant::now();
-    let mut ask_vectors = tei::tei_embed(cfg, &[query.to_string()]).await?;
+    let mut ask_vectors = tei::tei_embed(cfg, &[query.to_string()])
+        .await
+        .map_err(|e| anyhow!(e.to_string()))?;
     if ask_vectors.is_empty() {
-        return Err("TEI returned no vector for ask query".into());
+        return Err(anyhow!("TEI returned no vector for ask query"));
     }
     let vecq = ask_vectors.remove(0);
     let query_tokens = ranking::tokenize_query(query);
-    let hits = qdrant::qdrant_search(cfg, &vecq, cfg.ask_candidate_limit).await?;
+    let hits = qdrant::qdrant_search(cfg, &vecq, cfg.ask_candidate_limit)
+        .await
+        .map_err(|e| anyhow!(e.to_string()))?;
     let mut candidates = Vec::new();
     for hit in hits {
         let url = qdrant::payload_url_typed(&hit.payload).to_string();
@@ -114,18 +112,17 @@ async fn retrieve_ask_candidates(
         });
     }
     if candidates.is_empty() {
-        return Err("No relevant documents found for ask query".into());
+        return Err(anyhow!("No relevant documents found for ask query"));
     }
     let reranked = ranking::rerank_ask_candidates(&candidates, &query_tokens)
         .into_iter()
         .filter(|c| c.rerank_score >= cfg.ask_min_relevance_score)
         .collect::<Vec<_>>();
     if reranked.is_empty() {
-        return Err(format!(
+        return Err(anyhow!(
             "No candidates met relevance threshold {:.3}; lower AXON_ASK_MIN_RELEVANCE_SCORE",
             cfg.ask_min_relevance_score
-        )
-        .into());
+        ));
     }
     Ok(AskRetrieval {
         top_chunk_indices: ranking::select_diverse_candidates(&reranked, cfg.ask_chunk_limit, 2),
@@ -141,7 +138,7 @@ async fn build_context_from_candidates(
     reranked: &[ranking::AskCandidate],
     top_chunk_indices: &[usize],
     top_full_doc_indices: &[usize],
-) -> Result<BuiltAskContext, Box<dyn Error>> {
+) -> Result<BuiltAskContext> {
     let max_context_chars = cfg.ask_max_context_chars;
     let backfill_limit = cfg.ask_backfill_chunks;
     let doc_fetch_concurrency = cfg.ask_doc_fetch_concurrency;
@@ -203,7 +200,7 @@ async fn build_context_from_candidates(
     );
 
     if context_entries.is_empty() {
-        return Err("Failed to retrieve any context sources for ask".into());
+        return Err(anyhow!("Failed to retrieve any context sources for ask"));
     }
 
     let context = format!("Sources:\n{}", context_entries.join(separator));
@@ -280,7 +277,7 @@ async fn fetch_full_docs(
     max_context_chars: usize,
     doc_chunk_limit: usize,
     doc_fetch_concurrency: usize,
-) -> Result<Vec<(usize, String, Vec<qdrant::QdrantPoint>)>, Box<dyn Error>> {
+) -> Result<Vec<(usize, String, Vec<qdrant::QdrantPoint>)>> {
     let mut fetched_docs = Vec::new();
     if context_char_count >= max_context_chars {
         return Ok(fetched_docs);

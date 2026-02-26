@@ -1,7 +1,10 @@
 use crate::crates::core::config::Config;
+use anyhow::{Result as AnyResult, anyhow};
 use futures_util::StreamExt;
 use std::error::Error;
 use std::io::Write;
+
+pub(crate) const ASK_RAG_SYSTEM_PROMPT: &str = "You are a precise technical research assistant. Answer questions using the retrieved source documents when they are relevant.\n\nSTEP 1 — RELEVANCE CHECK: Before answering, assess whether the retrieved documents genuinely address the question. Look for topical overlap beyond keyword coincidence (e.g., a doc about implementing a library's internal HTTP adapter is NOT relevant to a question about how to use HTTP clients in general).\n\nSTEP 2 — ANSWER based on your assessment:\n\nIF SOURCES ARE RELEVANT:\n1. CITATIONS — Cite inline immediately after each claim using [S#] labels. When multiple sources support the same point, cite all: [S1][S3]. Never make a claim without a citation.\n2. FOOTER — After your answer, add a \"## Sources\" section listing each cited source number and its URL.\n3. SYNTHESIS — Integrate information from multiple sources into a unified answer.\n4. GAPS — State explicitly what the sources cover and what they do not.\n5. PRECISION — Include exact values, function names, file paths, and configuration keys when the sources provide them.\n\nIF SOURCES ARE NOT RELEVANT (documents discuss a related but different topic than what was asked):\n- Open with: \"The indexed knowledge base does not contain directly relevant information for this question.\"\n- Then provide a complete, accurate answer in a section labeled \"## Answer (from training knowledge)\".\n- Do NOT cite [S#] for claims not supported by the retrieved sources.";
 
 /// Build a POST request to the OpenAI-compatible chat completions endpoint with
 /// optional bearer auth. Callers chain `.json(...)` to attach the request body.
@@ -181,7 +184,7 @@ pub(crate) async fn ask_llm_streaming(
     let req = build_openai_chat_request(client, cfg).json(&serde_json::json!({
         "model": cfg.openai_model,
         "messages": [
-            {"role": "system", "content": "You are a precise technical research assistant. Answer questions using the retrieved source documents when they are relevant.\n\nSTEP 1 — RELEVANCE CHECK: Before answering, assess whether the retrieved documents genuinely address the question. Look for topical overlap beyond keyword coincidence (e.g., a doc about implementing a library's internal HTTP adapter is NOT relevant to a question about how to use HTTP clients in general).\n\nSTEP 2 — ANSWER based on your assessment:\n\nIF SOURCES ARE RELEVANT:\n1. CITATIONS — Cite inline immediately after each claim using [S#] labels. When multiple sources support the same point, cite all: [S1][S3]. Never make a claim without a citation.\n2. FOOTER — After your answer, add a \"## Sources\" section listing each cited source number and its URL.\n3. SYNTHESIS — Integrate information from multiple sources into a unified answer.\n4. GAPS — State explicitly what the sources cover and what they do not.\n5. PRECISION — Include exact values, function names, file paths, and configuration keys when the sources provide them.\n\nIF SOURCES ARE NOT RELEVANT (documents discuss a related but different topic than what was asked):\n- Open with: \"The indexed knowledge base does not contain directly relevant information for this question.\"\n- Then provide a complete, accurate answer in a section labeled \"## Answer (from training knowledge)\".\n- Do NOT cite [S#] for claims not supported by the retrieved sources."},
+            {"role": "system", "content": ASK_RAG_SYSTEM_PROMPT},
             {"role": "user", "content": format!("Question: {}\n\nContext:\n{}", query, context)}
         ],
         "temperature": 0.1,
@@ -196,18 +199,23 @@ pub(crate) async fn ask_llm_non_streaming(
     client: &reqwest::Client,
     query: &str,
     context: &str,
-) -> Result<String, Box<dyn Error>> {
+) -> AnyResult<String> {
     let req = build_openai_chat_request(client, cfg).json(&serde_json::json!({
         "model": cfg.openai_model,
         "messages": [
-            {"role": "system", "content": "You are a precise technical research assistant. Answer questions using the retrieved source documents when they are relevant.\n\nSTEP 1 — RELEVANCE CHECK: Before answering, assess whether the retrieved documents genuinely address the question. Look for topical overlap beyond keyword coincidence (e.g., a doc about implementing a library's internal HTTP adapter is NOT relevant to a question about how to use HTTP clients in general).\n\nSTEP 2 — ANSWER based on your assessment:\n\nIF SOURCES ARE RELEVANT:\n1. CITATIONS — Cite inline immediately after each claim using [S#] labels. When multiple sources support the same point, cite all: [S1][S3]. Never make a claim without a citation.\n2. FOOTER — After your answer, add a \"## Sources\" section listing each cited source number and its URL.\n3. SYNTHESIS — Integrate information from multiple sources into a unified answer.\n4. GAPS — State explicitly what the sources cover and what they do not.\n5. PRECISION — Include exact values, function names, file paths, and configuration keys when the sources provide them.\n\nIF SOURCES ARE NOT RELEVANT (documents discuss a related but different topic than what was asked):\n- Open with: \"The indexed knowledge base does not contain directly relevant information for this question.\"\n- Then provide a complete, accurate answer in a section labeled \"## Answer (from training knowledge)\".\n- Do NOT cite [S#] for claims not supported by the retrieved sources."},
+            {"role": "system", "content": ASK_RAG_SYSTEM_PROMPT},
             {"role": "user", "content": format!("Question: {}\n\nContext:\n{}", query, context)}
         ],
         "temperature": 0.1
     }));
 
-    let response = req.send().await?.error_for_status()?;
-    let json: serde_json::Value = response.json().await?;
+    let response = req
+        .send()
+        .await
+        .map_err(|e| anyhow!(e.to_string()))?
+        .error_for_status()
+        .map_err(|e| anyhow!(e.to_string()))?;
+    let json: serde_json::Value = response.json().await.map_err(|e| anyhow!(e.to_string()))?;
     Ok(json["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("(no answer)")

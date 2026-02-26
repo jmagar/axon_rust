@@ -29,6 +29,21 @@ pub async fn status_snapshot(cfg: &Config) -> Result<serde_json::Value, Box<dyn 
     }))
 }
 
+pub async fn status_text(cfg: &Config) -> Result<String, Box<dyn Error>> {
+    let jobs = load_status_jobs(cfg).await?;
+    let crawl_total = jobs.crawl.len();
+    let extract_total = jobs.extract.len();
+    let embed_total = jobs.embed.len();
+    let ingest_total = jobs.ingest.len();
+    let mut lines = Vec::new();
+    lines.push("Axon Status".to_string());
+    lines.push(format!("crawl jobs:   {crawl_total}"));
+    lines.push(format!("extract jobs: {extract_total}"));
+    lines.push(format!("embed jobs:   {embed_total}"));
+    lines.push(format!("ingest jobs:  {ingest_total}"));
+    Ok(lines.join("\n"))
+}
+
 struct StatusJobs {
     crawl: Vec<CrawlJob>,
     extract: Vec<ExtractJob>,
