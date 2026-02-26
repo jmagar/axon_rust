@@ -5,6 +5,7 @@ Documentation index for Axon.
 
 ## Core Docs
 - [Architecture](./ARCHITECTURE.md)
+- [Feature Delivery Framework](./FEATURE-DELIVERY-FRAMEWORK.md)
 - [API](./API.md)
 - [Deployment](./DEPLOYMENT.md)
 - [Operations](./OPERATIONS.md)

@@ -52,6 +52,7 @@ fn durable_queue_options() -> QueueDeclareOptions {
 #[derive(Debug, Clone, Copy)]
 pub enum JobTable {
     Crawl,
+    Refresh,
     Extract,
     Embed,
     Ingest,
@@ -61,6 +62,7 @@ impl JobTable {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Crawl => "axon_crawl_jobs",
+            Self::Refresh => "axon_refresh_jobs",
             Self::Extract => "axon_extract_jobs",
             Self::Embed => "axon_embed_jobs",
             Self::Ingest => "axon_ingest_jobs",

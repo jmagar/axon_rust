@@ -16,6 +16,7 @@ pub(super) struct Cli {
 pub(super) enum CliCommand {
     Scrape(ScrapeArgs),
     Crawl(CrawlArgs),
+    Refresh(CrawlArgs),
     Map(UrlArg),
     Extract(ExtractArgs),
     Search(TextArg),
@@ -361,6 +362,9 @@ pub(super) struct GlobalArgs {
 
     #[arg(global = true, long)]
     pub(super) crawl_queue: Option<String>,
+
+    #[arg(global = true, long)]
+    pub(super) refresh_queue: Option<String>,
 
     #[arg(global = true, long)]
     pub(super) extract_queue: Option<String>,

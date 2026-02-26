@@ -42,3 +42,5 @@ crates/cli/commands/crawl.rs
 crates/vector/ops/commands/ask/context.rs
 # 509 lines — citation-quality gates + test suite; test block accounts for overage (2026-02-26)
 crates/vector/ops/commands/ask.rs
+# 704 lines — refresh pipeline landed in one pass; split/refactor follow-up needed (2026-02-26)
+crates/jobs/refresh.rs

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 pub enum CommandKind {
     Scrape,
     Crawl,
+    Refresh,
     Map,
     Extract,
     Search,
@@ -37,6 +38,7 @@ impl CommandKind {
         match self {
             Self::Scrape => "scrape",
             Self::Crawl => "crawl",
+            Self::Refresh => "refresh",
             Self::Map => "map",
             Self::Extract => "extract",
             Self::Search => "search",
@@ -306,6 +308,9 @@ pub struct Config {
 
     /// AMQP queue name for crawl jobs. Env: `AXON_CRAWL_QUEUE`. Flag: `--crawl-queue`.
     pub crawl_queue: String,
+
+    /// AMQP queue name for refresh jobs. Env: `AXON_REFRESH_QUEUE`. Flag: `--refresh-queue`.
+    pub refresh_queue: String,
 
     /// AMQP queue name for extract jobs. Env: `AXON_EXTRACT_QUEUE`. Flag: `--extract-queue`.
     pub extract_queue: String,
@@ -583,6 +588,7 @@ impl Default for Config {
             redis_url: String::new(),
             amqp_url: String::new(),
             crawl_queue: "axon.crawl.jobs".to_string(),
+            refresh_queue: "axon.refresh.jobs".to_string(),
             extract_queue: "axon.extract.jobs".to_string(),
             embed_queue: "axon.embed.jobs".to_string(),
             ingest_queue: "axon.ingest.jobs".to_string(),
@@ -707,6 +713,7 @@ impl fmt::Debug for Config {
             .field("redis_url", &"[REDACTED]")
             .field("amqp_url", &"[REDACTED]")
             .field("crawl_queue", &self.crawl_queue)
+            .field("refresh_queue", &self.refresh_queue)
             .field("extract_queue", &self.extract_queue)
             .field("embed_queue", &self.embed_queue)
             .field("ingest_queue", &self.ingest_queue)

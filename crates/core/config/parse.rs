@@ -106,6 +106,14 @@ fn into_config(cli: Cli) -> Result<Config, String> {
                 args.positional_urls
             },
         ),
+        CliCommand::Refresh(args) => (
+            CommandKind::Refresh,
+            if let Some(job) = args.job {
+                positional_from_job(job)
+            } else {
+                args.positional_urls
+            },
+        ),
         CliCommand::Map(args) => (
             CommandKind::Map,
             args.value.into_iter().collect::<Vec<String>>(),
@@ -310,6 +318,10 @@ fn into_config(cli: Cli) -> Result<Config, String> {
             .crawl_queue
             .or_else(|| env::var("AXON_CRAWL_QUEUE").ok())
             .unwrap_or_else(|| "axon.crawl.jobs".to_string()),
+        refresh_queue: global
+            .refresh_queue
+            .or_else(|| env::var("AXON_REFRESH_QUEUE").ok())
+            .unwrap_or_else(|| "axon.refresh.jobs".to_string()),
         extract_queue: global
             .extract_queue
             .or_else(|| env::var("AXON_EXTRACT_QUEUE").ok())
