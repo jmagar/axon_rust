@@ -223,10 +223,7 @@ Key behaviors:
 
 ## Web Runtime Architecture
 
-Two UI paths exist today:
-
-- `apps/web` (Next.js): active UI for omnibox, pulse, and modern workflows.
-- `axon serve` static UI (`crates/web/static`): legacy/deprecated path.
+The web UI is `apps/web` (Next.js). `crates/web.rs` provides the axum WebSocket bridge it connects to.
 
 ### Axum Runtime (`serve`)
 

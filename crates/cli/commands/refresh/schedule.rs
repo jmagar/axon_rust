@@ -3,10 +3,12 @@ use crate::crates::core::config::Config;
 use crate::crates::core::http::validate_url;
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::core::ui::{accent, muted, status_text, symbol_for_status};
+use crate::crates::jobs::common::make_pool;
+use crate::crates::jobs::refresh::ensure_schema_once;
 use crate::crates::jobs::refresh::{
-    RefreshScheduleCreate, claim_due_refresh_schedules, create_refresh_schedule,
-    delete_refresh_schedule, list_refresh_schedules, mark_refresh_schedule_ran,
-    set_refresh_schedule_enabled, start_refresh_job,
+    RefreshScheduleCreate, claim_due_refresh_schedules_with_pool, create_refresh_schedule,
+    delete_refresh_schedule, list_refresh_schedules, mark_refresh_schedule_ran_with_pool,
+    set_refresh_schedule_enabled, start_refresh_job_with_pool,
 };
 use chrono::{Duration, Utc};
 use std::error::Error;
@@ -325,7 +327,9 @@ async fn run_refresh_schedule_due_sweep(
     cfg: &Config,
     batch: usize,
 ) -> Result<RefreshScheduleDueSweep, Box<dyn Error>> {
-    let claimed = claim_due_refresh_schedules(cfg, batch as i64).await?;
+    let pool = make_pool(cfg).await?;
+    ensure_schema_once(&pool).await?;
+    let claimed = claim_due_refresh_schedules_with_pool(&pool, batch as i64).await?;
     let now = Utc::now();
     let mut dispatched = 0usize;
     let mut skipped = 0usize;
@@ -335,14 +339,25 @@ async fn run_refresh_schedule_due_sweep(
     for schedule in &claimed {
         let urls = resolve_schedule_urls(cfg, schedule).await?;
         if urls.is_empty() {
+            let next_run_at = now + Duration::seconds(schedule.every_seconds);
+            if let Err(err) =
+                mark_refresh_schedule_ran_with_pool(&pool, schedule.id, next_run_at).await
+            {
+                log_warn(&format!(
+                    "refresh schedule mark_ran failed for skipped schedule={} id={}: {err}",
+                    schedule.name, schedule.id
+                ));
+            }
             skipped += 1;
             continue;
         }
 
-        match start_refresh_job(cfg, &urls).await {
+        match start_refresh_job_with_pool(&pool, cfg, &urls, true).await {
             Ok(job_id) => {
                 let next_run_at = now + Duration::seconds(schedule.every_seconds);
-                if let Err(err) = mark_refresh_schedule_ran(cfg, schedule.id, next_run_at).await {
+                if let Err(err) =
+                    mark_refresh_schedule_ran_with_pool(&pool, schedule.id, next_run_at).await
+                {
                     log_warn(&format!(
                         "refresh schedule mark_ran failed for schedule={} id={}: {err}",
                         schedule.name, schedule.id

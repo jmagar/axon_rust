@@ -7,7 +7,7 @@ use crate::crates::core::logging::log_info;
 use axum::Router;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
@@ -17,34 +17,6 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast};
-
-// Release: static assets compiled into the binary
-#[cfg(not(debug_assertions))]
-const INDEX_HTML: &str = include_str!("web/static/index.html");
-#[cfg(not(debug_assertions))]
-const STYLE_CSS: &str = include_str!("web/static/style.css");
-#[cfg(not(debug_assertions))]
-const NEURAL_JS: &str = include_str!("web/static/neural.js");
-#[cfg(not(debug_assertions))]
-const APP_JS: &str = include_str!("web/static/app.js");
-
-/// In debug builds, resolve the static assets directory relative to the source.
-#[cfg(debug_assertions)]
-fn static_dir() -> PathBuf {
-    // Cargo sets CARGO_MANIFEST_DIR at compile time
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("crates")
-        .join("web")
-        .join("static")
-}
-
-/// Read a static file from disk (debug) or panic with a clear message.
-#[cfg(debug_assertions)]
-fn read_static(name: &str) -> String {
-    let path = static_dir().join(name);
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| format!("<!-- ERROR: could not read {}: {} -->", path.display(), e))
-}
 
 /// Shared state across all WS connections.
 pub(crate) struct AppState {
@@ -77,10 +49,6 @@ pub async fn start_server(port: u16) -> Result<(), Box<dyn Error>> {
         .with_state(job_dirs);
 
     let app = Router::new()
-        .route("/", get(serve_index))
-        .route("/style.css", get(serve_css))
-        .route("/neural.js", get(serve_neural_js))
-        .route("/app.js", get(serve_app_js))
         .route("/ws", get(ws_upgrade))
         .route("/output/{*path}", get(serve_output_file))
         .with_state(state)
@@ -91,12 +59,6 @@ pub async fn start_server(port: u16) -> Result<(), Box<dyn Error>> {
         .parse()
         .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], port)));
 
-    #[cfg(debug_assertions)]
-    log_info(&format!(
-        "Axon web UI listening on http://{addr} (dev mode — hot reload from {})",
-        static_dir().display()
-    ));
-    #[cfg(not(debug_assertions))]
     log_info(&format!("Axon web UI listening on http://{addr}"));
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -111,61 +73,6 @@ async fn shutdown_signal() {
     tokio::signal::ctrl_c()
         .await
         .expect("failed to listen for ctrl+c");
-}
-
-// ── Static asset handlers ────────────────────────────────────────────────────
-// Debug: read from disk on every request (hot reload).
-// Release: serve compiled-in strings.
-
-#[cfg(not(debug_assertions))]
-async fn serve_index() -> Html<&'static str> {
-    Html(INDEX_HTML)
-}
-#[cfg(debug_assertions)]
-async fn serve_index() -> Html<String> {
-    Html(read_static("index.html"))
-}
-
-#[cfg(not(debug_assertions))]
-async fn serve_css() -> impl IntoResponse {
-    ([("content-type", "text/css; charset=utf-8")], STYLE_CSS)
-}
-#[cfg(debug_assertions)]
-async fn serve_css() -> impl IntoResponse {
-    (
-        [("content-type", "text/css; charset=utf-8")],
-        read_static("style.css"),
-    )
-}
-
-#[cfg(not(debug_assertions))]
-async fn serve_neural_js() -> impl IntoResponse {
-    (
-        [("content-type", "application/javascript; charset=utf-8")],
-        NEURAL_JS,
-    )
-}
-#[cfg(debug_assertions)]
-async fn serve_neural_js() -> impl IntoResponse {
-    (
-        [("content-type", "application/javascript; charset=utf-8")],
-        read_static("neural.js"),
-    )
-}
-
-#[cfg(not(debug_assertions))]
-async fn serve_app_js() -> impl IntoResponse {
-    (
-        [("content-type", "application/javascript; charset=utf-8")],
-        APP_JS,
-    )
-}
-#[cfg(debug_assertions)]
-async fn serve_app_js() -> impl IntoResponse {
-    (
-        [("content-type", "application/javascript; charset=utf-8")],
-        read_static("app.js"),
-    )
 }
 
 // ── Output file serving ───────────────────────────────────────────────────────

@@ -3,7 +3,9 @@ mod schedule;
 mod state;
 mod worker;
 
-use crate::crates::jobs::common::{JobTable, make_pool, purge_queue_safe};
+use crate::crates::jobs::common::{
+    JobTable, cancel_pending_or_running_job, make_pool, purge_queue_safe,
+};
 use crate::crates::jobs::status::JobStatus;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -15,6 +17,10 @@ pub use schedule::{
     RefreshScheduleCreate, claim_due_refresh_schedules, create_refresh_schedule,
     delete_refresh_schedule, list_refresh_schedules, mark_refresh_schedule_ran,
     set_refresh_schedule_enabled, start_refresh_job,
+};
+pub(crate) use schedule::{
+    claim_due_refresh_schedules_with_pool, mark_refresh_schedule_ran_with_pool,
+    start_refresh_job_with_pool,
 };
 pub use worker::{recover_stale_refresh_jobs_startup, run_refresh_once, run_refresh_worker};
 
@@ -202,19 +208,7 @@ pub async fn cancel_refresh_job(
 ) -> Result<bool, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
     ensure_schema_once(&pool).await?;
-
-    let rows = sqlx::query(
-        "UPDATE axon_refresh_jobs SET status=$2,updated_at=NOW(),finished_at=NOW() WHERE id=$1 AND status IN ($3,$4)",
-    )
-    .bind(id)
-    .bind(JobStatus::Canceled.as_str())
-    .bind(JobStatus::Pending.as_str())
-    .bind(JobStatus::Running.as_str())
-    .execute(&pool)
-    .await?
-    .rows_affected();
-
-    Ok(rows > 0)
+    Ok(cancel_pending_or_running_job(&pool, TABLE, id).await?)
 }
 
 pub async fn cleanup_refresh_jobs(

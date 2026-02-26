@@ -8,7 +8,7 @@ use crate::crates::core::content::{to_markdown, url_to_filename};
 use crate::crates::core::http::{http_client, validate_url};
 use crate::crates::core::logging::log_warn;
 use crate::crates::crawl::manifest::ManifestEntry;
-use crate::crates::jobs::common::mark_job_failed;
+use crate::crates::jobs::common::{mark_job_completed, mark_job_failed, touch_running_job};
 use crate::crates::jobs::status::JobStatus;
 use crate::crates::vector::ops::embed_text_with_metadata;
 use reqwest::StatusCode;
@@ -19,17 +19,6 @@ use std::error::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::time::Duration;
 use uuid::Uuid;
-
-async fn touch_running_refresh_job(pool: &PgPool, id: Uuid) -> Result<u64, sqlx::Error> {
-    Ok(sqlx::query(&format!(
-        "UPDATE axon_refresh_jobs SET updated_at=NOW() WHERE id=$1 AND status='{running}'",
-        running = JobStatus::Running.as_str(),
-    ))
-    .bind(id)
-    .execute(pool)
-    .await?
-    .rows_affected())
-}
 
 pub(crate) async fn refresh_one_url(
     client: &reqwest::Client,
@@ -102,7 +91,7 @@ async fn fetch_and_process_url(
     let mut hasher = Sha256::new();
     hasher.update(trimmed.as_bytes());
     let content_hash = hex::encode(hasher.finalize());
-    let markdown_chars = trimmed.len();
+    let markdown_chars = trimmed.chars().count();
     let changed = previous
         .and_then(|s| s.content_hash.as_deref())
         .is_none_or(|hash| hash != content_hash);
@@ -198,7 +187,7 @@ async fn setup_refresh_job_context(
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    let _ = touch_running_refresh_job(&heartbeat_pool, id).await;
+                    let _ = touch_running_job(&heartbeat_pool, TABLE, id).await;
                 }
                 changed = heartbeat_stop_rx.changed() => {
                     if changed.is_err() || *heartbeat_stop_rx.borrow() {
@@ -349,25 +338,16 @@ async fn finalize_refresh_job(
         "manifest_path": manifest_path.to_string_lossy(),
     });
 
-    match sqlx::query(&format!(
-        "UPDATE axon_refresh_jobs SET status='{completed}',updated_at=NOW(),finished_at=NOW(),error_text=NULL,result_json=$2 WHERE id=$1 AND status='{running}'",
-        completed = JobStatus::Completed.as_str(),
-        running = JobStatus::Running.as_str(),
-    ))
-    .bind(id)
-    .bind(final_result)
-    .execute(pool)
-    .await
-    {
-        Ok(done) => {
-            if done.rows_affected() == 0 {
-                log_warn(&format!(
-                    "command=refresh_worker completion_update_skipped job_id={id} reason=not_running_state"
-                ));
-            }
+    match mark_job_completed(pool, TABLE, id, Some(&final_result)).await {
+        Ok(false) => {
+            log_warn(&format!(
+                "command=refresh_worker completion_update_skipped job_id={id} reason=not_running_state"
+            ));
         }
+        Ok(true) => {}
         Err(err) => {
-            let _ = mark_job_failed(pool, TABLE, id, &format!("mark completed failed: {err}")).await;
+            let _ =
+                mark_job_failed(pool, TABLE, id, &format!("mark completed failed: {err}")).await;
         }
     }
 }

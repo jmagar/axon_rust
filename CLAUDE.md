@@ -180,7 +180,7 @@ High-level subsystem map:
 - Vector + RAG:
   - `crates/vector/ops/*` (TEI embedding, Qdrant upsert/search, ask/evaluate/query)
 - Web runtimes:
-  - Legacy/deprecated static UI: `crates/web.rs` + `crates/web/static/*`
+  - WebSocket execution bridge: `crates/web.rs`
   - Active UI: `apps/web/*` (Next.js omnibox and pulse workspace)
 
 ## Infrastructure
@@ -336,9 +336,6 @@ cargo build --release --bin axon
 ```toml
 spider_agent = { version = "2.45", default-features = false, features = ["search_tavily", "openai"] }
 ```
-
-### `serve` hot reload (debug builds)
-In debug builds (`#[cfg(debug_assertions)]`), static assets are read from disk at `crates/web/static/` on every request — edit and refresh, no rebuild. Release builds use `include_str!()` compiled into the binary.
 
 ### Subprocess stdout vs stderr
 CLI commands output JSON data to stdout and progress/logs to stderr (Spinner via indicatif, tracing via `log_info`/`log_done`). The web UI streams both: stdout as `"type": "output"`, stderr as `"type": "log"`. ANSI codes stripped via `console::strip_ansi_codes()`.

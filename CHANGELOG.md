@@ -9,6 +9,8 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
+| `TBD` | feat(docker) | install AI CLIs in web image, non-root node user, AXON_WORKSPACE + ~/.ssh mounts |
+| `f5eb415` | fix(docker) | pin codex cli package in web image |
 | `93f51e8` | chore(docker+docs) | align web CLI mounts and refresh changelog |
 | `4756caa` | feat(pulse+docker) | conversation memory fallback + claude binary mount |
 | `4e4a9d2` | docs(changelog) | fix TBD sha → a3b3b76 |
@@ -42,6 +44,11 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 ### Highlights
 
 #### Pulse / Runtime (newest)
+- `axon-web` now runs as non-root `node` user; Claude, Codex, Gemini CLIs installed from official sources inside the image (`TBD`).
+- `AXON_WORKSPACE` env var mounts host workspace dir at `/workspace` inside the container (`TBD`).
+- `~/.ssh` and `~/.claude.json` bind-mounted into `axon-web` for key-based git ops and Claude auth (`TBD`).
+- `docker/web/Dockerfile` switched to `node:24-slim`; legacy static web UI files removed (`TBD`).
+- Fixed: pinned `@openai/codex` to `0.105.0` to avoid broken `@latest` tarball (`f5eb415`).
 - Aligned web runtime mounts to `/home/node/.claude*` and refreshed commit-driven changelog coverage for branch history (`93f51e8`).
 - Added conversation-memory fallback for favorite-color recall in Pulse chat when upstream Claude CLI path fails, ensuring turn continuity for the common “what is my favorite color?” follow-up (`4756caa`).
 - Updated Docker web image/runtime to include `claude` binary mount behavior used by the Pulse chat API subprocess path (`4756caa`).

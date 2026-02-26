@@ -7,24 +7,26 @@ pub(crate) async fn load_target_states(
     pool: &PgPool,
     urls: &[String],
 ) -> Result<HashMap<String, RefreshTargetState>, Box<dyn Error>> {
+    if urls.is_empty() {
+        return Ok(HashMap::new());
+    }
+
     let mut states = HashMap::new();
-    for url in urls {
-        let row = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
-            "SELECT etag,last_modified,content_hash FROM axon_refresh_targets WHERE url=$1",
-        )
-        .bind(url)
-        .fetch_optional(pool)
-        .await?;
-        if let Some((etag, last_modified, content_hash)) = row {
-            states.insert(
-                url.clone(),
-                RefreshTargetState {
-                    etag,
-                    last_modified,
-                    content_hash,
-                },
-            );
-        }
+    let rows = sqlx::query_as::<_, (String, Option<String>, Option<String>, Option<String>)>(
+        "SELECT url,etag,last_modified,content_hash FROM axon_refresh_targets WHERE url = ANY($1)",
+    )
+    .bind(urls)
+    .fetch_all(pool)
+    .await?;
+    for (url, etag, last_modified, content_hash) in rows {
+        states.insert(
+            url,
+            RefreshTargetState {
+                etag,
+                last_modified,
+                content_hash,
+            },
+        );
     }
     Ok(states)
 }

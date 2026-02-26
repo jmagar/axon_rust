@@ -971,12 +971,21 @@ impl AxonMcpServer {
                             invalid_params("schedule_name is required for schedule create")
                         })?;
                         let urls = req.urls.or_else(|| req.url.map(|u| vec![u]));
+                        let urls = urls.unwrap_or_default();
+                        if urls.is_empty() {
+                            return Err(invalid_params(
+                                "refresh schedule create requires at least one URL",
+                            ));
+                        }
+                        for url in &urls {
+                            validate_url(url).map_err(|e| invalid_params(e.to_string()))?;
+                        }
                         let schedule = create_refresh_schedule(
                             self.cfg.as_ref(),
                             &RefreshScheduleCreate {
                                 name,
                                 seed_url: None,
-                                urls,
+                                urls: Some(urls),
                                 every_seconds: 3600,
                                 enabled: true,
                                 next_run_at: chrono::Utc::now(),

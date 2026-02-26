@@ -1,12 +1,12 @@
-use super::{RefreshJobConfig, TABLE, ensure_schema_once, processor::process_refresh_job};
+use super::{
+    TABLE, ensure_schema_once, processor::process_refresh_job, start_refresh_job_with_pool,
+};
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::log_info;
-use crate::crates::jobs::common::{make_pool, reclaim_stale_running_jobs};
-use crate::crates::jobs::status::JobStatus;
+use crate::crates::jobs::common::{claim_pending_by_id, make_pool, reclaim_stale_running_jobs};
 use crate::crates::jobs::worker_lane::{ProcessFn, WorkerConfig, run_job_worker};
 use std::error::Error;
 use std::sync::Arc;
-use uuid::Uuid;
 
 pub async fn run_refresh_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
@@ -32,24 +32,10 @@ pub async fn run_refresh_once(
 ) -> Result<serde_json::Value, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
     ensure_schema_once(&pool).await?;
-
-    let id = Uuid::new_v4();
-    let urls_json = serde_json::to_value(urls)?;
-    let cfg_json = serde_json::to_value(RefreshJobConfig {
-        urls: urls.to_vec(),
-        embed: cfg.embed,
-        output_dir: cfg.output_dir.to_string_lossy().to_string(),
-    })?;
-
-    sqlx::query(
-        "INSERT INTO axon_refresh_jobs (id, status, urls_json, config_json, started_at) VALUES ($1, $2, $3, $4, NOW())",
-    )
-    .bind(id)
-    .bind(JobStatus::Running.as_str())
-    .bind(urls_json)
-    .bind(cfg_json)
-    .execute(&pool)
-    .await?;
+    let id = start_refresh_job_with_pool(&pool, cfg, urls, false).await?;
+    if !claim_pending_by_id(&pool, TABLE, id).await? {
+        return Err(format!("failed to claim newly created refresh job {id}").into());
+    }
 
     process_refresh_job(cfg.clone(), pool.clone(), id).await;
 
