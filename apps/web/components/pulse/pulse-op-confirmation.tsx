@@ -24,7 +24,7 @@ export function PulseOpConfirmation({
   onReject,
 }: PulseOpConfirmationProps) {
   return (
-    <div className="rounded-lg border border-[rgba(255,135,175,0.3)] bg-[rgba(255,135,175,0.05)] p-4">
+    <div className="rounded-lg border border-[rgba(175,215,255,0.3)] bg-[rgba(175,215,255,0.05)] p-4">
       <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-[var(--axon-accent-pink)]">
         Confirm Document Changes
       </h4>
@@ -42,14 +42,14 @@ export function PulseOpConfirmation({
         <button
           type="button"
           onClick={onConfirm}
-          className="rounded-md bg-[rgba(255,135,175,0.2)] px-3 py-1.5 text-xs font-semibold text-[var(--axon-accent-pink)] transition-colors hover:bg-[rgba(255,135,175,0.3)]"
+          className="rounded-md bg-[rgba(175,215,255,0.2)] px-3 py-1.5 text-xs font-semibold text-[var(--axon-accent-pink)] transition-colors hover:bg-[rgba(175,215,255,0.3)]"
         >
           Apply Changes
         </button>
         <button
           type="button"
           onClick={onReject}
-          className="rounded-md bg-[rgba(175,215,255,0.1)] px-3 py-1.5 text-xs font-semibold text-[var(--axon-text-muted)] transition-colors hover:text-[var(--axon-accent-blue)]"
+          className="rounded-md bg-[rgba(255,135,175,0.1)] px-3 py-1.5 text-xs font-semibold text-[var(--axon-text-muted)] transition-colors hover:text-[var(--axon-accent-blue)]"
         >
           Reject
         </button>

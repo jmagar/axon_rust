@@ -36,7 +36,7 @@ export function CrawlProgress({ progress, isProcessing }: CrawlProgressProps) {
   return (
     <div className="mb-3 space-y-1.5">
       {/* Progress bar */}
-      <div className="relative h-[3px] overflow-hidden rounded-full bg-[rgba(175,215,255,0.08)]">
+      <div className="relative h-[3px] overflow-hidden rounded-full bg-[rgba(255,135,175,0.08)]">
         {isProcessing && discovered > 0 && pct < 100 ? (
           <div
             className="h-full rounded-full transition-all duration-700"

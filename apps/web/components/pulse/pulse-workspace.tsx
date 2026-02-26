@@ -158,10 +158,10 @@ export function PulseWorkspace() {
         saveStatus={saveStatus}
       />
       <div className="flex gap-3" style={{ minHeight: '60vh' }}>
-        <div className="flex-[3] overflow-hidden rounded-xl border border-[rgba(175,215,255,0.1)] bg-[rgba(10,18,35,0.4)]">
+        <div className="flex-[3] overflow-hidden rounded-xl border border-[rgba(255,135,175,0.1)] bg-[rgba(10,18,35,0.4)]">
           <PulseEditorPane markdown={documentMarkdown} onMarkdownChange={setDocumentMarkdown} />
         </div>
-        <div className="flex-[2] overflow-hidden rounded-xl border border-[rgba(175,215,255,0.1)] bg-[rgba(10,18,35,0.4)]">
+        <div className="flex-[2] overflow-hidden rounded-xl border border-[rgba(255,135,175,0.1)] bg-[rgba(10,18,35,0.4)]">
           <PulseChatPane messages={chatHistory} isLoading={isChatLoading} />
           {pendingOps && pendingValidation && (
             <div className="p-3">

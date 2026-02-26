@@ -1,4 +1,4 @@
-use crate::crates::core::ui::{metric, muted, primary, subtle, symbol_for_status};
+use crate::crates::core::ui::{accent, metric, subtle, symbol_for_status};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
@@ -92,10 +92,10 @@ pub(super) fn embed_metrics_suffix(status: &str, result_json: Option<&Value>) ->
         ) {
             return format!(
                 "{sep}{}{}{} {}",
-                primary(&done.to_string()),
+                accent(&done.to_string()),
                 subtle("/"),
-                primary(&total.to_string()),
-                muted("docs")
+                accent(&total.to_string()),
+                accent("docs")
             );
         }
         return String::new();

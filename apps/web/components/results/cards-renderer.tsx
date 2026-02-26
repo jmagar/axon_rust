@@ -41,7 +41,7 @@ function QueryCards({ results }: { results: QueryResult[] }) {
       {results.map((r) => (
         <div
           key={`${r.rank}-${r.url}`}
-          className="rounded-lg border border-[rgba(175,215,255,0.08)] p-3 transition-colors hover:border-[rgba(175,215,255,0.15)]"
+          className="rounded-lg border border-[rgba(255,135,175,0.08)] p-3 transition-colors hover:border-[rgba(255,135,175,0.15)]"
           style={{ background: 'rgba(10, 18, 35, 0.4)' }}
         >
           {/* Header: rank badge + score + URL */}

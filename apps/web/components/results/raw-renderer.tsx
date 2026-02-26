@@ -18,7 +18,7 @@ export function RawRenderer({ stdoutJson, stdoutLines, isProcessing }: RawRender
     if (isProcessing) {
       return (
         <div className="flex items-center gap-2 text-[var(--axon-text-muted)]">
-          <span className="inline-block size-2.5 animate-spin rounded-full border-[1.5px] border-[rgba(255,135,175,0.2)] border-t-[var(--axon-accent-pink)]" />
+          <span className="inline-block size-2.5 animate-spin rounded-full border-[1.5px] border-[rgba(175,215,255,0.2)] border-t-[var(--axon-accent-pink)]" />
           <span className="text-xs">Processing...</span>
         </div>
       )

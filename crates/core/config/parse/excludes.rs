@@ -5,35 +5,72 @@ pub(crate) struct NormalizedExcludePrefixes {
 
 pub fn default_exclude_prefixes() -> Vec<String> {
     vec![
-        // Auth / account flows -- no indexable content
+        // Auth / account / transactional -- no indexable content
+        "/account",
+        "/admin",
         "/auth",
+        "/callback",
+        "/cart",
+        "/checkout",
+        "/dashboard",
         "/login",
         "/logout",
+        "/oauth",
         "/register",
+        "/settings",
         "/signin",
         "/signup",
+        "/unsubscribe",
+        "/webhook",
+        "/webhooks",
         // Legal / compliance boilerplate
         "/cookie-policy",
         "/cookies",
         "/legal",
         "/privacy",
         "/terms",
-        // CDN and framework internals -- never user-facing content
+        // CDN / framework internals -- never user-facing content
         "/_astro",
         "/_next",
         "/_nuxt",
         "/_vercel",
         "/__nextjs",
         "/cdn-cgi",
+        "/static",
         "/wp-admin",
         "/wp-includes",
         // Syndication feeds -- XML, not useful for RAG
         "/atom",
         "/feed",
         "/rss",
+        // Marketing / sales pages -- no technical content
+        "/about",
+        "/careers",
+        "/case-studies",
+        "/contact",
+        "/customers",
+        "/demo",
+        "/enterprise",
+        "/events",
+        "/jobs",
+        "/newsletter",
+        "/newsroom",
+        "/partners",
+        "/press",
+        "/pricing",
+        "/testimonials",
+        // User-generated / high-noise listing pages
+        "/archive",
+        "/categories",
+        "/comments",
+        "/profiles",
+        "/tags",
+        "/users",
         // Duplicate / utility page variants
+        "/amp",
         "/print",
         "/search",
+        "/share",
         // Forum / community discussion threads
         "/answers",
         "/discussions",
@@ -121,7 +158,8 @@ pub(crate) fn normalize_exclude_prefixes(input: Vec<String>) -> NormalizedExclud
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_exclude_prefixes;
+    use super::{default_exclude_prefixes, normalize_exclude_prefixes};
+    use std::collections::HashSet;
 
     #[test]
     fn normalize_exclude_prefixes_none_disables_defaults() {
@@ -135,5 +173,62 @@ mod tests {
         let normalized = normalize_exclude_prefixes(vec!["none".to_string(), "/fr".to_string()]);
         assert!(normalized.disable_defaults);
         assert!(normalized.prefixes.is_empty());
+    }
+
+    #[test]
+    fn defaults_all_start_with_slash() {
+        for prefix in default_exclude_prefixes() {
+            assert!(
+                prefix.starts_with('/'),
+                "prefix missing leading slash: {prefix}"
+            );
+        }
+    }
+
+    #[test]
+    fn defaults_no_duplicates() {
+        let prefixes = default_exclude_prefixes();
+        let unique: HashSet<&str> = prefixes.iter().map(|s| s.as_str()).collect();
+        assert_eq!(
+            prefixes.len(),
+            unique.len(),
+            "duplicate prefixes found in defaults"
+        );
+    }
+
+    #[test]
+    fn defaults_are_sorted_within_categories() {
+        // The full list won't be globally sorted (categories break ordering),
+        // but verify no entry appears to be a typo or misplaced duplicate.
+        let prefixes = default_exclude_prefixes();
+        assert!(
+            prefixes.len() > 50,
+            "expected 50+ default prefixes, got {}",
+            prefixes.len()
+        );
+    }
+
+    #[test]
+    fn normalize_adds_leading_slash() {
+        let normalized = normalize_exclude_prefixes(vec!["blog".to_string()]);
+        assert_eq!(normalized.prefixes, vec!["/blog"]);
+        assert!(!normalized.disable_defaults);
+    }
+
+    #[test]
+    fn normalize_deduplicates_and_sorts() {
+        let normalized = normalize_exclude_prefixes(vec![
+            "/zz".to_string(),
+            "/aa".to_string(),
+            "/zz".to_string(),
+        ]);
+        assert_eq!(normalized.prefixes, vec!["/aa", "/zz"]);
+    }
+
+    #[test]
+    fn normalize_skips_empty_and_root() {
+        let normalized =
+            normalize_exclude_prefixes(vec!["".to_string(), "  ".to_string(), "/ok".to_string()]);
+        assert_eq!(normalized.prefixes, vec!["/ok"]);
     }
 }

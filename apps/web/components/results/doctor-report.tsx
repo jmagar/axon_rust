@@ -37,12 +37,12 @@ function MetricTile({
 }) {
   const colorClass =
     accent === 'pink'
-      ? 'text-[var(--axon-accent-pink)] border-[rgba(255,135,175,0.28)] bg-[rgba(255,135,175,0.08)]'
+      ? 'text-[var(--axon-accent-pink)] border-[rgba(175,215,255,0.28)] bg-[rgba(175,215,255,0.08)]'
       : accent === 'green'
         ? 'text-[var(--axon-success)] border-[rgba(130,217,160,0.28)] bg-[var(--axon-success-bg)]'
         : accent === 'orange'
           ? 'text-[var(--axon-warning)] border-[rgba(255,192,134,0.28)] bg-[var(--axon-warning-bg)]'
-          : 'text-[var(--axon-accent-blue)] border-[rgba(175,215,255,0.24)] bg-[rgba(175,215,255,0.08)]'
+          : 'text-[var(--axon-accent-blue)] border-[rgba(255,135,175,0.24)] bg-[rgba(255,135,175,0.08)]'
 
   return (
     <div className={`rounded-lg border px-3 py-2.5 ${colorClass}`}>
@@ -60,7 +60,7 @@ function StatusPill({ ok }: { ok: boolean }) {
       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
         ok
           ? 'bg-[var(--axon-success-bg)] text-[var(--axon-success)]'
-          : 'bg-[rgba(255,135,175,0.2)] text-[var(--axon-accent-pink)]'
+          : 'bg-[rgba(175,215,255,0.2)] text-[var(--axon-accent-pink)]'
       }`}
     >
       <span className="text-[9px]">{'\u25CF'}</span>
@@ -71,8 +71,8 @@ function StatusPill({ ok }: { ok: boolean }) {
 
 function ServiceRows({ entries }: { entries: Array<[string, DoctorServiceStatus]> }) {
   return (
-    <div className="rounded-lg border border-[rgba(175,215,255,0.14)] bg-[rgba(9,16,34,0.55)]">
-      <div className="grid grid-cols-[110px_130px_1fr] gap-3 border-b border-[rgba(175,215,255,0.12)] px-3 py-2 text-[10px] uppercase tracking-wider text-[var(--axon-text-dim)]">
+    <div className="rounded-lg border border-[rgba(255,135,175,0.14)] bg-[rgba(9,16,34,0.55)]">
+      <div className="grid grid-cols-[110px_130px_1fr] gap-3 border-b border-[rgba(255,135,175,0.12)] px-3 py-2 text-[10px] uppercase tracking-wider text-[var(--axon-text-dim)]">
         <span>Status</span>
         <span>Latency</span>
         <span>Service</span>
@@ -84,7 +84,7 @@ function ServiceRows({ entries }: { entries: Array<[string, DoctorServiceStatus]
           return (
             <div
               key={name}
-              className="border-b border-[rgba(175,215,255,0.08)] px-3 py-2.5 last:border-b-0"
+              className="border-b border-[rgba(255,135,175,0.08)] px-3 py-2.5 last:border-b-0"
             >
               <div className="grid grid-cols-[110px_130px_1fr] gap-3">
                 <div className="pt-0.5">
@@ -152,7 +152,7 @@ export function DoctorReport({ data }: { data: DoctorResult }) {
       <div
         className="rounded-xl border px-3 py-3"
         style={{
-          borderColor: data.all_ok ? 'rgba(135,215,135,0.24)' : 'rgba(255,135,175,0.34)',
+          borderColor: data.all_ok ? 'rgba(135,215,135,0.24)' : 'rgba(175,215,255,0.34)',
           background:
             'linear-gradient(120deg, rgba(14,24,44,0.74) 0%, rgba(11,20,38,0.92) 52%, rgba(17,26,48,0.74) 100%)',
         }}
@@ -162,7 +162,7 @@ export function DoctorReport({ data }: { data: DoctorResult }) {
             className={`inline-block size-2.5 rounded-full ${
               data.all_ok
                 ? 'bg-[var(--axon-success)] shadow-[0_0_8px_rgba(130,217,160,0.65)]'
-                : 'bg-[var(--axon-accent-pink)] shadow-[0_0_8px_rgba(255,135,175,0.65)]'
+                : 'bg-[var(--axon-accent-pink)] shadow-[0_0_8px_rgba(175,215,255,0.65)]'
             }`}
           />
           <span className="text-[12px] font-semibold text-[var(--axon-text-secondary)]">
@@ -188,7 +188,7 @@ export function DoctorReport({ data }: { data: DoctorResult }) {
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-lg border border-[rgba(175,215,255,0.15)] p-3 bg-[rgba(9,16,34,0.55)]">
+          <div className="rounded-lg border border-[rgba(255,135,175,0.15)] p-3 bg-[rgba(9,16,34,0.55)]">
             <SectionHeader>Pipelines</SectionHeader>
             <div className="mb-3 grid grid-cols-2 gap-3">
               <MetricTile label="Up" value={`${healthyPipelines}`} accent="green" />
@@ -198,7 +198,7 @@ export function DoctorReport({ data }: { data: DoctorResult }) {
               {pipelineEntries.map(([name, ok]) => (
                 <div
                   key={name}
-                  className="flex items-center justify-between rounded-md border border-[rgba(175,215,255,0.08)] bg-[rgba(8,14,30,0.4)] px-2 py-1.5 text-[11px]"
+                  className="flex items-center justify-between rounded-md border border-[rgba(255,135,175,0.08)] bg-[rgba(8,14,30,0.4)] px-2 py-1.5 text-[11px]"
                 >
                   <span className="text-[var(--axon-text-secondary)]">{name}</span>
                   <span
@@ -212,13 +212,13 @@ export function DoctorReport({ data }: { data: DoctorResult }) {
           </div>
 
           {queueEntries.length > 0 && (
-            <div className="rounded-lg border border-[rgba(175,215,255,0.15)] p-3 bg-[rgba(9,16,34,0.55)]">
+            <div className="rounded-lg border border-[rgba(255,135,175,0.15)] p-3 bg-[rgba(9,16,34,0.55)]">
               <SectionHeader>Queue Names</SectionHeader>
               <div className="space-y-1.5 font-mono text-[11px]">
                 {queueEntries.map(([key, val]) => (
                   <div
                     key={key}
-                    className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-3 rounded-md border border-[rgba(175,215,255,0.08)] bg-[rgba(8,14,30,0.4)] px-2 py-1.5"
+                    className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-3 rounded-md border border-[rgba(255,135,175,0.08)] bg-[rgba(8,14,30,0.4)] px-2 py-1.5"
                   >
                     <span className="break-words text-[var(--axon-text-dim)]">{key}</span>
                     <span className="break-all text-right text-[var(--axon-accent-blue)]">
@@ -231,7 +231,7 @@ export function DoctorReport({ data }: { data: DoctorResult }) {
           )}
 
           {data.browser_runtime && (
-            <div className="rounded-lg border border-[rgba(175,215,255,0.15)] p-3 bg-[rgba(9,16,34,0.55)]">
+            <div className="rounded-lg border border-[rgba(255,135,175,0.15)] p-3 bg-[rgba(9,16,34,0.55)]">
               <SectionHeader>Browser Runtime</SectionHeader>
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-[var(--axon-text-dim)]">Selection</span>
@@ -243,7 +243,7 @@ export function DoctorReport({ data }: { data: DoctorResult }) {
           )}
 
           {data.timing_ms && (
-            <div className="rounded-lg border border-[rgba(175,215,255,0.15)] p-3 bg-[rgba(9,16,34,0.55)]">
+            <div className="rounded-lg border border-[rgba(255,135,175,0.15)] p-3 bg-[rgba(9,16,34,0.55)]">
               <SectionHeader>Probe Timing</SectionHeader>
               <div className="space-y-1.5 font-mono text-[11px]">
                 {timingRows.map(([label, value]) => (

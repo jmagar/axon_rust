@@ -145,7 +145,7 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
       {/* Tab bar */}
       <div className="mb-2.5 flex justify-end overflow-x-auto">
         <div
-          className="flex w-fit gap-0.5 rounded-lg border border-[rgba(175,215,255,0.1)] p-[3px]"
+          className="flex w-fit gap-0.5 rounded-lg border border-[rgba(255,135,175,0.1)] p-[3px]"
           style={{ background: 'rgba(10, 18, 35, 0.5)' }}
         >
           {tabs.map((tab) => (
@@ -155,8 +155,8 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
               onClick={() => setActiveTab(tab.id)}
               className={`rounded-md px-3.5 py-1 text-[11px] font-medium tracking-wide transition-all duration-200 ${
                 activeTab === tab.id
-                  ? 'bg-[rgba(175,215,255,0.1)] font-semibold text-[var(--axon-accent-blue)]'
-                  : 'text-[var(--axon-text-muted)] hover:bg-[rgba(175,215,255,0.06)] hover:text-[var(--axon-accent-blue)]'
+                  ? 'bg-[rgba(255,135,175,0.1)] font-semibold text-[var(--axon-accent-blue)]'
+                  : 'text-[var(--axon-text-muted)] hover:bg-[rgba(255,135,175,0.06)] hover:text-[var(--axon-accent-blue)]'
               }`}
             >
               {tab.label}
@@ -193,7 +193,7 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
               </div>
             )}
             <div
-              className="flex max-h-[72vh] overflow-hidden rounded-[10px] border border-[rgba(175,215,255,0.1)]"
+              className="flex max-h-[72vh] overflow-hidden rounded-[10px] border border-[rgba(255,135,175,0.1)]"
               style={{ background: 'rgba(3, 7, 18, 0.25)' }}
             >
               {isScreenshotMode ? (
@@ -247,7 +247,7 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
       {/* Stats pane — CLI log output + Docker stats */}
       {activeTab === 'stats' && (
         <div
-          className="max-h-[72vh] space-y-4 overflow-y-auto rounded-[10px] border border-[rgba(175,215,255,0.1)] p-4"
+          className="max-h-[72vh] space-y-4 overflow-y-auto rounded-[10px] border border-[rgba(255,135,175,0.1)] p-4"
           style={{ background: 'rgba(3, 7, 18, 0.25)' }}
         >
           {logLines.length > 0 && <LogViewer lines={logLines} />}
@@ -273,20 +273,20 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
               <table className="w-full border-collapse">
                 <thead>
                   <tr className="text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
-                    <th className="w-5 border-b border-[rgba(175,215,255,0.15)] pb-2 text-center" />
-                    <th className="border-b border-[rgba(175,215,255,0.15)] pb-2 text-left">
+                    <th className="w-5 border-b border-[rgba(255,135,175,0.15)] pb-2 text-center" />
+                    <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left">
                       Mode
                     </th>
-                    <th className="border-b border-[rgba(175,215,255,0.15)] pb-2 text-left">
+                    <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left">
                       Target
                     </th>
-                    <th className="border-b border-[rgba(175,215,255,0.15)] pb-2 text-right">
+                    <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-right">
                       Duration
                     </th>
-                    <th className="border-b border-[rgba(175,215,255,0.15)] pb-2 text-right">
+                    <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-right">
                       Lines
                     </th>
-                    <th className="border-b border-[rgba(175,215,255,0.15)] pb-2 text-right">
+                    <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-right">
                       Time
                     </th>
                   </tr>
@@ -295,14 +295,14 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
                   {recentRuns.map((run) => (
                     <tr
                       key={run.id}
-                      className="border-b border-[rgba(175,215,255,0.05)] hover:bg-[rgba(175,215,255,0.03)]"
+                      className="border-b border-[rgba(255,135,175,0.05)] hover:bg-[rgba(255,135,175,0.03)]"
                     >
                       <td className="py-2 text-center">
                         <span
                           className={`inline-block size-[7px] rounded-full ${
                             run.status === 'done'
                               ? 'bg-[var(--axon-success)] shadow-[0_0_6px_rgba(74,222,128,0.4)]'
-                              : 'bg-[var(--axon-accent-pink)] shadow-[0_0_6px_rgba(255,135,175,0.4)]'
+                              : 'bg-[var(--axon-accent-pink)] shadow-[0_0_6px_rgba(175,215,255,0.4)]'
                           }`}
                         />
                       </td>
@@ -346,7 +346,7 @@ function LogViewer({ lines }: { lines: { content: string; timestamp: number }[] 
   return (
     <div
       ref={scrollRef}
-      className="max-h-[200px] overflow-y-auto rounded-lg border border-[rgba(175,215,255,0.08)] p-3"
+      className="max-h-[200px] overflow-y-auto rounded-lg border border-[rgba(255,135,175,0.08)] p-3"
       style={{ background: 'rgba(10, 18, 35, 0.4)' }}
     >
       <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--axon-text-dim)]">

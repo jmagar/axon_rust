@@ -48,7 +48,7 @@ function FilterInput({ value, onChange }: { value: string; onChange: (v: string)
       placeholder="Filter..."
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="mb-3 w-full rounded-md border border-[rgba(175,215,255,0.1)] px-3 py-1.5 text-xs text-[var(--axon-text-secondary)] placeholder-[var(--axon-text-subtle)] outline-none transition-colors focus:border-[rgba(135,175,255,0.3)]"
+      className="mb-3 w-full rounded-md border border-[rgba(255,135,175,0.1)] px-3 py-1.5 text-xs text-[var(--axon-text-secondary)] placeholder-[var(--axon-text-subtle)] outline-none transition-colors focus:border-[rgba(135,175,255,0.3)]"
       style={{ background: 'rgba(10, 18, 35, 0.6)' }}
     />
   )
@@ -76,7 +76,7 @@ function SortHeader({
   const active = currentSort === sortKey
   return (
     <th
-      className={`cursor-pointer select-none border-b border-[rgba(175,215,255,0.15)] pb-2 text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)] transition-colors hover:text-[var(--axon-accent-blue)] ${align === 'right' ? 'text-right' : 'text-left'}`}
+      className={`cursor-pointer select-none border-b border-[rgba(255,135,175,0.15)] pb-2 text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)] transition-colors hover:text-[var(--axon-accent-blue)] ${align === 'right' ? 'text-right' : 'text-left'}`}
       onClick={() => onSort(sortKey)}
     >
       {label}
@@ -118,7 +118,7 @@ function StatusBadge({ status }: { status: string }) {
     completed: { color: 'var(--axon-success)', background: 'var(--axon-success-bg)' },
     running: { color: 'var(--axon-accent-blue-strong)', background: 'rgba(135,175,255,0.14)' },
     pending: { color: 'var(--axon-warning)', background: 'var(--axon-warning-bg)' },
-    failed: { color: 'var(--axon-accent-pink)', background: 'rgba(255,135,175,0.14)' },
+    failed: { color: 'var(--axon-accent-pink)', background: 'rgba(175,215,255,0.14)' },
     canceled: { color: 'var(--axon-text-muted)', background: 'rgba(147,170,202,0.14)' },
   }
   const style = colors[status] ?? {
@@ -200,7 +200,7 @@ function KeyValueTable({
             {rows.map((row) => (
               <tr
                 key={row.key}
-                className="border-b border-[rgba(175,215,255,0.05)] hover:bg-[rgba(175,215,255,0.03)]"
+                className="border-b border-[rgba(255,135,175,0.05)] hover:bg-[rgba(255,135,175,0.03)]"
               >
                 <td className="max-w-[400px] truncate py-1.5 pr-4">
                   <UrlCell url={row.key} />
@@ -296,7 +296,7 @@ function DomainsTable({ data }: { data: DomainsResult }) {
             {rows.map((row) => (
               <tr
                 key={row.domain}
-                className="border-b border-[rgba(175,215,255,0.05)] hover:bg-[rgba(175,215,255,0.03)]"
+                className="border-b border-[rgba(255,135,175,0.05)] hover:bg-[rgba(255,135,175,0.03)]"
               >
                 <td className="max-w-[300px] truncate py-1.5 pr-4 text-[var(--axon-text-secondary)]">
                   {row.domain}
@@ -363,10 +363,10 @@ function MapTable({ data }: { data: MapResult }) {
         <table className="w-full border-collapse font-mono text-[12px]">
           <thead className="sticky top-0" style={{ background: 'rgba(3, 7, 18, 0.95)' }}>
             <tr>
-              <th className="border-b border-[rgba(175,215,255,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)] w-12">
+              <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)] w-12">
                 #
               </th>
-              <th className="border-b border-[rgba(175,215,255,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
+              <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
                 URL
               </th>
             </tr>
@@ -375,7 +375,7 @@ function MapTable({ data }: { data: MapResult }) {
             {filtered.map((url, i) => (
               <tr
                 key={url}
-                className="border-b border-[rgba(175,215,255,0.05)] hover:bg-[rgba(175,215,255,0.03)]"
+                className="border-b border-[rgba(255,135,175,0.05)] hover:bg-[rgba(255,135,175,0.03)]"
               >
                 <td className="py-1 text-[var(--axon-text-subtle)] tabular-nums">{i + 1}</td>
                 <td className="py-1 truncate max-w-[600px]">
@@ -417,13 +417,13 @@ function StatusTable({ data }: { data: StatusResult }) {
             <table className="w-full border-collapse font-mono text-[12px]">
               <thead>
                 <tr>
-                  <th className="border-b border-[rgba(175,215,255,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
+                  <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
                     ID
                   </th>
-                  <th className="border-b border-[rgba(175,215,255,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
+                  <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
                     URL
                   </th>
-                  <th className="border-b border-[rgba(175,215,255,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
+                  <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
                     Status
                   </th>
                 </tr>
@@ -432,7 +432,7 @@ function StatusTable({ data }: { data: StatusResult }) {
                 {queue.jobs.map((job) => (
                   <tr
                     key={job.id}
-                    className="border-b border-[rgba(175,215,255,0.05)] hover:bg-[rgba(175,215,255,0.03)]"
+                    className="border-b border-[rgba(255,135,175,0.05)] hover:bg-[rgba(255,135,175,0.03)]"
                   >
                     <td className="py-1.5 text-[var(--axon-text-muted)]">{job.id.slice(0, 8)}</td>
                     <td className="py-1.5 max-w-[300px] truncate">
@@ -498,10 +498,10 @@ function SuggestTable({ data }: { data: SuggestResult }) {
         <table className="w-full border-collapse font-mono text-[12px]">
           <thead className="sticky top-0" style={{ background: 'rgba(3, 7, 18, 0.95)' }}>
             <tr>
-              <th className="border-b border-[rgba(175,215,255,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
+              <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
                 URL
               </th>
-              <th className="border-b border-[rgba(175,215,255,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
+              <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
                 Reason
               </th>
             </tr>
@@ -510,7 +510,7 @@ function SuggestTable({ data }: { data: SuggestResult }) {
             {filtered.map((s) => (
               <tr
                 key={s.url}
-                className="border-b border-[rgba(175,215,255,0.05)] hover:bg-[rgba(175,215,255,0.03)]"
+                className="border-b border-[rgba(255,135,175,0.05)] hover:bg-[rgba(255,135,175,0.03)]"
               >
                 <td className="py-1.5 max-w-[350px] truncate pr-4">
                   <UrlCell url={s.url} />
@@ -541,7 +541,7 @@ function RetrieveView({ data }: { data: RetrieveResult }) {
         </span>
       </div>
       <pre
-        className="max-h-[55vh] overflow-auto whitespace-pre-wrap rounded-lg border border-[rgba(175,215,255,0.08)] p-3 font-mono text-[12px] leading-relaxed text-[var(--axon-text-secondary)]"
+        className="max-h-[55vh] overflow-auto whitespace-pre-wrap rounded-lg border border-[rgba(255,135,175,0.08)] p-3 font-mono text-[12px] leading-relaxed text-[var(--axon-text-secondary)]"
         style={{ background: 'rgba(10, 18, 35, 0.4)' }}
       >
         {data.content}

@@ -74,7 +74,7 @@ function Section({
       className="rounded-lg border p-3"
       style={{
         background: muted ? 'rgba(10, 18, 35, 0.25)' : 'rgba(10, 18, 35, 0.4)',
-        borderColor: 'rgba(175,215,255,0.08)',
+        borderColor: 'rgba(255,135,175,0.08)',
       }}
     >
       {title && (
@@ -93,7 +93,7 @@ function KeyValueTable({ rows }: { rows: Array<{ key: string; value: Scalar }> }
       <table className="w-full border-collapse font-mono text-[12px]">
         <tbody>
           {rows.map((row) => (
-            <tr key={row.key} className="border-b border-[rgba(175,215,255,0.06)] last:border-b-0">
+            <tr key={row.key} className="border-b border-[rgba(255,135,175,0.06)] last:border-b-0">
               <td className="py-1 pr-4 align-top text-[var(--axon-text-muted)]">
                 {humanizeKey(row.key)}
               </td>
@@ -119,7 +119,7 @@ function ScalarArrayTable({ rows }: { rows: Array<Record<string, Scalar>> }) {
             {columns.map((col) => (
               <th
                 key={col}
-                className="border-b border-[rgba(175,215,255,0.12)] py-1.5 pr-4 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]"
+                className="border-b border-[rgba(255,135,175,0.12)] py-1.5 pr-4 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]"
               >
                 {humanizeKey(col)}
               </th>
@@ -128,7 +128,7 @@ function ScalarArrayTable({ rows }: { rows: Array<Record<string, Scalar>> }) {
         </thead>
         <tbody>
           {rows.map((row, idx) => (
-            <tr key={idx} className="border-b border-[rgba(175,215,255,0.06)] last:border-b-0">
+            <tr key={idx} className="border-b border-[rgba(255,135,175,0.06)] last:border-b-0">
               {columns.map((col) => (
                 <td key={col} className="py-1.5 pr-4 text-[var(--axon-text-secondary)]">
                   {scalarLabel(row[col])}

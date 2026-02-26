@@ -585,6 +585,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.2",
  "rmcp",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",

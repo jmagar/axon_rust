@@ -136,7 +136,7 @@ export default function DashboardPage() {
         <h1
           className="text-base font-extrabold tracking-[6px]"
           style={{
-            background: 'linear-gradient(135deg, #ff87af 0%, #afd7ff 50%, #8787af 100%)',
+            background: 'linear-gradient(135deg, #afd7ff 0%, #ff87af 50%, #8787af 100%)',
             WebkitBackgroundClip: 'text',
             WebkitTextFillColor: 'transparent',
             backgroundClip: 'text',
@@ -158,11 +158,11 @@ export default function DashboardPage() {
         <div
           className={`rounded-2xl border p-3 transition-all duration-500 sm:p-5 ${
             isProcessing
-              ? 'shadow-[0_0_80px_rgba(255,135,175,0.1),0_0_30px_rgba(175,215,255,0.05),inset_0_1px_0_rgba(255,255,255,0.04)]'
-              : 'shadow-[0_0_60px_rgba(175,215,255,0.05),inset_0_1px_0_rgba(255,255,255,0.02)]'
+              ? 'shadow-[0_0_80px_rgba(175,215,255,0.1),0_0_30px_rgba(255,135,175,0.05),inset_0_1px_0_rgba(255,255,255,0.04)]'
+              : 'shadow-[0_0_60px_rgba(255,135,175,0.05),inset_0_1px_0_rgba(255,255,255,0.02)]'
           }`}
           style={{
-            borderColor: isProcessing ? 'rgba(255,135,175,0.3)' : 'var(--axon-border)',
+            borderColor: isProcessing ? 'rgba(175,215,255,0.3)' : 'var(--axon-border)',
             background: 'var(--axon-surface-3)',
           }}
         >

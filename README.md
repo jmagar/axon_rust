@@ -297,6 +297,7 @@ All flags are global (usable with any subcommand).
 | `--wait <bool>` | bool | `false` | Run synchronously and block until completion. Without this, async commands enqueue and return immediately. |
 | `--yes` | flag | `false` | Skip confirmation prompts (non-interactive mode). |
 | `--json` | flag | `false` | Machine-readable JSON output on stdout. |
+| `--reclaimed` | flag | `false` | `status` mode: show only watchdog-reclaimed jobs. Default `status` hides reclaimed jobs. |
 
 #### Crawl & Scrape
 

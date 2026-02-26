@@ -1,6 +1,9 @@
 use super::*;
 use crate::crates::core::content::ExtractRun;
 use crate::crates::jobs::worker_lane::{ProcessFn, WorkerConfig, run_job_worker};
+use tokio::time::Duration;
+
+const EXTRACT_HEARTBEAT_INTERVAL_SECS: u64 = 30;
 
 struct ExtractAggregation {
     runs: Vec<serde_json::Value>,
@@ -205,7 +208,38 @@ async fn process_extract_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<()
         let prompt = job_cfg
             .prompt
             .ok_or("extract prompt is required; pass --query")?;
+        let (heartbeat_stop_tx, mut heartbeat_stop_rx) = tokio::sync::watch::channel(false);
+        let heartbeat_pool = pool.clone();
+        let heartbeat_task = tokio::spawn(async move {
+            let mut ticker =
+                tokio::time::interval(Duration::from_secs(EXTRACT_HEARTBEAT_INTERVAL_SECS));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = ticker.tick() => {
+                        let _ = sqlx::query(
+                            "UPDATE axon_extract_jobs SET updated_at=NOW() WHERE id=$1 AND status=$2",
+                        )
+                        .bind(id)
+                        .bind(JobStatus::Running.as_str())
+                        .execute(&heartbeat_pool)
+                        .await;
+                    }
+                    changed = heartbeat_stop_rx.changed() => {
+                        if changed.is_err() || *heartbeat_stop_rx.borrow() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
         let agg = execute_extract_runs(cfg, urls, prompt.clone(), job_cfg.max_pages).await;
+        let _ = heartbeat_stop_tx.send(true);
+        if let Err(err) = heartbeat_task.await {
+            log_warn(&format!(
+                "extract heartbeat_task panicked for job {id}: {err:?}"
+            ));
+        }
         Ok(Some(extract_result_json(
             prompt,
             cfg.openai_model.clone(),
@@ -232,7 +266,12 @@ async fn process_extract_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<()
                 .execute(pool)
                 .await
                 {
-                    Ok(_) => {
+                    Ok(done) => {
+                        if done.rows_affected() == 0 {
+                            log_warn(&format!(
+                                "worker extract job {id} completion update skipped: job no longer running (likely reclaimed/canceled)"
+                            ));
+                        }
                         last_err = None;
                         break;
                     }
@@ -242,7 +281,7 @@ async fn process_extract_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<()
                         ));
                         last_err = Some(e);
                         if attempt < 3 {
-                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            tokio::time::sleep(Duration::from_secs(1)).await;
                         }
                     }
                 }

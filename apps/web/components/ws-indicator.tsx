@@ -11,7 +11,7 @@ export function WsIndicator() {
       style={{
         background: 'rgba(3, 7, 18, 0.6)',
         borderColor:
-          status === 'connected' ? 'rgba(130, 217, 160, 0.18)' : 'rgba(175, 215, 255, 0.08)',
+          status === 'connected' ? 'rgba(130, 217, 160, 0.18)' : 'rgba(255,135,175, 0.08)',
         color: status === 'connected' ? 'var(--axon-text-muted)' : 'var(--axon-text-subtle)',
         letterSpacing: '0.5px',
       }}

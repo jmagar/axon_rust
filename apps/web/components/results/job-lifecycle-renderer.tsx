@@ -123,7 +123,7 @@ function JobCard({ job, commandMode }: { job: JobState; commandMode: string | nu
 
   return (
     <div
-      className="rounded-lg border border-[rgba(175,215,255,0.08)] p-4"
+      className="rounded-lg border border-[rgba(255,135,175,0.08)] p-4"
       style={{ background: 'rgba(10, 18, 35, 0.3)' }}
     >
       {/* Header: status dot + job ID */}

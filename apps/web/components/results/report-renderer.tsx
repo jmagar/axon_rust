@@ -53,7 +53,7 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 
 function AskPill({ label, value, icon }: { label: string; value: string; icon?: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-md border border-[rgba(175,215,255,0.2)] bg-[rgba(14,25,48,0.62)] px-2 py-0.5 font-mono text-[10px] text-[var(--axon-accent-blue)]">
+    <span className="inline-flex items-center gap-1 rounded-md border border-[rgba(255,135,175,0.2)] bg-[rgba(14,25,48,0.62)] px-2 py-0.5 font-mono text-[10px] text-[var(--axon-accent-blue)]">
       {icon && <span className="text-[var(--axon-accent-blue-strong)]">{icon}</span>}
       <span className="uppercase tracking-wide text-[var(--axon-text-dim)]">{label}</span>
       <span className="text-[var(--axon-text-secondary)]">{value}</span>
@@ -73,7 +73,7 @@ function Collapsible({
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div
-      className="rounded-lg border border-[rgba(175,215,255,0.08)]"
+      className="rounded-lg border border-[rgba(255,135,175,0.08)]"
       style={{ background: 'rgba(10, 18, 35, 0.3)' }}
     >
       <button
@@ -84,7 +84,7 @@ function Collapsible({
         <span className="text-[11px]">{open ? '\u25BC' : '\u25B6'}</span>
         {title}
       </button>
-      {open && <div className="border-t border-[rgba(175,215,255,0.06)] px-3 py-2">{children}</div>}
+      {open && <div className="border-t border-[rgba(255,135,175,0.06)] px-3 py-2">{children}</div>}
     </div>
   )
 }
@@ -137,14 +137,14 @@ function AskReport({ data }: { data: AskResult }) {
     <div className="space-y-2 animate-in fade-in-0 slide-in-from-bottom-1 duration-300">
       {/* Omnibox-style meta strip */}
       <div
-        className="rounded-lg border border-[rgba(175,215,255,0.14)] px-2 py-1"
+        className="rounded-lg border border-[rgba(255,135,175,0.14)] px-2 py-1"
         style={{
           background:
             'linear-gradient(130deg, rgba(14,24,46,0.78) 0%, rgba(10,18,36,0.58) 55%, rgba(24,16,38,0.5) 100%)',
         }}
       >
         <div className="flex flex-wrap items-center gap-1">
-          <span className="inline-flex size-4 items-center justify-center rounded-[6px] border border-[rgba(255,135,175,0.3)] bg-[rgba(255,135,175,0.12)] text-[var(--axon-accent-pink-strong)]">
+          <span className="inline-flex size-4 items-center justify-center rounded-[6px] border border-[rgba(175,215,255,0.3)] bg-[rgba(175,215,255,0.12)] text-[var(--axon-accent-pink-strong)]">
             <Sparkles size={10} />
           </span>
           <span className="text-[10px] uppercase tracking-wider text-[var(--axon-text-dim)]">
@@ -177,7 +177,7 @@ function AskReport({ data }: { data: AskResult }) {
 
       {/* Answer */}
       <div
-        className="rounded-lg border border-[rgba(175,215,255,0.12)] px-2 py-1.5"
+        className="rounded-lg border border-[rgba(255,135,175,0.12)] px-2 py-1.5"
         style={{
           background:
             'linear-gradient(145deg, rgba(11,20,40,0.72), rgba(8,15,31,0.52) 60%, rgba(20,14,36,0.42))',
@@ -254,7 +254,7 @@ function EvaluateReport({ data }: { data: EvaluateResult }) {
             <TimingRow label="Baseline LLM" ms={data.timing_ms.baseline_llm} />
             <TimingRow label="Research" ms={data.timing_ms.research_elapsed_ms} />
             <TimingRow label="Analysis LLM" ms={data.timing_ms.analysis_llm_ms} />
-            <div className="mt-1 border-t border-[rgba(175,215,255,0.08)] pt-1">
+            <div className="mt-1 border-t border-[rgba(255,135,175,0.08)] pt-1">
               <TimingRow label="Total" ms={data.timing_ms.total} />
             </div>
           </div>
@@ -292,7 +292,7 @@ function DebugReport({ data }: { data: DebugResult }) {
           </span>
         </div>
         <div
-          className="whitespace-pre-wrap rounded-lg border border-[rgba(175,215,255,0.08)] p-3 text-[12px] leading-relaxed text-[var(--axon-text-secondary)]"
+          className="whitespace-pre-wrap rounded-lg border border-[rgba(255,135,175,0.08)] p-3 text-[12px] leading-relaxed text-[var(--axon-text-secondary)]"
           style={{ background: 'rgba(10, 18, 35, 0.4)' }}
         >
           {data.llm_debug.analysis}

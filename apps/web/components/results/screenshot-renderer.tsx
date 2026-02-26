@@ -18,7 +18,7 @@ export function ScreenshotRenderer({ files, isProcessing }: ScreenshotRendererPr
   if (files.length === 0 && isProcessing) {
     return (
       <div className="flex items-center gap-2 text-[var(--axon-text-muted)]">
-        <span className="inline-block size-2.5 animate-spin rounded-full border-[1.5px] border-[rgba(255,135,175,0.2)] border-t-[var(--axon-accent-pink)]" />
+        <span className="inline-block size-2.5 animate-spin rounded-full border-[1.5px] border-[rgba(175,215,255,0.2)] border-t-[var(--axon-accent-pink)]" />
         <span className="text-xs">Capturing screenshot...</span>
       </div>
     )
@@ -46,7 +46,7 @@ export function ScreenshotRenderer({ files, isProcessing }: ScreenshotRendererPr
 
           {/* Screenshot image */}
           <div
-            className="overflow-hidden rounded-lg border border-[rgba(175,215,255,0.1)]"
+            className="overflow-hidden rounded-lg border border-[rgba(255,135,175,0.1)]"
             style={{ background: 'rgba(10, 18, 35, 0.4)' }}
           >
             <Image

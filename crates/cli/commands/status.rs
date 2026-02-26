@@ -2,7 +2,7 @@ mod metrics;
 
 use crate::crates::core::config::Config;
 use crate::crates::core::ui::{
-    accent, metric, muted, primary, status_label, subtle, symbol_for_status,
+    accent, error, metric, muted, primary, status_label, subtle, symbol_for_status,
 };
 use crate::crates::jobs::crawl::{CrawlJob, list_jobs};
 use crate::crates::jobs::embed::{EmbedJob, list_embed_jobs};
@@ -14,6 +14,8 @@ use metrics::{
     format_error, ingest_metrics_suffix, job_age, section_symbol, summarize_urls,
 };
 use std::error::Error;
+
+const WATCHDOG_RECLAIM_PREFIX: &str = "watchdog reclaimed stale running ";
 
 pub async fn run_status(cfg: &Config) -> Result<(), Box<dyn Error>> {
     run_status_impl(cfg).await
@@ -63,7 +65,7 @@ async fn run_status_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 async fn load_status_jobs(cfg: &Config) -> Result<StatusJobs, Box<dyn Error>> {
-    let (crawl, extract, embed, ingest) = spider::tokio::try_join!(
+    let (crawl_raw, extract_raw, embed_raw, ingest_raw) = spider::tokio::try_join!(
         async {
             list_jobs(cfg, 20)
                 .await
@@ -85,12 +87,70 @@ async fn load_status_jobs(cfg: &Config) -> Result<StatusJobs, Box<dyn Error>> {
                 .map_err(|e| format!("ingest status lookup failed: {e}"))
         },
     )?;
+    let crawl = crawl_raw
+        .into_iter()
+        .filter(|job| {
+            include_status_job(
+                &job.status,
+                job.error_text.as_deref(),
+                cfg.reclaimed_status_only,
+            )
+        })
+        .collect();
+    let extract = extract_raw
+        .into_iter()
+        .filter(|job| {
+            include_status_job(
+                &job.status,
+                job.error_text.as_deref(),
+                cfg.reclaimed_status_only,
+            )
+        })
+        .collect();
+    let embed = embed_raw
+        .into_iter()
+        .filter(|job| {
+            include_status_job(
+                &job.status,
+                job.error_text.as_deref(),
+                cfg.reclaimed_status_only,
+            )
+        })
+        .collect();
+    let ingest = ingest_raw
+        .into_iter()
+        .filter(|job| {
+            include_status_job(
+                &job.status,
+                job.error_text.as_deref(),
+                cfg.reclaimed_status_only,
+            )
+        })
+        .collect();
     Ok(StatusJobs {
         crawl,
         extract,
         embed,
         ingest,
     })
+}
+
+fn include_status_job(status: &str, error_text: Option<&str>, reclaimed_only: bool) -> bool {
+    let reclaimed = is_watchdog_reclaimed_failure(status, error_text);
+    if reclaimed_only {
+        reclaimed
+    } else {
+        !reclaimed
+    }
+}
+
+fn is_watchdog_reclaimed_failure(status: &str, error_text: Option<&str>) -> bool {
+    if status != "failed" {
+        return false;
+    }
+    error_text
+        .map(str::trim_start)
+        .is_some_and(|text| text.starts_with(WATCHDOG_RECLAIM_PREFIX))
 }
 
 fn emit_status_json(
@@ -199,7 +259,7 @@ fn print_crawls(crawl_jobs: &[CrawlJob]) {
             .map(|metrics| crawl_metrics_suffix(&job.status, metrics))
             .unwrap_or_default();
         let age_text = job_age(&job.status, job.finished_at.as_ref(), &job.updated_at);
-        let age = format!("{}{}{}", subtle(" | ("), accent(&age_text), subtle(")"));
+        let age = format!("{}{}", subtle(" | "), accent(&age_text));
         let label = status_label(&job.status);
         let prefix = if label.is_empty() {
             format!("  {} ", symbol_for_status(&job.status))
@@ -209,14 +269,14 @@ fn print_crawls(crawl_jobs: &[CrawlJob]) {
         println!(
             "{}{}{}{} {} {}",
             prefix,
-            accent(&job.url),
+            primary(&job.url),
             metrics_suffix,
             age,
             subtle("|"),
-            subtle(&job.id.to_string()),
+            muted(&job.id.to_string()),
         );
         if let Some(err) = format_error(job.error_text.as_deref()) {
-            println!("       {}", muted(&format!("↳ {err}")));
+            println!("       {}", error(&format!("↳ {err}")));
         }
     }
     println!();
@@ -247,7 +307,7 @@ fn crawl_metrics_suffix(status: &str, metrics: &serde_json::Value) -> String {
         let thin_str = format!("{:.1}%", thin_pct);
         return format!(
             "{sep}{}{}{}{sep}{}{sep}{}",
-            primary(&md_created.to_string()),
+            accent(&md_created.to_string()),
             subtle("/"),
             metric(pages_target, "pages"),
             metric(filtered_urls, "filtered"),
@@ -289,10 +349,10 @@ struct JobRow<'a> {
 fn print_job_row(row: &JobRow<'_>) {
     let collection_suffix = row
         .collection
-        .map(|c| format!("{}{}", subtle(" | "), primary(c)))
+        .map(|c| format!("{}{}", subtle(" | "), accent(c)))
         .unwrap_or_default();
     let age_text = job_age(row.status, row.finished_at, row.updated_at);
-    let age = format!("{}{}{}", subtle(" | ("), accent(&age_text), subtle(")"));
+    let age = format!("{}{}", subtle(" | "), accent(&age_text));
     let label = status_label(row.status);
     let prefix = if label.is_empty() {
         format!("  {} ", symbol_for_status(row.status))
@@ -302,15 +362,15 @@ fn print_job_row(row: &JobRow<'_>) {
     println!(
         "{}{}{}{}{} {} {}",
         prefix,
-        accent(row.target),
+        primary(row.target),
         row.metrics_suffix,
         collection_suffix,
         age,
         subtle("|"),
-        subtle(&row.id.to_string()),
+        muted(&row.id.to_string()),
     );
     if let Some(err) = format_error(row.error_text) {
-        println!("       {}", muted(&format!("↳ {err}")));
+        println!("       {}", error(&format!("↳ {err}")));
     }
 }
 
@@ -407,4 +467,39 @@ fn print_embeds(embed_jobs: &[EmbedJob], crawl_jobs: &[CrawlJob]) {
         });
     }
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{include_status_job, is_watchdog_reclaimed_failure};
+
+    #[test]
+    fn watchdog_reclaim_detection_matches_prefix_on_failed_jobs() {
+        assert!(is_watchdog_reclaimed_failure(
+            "failed",
+            Some("watchdog reclaimed stale running ingest job (idle=360s marker=amqp)")
+        ));
+        assert!(!is_watchdog_reclaimed_failure(
+            "error",
+            Some("watchdog reclaimed stale running crawl job (idle=361s marker=polling)")
+        ));
+        assert!(!is_watchdog_reclaimed_failure(
+            "completed",
+            Some("watchdog reclaimed stale running ingest job (idle=360s marker=amqp)")
+        ));
+        assert!(!is_watchdog_reclaimed_failure(
+            "failed",
+            Some("network timeout")
+        ));
+    }
+
+    #[test]
+    fn status_filter_hides_reclaimed_by_default_and_shows_in_reclaimed_mode() {
+        let reclaimed_err =
+            Some("watchdog reclaimed stale running extract job (idle=360s marker=amqp)");
+        assert!(!include_status_job("failed", reclaimed_err, false));
+        assert!(include_status_job("failed", reclaimed_err, true));
+        assert!(include_status_job("completed", None, false));
+        assert!(!include_status_job("completed", None, true));
+    }
 }

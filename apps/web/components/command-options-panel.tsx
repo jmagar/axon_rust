@@ -43,7 +43,7 @@ function OptionControl({
   switch (spec.value) {
     case 'bool':
       return (
-        <label className="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 transition-colors hover:bg-[rgba(175,215,255,0.05)]">
+        <label className="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 transition-colors hover:bg-[rgba(255,135,175,0.05)]">
           <button
             type="button"
             role="checkbox"
@@ -51,8 +51,8 @@ function OptionControl({
             onClick={() => onUpdate(optionKey, !value)}
             className={`flex size-4 shrink-0 items-center justify-center rounded border transition-all ${
               value
-                ? 'border-[var(--axon-accent-pink)] bg-[rgba(255,135,175,0.2)]'
-                : 'border-[rgba(175,215,255,0.2)] bg-transparent'
+                ? 'border-[var(--axon-accent-pink)] bg-[rgba(175,215,255,0.2)]'
+                : 'border-[rgba(255,135,175,0.2)] bg-transparent'
             }`}
           >
             {value && (
@@ -83,7 +83,7 @@ function OptionControl({
               if (!Number.isNaN(n)) onUpdate(optionKey, n)
             }}
             placeholder="—"
-            className="w-20 rounded border border-[rgba(175,215,255,0.15)] bg-[rgba(10,18,35,0.5)] px-2 py-1 font-mono text-xs text-[var(--axon-accent-blue)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[rgba(175,215,255,0.35)]"
+            className="w-20 rounded border border-[rgba(255,135,175,0.15)] bg-[rgba(10,18,35,0.5)] px-2 py-1 font-mono text-xs text-[var(--axon-accent-blue)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[rgba(255,135,175,0.35)]"
           />
         </label>
       )
@@ -96,7 +96,7 @@ function OptionControl({
           <select
             value={value !== undefined ? String(value) : ''}
             onChange={(e) => onUpdate(optionKey, e.target.value)}
-            className="rounded border border-[rgba(175,215,255,0.15)] bg-[rgba(10,18,35,0.5)] px-2 py-1 font-mono text-xs text-[var(--axon-accent-blue)] outline-none focus:border-[rgba(175,215,255,0.35)]"
+            className="rounded border border-[rgba(255,135,175,0.15)] bg-[rgba(10,18,35,0.5)] px-2 py-1 font-mono text-xs text-[var(--axon-accent-blue)] outline-none focus:border-[rgba(255,135,175,0.35)]"
           >
             <option value="">default</option>
             {options.map((opt) => (
@@ -119,7 +119,7 @@ function OptionControl({
             value={value !== undefined ? String(value) : ''}
             onChange={(e) => onUpdate(optionKey, e.target.value)}
             placeholder={spec.value === 'list' ? 'comma-separated' : '—'}
-            className="w-40 rounded border border-[rgba(175,215,255,0.15)] bg-[rgba(10,18,35,0.5)] px-2 py-1 font-mono text-xs text-[var(--axon-accent-blue)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[rgba(175,215,255,0.35)]"
+            className="w-40 rounded border border-[rgba(255,135,175,0.15)] bg-[rgba(10,18,35,0.5)] px-2 py-1 font-mono text-xs text-[var(--axon-accent-blue)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[rgba(255,135,175,0.35)]"
           />
         </label>
       )
@@ -152,13 +152,13 @@ export function CommandOptionsPanel({ mode, values, onChange }: CommandOptionsPa
 
   return (
     <div
-      className="overflow-hidden rounded-lg border border-[rgba(175,215,255,0.1)] transition-all duration-200"
+      className="overflow-hidden rounded-lg border border-[rgba(255,135,175,0.1)] transition-all duration-200"
       style={{ background: 'rgba(10, 18, 35, 0.45)' }}
     >
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[rgba(175,215,255,0.05)]"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[rgba(255,135,175,0.05)]"
       >
         <svg
           className={`size-3 shrink-0 text-[var(--axon-text-dim)] transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
@@ -177,7 +177,7 @@ export function CommandOptionsPanel({ mode, values, onChange }: CommandOptionsPa
       </button>
 
       {expanded && (
-        <div className="flex flex-wrap gap-x-2 gap-y-0.5 border-t border-[rgba(175,215,255,0.08)] px-1 pb-2 pt-1">
+        <div className="flex flex-wrap gap-x-2 gap-y-0.5 border-t border-[rgba(255,135,175,0.08)] px-1 pb-2 pt-1">
           {resolvedOptions.map(({ key, spec: optSpec }) => (
             <OptionControl
               key={key}

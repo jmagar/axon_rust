@@ -89,12 +89,12 @@
   --axon-surface-1: rgba(10, 18, 35, 0.5);
   --axon-surface-2: rgba(10, 18, 35, 0.35);
   --axon-surface-3: rgba(15, 23, 42, 0.12);
-  --axon-border: rgba(175, 215, 255, 0.12);
-  --axon-border-strong: rgba(175, 215, 255, 0.22);
-  --axon-accent-blue: #afd7ff;
-  --axon-accent-blue-strong: #87afff;
-  --axon-accent-pink: #ff87af;
-  --axon-accent-pink-strong: #ff9ec0;
+  --axon-border: rgba(255,135,175, 0.12);
+  --axon-border-strong: rgba(255,135,175, 0.22);
+  --axon-accent-blue: #ff87af;
+  --axon-accent-blue-strong: #ff9ec0;
+  --axon-accent-pink: #afd7ff;
+  --axon-accent-pink-strong: #87afff;
   --axon-text-primary: #e8f4f8;
   --axon-text-secondary: #dce6f0;
   --axon-text-muted: #93aaca;
@@ -104,7 +104,7 @@
   --axon-success-bg: rgba(130, 217, 160, 0.14);
   --axon-warning: #ffc086;
   --axon-warning-bg: rgba(255, 192, 134, 0.14);
-  --axon-danger-bg: rgba(255, 135, 175, 0.1);
+  --axon-danger-bg: rgba(175,215,255, 0.1);
 }
 
 .dark {
@@ -149,8 +149,8 @@
   }
   body {
     background:
-      radial-gradient(circle at 14% 12%, rgba(255, 135, 175, 0.12), transparent 34%),
-      radial-gradient(circle at 82% 18%, rgba(175, 215, 255, 0.1), transparent 38%),
+      radial-gradient(circle at 14% 12%, rgba(175,215,255, 0.12), transparent 34%),
+      radial-gradient(circle at 82% 18%, rgba(255,135,175, 0.1), transparent 38%),
       linear-gradient(180deg, #02040b 0%, var(--axon-bg) 58%, #040a14 100%);
     color: var(--axon-text-primary);
   }
@@ -159,7 +159,7 @@
 /* Themed scrollbars — outside @layer for specificity over Tailwind resets */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(175, 215, 255, 0.15) transparent;
+  scrollbar-color: rgba(255,135,175, 0.15) transparent;
   -webkit-overflow-scrolling: touch;
 }
 *::-webkit-scrollbar {
@@ -170,11 +170,11 @@
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: rgba(175, 215, 255, 0.15);
+  background: rgba(255,135,175, 0.15);
   border-radius: 3px;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(175, 215, 255, 0.25);
+  background: rgba(255,135,175, 0.25);
 }
 
 @keyframes shimmer {

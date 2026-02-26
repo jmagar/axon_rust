@@ -392,6 +392,7 @@ fn into_config(cli: Cli) -> Result<Config, String> {
         watchdog_stale_timeout_secs: global.watchdog_stale_timeout_secs.max(30),
         watchdog_confirm_secs: global.watchdog_confirm_secs.max(10),
         json_output: global.json,
+        reclaimed_status_only: global.reclaimed,
         normalize: global.normalize,
         chrome_network_idle_timeout_secs: global.chrome_network_idle_timeout,
         auto_switch_thin_ratio: global.auto_switch_thin_ratio,

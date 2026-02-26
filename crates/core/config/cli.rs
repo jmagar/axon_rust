@@ -315,6 +315,10 @@ pub(super) struct GlobalArgs {
     #[arg(global = true, long, action = ArgAction::SetTrue)]
     pub(super) json: bool,
 
+    /// Status mode: show only watchdog-reclaimed jobs.
+    #[arg(global = true, long, action = ArgAction::SetTrue)]
+    pub(super) reclaimed: bool,
+
     #[arg(global = true, long, value_enum, default_value_t = PerformanceProfile::HighStable)]
     pub(super) performance_profile: PerformanceProfile,
 

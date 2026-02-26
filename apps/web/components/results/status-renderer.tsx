@@ -68,7 +68,7 @@ function StatsPanel({ data }: { data: StatsResult }) {
 
   return (
     <div
-      className="rounded-lg border border-[rgba(175,215,255,0.08)] p-4"
+      className="rounded-lg border border-[rgba(255,135,175,0.08)] p-4"
       style={{ background: 'rgba(10, 18, 35, 0.3)' }}
     >
       {/* Collection info */}
@@ -104,7 +104,7 @@ function StatsPanel({ data }: { data: StatsResult }) {
             {data.payload_fields.map((f) => (
               <span
                 key={f}
-                className="rounded-md border border-[rgba(175,215,255,0.1)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--axon-text-muted)]"
+                className="rounded-md border border-[rgba(255,135,175,0.1)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--axon-text-muted)]"
               >
                 {f}
               </span>
@@ -147,7 +147,7 @@ function StatsPanel({ data }: { data: StatsResult }) {
 function DedupePanel({ data }: { data: DedupeResult }) {
   return (
     <div
-      className="rounded-lg border border-[rgba(175,215,255,0.08)] p-4"
+      className="rounded-lg border border-[rgba(255,135,175,0.08)] p-4"
       style={{ background: 'rgba(10, 18, 35, 0.3)' }}
     >
       <SectionHeader>Deduplication Results</SectionHeader>

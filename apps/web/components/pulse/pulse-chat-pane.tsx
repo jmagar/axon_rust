@@ -10,7 +10,7 @@ interface PulseChatPaneProps {
 export function PulseChatPane({ messages, isLoading }: PulseChatPaneProps) {
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-[rgba(175,215,255,0.08)] px-4 py-2.5">
+      <div className="border-b border-[rgba(255,135,175,0.08)] px-4 py-2.5">
         <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-[var(--axon-text-dim)]">
           Pulse Chat
         </span>
@@ -39,8 +39,8 @@ export function PulseChatPane({ messages, isLoading }: PulseChatPaneProps) {
                 key={`msg-${i}-${msg.role}`}
                 className={`rounded-lg p-3 text-sm ${
                   msg.role === 'user'
-                    ? 'ml-8 bg-[rgba(255,135,175,0.08)] text-[var(--axon-text-primary)]'
-                    : 'mr-8 bg-[rgba(175,215,255,0.06)] text-[var(--axon-text-secondary)]'
+                    ? 'ml-8 bg-[rgba(175,215,255,0.08)] text-[var(--axon-text-primary)]'
+                    : 'mr-8 bg-[rgba(255,135,175,0.06)] text-[var(--axon-text-secondary)]'
                 }`}
               >
                 {msg.content}

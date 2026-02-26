@@ -10,11 +10,13 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use std::error::Error;
 use std::sync::Arc;
+use tokio::time::Duration;
 use uuid::Uuid;
 
 static SCHEMA_INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 const TABLE: JobTable = JobTable::Ingest;
+const INGEST_HEARTBEAT_INTERVAL_SECS: u64 = 30;
 
 /// Discriminates which ingest source a job targets.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -296,6 +298,31 @@ async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
         }
     };
 
+    let (heartbeat_stop_tx, mut heartbeat_stop_rx) = tokio::sync::watch::channel(false);
+    let heartbeat_pool = pool.clone();
+    let heartbeat_task = tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(INGEST_HEARTBEAT_INTERVAL_SECS));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {
+                    let _ = sqlx::query(
+                        "UPDATE axon_ingest_jobs SET updated_at=NOW() WHERE id=$1 AND status=$2",
+                    )
+                    .bind(id)
+                    .bind(JobStatus::Running.as_str())
+                    .execute(&heartbeat_pool)
+                    .await;
+                }
+                changed = heartbeat_stop_rx.changed() => {
+                    if changed.is_err() || *heartbeat_stop_rx.borrow() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
     let result = match &job_cfg.source {
         IngestSource::Github {
             repo,
@@ -317,10 +344,16 @@ async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
             ingest::sessions::ingest_sessions(&sessions_cfg).await
         }
     };
+    let _ = heartbeat_stop_tx.send(true);
+    if let Err(err) = heartbeat_task.await {
+        log_warn(&format!(
+            "command=ingest_worker heartbeat_task_panicked job_id={id} err={err:?}"
+        ));
+    }
 
     match result {
         Ok(chunks) => {
-            if let Err(e) = sqlx::query(&format!(
+            match sqlx::query(&format!(
                 "UPDATE axon_ingest_jobs SET status='{completed}',updated_at=NOW(),\
                  finished_at=NOW(),result_json=$2 WHERE id=$1 AND status='{running}'",
                 completed = JobStatus::Completed.as_str(),
@@ -331,9 +364,18 @@ async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
             .execute(&pool)
             .await
             {
-                log_warn(&format!(
-                    "command=ingest_worker mark_completed_failed job_id={id} err={e}"
-                ));
+                Ok(done) => {
+                    if done.rows_affected() == 0 {
+                        log_warn(&format!(
+                            "command=ingest_worker completion_update_skipped job_id={id} reason=not_running_state"
+                        ));
+                    }
+                }
+                Err(e) => {
+                    log_warn(&format!(
+                        "command=ingest_worker mark_completed_failed job_id={id} err={e}"
+                    ));
+                }
             }
         }
         Err(e) => {

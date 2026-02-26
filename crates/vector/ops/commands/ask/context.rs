@@ -27,6 +27,82 @@ fn push_context_entry(
     true
 }
 
+const SUPPLEMENTAL_CONTEXT_BUDGET_PCT: usize = 85;
+const SUPPLEMENTAL_MIN_TOP_CHUNKS_FOR_COVERAGE: usize = 6;
+const SUPPLEMENTAL_RELEVANCE_BONUS: f64 = 0.05;
+
+fn should_inject_supplemental(
+    context_char_count: usize,
+    max_context_chars: usize,
+    full_docs_selected: usize,
+    top_chunks_selected: usize,
+) -> bool {
+    if max_context_chars == 0 {
+        return false;
+    }
+    let within_budget =
+        context_char_count * 100 < max_context_chars * SUPPLEMENTAL_CONTEXT_BUDGET_PCT;
+    let coverage_needs_backfill =
+        full_docs_selected == 0 || top_chunks_selected < SUPPLEMENTAL_MIN_TOP_CHUNKS_FOR_COVERAGE;
+    within_budget && coverage_needs_backfill
+}
+
+fn query_requests_low_signal_sources(query_tokens: &[String], raw_query: &str) -> bool {
+    if raw_query.to_ascii_lowercase().contains("docs/sessions") {
+        return true;
+    }
+    query_tokens.iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "session" | "sessions" | "log" | "logs" | "history" | "histories"
+        )
+    })
+}
+
+fn is_low_signal_source_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    let is_web_url = lower.starts_with("http://") || lower.starts_with("https://");
+    // Session logs and cache files — local file path patterns only.
+    // /logs/ and .log are NOT filtered for web URLs to avoid false-positives on
+    // legitimately indexed pages like docs.example.com/logs/ or Datadog docs.
+    lower.contains("/docs/sessions/")
+        || lower.contains("docs/sessions/")
+        || lower.contains("/.cache/")
+        || lower.contains(".cache/")
+        || (!is_web_url && lower.contains("/logs/"))
+        || (!is_web_url && lower.ends_with(".log"))
+}
+
+fn candidate_topical_overlap_count(
+    candidate: &ranking::AskCandidate,
+    query_tokens: &[String],
+) -> usize {
+    query_tokens
+        .iter()
+        .filter(|token| {
+            candidate.url_tokens.contains(token.as_str())
+                || candidate.chunk_tokens.contains(token.as_str())
+        })
+        .count()
+}
+
+fn candidate_has_topical_overlap(
+    candidate: &ranking::AskCandidate,
+    query_tokens: &[String],
+) -> bool {
+    if query_tokens.is_empty() {
+        return true;
+    }
+    let overlap = candidate_topical_overlap_count(candidate, query_tokens);
+    let coverage = overlap as f64 / query_tokens.len() as f64;
+    match query_tokens.len() {
+        0 => true,
+        1 | 2 => overlap >= 1,
+        3 | 4 => overlap >= 2 || coverage >= 0.5,
+        _ => overlap >= 2 && coverage >= 0.34,
+    }
+}
+
 pub(crate) struct AskContext {
     pub context: String,
     pub candidate_count: usize,
@@ -90,6 +166,7 @@ async fn retrieve_ask_candidates(cfg: &Config, query: &str) -> Result<AskRetriev
     }
     let vecq = ask_vectors.remove(0);
     let query_tokens = ranking::tokenize_query(query);
+    let allow_low_signal = query_requests_low_signal_sources(&query_tokens, query);
     let hits = qdrant::qdrant_search(cfg, &vecq, cfg.ask_candidate_limit)
         .await
         .map_err(|e| anyhow!(e.to_string()))?;
@@ -98,6 +175,9 @@ async fn retrieve_ask_candidates(cfg: &Config, query: &str) -> Result<AskRetriev
         let url = qdrant::payload_url_typed(&hit.payload).to_string();
         let chunk_text = qdrant::payload_text_typed(&hit.payload).to_string();
         if url.is_empty() || chunk_text.len() < 40 {
+            continue;
+        }
+        if !allow_low_signal && is_low_signal_source_url(&url) {
             continue;
         }
         let path = ranking::extract_path_from_url(&url);
@@ -116,7 +196,10 @@ async fn retrieve_ask_candidates(cfg: &Config, query: &str) -> Result<AskRetriev
     }
     let reranked = ranking::rerank_ask_candidates(&candidates, &query_tokens)
         .into_iter()
-        .filter(|c| c.rerank_score >= cfg.ask_min_relevance_score)
+        .filter(|candidate| {
+            candidate.rerank_score >= cfg.ask_min_relevance_score
+                && candidate_has_topical_overlap(candidate, &query_tokens)
+        })
         .collect::<Vec<_>>();
     if reranked.is_empty() {
         return Err(anyhow!(
@@ -125,7 +208,7 @@ async fn retrieve_ask_candidates(cfg: &Config, query: &str) -> Result<AskRetriev
         ));
     }
     Ok(AskRetrieval {
-        top_chunk_indices: ranking::select_diverse_candidates(&reranked, cfg.ask_chunk_limit, 2),
+        top_chunk_indices: ranking::select_diverse_candidates(&reranked, cfg.ask_chunk_limit, 1),
         top_full_doc_indices: ranking::select_diverse_candidates(&reranked, cfg.ask_full_docs, 1),
         candidates,
         reranked,
@@ -180,24 +263,37 @@ async fn build_context_from_candidates(
     );
     source_idx = next_source_idx;
 
-    let supplemental_candidate_indices =
-        collect_supplemental_candidate_indices(reranked, &inserted_full_doc_urls);
-    let supplemental = ranking::select_diverse_candidates_from_indices(
-        reranked,
-        &supplemental_candidate_indices,
-        backfill_limit,
-        1,
-    );
-
-    let supplemental_count = append_supplemental_chunks(
-        reranked,
-        &supplemental,
-        &mut context_entries,
-        &mut context_char_count,
-        &mut source_idx,
-        separator,
+    let mut supplemental: Vec<usize> = Vec::new();
+    let mut supplemental_count = 0usize;
+    if should_inject_supplemental(
+        context_char_count,
         max_context_chars,
-    );
+        full_docs_selected,
+        top_chunks_selected,
+    ) {
+        let min_supplemental_score = cfg.ask_min_relevance_score + SUPPLEMENTAL_RELEVANCE_BONUS;
+        let supplemental_candidate_indices = collect_supplemental_candidate_indices(
+            reranked,
+            &inserted_full_doc_urls,
+            min_supplemental_score,
+        );
+        supplemental = ranking::select_diverse_candidates_from_indices(
+            reranked,
+            &supplemental_candidate_indices,
+            backfill_limit,
+            1,
+        );
+
+        supplemental_count = append_supplemental_chunks(
+            reranked,
+            &supplemental,
+            &mut context_entries,
+            &mut context_char_count,
+            &mut source_idx,
+            separator,
+            max_context_chars,
+        );
+    }
 
     if context_entries.is_empty() {
         return Err(anyhow!("Failed to retrieve any context sources for ask"));
@@ -260,11 +356,15 @@ fn append_top_chunks_to_context(
 fn collect_supplemental_candidate_indices(
     reranked: &[ranking::AskCandidate],
     inserted_full_doc_urls: &HashSet<String>,
+    min_supplemental_score: f64,
 ) -> Vec<usize> {
     reranked
         .iter()
         .enumerate()
-        .filter(|(_, candidate)| !inserted_full_doc_urls.contains(&candidate.url))
+        .filter(|(_, candidate)| {
+            !inserted_full_doc_urls.contains(&candidate.url)
+                && candidate.rerank_score >= min_supplemental_score
+        })
         .map(|(idx, _)| idx)
         .collect::<Vec<_>>()
 }
@@ -414,4 +514,134 @@ fn build_diagnostic_sources(
             .map(|c| format!("chunk score={:.3} url={}", c.score, display_source(&c.url))),
     );
     diagnostic_sources
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        candidate_has_topical_overlap, collect_supplemental_candidate_indices,
+        is_low_signal_source_url, query_requests_low_signal_sources, should_inject_supplemental,
+    };
+    use crate::crates::vector::ops::ranking::AskCandidate;
+    use std::collections::HashSet;
+
+    fn test_candidate(url: &str, rerank_score: f64) -> AskCandidate {
+        AskCandidate {
+            score: rerank_score,
+            url: url.to_string(),
+            path: url.to_string(),
+            chunk_text: "chunk text for testing".to_string(),
+            url_tokens: HashSet::new(),
+            chunk_tokens: HashSet::new(),
+            rerank_score,
+        }
+    }
+
+    #[test]
+    fn supplemental_injects_when_coverage_is_thin_and_budget_is_available() {
+        let should = should_inject_supplemental(
+            10_000, 100_000, 0, // no full docs selected yet
+            4, // below coverage threshold
+        );
+        assert!(should);
+    }
+
+    #[test]
+    fn supplemental_skips_when_context_budget_is_nearly_full() {
+        let should = should_inject_supplemental(
+            90_000,  // exceeds 85% budget gate
+            100_000, //
+            0, 2,
+        );
+        assert!(!should);
+    }
+
+    #[test]
+    fn supplemental_skips_when_coverage_is_already_strong() {
+        let should = should_inject_supplemental(
+            50_000, // budget headroom remains
+            100_000, 2, // full docs present
+            6, // meets chunk coverage threshold
+        );
+        assert!(!should);
+    }
+
+    #[test]
+    fn low_signal_source_filter_matches_sessions_and_cache() {
+        assert!(is_low_signal_source_url(
+            "docs/sessions/2026-02-26-context-injection-cleanup.md"
+        ));
+        assert!(is_low_signal_source_url(".cache/axon-rust/output/file.md"));
+        // Local file paths with /logs/ or .log are filtered.
+        assert!(is_low_signal_source_url("/home/user/app/logs/access.log"));
+        assert!(is_low_signal_source_url("logs/debug.log"));
+        // Web URLs with /logs/ in the path must NOT be filtered (e.g. Datadog docs).
+        assert!(!is_low_signal_source_url(
+            "https://docs.datadoghq.com/logs/explorer/"
+        ));
+        assert!(!is_low_signal_source_url(
+            "https://docs.rs/spider/latest/spider/"
+        ));
+    }
+
+    #[test]
+    fn low_signal_sources_allowed_when_query_explicitly_requests_them() {
+        let tokens = vec!["debug".to_string(), "session".to_string()];
+        assert!(query_requests_low_signal_sources(
+            &tokens,
+            "debug this session"
+        ));
+        assert!(query_requests_low_signal_sources(
+            &["debug".to_string()],
+            "show docs/sessions files"
+        ));
+        assert!(!query_requests_low_signal_sources(
+            &["debug".to_string(), "crawl".to_string()],
+            "debug crawl failures"
+        ));
+    }
+
+    #[test]
+    fn supplemental_candidates_respect_score_threshold_and_full_doc_exclusions() {
+        let candidates = vec![
+            test_candidate("https://a.dev/docs/one", 0.70),
+            test_candidate("https://a.dev/docs/two", 0.52),
+            test_candidate("https://b.dev/docs/three", 0.61),
+        ];
+        let mut excluded = HashSet::new();
+        excluded.insert("https://a.dev/docs/one".to_string());
+        let selected = collect_supplemental_candidate_indices(&candidates, &excluded, 0.60);
+        assert_eq!(selected, vec![2]);
+    }
+
+    #[test]
+    fn topical_overlap_requires_multiple_query_tokens_for_longer_queries() {
+        let candidate = test_candidate("https://example.com/docs/commands", 0.9);
+        let tokens = vec![
+            "create".to_string(),
+            "claude".to_string(),
+            "code".to_string(),
+            "custom".to_string(),
+            "slash".to_string(),
+            "commands".to_string(),
+        ];
+        assert!(!candidate_has_topical_overlap(&candidate, &tokens));
+
+        let strong_candidate = AskCandidate {
+            score: 0.9,
+            url: "https://docs.claude.com/en/docs/claude-code/slash-commands".to_string(),
+            path: "/docs/claude-code/slash-commands".to_string(),
+            chunk_text: "Create custom slash commands in Claude Code.".to_string(),
+            url_tokens: ["claude", "code", "slash", "commands"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            chunk_tokens: ["create", "custom", "slash", "commands"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            rerank_score: 0.9,
+        };
+        assert!(candidate_has_topical_overlap(&strong_candidate, &tokens));
+    }
 }

@@ -24,7 +24,7 @@ export function PulseToolbar({
   saveStatus,
 }: PulseToolbarProps) {
   return (
-    <div className="flex items-center justify-between rounded-lg border border-[rgba(175,215,255,0.08)] bg-[rgba(10,18,35,0.3)] px-3 py-1.5">
+    <div className="flex items-center justify-between rounded-lg border border-[rgba(255,135,175,0.08)] bg-[rgba(10,18,35,0.3)] px-3 py-1.5">
       <input
         value={title}
         onChange={(e) => onTitleChange(e.target.value)}
@@ -47,7 +47,7 @@ export function PulseToolbar({
               onClick={() => onPermissionChange(opt.value)}
               className={`rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${
                 permissionLevel === opt.value
-                  ? 'bg-[rgba(255,135,175,0.15)] text-[var(--axon-accent-pink)]'
+                  ? 'bg-[rgba(175,215,255,0.15)] text-[var(--axon-accent-pink)]'
                   : 'text-[var(--axon-text-dim)] hover:text-[var(--axon-text-muted)]'
               }`}
               title={opt.label}

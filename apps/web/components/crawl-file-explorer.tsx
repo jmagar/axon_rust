@@ -121,7 +121,7 @@ export function CrawlFileExplorer({
     <button
       type="button"
       onClick={() => setOpen(!open)}
-      className="hidden w-10 flex-shrink-0 items-start justify-center self-stretch border-r border-[rgba(175,215,255,0.08)] pt-3 text-[var(--axon-text-muted)] transition-colors hover:text-[var(--axon-accent-blue)] md:flex"
+      className="hidden w-10 flex-shrink-0 items-start justify-center self-stretch border-r border-[rgba(255,135,175,0.08)] pt-3 text-[var(--axon-text-muted)] transition-colors hover:text-[var(--axon-accent-blue)] md:flex"
       style={{ background: 'rgba(3, 7, 18, 0.3)' }}
       title={open ? 'Collapse file explorer' : 'Expand file explorer'}
     >
@@ -145,7 +145,7 @@ export function CrawlFileExplorer({
     <button
       type="button"
       onClick={() => setOpen(true)}
-      className="fixed bottom-4 left-4 z-30 flex h-10 w-10 items-center justify-center rounded-full border border-[rgba(175,215,255,0.15)] shadow-lg backdrop-blur-sm transition-all active:scale-95 md:hidden"
+      className="fixed bottom-4 left-4 z-30 flex h-10 w-10 items-center justify-center rounded-full border border-[rgba(255,135,175,0.15)] shadow-lg backdrop-blur-sm transition-all active:scale-95 md:hidden"
       style={{ background: 'rgba(8, 15, 30, 0.85)' }}
       title="Open file explorer"
     >
@@ -184,11 +184,11 @@ export function CrawlFileExplorer({
   const panel = (
     <div
       ref={panelRef}
-      className="flex w-full flex-shrink-0 flex-col border-r border-[rgba(175,215,255,0.08)] md:w-[260px]"
+      className="flex w-full flex-shrink-0 flex-col border-r border-[rgba(255,135,175,0.08)] md:w-[260px]"
       style={{ background: 'rgba(3, 7, 18, 0.3)' }}
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-[rgba(175,215,255,0.08)] px-3 py-2">
+      <div className="flex items-center justify-between border-b border-[rgba(255,135,175,0.08)] px-3 py-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-[12px] font-semibold text-[var(--axon-accent-blue)]">
             {domain}
@@ -198,7 +198,7 @@ export function CrawlFileExplorer({
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="ml-2 flex-shrink-0 rounded p-1 text-[var(--axon-text-muted)] transition-colors hover:bg-[rgba(175,215,255,0.06)] hover:text-[var(--axon-accent-blue)]"
+          className="ml-2 flex-shrink-0 rounded p-1 text-[var(--axon-text-muted)] transition-colors hover:bg-[rgba(255,135,175,0.06)] hover:text-[var(--axon-accent-blue)]"
           title="Collapse file explorer"
         >
           <svg
@@ -217,13 +217,13 @@ export function CrawlFileExplorer({
       </div>
 
       {/* Filter input */}
-      <div className="border-b border-[rgba(175,215,255,0.08)] px-2 py-1.5">
+      <div className="border-b border-[rgba(255,135,175,0.08)] px-2 py-1.5">
         <input
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filter pages..."
-          className="w-full rounded bg-[rgba(175,215,255,0.04)] px-2 py-1.5 text-[12px] text-[var(--axon-text-secondary)] placeholder-[var(--axon-text-subtle)] outline-none ring-1 ring-[rgba(175,215,255,0.08)] transition-all focus:ring-[rgba(175,215,255,0.2)]"
+          className="w-full rounded bg-[rgba(255,135,175,0.04)] px-2 py-1.5 text-[12px] text-[var(--axon-text-secondary)] placeholder-[var(--axon-text-subtle)] outline-none ring-1 ring-[rgba(255,135,175,0.08)] transition-all focus:ring-[rgba(255,135,175,0.2)]"
         />
       </div>
 
@@ -243,10 +243,10 @@ export function CrawlFileExplorer({
               tabIndex={0}
               onClick={() => handleSelect(file.relative_path)}
               onKeyDown={(e) => handleKeyDown(e, file.relative_path)}
-              className={`cursor-pointer border-b border-[rgba(175,215,255,0.04)] px-3 py-2 transition-colors ${
+              className={`cursor-pointer border-b border-[rgba(255,135,175,0.04)] px-3 py-2 transition-colors ${
                 isActive
-                  ? 'border-l-2 border-l-[var(--axon-accent-pink)] bg-[rgba(175,215,255,0.08)]'
-                  : 'border-l-2 border-l-transparent hover:bg-[rgba(175,215,255,0.04)]'
+                  ? 'border-l-2 border-l-[var(--axon-accent-pink)] bg-[rgba(255,135,175,0.08)]'
+                  : 'border-l-2 border-l-transparent hover:bg-[rgba(255,135,175,0.04)]'
               }`}
             >
               <div className="flex items-start justify-between gap-1.5">
@@ -321,7 +321,7 @@ export function CrawlFileExplorer({
         />
         {/* Drawer */}
         <div
-          className={`fixed inset-y-0 left-0 z-50 flex w-[85vw] max-w-[320px] flex-col overflow-hidden rounded-r-xl border-r border-[rgba(175,215,255,0.12)] shadow-2xl transition-transform duration-300 ease-out ${
+          className={`fixed inset-y-0 left-0 z-50 flex w-[85vw] max-w-[320px] flex-col overflow-hidden rounded-r-xl border-r border-[rgba(255,135,175,0.12)] shadow-2xl transition-transform duration-300 ease-out ${
             open ? 'translate-x-0' : '-translate-x-full'
           }`}
           style={{ background: 'rgba(8, 15, 30, 0.97)' }}

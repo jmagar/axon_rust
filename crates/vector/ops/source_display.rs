@@ -22,17 +22,30 @@ fn find_manifest_for_markdown(path: &Path) -> Option<PathBuf> {
 
 fn manifest_url_for_file(path: &Path, manifest: &Path) -> Option<String> {
     let file = File::open(manifest).ok()?;
+    let manifest_dir = manifest.parent();
     let target = normalize_path(path);
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         let parsed: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let manifest_file = match parsed.get("file_path").and_then(Value::as_str) {
-            Some(v) if !v.is_empty() => v,
-            _ => continue,
+        // Handle both "relative_path" (modern crawl format) and "file_path" (absolute path format).
+        let manifest_path = if let Some(rel) = parsed
+            .get("relative_path")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            let base = manifest_dir.unwrap_or(Path::new("."));
+            normalize_path(&base.join(rel))
+        } else if let Some(abs) = parsed
+            .get("file_path")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            normalize_path(Path::new(abs))
+        } else {
+            continue;
         };
-        let manifest_path = normalize_path(Path::new(manifest_file));
         if manifest_path == target {
             if let Some(url) = parsed.get("url").and_then(Value::as_str) {
                 if !url.is_empty() {
@@ -84,10 +97,36 @@ pub fn display_source(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::display_source;
+    use std::fs;
 
     #[test]
     fn display_source_keeps_http_urls() {
         let url = "https://example.com/docs";
         assert_eq!(display_source(url), url);
+    }
+
+    #[test]
+    fn display_source_resolves_relative_path_via_manifest() {
+        let tmp = tempfile::TempDir::new().expect("tmp dir");
+        let markdown_dir = tmp.path().join("markdown");
+        fs::create_dir_all(&markdown_dir).expect("create markdown dir");
+        let md_file = markdown_dir.join("0001-example-com-docs.md");
+        fs::write(&md_file, "# docs").expect("write md file");
+        let manifest = tmp.path().join("manifest.jsonl");
+        fs::write(
+            &manifest,
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "url": "https://example.com/docs",
+                    "relative_path": "markdown/0001-example-com-docs.md",
+                    "markdown_chars": 6
+                })
+            ),
+        )
+        .expect("write manifest");
+
+        let result = display_source(&md_file.to_string_lossy());
+        assert_eq!(result, "https://example.com/docs");
     }
 }

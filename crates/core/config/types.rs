@@ -428,6 +428,9 @@ pub struct Config {
     /// Emit machine-readable JSON output on stdout instead of human-readable text. Flag: `--json`.
     pub json_output: bool,
 
+    /// Status mode: include only watchdog-reclaimed jobs. Flag: `--reclaimed`.
+    pub reclaimed_status_only: bool,
+
     /// Deduplicate trailing-slash URL variants (e.g. `/about` and `/about/` treated as one).
     /// Spider: `with_normalize(bool)`. Default false. Flag: `--normalize`.
     pub normalize: bool,
@@ -600,6 +603,7 @@ impl Default for Config {
             watchdog_stale_timeout_secs: 300,
             watchdog_confirm_secs: 60,
             json_output: false,
+            reclaimed_status_only: false,
             normalize: false,
             chrome_network_idle_timeout_secs: 15,
             auto_switch_thin_ratio: 0.60,
@@ -722,6 +726,7 @@ impl fmt::Debug for Config {
             )
             .field("watchdog_confirm_secs", &self.watchdog_confirm_secs)
             .field("json_output", &self.json_output)
+            .field("reclaimed_status_only", &self.reclaimed_status_only)
             .field("normalize", &self.normalize)
             .field(
                 "chrome_network_idle_timeout_secs",
@@ -825,6 +830,7 @@ mod tests {
         let cfg = Config::default();
         assert!(!cfg.wait);
         assert!(!cfg.json_output);
+        assert!(!cfg.reclaimed_status_only);
     }
 
     #[test]
