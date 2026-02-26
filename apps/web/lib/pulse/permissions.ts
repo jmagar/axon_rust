@@ -17,15 +17,22 @@ export function checkPermission(
   operations: DocOperation[],
   context: PermissionContext,
 ): PermissionResult {
-  if (level === 'full-access') {
+  if (level === 'bypass-permissions') {
     return { allowed: true, requiresConfirmation: false }
   }
 
-  if (level === 'plan' && !context.isCurrentDoc) {
-    return { allowed: false, requiresConfirmation: false, reason: 'plan_mode_current_doc_only' }
+  if (level === 'plan') {
+    return { allowed: false, requiresConfirmation: false, reason: 'plan_mode_no_edits' }
   }
 
-  if (level === 'training-wheels') {
+  if (level === 'accept-edits') {
+    if (!context.isCurrentDoc) {
+      return {
+        allowed: false,
+        requiresConfirmation: false,
+        reason: 'accept_edits_current_doc_only',
+      }
+    }
     const highRisk = isHighRiskOperationSet(operations, context.currentDocMarkdown ?? '')
     return { allowed: true, requiresConfirmation: highRisk }
   }

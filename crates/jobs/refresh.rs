@@ -26,6 +26,7 @@ static SCHEMA_INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 const TABLE: JobTable = JobTable::Refresh;
 const REFRESH_HEARTBEAT_INTERVAL_SECS: u64 = 15;
+const SCHEDULE_CLAIM_LEASE_SECS: i64 = 300;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RefreshJobConfig {
@@ -75,6 +76,30 @@ pub struct RefreshJob {
     pub urls_json: serde_json::Value,
     pub result_json: Option<serde_json::Value>,
     pub config_json: serde_json::Value,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct RefreshSchedule {
+    pub id: Uuid,
+    pub name: String,
+    pub seed_url: Option<String>,
+    pub urls_json: Option<serde_json::Value>,
+    pub every_seconds: i64,
+    pub enabled: bool,
+    pub next_run_at: DateTime<Utc>,
+    pub last_run_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefreshScheduleCreate {
+    pub name: String,
+    pub seed_url: Option<String>,
+    pub urls: Option<Vec<String>>,
+    pub every_seconds: i64,
+    pub enabled: bool,
+    pub next_run_at: DateTime<Utc>,
 }
 
 async fn touch_running_refresh_job(pool: &PgPool, id: Uuid) -> Result<u64, sqlx::Error> {
@@ -128,6 +153,31 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
             error_text TEXT
         )
         "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS axon_refresh_schedules (
+            id UUID PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            seed_url TEXT,
+            urls_json JSONB,
+            every_seconds BIGINT NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            next_run_at TIMESTAMPTZ NOT NULL,
+            last_run_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_axon_refresh_schedules_due ON axon_refresh_schedules(next_run_at ASC) WHERE enabled = TRUE",
     )
     .execute(pool)
     .await?;
@@ -275,6 +325,175 @@ pub async fn recover_stale_refresh_jobs(cfg: &Config) -> Result<u64, Box<dyn Err
     )
     .await?;
     Ok(stats.reclaimed_jobs)
+}
+
+pub async fn create_refresh_schedule(
+    cfg: &Config,
+    schedule: &RefreshScheduleCreate,
+) -> Result<RefreshSchedule, Box<dyn Error>> {
+    let pool = make_pool(cfg).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
+
+    let urls_json = schedule
+        .urls
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()?;
+    let id = Uuid::new_v4();
+
+    Ok(sqlx::query_as::<_, RefreshSchedule>(
+        r#"
+        INSERT INTO axon_refresh_schedules (
+            id, name, seed_url, urls_json, every_seconds, enabled, next_run_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING
+            id, name, seed_url, urls_json, every_seconds, enabled,
+            next_run_at, last_run_at, created_at, updated_at
+        "#,
+    )
+    .bind(id)
+    .bind(&schedule.name)
+    .bind(schedule.seed_url.as_deref())
+    .bind(urls_json)
+    .bind(schedule.every_seconds)
+    .bind(schedule.enabled)
+    .bind(schedule.next_run_at)
+    .fetch_one(&pool)
+    .await?)
+}
+
+pub async fn list_refresh_schedules(
+    cfg: &Config,
+    limit: i64,
+) -> Result<Vec<RefreshSchedule>, Box<dyn Error>> {
+    let pool = make_pool(cfg).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
+
+    Ok(sqlx::query_as::<_, RefreshSchedule>(
+        r#"
+        SELECT
+            id, name, seed_url, urls_json, every_seconds, enabled,
+            next_run_at, last_run_at, created_at, updated_at
+        FROM axon_refresh_schedules
+        ORDER BY next_run_at ASC, created_at ASC
+        LIMIT $1
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(&pool)
+    .await?)
+}
+
+pub async fn delete_refresh_schedule(cfg: &Config, name: &str) -> Result<bool, Box<dyn Error>> {
+    let pool = make_pool(cfg).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
+
+    let rows = sqlx::query("DELETE FROM axon_refresh_schedules WHERE name = $1")
+        .bind(name)
+        .execute(&pool)
+        .await?
+        .rows_affected();
+    Ok(rows > 0)
+}
+
+pub async fn set_refresh_schedule_enabled(
+    cfg: &Config,
+    name: &str,
+    enabled: bool,
+) -> Result<bool, Box<dyn Error>> {
+    let pool = make_pool(cfg).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
+
+    let rows = sqlx::query(
+        "UPDATE axon_refresh_schedules SET enabled = $2, updated_at = NOW() WHERE name = $1",
+    )
+    .bind(name)
+    .bind(enabled)
+    .execute(&pool)
+    .await?
+    .rows_affected();
+    Ok(rows > 0)
+}
+
+pub async fn claim_due_refresh_schedules(
+    cfg: &Config,
+    limit: i64,
+) -> Result<Vec<RefreshSchedule>, Box<dyn Error>> {
+    let pool = make_pool(cfg).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
+
+    let mut tx = pool.begin().await?;
+    let claimed = sqlx::query_as::<_, RefreshSchedule>(
+        r#"
+        WITH due AS (
+            SELECT id
+            FROM axon_refresh_schedules
+            WHERE enabled = TRUE AND next_run_at <= NOW()
+            ORDER BY next_run_at ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT $1
+        ),
+        claimed AS (
+            UPDATE axon_refresh_schedules s
+            SET
+                next_run_at = NOW() + make_interval(secs => $2::double precision),
+                updated_at = NOW()
+            FROM due
+            WHERE s.id = due.id
+            RETURNING
+                s.id, s.name, s.seed_url, s.urls_json, s.every_seconds, s.enabled,
+                s.next_run_at, s.last_run_at, s.created_at, s.updated_at
+        )
+        SELECT
+            id, name, seed_url, urls_json, every_seconds, enabled,
+            next_run_at, last_run_at, created_at, updated_at
+        FROM claimed
+        ORDER BY next_run_at ASC, created_at ASC
+        "#,
+    )
+    .bind(limit)
+    .bind(SCHEDULE_CLAIM_LEASE_SECS)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(claimed)
+}
+
+pub async fn mark_refresh_schedule_ran(
+    cfg: &Config,
+    id: Uuid,
+    next_run_at: DateTime<Utc>,
+) -> Result<bool, Box<dyn Error>> {
+    let pool = make_pool(cfg).await?;
+    if SCHEMA_INIT.get().is_none() {
+        ensure_schema(&pool).await?;
+        let _ = SCHEMA_INIT.set(());
+    }
+
+    let rows = sqlx::query(
+        "UPDATE axon_refresh_schedules SET last_run_at = NOW(), next_run_at = $2, updated_at = NOW() WHERE id = $1",
+    )
+    .bind(id)
+    .bind(next_run_at)
+    .execute(&pool)
+    .await?
+    .rows_affected();
+    Ok(rows > 0)
 }
 
 async fn load_target_states(
@@ -769,4 +988,143 @@ pub async fn recover_stale_refresh_jobs_startup(cfg: &Config) -> Result<u64, Box
         stats.reclaimed_jobs, stats.stale_candidates
     ));
     Ok(stats.reclaimed_jobs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crates::jobs::common::test_config;
+    use chrono::Duration;
+    use std::env;
+
+    fn pg_url() -> Option<String> {
+        env::var("AXON_TEST_PG_URL")
+            .ok()
+            .or_else(|| env::var("AXON_PG_URL").ok())
+            .filter(|v| !v.trim().is_empty())
+    }
+
+    #[tokio::test]
+    async fn ensure_schema_creates_refresh_schedule_table() -> Result<(), Box<dyn Error>> {
+        let Some(pg_url) = pg_url() else {
+            return Ok(());
+        };
+        let cfg = test_config(&pg_url);
+        let pool = make_pool(&cfg).await?;
+        ensure_schema(&pool).await?;
+
+        let table_exists: Option<String> = sqlx::query_scalar(
+            r#"
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'axon_refresh_schedules'
+            "#,
+        )
+        .fetch_optional(&pool)
+        .await?;
+
+        assert_eq!(table_exists.as_deref(), Some("axon_refresh_schedules"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn claim_due_refresh_schedules_only_returns_enabled_due_rows()
+    -> Result<(), Box<dyn Error>> {
+        let Some(pg_url) = pg_url() else {
+            return Ok(());
+        };
+        let cfg = test_config(&pg_url);
+        let pool = make_pool(&cfg).await?;
+        ensure_schema(&pool).await?;
+
+        let due_name = format!("refresh-due-{}", Uuid::new_v4());
+        let future_name = format!("refresh-future-{}", Uuid::new_v4());
+        let disabled_name = format!("refresh-disabled-{}", Uuid::new_v4());
+
+        let now = Utc::now();
+        let _ = create_refresh_schedule(
+            &cfg,
+            &RefreshScheduleCreate {
+                name: due_name.clone(),
+                seed_url: None,
+                urls: Some(vec!["https://example.com/due".to_string()]),
+                every_seconds: 60,
+                enabled: true,
+                next_run_at: now - Duration::minutes(1),
+            },
+        )
+        .await?;
+
+        let _ = create_refresh_schedule(
+            &cfg,
+            &RefreshScheduleCreate {
+                name: future_name.clone(),
+                seed_url: None,
+                urls: Some(vec!["https://example.com/future".to_string()]),
+                every_seconds: 60,
+                enabled: true,
+                next_run_at: now + Duration::minutes(10),
+            },
+        )
+        .await?;
+
+        let _ = create_refresh_schedule(
+            &cfg,
+            &RefreshScheduleCreate {
+                name: disabled_name.clone(),
+                seed_url: None,
+                urls: Some(vec!["https://example.com/disabled".to_string()]),
+                every_seconds: 60,
+                enabled: false,
+                next_run_at: now - Duration::minutes(2),
+            },
+        )
+        .await?;
+
+        let claimed = claim_due_refresh_schedules(&cfg, 25).await?;
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].name, due_name);
+
+        let _ = delete_refresh_schedule(&cfg, &due_name).await?;
+        let _ = delete_refresh_schedule(&cfg, &future_name).await?;
+        let _ = delete_refresh_schedule(&cfg, &disabled_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn claim_due_refresh_schedules_prevents_immediate_duplicate_claims()
+    -> Result<(), Box<dyn Error>> {
+        let Some(pg_url) = pg_url() else {
+            return Ok(());
+        };
+        let cfg = test_config(&pg_url);
+        let pool = make_pool(&cfg).await?;
+        ensure_schema(&pool).await?;
+
+        let name = format!("refresh-atomic-claim-{}", Uuid::new_v4());
+        let before_create = Utc::now();
+        let _ = create_refresh_schedule(
+            &cfg,
+            &RefreshScheduleCreate {
+                name: name.clone(),
+                seed_url: None,
+                urls: Some(vec!["https://example.com/atomic".to_string()]),
+                every_seconds: 120,
+                enabled: true,
+                next_run_at: before_create - Duration::minutes(2),
+            },
+        )
+        .await?;
+
+        let first = claim_due_refresh_schedules(&cfg, 1).await?;
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].name, name);
+        assert!(first[0].next_run_at > before_create);
+
+        let second = claim_due_refresh_schedules(&cfg, 1).await?;
+        assert!(second.is_empty());
+
+        let _ = delete_refresh_schedule(&cfg, &name).await?;
+        Ok(())
+    }
 }

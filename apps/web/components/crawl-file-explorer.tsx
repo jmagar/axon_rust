@@ -67,9 +67,18 @@ export function CrawlFileExplorer({
   onSelectFile,
   jobId,
 }: CrawlFileExplorerProps) {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState('')
   const panelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const initialize = () => {
+      setOpen(window.innerWidth >= 768)
+    }
+    initialize()
+    window.addEventListener('resize', initialize)
+    return () => window.removeEventListener('resize', initialize)
+  }, [])
 
   const domain = useMemo(() => {
     if (files.length === 0) return ''
@@ -116,69 +125,55 @@ export function CrawlFileExplorer({
     return () => document.removeEventListener('keydown', handler)
   }, [open])
 
-  // Desktop toggle strip (inline, always visible on md+)
-  const desktopToggle = (
-    <button
-      type="button"
-      onClick={() => setOpen(!open)}
-      aria-label={open ? 'Collapse file explorer' : 'Expand file explorer'}
-      className="hidden w-10 flex-shrink-0 items-start justify-center self-stretch border-r border-[rgba(255,135,175,0.08)] pt-3 text-[var(--axon-text-muted)] transition-colors hover:text-[var(--axon-accent-blue)] md:flex"
-      style={{ background: 'rgba(3, 7, 18, 0.3)' }}
-      title={open ? 'Collapse file explorer' : 'Expand file explorer'}
+  const fileCountLabel = files.length > 99 ? '99+' : String(files.length)
+  const openLabel = `Open files (${files.length})`
+  const fileIcon = (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="size-3.5"
+      aria-hidden="true"
     >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="size-4"
-      >
-        <path d={open ? 'm15 18-6-6 6-6' : 'm9 18 6-6-6-6'} />
-      </svg>
-    </button>
-  )
-
-  // Mobile FAB (floating action button, bottom-left, only when closed)
-  const mobileFab = (
-    <button
-      type="button"
-      onClick={() => setOpen(true)}
-      aria-label="Open file explorer"
-      className="fixed bottom-4 left-4 z-30 flex h-10 w-10 items-center justify-center rounded-full border border-[rgba(255,135,175,0.15)] shadow-lg backdrop-blur-sm transition-all active:scale-95 md:hidden"
-      style={{ background: 'rgba(8, 15, 30, 0.85)' }}
-      title="Open file explorer"
-    >
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.5}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="size-4 text-[var(--axon-accent-blue)]"
-      >
-        <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
-        <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-        <path d="M10 18v-6" />
-        <path d="M14 18v-3" />
-      </svg>
-      {files.length > 0 && (
-        <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--axon-accent-pink)] px-1 text-[10px] font-bold text-white">
-          {files.length > 99 ? '99+' : files.length}
-        </span>
-      )}
-    </button>
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M9 13h6" />
+      <path d="M9 17h6" />
+    </svg>
   )
 
   if (!open) {
     return (
       <>
-        {mobileFab}
-        {desktopToggle}
+        <div className="hidden w-12 flex-shrink-0 items-start justify-center self-stretch border-r border-[rgba(255,135,175,0.08)] pt-2 md:flex">
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            aria-label={openLabel}
+            title={openLabel}
+            className="ui-chip inline-flex items-center gap-1 rounded-md border border-[rgba(255,135,175,0.14)] bg-[rgba(10,18,35,0.7)] px-2 py-1 text-[var(--axon-accent-blue)] transition-colors hover:bg-[rgba(255,135,175,0.1)]"
+          >
+            {fileIcon}
+            <span>{fileCountLabel}</span>
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-label={openLabel}
+          title={openLabel}
+          className="ui-chip fixed bottom-4 left-4 z-40 inline-flex items-center gap-1.5 rounded-full border border-[rgba(255,135,175,0.2)] bg-[rgba(8,15,30,0.9)] px-3 py-2 text-[var(--axon-accent-blue)] shadow-lg backdrop-blur-sm transition-transform active:scale-95 md:hidden"
+        >
+          {fileIcon}
+          <span>Files</span>
+          <span className="rounded bg-[rgba(255,135,175,0.18)] px-1 text-[length:var(--text-2xs)] leading-4 text-[var(--axon-text-primary)]">
+            {fileCountLabel}
+          </span>
+        </button>
       </>
     )
   }
@@ -192,10 +187,10 @@ export function CrawlFileExplorer({
       {/* Header */}
       <div className="flex items-center justify-between border-b border-[rgba(255,135,175,0.08)] px-3 py-2">
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[12px] font-semibold text-[var(--axon-accent-blue)]">
+          <div className="truncate text-[length:var(--text-md)] font-semibold text-[var(--axon-accent-blue)]">
             {domain}
           </div>
-          <div className="text-[11px] text-[var(--axon-text-muted)]">{files.length} pages</div>
+          <div className="ui-meta">{files.length} pages</div>
         </div>
         <button
           type="button"
@@ -226,7 +221,7 @@ export function CrawlFileExplorer({
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Filter pages..."
-          className="w-full rounded bg-[rgba(255,135,175,0.04)] px-2 py-1.5 text-[12px] text-[var(--axon-text-secondary)] placeholder-[var(--axon-text-subtle)] outline-none ring-1 ring-[rgba(255,135,175,0.08)] transition-all focus:ring-[rgba(255,135,175,0.2)]"
+          className="w-full rounded bg-[rgba(255,135,175,0.04)] px-2 py-1.5 text-[length:var(--text-md)] text-[var(--axon-text-secondary)] placeholder-[var(--axon-text-subtle)] outline-none ring-1 ring-[rgba(255,135,175,0.08)] transition-all focus:ring-[rgba(255,135,175,0.2)]"
         />
       </div>
 
@@ -255,18 +250,18 @@ export function CrawlFileExplorer({
               <div className="flex items-start justify-between gap-1.5">
                 <div className="min-w-0 flex-1">
                   <div
-                    className={`truncate text-[12px] font-medium leading-snug ${isActive ? 'text-[var(--axon-accent-blue)]' : 'text-[var(--axon-text-secondary)]'}`}
+                    className={`truncate text-[length:var(--text-md)] font-medium leading-[var(--leading-tight)] ${isActive ? 'text-[var(--axon-accent-blue)]' : 'text-[var(--axon-text-secondary)]'}`}
                   >
                     {name}
                   </div>
                   {crumb && (
-                    <div className="truncate text-[10px] text-[var(--axon-text-subtle)]">
+                    <div className="truncate text-[length:var(--text-xs)] text-[var(--axon-text-subtle)]">
                       {crumb}
                     </div>
                   )}
                 </div>
                 <div className="mt-0.5 flex flex-shrink-0 items-center gap-1">
-                  <span className="text-[10px] tabular-nums text-[var(--axon-text-subtle)]">
+                  <span className="text-[length:var(--text-xs)] tabular-nums text-[var(--axon-text-subtle)]">
                     {file.markdown_chars > 1000
                       ? `${(file.markdown_chars / 1000).toFixed(1)}k`
                       : file.markdown_chars}
@@ -300,7 +295,7 @@ export function CrawlFileExplorer({
           )
         })}
         {filteredFiles.length === 0 && filter && (
-          <div className="px-3 py-4 text-center text-[12px] text-[var(--axon-text-subtle)]">
+          <div className="px-3 py-4 text-center text-[length:var(--text-md)] text-[var(--axon-text-subtle)]">
             No matches
           </div>
         )}

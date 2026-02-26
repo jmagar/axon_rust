@@ -132,9 +132,9 @@ function JobCard({ job, commandMode }: { job: JobState; commandMode: string | nu
           className={`inline-block size-2 shrink-0 rounded-full ${PHASE_META[job.status].dotClass}`}
         />
         <div className="min-w-0 flex-1">
-          <span className="font-mono text-[12px] text-[var(--axon-accent-blue)]">{job.jobId}</span>
+          <span className="ui-mono text-[var(--axon-accent-blue)]">{job.jobId}</span>
           <span
-            className="ml-2 text-[11px] font-semibold uppercase tracking-wider"
+            className="ml-2 ui-label"
             style={{ color: PHASE_META[job.status].color }}
           >
             {PHASE_META[job.status].label}
@@ -145,10 +145,10 @@ function JobCard({ job, commandMode }: { job: JobState; commandMode: string | nu
       {/* Error display */}
       {job.status === 'failed' && job.errorText && (
         <div className="mb-3 rounded-md border border-[rgba(255,95,135,0.2)] bg-[rgba(255,95,135,0.06)] px-3 py-2">
-          <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--axon-accent-pink)]">
+          <div className="ui-label mb-1 text-[var(--axon-accent-pink)]">
             Error
           </div>
-          <div className="font-mono text-[12px] leading-relaxed text-[var(--axon-text-secondary)]">
+          <div className="ui-mono text-[var(--axon-text-secondary)]">
             {job.errorText}
           </div>
         </div>
@@ -157,11 +157,11 @@ function JobCard({ job, commandMode }: { job: JobState; commandMode: string | nu
       {/* Result summary for completed jobs */}
       {job.status === 'completed' && job.resultSummary && (
         <div className="mb-3 space-y-0.5">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--axon-text-dim)]">
+          <div className="ui-label mb-1">
             Result
           </div>
           {Object.entries(job.resultSummary).map(([key, val]) => (
-            <div key={key} className="flex justify-between py-0.5 text-[12px]">
+            <div key={key} className="flex justify-between py-0.5 text-[length:var(--text-sm)]">
               <span className="text-[var(--axon-text-muted)]">{key}</span>
               <span className="max-w-[60%] truncate tabular-nums text-[var(--axon-accent-blue)]">
                 {summarizeStructuredValue(val)}
@@ -209,7 +209,7 @@ function ActionButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`rounded-md border px-3 py-1.5 text-[11px] font-medium transition-colors duration-150 disabled:opacity-40 ${variantClasses}`}
+      className={`rounded-md border px-3 py-1.5 text-[length:var(--text-sm)] font-medium transition-colors duration-150 disabled:opacity-40 ${variantClasses}`}
     >
       {label}
     </button>
@@ -220,12 +220,14 @@ function EmptyState({ isProcessing }: { isProcessing: boolean }) {
   return (
     <div className="flex h-32 items-center justify-center">
       {isProcessing ? (
-        <div className="flex items-center gap-2 text-[13px] text-[var(--axon-text-muted)]">
+        <div className="flex items-center gap-2 text-[length:var(--text-base)] text-[var(--axon-text-muted)]">
           <span className="inline-block size-2 animate-pulse rounded-full bg-[var(--axon-warning)] shadow-[0_0_8px_rgba(255,175,135,0.6)]" />
           <span>Enqueuing job...</span>
         </div>
       ) : (
-        <span className="text-[13px] text-[var(--axon-text-muted)]">No job data available</span>
+        <span className="text-[length:var(--text-base)] text-[var(--axon-text-muted)]">
+          No job data available
+        </span>
       )}
     </div>
   )
@@ -279,10 +281,10 @@ export function JobLifecycleRenderer({
   if (errorMessage && jobs.length === 0) {
     return (
       <div className="rounded-md border border-[rgba(255,95,135,0.2)] bg-[rgba(255,95,135,0.06)] px-4 py-3">
-        <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-[var(--axon-accent-pink)]">
+        <div className="ui-label mb-1 text-[var(--axon-accent-pink)]">
           Error
         </div>
-        <div className="font-mono text-[13px] leading-relaxed text-[var(--axon-text-secondary)]">
+        <div className="ui-mono text-[var(--axon-text-secondary)]">
           {errorMessage}
         </div>
       </div>
@@ -297,7 +299,7 @@ export function JobLifecycleRenderer({
     <div className="space-y-3">
       {/* Summary header when multiple jobs */}
       {jobs.length > 1 && (
-        <div className="flex items-center gap-3 text-[11px] text-[var(--axon-text-muted)]">
+        <div className="ui-meta flex items-center gap-3">
           <span>{jobs.length} jobs</span>
           <span>&middot;</span>
           <span>{jobs.filter((j) => j.status === 'completed').length} completed</span>

@@ -47,7 +47,12 @@ export function validateDocOperations(
     }
 
     if (op.type === 'replace_document') {
-      if (estimateChangedRatio(originalMarkdown, op.markdown) > REPLACE_CHAR_THRESHOLD) {
+      // Only flag large_replace when the document already has content — replacing an
+      // empty document is always safe regardless of how much new content is added.
+      if (
+        originalMarkdown.trim().length > 0 &&
+        estimateChangedRatio(originalMarkdown, op.markdown) > REPLACE_CHAR_THRESHOLD
+      ) {
         reasons.add('large_replace')
       }
 

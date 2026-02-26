@@ -8,12 +8,14 @@ describe('pulse rag prompt builder', () => {
         prompt: 'summarize',
         documentMarkdown: '# Doc',
         selectedCollections: ['pulse'],
+        threadSources: [],
         conversationHistory: [],
-        permissionLevel: 'training-wheels',
+        permissionLevel: 'accept-edits',
+        model: 'sonnet',
       },
       [],
     )
-    expect(prompt).toContain('Permission level: training-wheels')
+    expect(prompt).toContain('Permission level: accept-edits')
   })
 
   it('includes citation snippets when provided', () => {
@@ -22,8 +24,10 @@ describe('pulse rag prompt builder', () => {
         prompt: 'summarize',
         documentMarkdown: '# Doc',
         selectedCollections: ['pulse'],
+        threadSources: [],
         conversationHistory: [],
         permissionLevel: 'plan',
+        model: 'sonnet',
       },
       [
         {
@@ -44,8 +48,10 @@ describe('pulse rag prompt builder', () => {
         prompt: 'summarize',
         documentMarkdown: 'A'.repeat(5000),
         selectedCollections: ['pulse'],
+        threadSources: [],
         conversationHistory: [],
-        permissionLevel: 'full-access',
+        permissionLevel: 'bypass-permissions',
+        model: 'sonnet',
       },
       [],
     )

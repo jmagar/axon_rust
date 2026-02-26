@@ -45,7 +45,7 @@ export function ReportRenderer({ result, commandMode }: ReportRendererProps) {
 
 function SectionHeader({ children }: { children: React.ReactNode }) {
   return (
-    <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--axon-text-dim)]">
+    <h3 className="ui-label mb-1.5">
       {children}
     </h3>
   )
@@ -53,7 +53,7 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 
 function AskPill({ label, value, icon }: { label: string; value: string; icon?: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-md border border-[rgba(255,135,175,0.2)] bg-[rgba(14,25,48,0.62)] px-2 py-0.5 font-mono text-[10px] text-[var(--axon-accent-blue)]">
+    <span className="ui-chip-status rounded-md border border-[rgba(255,135,175,0.2)] bg-[rgba(14,25,48,0.62)] text-[var(--axon-accent-blue)]">
       {icon && <span className="text-[var(--axon-accent-blue-strong)]">{icon}</span>}
       <span className="uppercase tracking-wide text-[var(--axon-text-dim)]">{label}</span>
       <span className="text-[var(--axon-text-secondary)]">{value}</span>
@@ -79,9 +79,9 @@ function Collapsible({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] font-medium text-[var(--axon-text-muted)] transition-colors hover:text-[var(--axon-accent-blue)]"
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[length:var(--text-sm)] font-medium text-[var(--axon-text-muted)] transition-colors hover:text-[var(--axon-accent-blue)]"
       >
-        <span className="text-[11px]">{open ? '\u25BC' : '\u25B6'}</span>
+        <span className="text-[length:var(--text-sm)]">{open ? '\u25BC' : '\u25B6'}</span>
         {title}
       </button>
       {open && <div className="border-t border-[rgba(255,135,175,0.06)] px-3 py-2">{children}</div>}
@@ -91,7 +91,7 @@ function Collapsible({
 
 function TimingRow({ label, ms }: { label: string; ms: number }) {
   return (
-    <div className="flex justify-between text-[11px]">
+    <div className="flex justify-between text-[length:var(--text-sm)]">
       <span className="text-[var(--axon-text-muted)]">{label}</span>
       <span className="tabular-nums text-[var(--axon-accent-blue)]">{fmtMs(ms)}</span>
     </div>
@@ -104,7 +104,7 @@ function TimingRow({ label, ms }: { label: string; ms: number }) {
 
 function DiagnosticsPanel({ diag }: { diag: AskDiagnostics }) {
   return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-1 font-mono text-[11px]">
+    <div className="grid grid-cols-2 gap-x-6 gap-y-1 ui-mono">
       <KV label="Candidate pool" value={fmtNum(diag.candidate_pool)} />
       <KV label="Reranked pool" value={fmtNum(diag.reranked_pool)} />
       <KV label="Chunks selected" value={fmtNum(diag.chunks_selected)} />
@@ -147,10 +147,10 @@ function AskReport({ data }: { data: AskResult }) {
           <span className="inline-flex size-4 items-center justify-center rounded-[6px] border border-[rgba(175,215,255,0.3)] bg-[rgba(175,215,255,0.12)] text-[var(--axon-accent-pink-strong)]">
             <Sparkles size={10} />
           </span>
-          <span className="text-[10px] uppercase tracking-wider text-[var(--axon-text-dim)]">
+          <span className="ui-label">
             Ask
           </span>
-          <p className="min-w-[180px] flex-1 break-words text-[12px] leading-[1.45] text-[var(--axon-text-secondary)]">
+          <p className="min-w-[180px] flex-1 break-words ui-long-copy">
             {data.query}
           </p>
           <AskPill label="total" value={fmtMs(data.timing_ms.total)} icon={<Clock3 size={10} />} />
@@ -183,12 +183,12 @@ function AskReport({ data }: { data: AskResult }) {
             'linear-gradient(145deg, rgba(11,20,40,0.72), rgba(8,15,31,0.52) 60%, rgba(20,14,36,0.42))',
         }}
       >
-        <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-[var(--axon-text-dim)]">
+        <div className="ui-label mb-1 flex items-center gap-1">
           <MessageSquareQuote size={11} className="text-[var(--axon-accent-blue)]" />
           <span>Answer</span>
         </div>
         <div className="animate-in fade-in-0 duration-500">
-          <MarkdownBlock markdown={data.answer} className="text-[12px] leading-[1.6]" />
+          <MarkdownBlock markdown={data.answer} className="ui-long-copy" />
         </div>
       </div>
     </div>
@@ -205,8 +205,8 @@ function EvaluateReport({ data }: { data: EvaluateResult }) {
       {/* Query */}
       <div>
         <SectionHeader>Query</SectionHeader>
-        <p className="text-[13px] font-medium text-[var(--axon-text-secondary)]">{data.query}</p>
-        <span className="mt-1 text-[11px] text-[var(--axon-text-muted)]">
+        <p className="text-[length:var(--text-base)] font-medium text-[var(--axon-text-secondary)]">{data.query}</p>
+        <span className="ui-meta mt-1">
           {data.ref_chunk_count} reference chunks
         </span>
       </div>
@@ -282,7 +282,7 @@ function DebugReport({ data }: { data: DebugResult }) {
 
       <div>
         <SectionHeader>LLM Debug Analysis</SectionHeader>
-        <div className="mb-2 flex gap-4 text-[11px] text-[var(--axon-text-muted)]">
+        <div className="ui-meta mb-2 flex gap-4">
           <span>
             Model: <span className="text-[var(--axon-accent-blue)]">{data.llm_debug.model}</span>
           </span>
@@ -292,7 +292,7 @@ function DebugReport({ data }: { data: DebugResult }) {
           </span>
         </div>
         <div
-          className="whitespace-pre-wrap rounded-lg border border-[rgba(255,135,175,0.08)] p-3 text-[12px] leading-relaxed text-[var(--axon-text-secondary)]"
+          className="whitespace-pre-wrap rounded-lg border border-[rgba(255,135,175,0.08)] p-3 ui-long-copy"
           style={{ background: 'rgba(10, 18, 35, 0.4)' }}
         >
           {data.llm_debug.analysis}
@@ -333,7 +333,7 @@ function RawTextReport({ data }: { data: unknown[] }) {
         return (
           <div
             key={`text-${idx}`}
-            className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--axon-text-secondary)]"
+            className="whitespace-pre-wrap ui-long-copy"
           >
             {text}
           </div>

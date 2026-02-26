@@ -1,5 +1,6 @@
 'use client'
 
+import { SendHorizontal, Shield, ShieldCheck, ShieldOff, Square, Wrench } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAxonWs } from '@/hooks/use-axon-ws'
 import { useWsMessages } from '@/hooks/use-ws-messages'
@@ -17,7 +18,6 @@ import {
 } from '@/lib/omnibox'
 import type { ModeCategory, ModeDefinition, WsServerMsg } from '@/lib/ws-protocol'
 import {
-  isWorkspaceMode,
   MODE_CATEGORY_LABELS,
   MODE_CATEGORY_ORDER,
   MODES,
@@ -26,9 +26,31 @@ import {
 } from '@/lib/ws-protocol'
 import { CommandOptionsPanel, type CommandOptionValues } from './command-options-panel'
 
+export function shouldPreservePulseWorkspaceForMode(
+  workspaceMode: string | null,
+  execMode: ModeId,
+): boolean {
+  return (
+    workspaceMode === 'pulse' &&
+    (execMode === 'scrape' || execMode === 'crawl' || execMode === 'extract')
+  )
+}
+
 export function Omnibox() {
   const { send, subscribe } = useAxonWs()
-  const { startExecution, activateWorkspace, submitWorkspacePrompt, currentJobId } = useWsMessages()
+  const {
+    startExecution,
+    activateWorkspace,
+    submitWorkspacePrompt,
+    currentJobId,
+    currentMode,
+    workspaceMode,
+    workspaceContext,
+    pulseModel,
+    pulsePermissionLevel,
+    setPulseModel,
+    setPulsePermissionLevel,
+  } = useWsMessages()
   const [mode, setMode] = useState<ModeId>('scrape')
   const [input, setInput] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
@@ -43,13 +65,39 @@ export function Omnibox() {
   const [localDocFiles, setLocalDocFiles] = useState<LocalDocFile[]>([])
   const [fileContextMentions, setFileContextMentions] = useState<Record<string, LocalDocFile>>({})
   const [recentFileSelections, setRecentFileSelections] = useState<Record<string, number>>({})
+  const [showModeSelector, setShowModeSelector] = useState(false)
+  const [toolsOpen, setToolsOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const omniboxRef = useRef<HTMLDivElement>(null)
+  const toolsRef = useRef<HTMLDivElement>(null)
   const startTimeRef = useRef(0)
   const execIdRef = useRef(0)
   const [optionValues, setOptionValues] = useState<CommandOptionValues>({})
 
-  const currentMode = MODES.find((m) => m.id === mode) ?? MODES[0]
+  function isUrlLikeToken(token: string): boolean {
+    if (!token) return false
+    if (/^https?:\/\//i.test(token)) return true
+    if (token.includes('@')) return false
+    return /^[a-z0-9.-]+\.[a-z]{2,}(?:[/:?#].*)?$/i.test(token)
+  }
+
+  function shouldRunCommandForInput(selectedMode: ModeId, rawInput: string): boolean {
+    const trimmed = rawInput.trim()
+    if (!trimmed) return NO_INPUT_MODES.has(selectedMode)
+    const firstToken = trimmed.split(/\s+/)[0] ?? ''
+    return isUrlLikeToken(firstToken)
+  }
+
+  function normalizeUrlInput(rawInput: string): string {
+    const trimmed = rawInput.trim()
+    const firstToken = trimmed.split(/\s+/)[0] ?? ''
+    if (!trimmed || /^https?:\/\//i.test(firstToken)) return trimmed
+    if (!isUrlLikeToken(firstToken)) return trimmed
+    if (firstToken !== trimmed) return trimmed
+    return `https://${trimmed}`
+  }
+
+  const selectedModeDef = MODES.find((m) => m.id === mode) ?? MODES[0]
   const hasOptions = (getCommandSpec(mode)?.commandOptions.length ?? 0) > 0
   const activeOptionCount = useMemo(
     () => Object.values(optionValues).filter((val) => val !== '' && val !== false).length,
@@ -61,6 +109,8 @@ export function Omnibox() {
     [input, activeMentionToken],
   )
   const activeSuggestions = mentionKind === 'mode' ? mentionSuggestions : fileSuggestions
+  const effectiveDropdownOpen = dropdownOpen || mentionKind === 'mode'
+  const willRunAsCommand = useMemo(() => shouldRunCommandForInput(mode, input), [mode, input])
   const omniboxPhase = useMemo(
     () =>
       deriveOmniboxPhase({
@@ -71,7 +121,13 @@ export function Omnibox() {
       }),
     [input, isProcessing, mentionKind, modeAppliedLabel],
   )
-
+  const contextFileCount = Object.keys(fileContextMentions).length
+  const contextUtilizationPercent = useMemo(() => {
+    if (!workspaceContext || workspaceContext.contextBudgetChars <= 0) return 0
+    const ratio = (workspaceContext.contextCharsTotal / workspaceContext.contextBudgetChars) * 100
+    if (ratio <= 0) return 0
+    return Math.min(100, ratio)
+  }, [workspaceContext])
   // Group modes by category for the dropdown
   const groupedModes = useMemo(() => {
     const groups = new Map<ModeCategory, ModeDefinition[]>()
@@ -91,6 +147,7 @@ export function Omnibox() {
       if (omniboxRef.current && !omniboxRef.current.contains(e.target as Node)) {
         setDropdownOpen(false)
         setOptionsOpen(false)
+        setToolsOpen(false)
       }
     }
     document.addEventListener('mousedown', handleClick)
@@ -126,7 +183,7 @@ export function Omnibox() {
     })
   }, [mode, subscribe])
 
-  // Global "/" shortcut to focus the omnibox.
+  // Global "/" and Cmd/Ctrl+K shortcuts to focus the omnibox.
   useEffect(() => {
     function isEditableElement(target: EventTarget | null): boolean {
       if (!(target instanceof HTMLElement)) return false
@@ -136,14 +193,26 @@ export function Omnibox() {
     }
 
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return
-      if (isEditableElement(event.target)) return
+      const slashShortcut =
+        event.key === '/' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+      const commandPaletteShortcut =
+        (event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'k'
+      if (!slashShortcut && !commandPaletteShortcut) return
+      if (slashShortcut && isEditableElement(event.target)) return
       event.preventDefault()
       inputRef.current?.focus()
     }
 
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 768px)')
+    const update = () => setShowModeSelector(media.matches)
+    update()
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
   }, [])
 
   useEffect(() => {
@@ -248,14 +317,15 @@ export function Omnibox() {
 
       const trimmedInput = execInput.trim()
       if (!trimmedInput && !NO_INPUT_MODES.has(execMode)) return
-
-      const { enrichedInput, contextFileLabels } = await buildInputWithFileContext(trimmedInput)
-
-      if (isWorkspaceMode(execMode)) {
-        activateWorkspace(execMode)
-        if (enrichedInput) submitWorkspacePrompt(enrichedInput)
+      const shouldRunCommand = shouldRunCommandForInput(execMode, trimmedInput)
+      if (!shouldRunCommand) {
+        activateWorkspace('pulse')
+        if (trimmedInput) submitWorkspacePrompt(trimmedInput)
         return
       }
+
+      const normalizedInput = normalizeUrlInput(trimmedInput)
+      const { enrichedInput, contextFileLabels } = await buildInputWithFileContext(normalizedInput)
 
       execIdRef.current += 1
       setIsProcessing(true)
@@ -280,12 +350,14 @@ export function Omnibox() {
         flags,
       })
 
-      startExecution(execMode, enrichedInput)
+      const preservePulseWorkspace = shouldPreservePulseWorkspaceForMode(workspaceMode, execMode)
+      startExecution(execMode, enrichedInput, { preserveWorkspace: preservePulseWorkspace })
     },
     [
       isProcessing,
       buildInputWithFileContext,
       activateWorkspace,
+      workspaceMode,
       submitWorkspacePrompt,
       send,
       startExecution,
@@ -294,7 +366,9 @@ export function Omnibox() {
   )
 
   const execute = useCallback(() => {
+    const hasTypedInput = input.trim().length > 0
     void executeCommand(mode, input)
+    if (hasTypedInput) setInput('')
   }, [executeCommand, mode, input])
 
   const cancel = useCallback(() => {
@@ -320,9 +394,14 @@ export function Omnibox() {
       setDropdownOpen(false)
       setOptionsOpen(false)
       setOptionValues({})
-      if (isWorkspaceMode(id)) {
-        activateWorkspace(id)
-      } else if (NO_INPUT_MODES.has(id)) {
+      if (mentionKind === 'mode') {
+        setInput('')
+        setMentionSuggestions([])
+        setFileSuggestions([])
+        setMentionSelectionIndex(0)
+        setModeAppliedLabel(MODES.find((m) => m.id === id)?.label ?? null)
+      }
+      if (NO_INPUT_MODES.has(id)) {
         setTimeout(() => {
           void executeCommand(id, '')
         }, 0)
@@ -330,7 +409,7 @@ export function Omnibox() {
         inputRef.current?.focus()
       }
     },
-    [activateWorkspace, executeCommand],
+    [executeCommand, mentionKind],
   )
 
   const applyModeMentionCandidate = useCallback(
@@ -415,6 +494,11 @@ export function Omnibox() {
           applyActiveSuggestion()
           return
         }
+        if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+          e.preventDefault()
+          execute()
+          return
+        }
         e.preventDefault()
         execute()
       }
@@ -423,6 +507,9 @@ export function Omnibox() {
         setOptionsOpen(false)
         setMentionSuggestions([])
         setFileSuggestions([])
+        if (mentionKind === 'mode') {
+          setInput('')
+        }
       }
     },
     [activeSuggestions, mentionKind, applyActiveSuggestion, execute],
@@ -435,7 +522,7 @@ export function Omnibox() {
           isProcessing
             ? 'border-[rgba(175,215,255,0.4)] shadow-[0_0_20px_rgba(175,215,255,0.15)]'
             : 'border-[rgba(255,135,175,0.18)]'
-        } focus-within:border-[rgba(255,135,175,0.4)] focus-within:shadow-[0_0_0_3px_rgba(255,135,175,0.08)]`}
+        } min-h-[46px] focus-within:border-[rgba(255,135,175,0.4)] focus-within:shadow-[0_0_0_3px_rgba(255,135,175,0.08)]`}
         style={{
           background: 'rgba(10, 18, 35, 0.65)',
           borderWidth: '1.5px',
@@ -445,14 +532,14 @@ export function Omnibox() {
       >
         {/* Text input */}
         <input
+          id="axon-omnibox-input"
+          name="axon_omnibox_input"
           ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={
-            NO_INPUT_MODES.has(mode) ? `Run ${currentMode.label}...` : 'Enter URL or query...'
-          }
-          className="min-w-0 flex-1 bg-transparent px-4 py-3.5 font-mono text-sm text-foreground outline-none placeholder:text-[var(--axon-text-subtle)]"
+          placeholder={'@mention a tool or just start talking'}
+          className="min-w-0 flex-1 bg-transparent px-3 py-2.5 font-mono text-[length:var(--text-base)] leading-[var(--leading-tight)] text-foreground outline-none placeholder:text-[var(--axon-text-subtle)] sm:px-4 sm:py-3"
           disabled={isProcessing}
         />
 
@@ -471,13 +558,115 @@ export function Omnibox() {
                   : 'bg-[#ef4444] shadow-[0_0_6px_rgba(239,68,68,0.5)]'
             }`}
           />
-          <span className="font-mono text-[11px] tracking-wide text-[var(--axon-text-muted)]">
+          <span className="font-mono text-[length:var(--text-xs)] tracking-wide text-[var(--axon-text-muted)]">
             {statusText}
           </span>
         </div>
 
         {/* Divider */}
         <div className="h-[22px] w-px shrink-0 bg-[rgba(255,135,175,0.12)]" />
+
+        {!NO_INPUT_MODES.has(mode) && input.trim().length > 0 && willRunAsCommand && (
+          <>
+            <div className="inline-flex shrink-0 items-center px-2.5">
+              <span
+                className={`ui-chip rounded-full border px-1.5 py-0.5 ${'border-[rgba(175,215,255,0.38)] bg-[rgba(175,215,255,0.12)] text-[var(--axon-accent-pink-strong)]'}`}
+              >
+                {selectedModeDef.label}
+              </span>
+            </div>
+            <div className="h-[22px] w-px shrink-0 bg-[rgba(255,135,175,0.12)]" />
+          </>
+        )}
+
+        {showModeSelector && (
+          <>
+            <div className="h-[22px] w-px shrink-0 bg-[rgba(255,135,175,0.12)]" />
+            <div className="inline-flex shrink-0 items-center px-2.5">
+              <span className="ui-chip rounded-full border border-[rgba(95,135,175,0.28)] bg-[rgba(10,18,35,0.48)] px-1.5 py-0.5 text-[var(--axon-accent-blue)]">
+                {selectedModeDef.label}
+              </span>
+            </div>
+          </>
+        )}
+
+        {workspaceMode === 'pulse' && (
+          <>
+            <div className="h-[22px] w-px shrink-0 bg-[rgba(255,135,175,0.12)]" />
+            <div ref={toolsRef} className="relative flex shrink-0 items-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setToolsOpen((prev) => !prev)
+                  setDropdownOpen(false)
+                  setOptionsOpen(false)
+                }}
+                className={`relative flex items-center justify-center rounded-md border px-2.5 py-2 text-[var(--axon-text-muted)] transition-colors duration-150 hover:text-[var(--axon-accent-blue)] ${
+                  toolsOpen
+                    ? 'border-[rgba(175,215,255,0.42)] bg-[rgba(175,215,255,0.12)]'
+                    : 'border-[rgba(255,135,175,0.22)] bg-transparent'
+                }`}
+                title={`Pulse tools · ${pulseModel} · ${pulsePermissionLevel}`}
+                aria-label="Pulse tools"
+              >
+                {pulsePermissionLevel === 'plan' ? (
+                  <Shield className="size-3.5" />
+                ) : pulsePermissionLevel === 'bypass-permissions' ? (
+                  <ShieldOff className="size-3.5" />
+                ) : (
+                  <ShieldCheck className="size-3.5" />
+                )}
+                {isProcessing && currentMode && (
+                  <span className="pointer-events-none absolute -right-0.5 -top-0.5 inline-flex size-2 animate-pulse rounded-full bg-[var(--axon-accent-pink)]" />
+                )}
+              </button>
+              {toolsOpen && (
+                <div
+                  className="absolute right-0 top-[calc(100%+6px)] z-50 w-44 space-y-2 rounded-md border border-[rgba(255,135,175,0.2)] bg-[rgba(10,18,35,0.96)] p-2 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
+                  role="dialog"
+                  aria-label="Pulse model and permission controls"
+                >
+                  <div className="flex items-center gap-1.5 text-[var(--axon-text-dim)]">
+                    <Wrench className="size-3" />
+                    <span className="ui-label">Tools</span>
+                  </div>
+                  <label className="block space-y-1">
+                    <span className="ui-label">Model</span>
+                    <select
+                      id="omnibox-pulse-model-selector"
+                      name="omnibox_pulse_model_selector"
+                      value={pulseModel}
+                      onChange={(e) => setPulseModel(e.target.value as typeof pulseModel)}
+                      className="h-7 w-full rounded border border-[rgba(95,135,175,0.24)] bg-[rgba(10,18,35,0.72)] px-2 text-[length:var(--text-xs)] font-semibold uppercase tracking-[0.04em] text-[var(--axon-text-primary)] outline-none"
+                      aria-label="Model selector"
+                    >
+                      <option value="sonnet">Sonnet</option>
+                      <option value="opus">Opus</option>
+                      <option value="haiku">Haiku</option>
+                    </select>
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="ui-label">Permission</span>
+                    <select
+                      id="omnibox-pulse-permission-selector"
+                      name="omnibox_pulse_permission_selector"
+                      value={pulsePermissionLevel}
+                      onChange={(e) =>
+                        setPulsePermissionLevel(e.target.value as typeof pulsePermissionLevel)
+                      }
+                      className="h-7 w-full rounded border border-[rgba(255,135,175,0.2)] bg-[rgba(10,18,35,0.72)] px-2 text-[length:var(--text-xs)] font-semibold uppercase tracking-[0.04em] text-[var(--axon-text-primary)] outline-none"
+                      aria-label="Permission selector"
+                    >
+                      <option value="plan">Plan</option>
+                      <option value="accept-edits">Accept</option>
+                      <option value="bypass-permissions">Bypass</option>
+                    </select>
+                  </label>
+                </div>
+              )}
+            </div>
+          </>
+        )}
 
         {/* Options button */}
         {hasOptions && (
@@ -488,7 +677,7 @@ export function Omnibox() {
                 setOptionsOpen((prev) => !prev)
                 setDropdownOpen(false)
               }}
-              className={`flex shrink-0 items-center gap-1.5 bg-transparent px-2.5 py-2.5 text-[11px] font-semibold uppercase tracking-wider transition-colors duration-150 ${
+              className={`flex shrink-0 items-center gap-1.5 bg-transparent px-2.5 py-2.5 text-[length:var(--text-xs)] font-semibold uppercase tracking-wider transition-colors duration-150 ${
                 optionsOpen
                   ? 'text-[var(--axon-accent-pink-strong)]'
                   : 'text-[var(--axon-text-muted)] hover:text-[var(--axon-accent-blue)]'
@@ -516,7 +705,7 @@ export function Omnibox() {
               </svg>
               <span>Options</span>
               {activeOptionCount > 0 && (
-                <span className="inline-flex min-w-[14px] items-center justify-center rounded-full border border-[rgba(175,215,255,0.35)] bg-[rgba(175,215,255,0.12)] px-1 text-[10px] text-[var(--axon-accent-pink-strong)]">
+                <span className="inline-flex min-w-[14px] items-center justify-center rounded-full border border-[rgba(175,215,255,0.35)] bg-[rgba(175,215,255,0.12)] px-1 text-[length:var(--text-2xs)] leading-[var(--leading-tight)] text-[var(--axon-accent-pink-strong)]">
                   {activeOptionCount}
                 </span>
               )}
@@ -525,77 +714,74 @@ export function Omnibox() {
           </>
         )}
 
-        {/* Action label — click to execute */}
+        {/* Action control — icon-only send/cancel */}
         <button
           type="button"
           onClick={isProcessing ? cancel : execute}
           disabled={!isProcessing && !input.trim() && !NO_INPUT_MODES.has(mode)}
-          className={`flex shrink-0 items-center gap-1.5 bg-transparent px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider transition-all duration-150 ${
+          className={`flex shrink-0 items-center gap-1.5 bg-transparent px-3 py-2.5 text-[length:var(--text-xs)] font-semibold uppercase tracking-wider transition-all duration-150 ${
             modeAppliedLabel
               ? 'text-[var(--axon-accent-pink)] drop-shadow-[0_0_6px_rgba(175,215,255,0.45)]'
               : 'text-[var(--axon-accent-blue)] hover:text-white'
           } disabled:opacity-40 disabled:hover:text-[var(--axon-accent-blue)]`}
           title={isProcessing ? 'Cancel' : 'Execute'}
         >
-          {isProcessing ? (
-            <>
-              <span className="inline-block size-2.5 animate-spin rounded-full border-[1.5px] border-[rgba(175,215,255,0.2)] border-t-[var(--axon-accent-pink)]" />
-              <span>Cancel</span>
-            </>
-          ) : (
-            <>
-              <svg
-                className="size-3.5 shrink-0"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d={currentMode.icon} />
-              </svg>
-              <span>{currentMode.label}</span>
-            </>
-          )}
+          {isProcessing ? <Square className="size-3.5" /> : <SendHorizontal className="size-3.5" />}
         </button>
 
-        {/* Arrow toggle — click to open mode dropdown */}
-        <button
-          type="button"
-          onClick={() => setDropdownOpen((prev) => !prev)}
-          className="flex shrink-0 items-center justify-center rounded-r-[10px] bg-transparent px-3 py-2.5 text-[var(--axon-text-muted)] transition-colors duration-150 hover:text-[var(--axon-accent-blue)]"
-          title="Select mode"
-        >
-          <svg
-            className={`size-3.5 transition-transform duration-200 ${dropdownOpen ? 'rotate-90' : ''}`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
+        {showModeSelector && (
+          /* Arrow toggle — click to open mode dropdown */
+          <button
+            type="button"
+            onClick={() => setDropdownOpen((prev) => !prev)}
+            className="flex shrink-0 items-center justify-center rounded-r-[10px] bg-transparent px-3 py-2.5 text-[var(--axon-text-muted)] transition-colors duration-150 hover:text-[var(--axon-accent-blue)]"
+            title="Select mode"
           >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-        </button>
+            <svg
+              className={`size-3.5 transition-transform duration-200 ${effectiveDropdownOpen ? 'rotate-90' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        )}
 
-        {/* Dropdown — grouped by category */}
+        {/* Mode dropdown — triggered by arrow button OR by typing @ */}
         <div
-          className={`absolute left-0 right-0 top-[calc(100%+6px)] z-50 space-y-1 rounded-xl border border-[rgba(255,135,175,0.15)] p-2 shadow-[0_16px_48px_rgba(0,0,0,0.5),0_0_0_1px_rgba(255,135,175,0.08)] backdrop-blur-xl transition-all duration-200 ${
-            dropdownOpen
+          className={`absolute left-0 right-0 top-[calc(100%+6px)] z-50 max-h-[65vh] space-y-1 overflow-y-auto rounded-xl border border-[rgba(255,135,175,0.15)] p-2 shadow-[0_16px_48px_rgba(0,0,0,0.5),0_0_0_1px_rgba(255,135,175,0.08)] backdrop-blur-xl transition-all duration-200 ${
+            effectiveDropdownOpen
               ? 'visible translate-y-0 opacity-100'
               : 'invisible -translate-y-1 opacity-0'
           }`}
           style={{ background: 'rgba(15, 23, 42, 0.95)' }}
         >
+          {mentionKind === 'mode' && activeMentionToken?.query && (
+            <div className="px-2.5 pb-1 pt-1 text-[length:var(--text-2xs)] text-[var(--axon-text-dim)]">
+              Showing results for{' '}
+              <span className="text-[var(--axon-accent-blue)]">@{activeMentionToken.query}</span>
+            </div>
+          )}
           {MODE_CATEGORY_ORDER.map((cat) => {
             const items = groupedModes.get(cat)
             if (!items || items.length === 0) return null
+            const visibleItems =
+              mentionKind === 'mode' && activeMentionToken?.query
+                ? items.filter(
+                    (m) =>
+                      m.id.includes(activeMentionToken.query.toLowerCase()) ||
+                      m.label.toLowerCase().includes(activeMentionToken.query.toLowerCase()),
+                  )
+                : items
+            if (visibleItems.length === 0) return null
             return (
               <div key={cat}>
-                <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-bold uppercase tracking-[0.15em] text-[var(--axon-text-dim)]">
+                <div className="px-2.5 pb-1 pt-1.5 text-[length:var(--text-2xs)] font-bold uppercase tracking-[0.15em] text-[var(--axon-text-dim)]">
                   {MODE_CATEGORY_LABELS[cat]}
                 </div>
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(130px,1fr))] gap-0.5">
-                  {items.map((m) => (
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(118px,1fr))] gap-0.5">
+                  {visibleItems.map((m) => (
                     <button
                       key={m.id}
                       type="button"
@@ -640,59 +826,37 @@ export function Omnibox() {
           </div>
         )}
       </div>
-      {activeSuggestions.length > 0 && mentionKind !== 'none' && (
+      {fileSuggestions.length > 0 && mentionKind === 'file' && (
         <div className="rounded-lg border border-[rgba(255,135,175,0.14)] bg-[rgba(10,18,35,0.45)] px-2 py-1.5">
-          <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wider text-[var(--axon-text-dim)]">
-            <span>{mentionKind === 'mode' ? 'Mode Select' : 'File Context'}</span>
+          <div className="ui-label mb-1 flex items-center justify-between">
+            <span>File Context</span>
             <span className="text-[var(--axon-text-dim)]">{omniboxPhase.replace('-', ' ')}</span>
           </div>
           <div className="flex flex-wrap gap-1.5">
-            {mentionKind === 'mode'
-              ? mentionSuggestions.map((candidate, idx) => (
-                  <button
-                    key={candidate.id}
-                    type="button"
-                    onClick={() => {
-                      setMentionSelectionIndex(idx)
-                      void applyModeMentionCandidate(candidate)
-                    }}
-                    className={`rounded-md border px-2 py-1 text-[11px] transition-all ${
-                      idx === mentionSelectionIndex
-                        ? 'border-[rgba(175,215,255,0.5)] bg-[rgba(175,215,255,0.18)] text-[var(--axon-accent-pink-strong)]'
-                        : 'border-[rgba(255,135,175,0.25)] bg-[rgba(255,135,175,0.08)] text-[var(--axon-accent-blue)] hover:bg-[rgba(255,135,175,0.14)]'
-                    }`}
-                  >
-                    @{candidate.id}
-                  </button>
-                ))
-              : fileSuggestions.map((candidate, idx) => (
-                  <button
-                    key={candidate.id}
-                    type="button"
-                    onClick={() => {
-                      setMentionSelectionIndex(idx)
-                      void applyFileMentionCandidate(candidate)
-                    }}
-                    className={`rounded-md border px-2 py-1 text-[11px] transition-all ${
-                      idx === mentionSelectionIndex
-                        ? 'border-[rgba(175,215,255,0.5)] bg-[rgba(175,215,255,0.18)] text-[var(--axon-accent-pink-strong)]'
-                        : 'border-[rgba(255,135,175,0.25)] bg-[rgba(255,135,175,0.08)] text-[var(--axon-accent-blue)] hover:bg-[rgba(255,135,175,0.14)]'
-                    }`}
-                  >
-                    @{candidate.label}
-                  </button>
-                ))}
+            {fileSuggestions.map((candidate, idx) => (
+              <button
+                key={candidate.id}
+                type="button"
+                onClick={() => {
+                  setMentionSelectionIndex(idx)
+                  void applyFileMentionCandidate(candidate)
+                }}
+                className={`rounded-md border px-2 py-1 text-[length:var(--text-xs)] font-semibold transition-all ${
+                  idx === mentionSelectionIndex
+                    ? 'border-[rgba(175,215,255,0.5)] bg-[rgba(175,215,255,0.18)] text-[var(--axon-accent-pink-strong)]'
+                    : 'border-[rgba(255,135,175,0.25)] bg-[rgba(255,135,175,0.08)] text-[var(--axon-accent-blue)] hover:bg-[rgba(255,135,175,0.14)]'
+                }`}
+              >
+                @{candidate.label}
+              </button>
+            ))}
           </div>
-          <div className="mt-1 text-[10px] text-[var(--axon-text-dim)]">
-            Tab/Enter apply · ↑/↓ change
-          </div>
+          <div className="ui-meta mt-1">Tab/Enter apply · ↑/↓ change</div>
         </div>
       )}
       {Object.keys(fileContextMentions).length > 0 && (
         <div className="rounded-lg border border-[rgba(95,135,175,0.35)] bg-[rgba(30,41,59,0.35)] px-2 py-1.5">
-          <div className="mb-1 text-[10px] uppercase tracking-wider text-[var(--axon-text-dim)]">
-            Attached Context
-          </div>
+          <div className="ui-label mb-1">Attached Context</div>
           <div className="flex flex-wrap gap-1.5">
             {Object.entries(fileContextMentions).map(([label]) => (
               <button
@@ -705,7 +869,7 @@ export function Omnibox() {
                     return next
                   })
                 }}
-                className="rounded-md border border-[rgba(95,135,175,0.45)] bg-[rgba(95,135,175,0.12)] px-2 py-1 text-[11px] text-[var(--axon-accent-blue)]"
+                className="rounded-md border border-[rgba(95,135,175,0.45)] bg-[rgba(95,135,175,0.12)] px-2 py-1 text-[length:var(--text-xs)] font-semibold text-[var(--axon-accent-blue)]"
               >
                 @{label} ×
               </button>
@@ -713,12 +877,34 @@ export function Omnibox() {
           </div>
         </div>
       )}
+      {workspaceMode === 'pulse' && workspaceContext && workspaceContext.turns > 0 && (
+        <div
+          className={`rounded-md border border-[rgba(95,135,175,0.2)] bg-[rgba(10,18,35,0.32)] px-2 py-1.5 ${
+            isProcessing ? 'shadow-[0_0_0_1px_rgba(175,215,255,0.2)]' : ''
+          }`}
+          title={`${workspaceContext.turns} turns · ${workspaceContext.threadSourceCount} active sources · ${contextFileCount} files · ${workspaceContext.contextCharsTotal.toLocaleString()} / ${workspaceContext.contextBudgetChars.toLocaleString()} chars · last ${(workspaceContext.lastLatencyMs / 1000).toFixed(1)}s${
+            isProcessing && currentMode ? ` · processing ${currentMode}` : ''
+          }`}
+        >
+          <div className="h-1.5 overflow-hidden rounded-full bg-[rgba(255,135,175,0.12)]">
+            <div
+              className={`h-full rounded-full bg-[linear-gradient(90deg,rgba(95,135,175,0.85),rgba(255,135,175,0.9)) ${
+                isProcessing ? 'animate-pulse' : ''
+              }`}
+              style={{ width: `${contextUtilizationPercent}%` }}
+            />
+          </div>
+        </div>
+      )}
       {modeAppliedLabel && (
-        <div className="rounded-md border border-[rgba(175,215,255,0.35)] bg-[rgba(175,215,255,0.1)] px-2 py-1 text-[11px] text-[var(--axon-accent-pink-strong)]">
+        <div className="rounded-md border border-[rgba(175,215,255,0.35)] bg-[rgba(175,215,255,0.1)] px-2 py-1 text-[length:var(--text-xs)] text-[var(--axon-accent-pink-strong)]">
           Mode selected:{' '}
           <span className="font-semibold text-[var(--axon-accent-pink)]">{modeAppliedLabel}</span>
         </div>
       )}
+      <div className="ui-meta rounded-md border border-[rgba(95,135,175,0.16)] bg-[rgba(10,18,35,0.28)] px-2 py-1">
+        Enter send · @mode switch · Alt+1/2/3 model · Alt+Shift+1/2/3 permission
+      </div>
     </div>
   )
 }

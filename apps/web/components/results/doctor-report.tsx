@@ -20,7 +20,7 @@ function cleanServiceMeta(text: string | undefined): string | undefined {
 
 function SectionHeader({ children }: { children: React.ReactNode }) {
   return (
-    <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--axon-accent-blue-strong)]">
+    <h3 className="ui-label mb-2 text-[var(--axon-accent-blue-strong)]">
       {children}
     </h3>
   )
@@ -46,10 +46,8 @@ function MetricTile({
 
   return (
     <div className={`rounded-lg border px-3 py-2.5 ${colorClass}`}>
-      <div className="text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
-        {label}
-      </div>
-      <div className="mt-1 font-mono text-[16px] font-semibold leading-none">{value}</div>
+      <div className="ui-label text-[var(--axon-text-muted)]">{label}</div>
+      <div className="mt-1 ui-mono text-[16px] font-semibold leading-none">{value}</div>
     </div>
   )
 }
@@ -57,13 +55,13 @@ function MetricTile({
 function StatusPill({ ok }: { ok: boolean }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+      className={`ui-chip-status ${
         ok
           ? 'bg-[var(--axon-success-bg)] text-[var(--axon-success)]'
           : 'bg-[rgba(175,215,255,0.2)] text-[var(--axon-accent-pink)]'
       }`}
     >
-      <span className="text-[9px]">{'\u25CF'}</span>
+      <span className="text-[length:var(--text-2xs)]">{'\u25CF'}</span>
       {ok ? 'ok' : 'fail'}
     </span>
   )
@@ -72,7 +70,7 @@ function StatusPill({ ok }: { ok: boolean }) {
 function ServiceRows({ entries }: { entries: Array<[string, DoctorServiceStatus]> }) {
   return (
     <div className="rounded-lg border border-[rgba(255,135,175,0.14)] bg-[rgba(9,16,34,0.55)]">
-      <div className="grid grid-cols-[110px_130px_1fr] gap-3 border-b border-[rgba(255,135,175,0.12)] px-3 py-2 text-[10px] uppercase tracking-wider text-[var(--axon-text-dim)]">
+      <div className="grid grid-cols-[110px_130px_1fr] gap-3 border-b border-[rgba(255,135,175,0.12)] px-3 py-2 ui-label">
         <span>Status</span>
         <span>Latency</span>
         <span>Service</span>
@@ -90,30 +88,30 @@ function ServiceRows({ entries }: { entries: Array<[string, DoctorServiceStatus]
                 <div className="pt-0.5">
                   <StatusPill ok={svc.ok} />
                 </div>
-                <div className="pt-1 font-mono text-[10px] text-[var(--axon-text-secondary)]">
+                <div className="pt-1 ui-mono text-[var(--axon-text-secondary)]">
                   {fmtProbeMs(svc.latency_ms)}
                 </div>
                 <div>
-                  <div className="text-[12px] font-semibold text-[var(--axon-text-secondary)]">
+                  <div className="text-[length:var(--text-sm)] font-semibold text-[var(--axon-text-secondary)]">
                     {name}
                   </div>
                   {svc.model && (
-                    <div className="mt-0.5 break-words text-[10px] text-[var(--axon-accent-blue)]">
+                    <div className="mt-0.5 break-words ui-meta text-[var(--axon-accent-blue)]">
                       {svc.model}
                     </div>
                   )}
                   {svc.url && (
-                    <div className="mt-0.5 break-all font-mono text-[10px] text-[var(--axon-accent-blue)]">
+                    <div className="mt-0.5 break-all ui-mono text-[var(--axon-accent-blue)]">
                       {svc.url}
                     </div>
                   )}
                   {detail && (
-                    <div className="mt-1 whitespace-pre-wrap break-words text-[10px] text-[var(--axon-text-muted)]">
+                    <div className="mt-1 whitespace-pre-wrap break-words ui-meta ui-dim-contrast">
                       {detail}
                     </div>
                   )}
                   {summary && (
-                    <div className="mt-1 whitespace-pre-wrap break-words text-[10px] text-[var(--axon-text-muted)]">
+                    <div className="mt-1 whitespace-pre-wrap break-words ui-meta ui-dim-contrast">
                       {summary}
                     </div>
                   )}
@@ -169,11 +167,11 @@ export function DoctorReport({ data }: DoctorReportProps) {
                 : 'bg-[var(--axon-accent-pink)] shadow-[0_0_8px_rgba(175,215,255,0.65)]'
             }`}
           />
-          <span className="text-[12px] font-semibold text-[var(--axon-text-secondary)]">
+          <span className="text-[length:var(--text-sm)] font-semibold text-[var(--axon-text-secondary)]">
             {data.all_ok ? 'System Health: Stable' : 'System Health: Attention Needed'}
           </span>
           {observedAt && (
-            <span className="text-[10px] text-[var(--axon-text-muted)]">Observed {observedAt}</span>
+            <span className="ui-meta">Observed {observedAt}</span>
           )}
         </div>
       </div>
@@ -202,7 +200,7 @@ export function DoctorReport({ data }: DoctorReportProps) {
               {pipelineEntries.map(([name, ok]) => (
                 <div
                   key={name}
-                  className="flex items-center justify-between rounded-md border border-[rgba(255,135,175,0.08)] bg-[rgba(8,14,30,0.4)] px-2 py-1.5 text-[11px]"
+                  className="flex items-center justify-between rounded-md border border-[rgba(255,135,175,0.08)] bg-[rgba(8,14,30,0.4)] px-2 py-1.5 text-[length:var(--text-sm)]"
                 >
                   <span className="text-[var(--axon-text-secondary)]">{name}</span>
                   <span
@@ -218,7 +216,7 @@ export function DoctorReport({ data }: DoctorReportProps) {
           {queueEntries.length > 0 && (
             <div className="rounded-lg border border-[rgba(255,135,175,0.15)] p-3 bg-[rgba(9,16,34,0.55)]">
               <SectionHeader>Queue Names</SectionHeader>
-              <div className="space-y-1.5 font-mono text-[11px]">
+              <div className="space-y-1.5 ui-mono">
                 {queueEntries.map(([key, val]) => (
                   <div
                     key={key}
@@ -237,9 +235,9 @@ export function DoctorReport({ data }: DoctorReportProps) {
           {data.browser_runtime && (
             <div className="rounded-lg border border-[rgba(255,135,175,0.15)] p-3 bg-[rgba(9,16,34,0.55)]">
               <SectionHeader>Browser Runtime</SectionHeader>
-              <div className="flex items-center justify-between text-[11px]">
+              <div className="flex items-center justify-between text-[length:var(--text-sm)]">
                 <span className="text-[var(--axon-text-dim)]">Selection</span>
-                <span className="font-mono text-[var(--axon-accent-blue)]">
+                <span className="ui-mono text-[var(--axon-accent-blue)]">
                   {data.browser_runtime.selection}
                 </span>
               </div>
@@ -249,7 +247,7 @@ export function DoctorReport({ data }: DoctorReportProps) {
           {data.timing_ms && (
             <div className="rounded-lg border border-[rgba(255,135,175,0.15)] p-3 bg-[rgba(9,16,34,0.55)]">
               <SectionHeader>Probe Timing</SectionHeader>
-              <div className="space-y-1.5 font-mono text-[11px]">
+              <div className="space-y-1.5 ui-mono">
                 {timingRows.map(([label, value]) => (
                   <div key={label} className="flex justify-between">
                     <span className="text-[var(--axon-text-dim)]">{label}</span>

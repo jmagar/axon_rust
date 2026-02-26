@@ -28,7 +28,7 @@ export function MarkdownBlock({ markdown, className }: MarkdownBlockProps) {
         <Editor
           variant="none"
           readOnly
-          className={`px-0 py-0 text-[11px] leading-[1.5] text-[var(--axon-text-secondary)] ${className ?? ''}`}
+          className={`px-0 py-0 ui-long-copy ${className ?? ''}`}
         />
       </EditorContainer>
     </Plate>

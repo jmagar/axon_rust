@@ -1,12 +1,12 @@
 'use client'
 
+import dynamic from 'next/dynamic'
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ContentViewer } from '@/components/content-viewer'
 import { CrawlDownloadToolbar } from '@/components/crawl-download-toolbar'
 import { CrawlFileExplorer } from '@/components/crawl-file-explorer'
 import { CrawlProgress } from '@/components/crawl-progress'
-import { PulseWorkspace } from '@/components/pulse/pulse-workspace'
 import { CardsRenderer } from '@/components/results/cards-renderer'
 import { JobLifecycleRenderer } from '@/components/results/job-lifecycle-renderer'
 import { RawRenderer } from '@/components/results/raw-renderer'
@@ -19,6 +19,20 @@ import { AXON_COMMAND_SPECS } from '@/lib/axon-command-map'
 import { normalizeResult } from '@/lib/result-normalizers'
 
 type TabId = 'content' | 'stats' | 'recent'
+const TAB_STORAGE_KEY = 'axon.web.results.active-tab'
+const TAB_SCROLL_STORAGE_KEY = 'axon.web.results.tab-scroll'
+
+const PulseWorkspace = dynamic(
+  () => import('@/components/pulse/pulse-workspace').then((mod) => mod.PulseWorkspace),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="rounded-xl border border-[rgba(255,135,175,0.14)] bg-[rgba(10,18,35,0.52)] p-4 text-xs text-[var(--axon-text-dim)]">
+        Loading Pulse workspace...
+      </div>
+    ),
+  },
+)
 
 interface ResultsPanelProps {
   statsSlot?: ReactNode
@@ -87,12 +101,74 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
     workspaceMode,
   } = useWsMessages()
 
+  const isPulseWorkspace = workspaceMode === 'pulse'
+
   const [activeTab, setActiveTab] = useState<TabId>('content')
+  const contentScrollRef = useRef<HTMLDivElement>(null)
+  const statsScrollRef = useRef<HTMLDivElement>(null)
+  const recentScrollRef = useRef<HTMLDivElement>(null)
+  const tabScrollMapRef = useRef<Record<TabId, number>>({ content: 0, stats: 0, recent: 0 })
   const tabs: { id: TabId; label: string }[] = [
     { id: 'content', label: 'Content' },
     { id: 'stats', label: 'Stats' },
     { id: 'recent', label: 'Recent' },
   ]
+
+  useEffect(() => {
+    try {
+      const savedTab = window.localStorage.getItem(TAB_STORAGE_KEY)
+      if (savedTab === 'content' || savedTab === 'stats' || savedTab === 'recent') {
+        setActiveTab(savedTab)
+      }
+      const raw = window.localStorage.getItem(TAB_SCROLL_STORAGE_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<Record<TabId, number>>
+        tabScrollMapRef.current = {
+          content: Number(parsed.content ?? 0),
+          stats: Number(parsed.stats ?? 0),
+          recent: Number(parsed.recent ?? 0),
+        }
+      }
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [])
+
+  useEffect(() => {
+    const target =
+      activeTab === 'content'
+        ? contentScrollRef.current
+        : activeTab === 'stats'
+          ? statsScrollRef.current
+          : recentScrollRef.current
+    if (!target) return
+    target.scrollTop = tabScrollMapRef.current[activeTab] ?? 0
+  }, [activeTab, hasResults, isPulseWorkspace])
+
+  const rememberScroll = (tabId: TabId, value: number) => {
+    tabScrollMapRef.current[tabId] = value
+    try {
+      window.localStorage.setItem(TAB_SCROLL_STORAGE_KEY, JSON.stringify(tabScrollMapRef.current))
+    } catch {
+      // Ignore storage failures.
+    }
+  }
+
+  const switchTab = (nextTab: TabId) => {
+    const activeNode =
+      activeTab === 'content'
+        ? contentScrollRef.current
+        : activeTab === 'stats'
+          ? statsScrollRef.current
+          : recentScrollRef.current
+    if (activeNode) rememberScroll(activeTab, activeNode.scrollTop)
+    setActiveTab(nextTab)
+    try {
+      window.localStorage.setItem(TAB_STORAGE_KEY, nextTab)
+    } catch {
+      // Ignore storage failures.
+    }
+  }
 
   const effectiveCommandMode = commandMode ?? currentMode ?? null
   const isCrawlMode = currentMode === 'crawl'
@@ -159,49 +235,50 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
   return (
     <div
       className={`overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] ${
-        hasResults ? 'mt-4 max-h-[90vh] opacity-100' : 'mt-0 max-h-0 opacity-0'
+        hasResults ? 'mt-2.5 max-h-[92vh] opacity-100' : 'mt-0 max-h-0 opacity-0'
       }`}
     >
-      {/* Tab bar */}
-      <div className="mb-2.5 flex justify-end overflow-x-auto">
-        <div
-          className="flex w-fit gap-0.5 rounded-lg border border-[rgba(255,135,175,0.1)] p-[3px]"
-          style={{ background: 'rgba(10, 18, 35, 0.5)' }}
-        >
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-              className={`rounded-md px-3.5 py-1 text-[11px] font-medium tracking-wide transition-all duration-200 ${
-                activeTab === tab.id
-                  ? 'bg-[rgba(255,135,175,0.1)] font-semibold text-[var(--axon-accent-blue)]'
-                  : 'text-[var(--axon-text-muted)] hover:bg-[rgba(255,135,175,0.06)] hover:text-[var(--axon-accent-blue)]'
-              }`}
-            >
-              {tab.label}
-              {tab.id === 'content' && hasCrawlFiles && (
-                <span className="ml-1.5 text-[10px] text-[var(--axon-text-muted)]">
-                  {crawlFiles.length}
-                </span>
-              )}
-              {tab.id === 'stats' && logLines.length > 0 && (
-                <span className="ml-1.5 text-[10px] text-[var(--axon-text-muted)]">
-                  {logLines.length}
-                </span>
-              )}
-              {tab.id === 'recent' && recentRuns.length > 0 && (
-                <span className="ml-1.5 text-[10px] text-[var(--axon-text-muted)]">
-                  {recentRuns.length}
-                </span>
-              )}
-            </button>
-          ))}
+      {!isPulseWorkspace && (
+        <div className="mb-2.5 flex justify-end overflow-x-auto">
+          <div
+            className="flex w-fit gap-0.5 rounded-lg border border-[rgba(255,135,175,0.1)] p-[3px]"
+            style={{ background: 'rgba(10, 18, 35, 0.5)' }}
+          >
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => switchTab(tab.id)}
+                className={`rounded-md px-3.5 py-1 text-[11px] font-medium tracking-wide transition-all duration-200 ${
+                  activeTab === tab.id
+                    ? 'bg-[rgba(255,135,175,0.1)] font-semibold text-[var(--axon-accent-blue)]'
+                    : 'text-[var(--axon-text-muted)] hover:bg-[rgba(255,135,175,0.06)] hover:text-[var(--axon-accent-blue)]'
+                }`}
+              >
+                {tab.label}
+                {tab.id === 'content' && hasCrawlFiles && (
+                  <span className="ml-1.5 text-[10px] text-[var(--axon-text-muted)]">
+                    {crawlFiles.length}
+                  </span>
+                )}
+                {tab.id === 'stats' && logLines.length > 0 && (
+                  <span className="ml-1.5 text-[10px] text-[var(--axon-text-muted)]">
+                    {logLines.length}
+                  </span>
+                )}
+                {tab.id === 'recent' && recentRuns.length > 0 && (
+                  <span className="ml-1.5 text-[10px] text-[var(--axon-text-muted)]">
+                    {recentRuns.length}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Content pane */}
-      {activeTab === 'content' &&
+      {(activeTab === 'content' || isPulseWorkspace) &&
         (workspaceMode === 'pulse' ? (
           <PulseWorkspace />
         ) : (
@@ -213,7 +290,9 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
               </div>
             )}
             <div
-              className="flex max-h-[72vh] overflow-hidden rounded-[10px] border border-[rgba(255,135,175,0.1)]"
+              ref={contentScrollRef}
+              onScroll={() => rememberScroll('content', contentScrollRef.current?.scrollTop ?? 0)}
+              className="flex max-h-[76vh] overflow-hidden rounded-[10px] border border-[rgba(255,135,175,0.1)]"
               style={{ background: 'rgba(3, 7, 18, 0.25)' }}
             >
               {isScreenshotMode ? (
@@ -267,6 +346,8 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
       {/* Stats pane — CLI log output + Docker stats */}
       {activeTab === 'stats' && (
         <div
+          ref={statsScrollRef}
+          onScroll={() => rememberScroll('stats', statsScrollRef.current?.scrollTop ?? 0)}
           className="max-h-[72vh] space-y-4 overflow-y-auto rounded-[10px] border border-[rgba(255,135,175,0.1)] p-4"
           style={{ background: 'rgba(3, 7, 18, 0.25)' }}
         >
@@ -283,7 +364,11 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
 
       {/* Recent pane */}
       {activeTab === 'recent' && (
-        <div className="font-mono text-xs">
+        <div
+          ref={recentScrollRef}
+          onScroll={() => rememberScroll('recent', recentScrollRef.current?.scrollTop ?? 0)}
+          className="max-h-[72vh] overflow-y-auto font-mono text-xs"
+        >
           {recentRuns.length === 0 ? (
             <div className="flex h-32 items-center justify-center text-sm text-[var(--axon-text-muted)]">
               No recent runs

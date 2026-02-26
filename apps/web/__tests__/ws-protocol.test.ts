@@ -8,36 +8,19 @@ import {
 } from '@/lib/ws-protocol'
 
 describe('ws-protocol mode registry', () => {
-  it('includes workspace in ModeCategory', () => {
-    expect(MODE_CATEGORY_ORDER).toContain('workspace')
+  it('does not include a workspace category', () => {
+    expect(MODE_CATEGORY_ORDER).not.toContain('workspace')
+    expect((MODE_CATEGORY_LABELS as Record<string, string>).workspace).toBeUndefined()
   })
 
-  it('has a label for workspace category', () => {
-    expect(MODE_CATEGORY_LABELS.workspace).toBe('Workspace')
-  })
-
-  it('places workspace after service in category order', () => {
-    const idx = MODE_CATEGORY_ORDER.indexOf('workspace')
-    const serviceIdx = MODE_CATEGORY_ORDER.indexOf('service')
-    expect(idx).toBeGreaterThan(serviceIdx)
-  })
-
-  it('includes pulse mode in MODES', () => {
+  it('does not include pulse mode in MODES', () => {
     const pulse = MODES.find((m) => m.id === 'pulse')
-    expect(pulse).toBeDefined()
-    expect(pulse?.category).toBe('workspace')
-    expect(pulse?.label).toBe('Pulse')
-  })
-
-  it('pulse is NOT in NO_INPUT_MODES', () => {
+    expect(pulse).toBeUndefined()
     expect(NO_INPUT_MODES.has('pulse')).toBe(false)
   })
 
-  it('pulse is a workspace mode', () => {
-    expect(isWorkspaceMode('pulse')).toBe(true)
-  })
-
-  it('scrape is NOT a workspace mode', () => {
+  it('does not map any mode as workspace-only', () => {
+    expect(isWorkspaceMode('pulse')).toBe(false)
     expect(isWorkspaceMode('scrape')).toBe(false)
   })
 })

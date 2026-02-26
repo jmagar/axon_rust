@@ -98,14 +98,34 @@ export function buildPulseSystemPrompt(req: PulseChatRequest, citations: PulseCi
     .map((c, i) => `(${i + 1}) [${c.collection}] ${c.title} ${c.url}\n${c.snippet}`)
     .join('\n\n')
 
-  return [
+  const parts: string[] = [
     'You are Pulse, a document copilot for editing markdown safely.',
     'Return plain assistant text and optional doc operations.',
     'Only suggest operations with these types: replace_document, append_markdown, insert_section.',
     `Permission level: ${req.permissionLevel}.`,
+    `Model: ${req.model}.`,
     'Current document:',
     doc,
-    'Retrieved context:',
-    citationContext || 'No citations retrieved.',
-  ].join('\n\n')
+  ]
+
+  // Scraped page content — injected directly (no Qdrant required).
+  if (req.scrapedContext?.markdown) {
+    parts.push(
+      `Scraped page (${req.scrapedContext.url || 'unknown URL'}):`,
+      truncate(req.scrapedContext.markdown, 8000),
+    )
+  }
+
+  // Crawled sources — content indexed in cortex; RAG results appear below.
+  if (req.threadSources.length > 0) {
+    parts.push(
+      'Crawled sources (content indexed in cortex collection — see Retrieved context below):',
+      req.threadSources.join('\n'),
+    )
+  }
+
+  parts.push('Retrieved context (semantic search over cortex):')
+  parts.push(citationContext || 'No citations retrieved.')
+
+  return parts.join('\n\n')
 }

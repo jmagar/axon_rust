@@ -48,7 +48,7 @@ function QueryCards({ results }: { results: QueryResult[] }) {
           <div className="mb-2 flex items-start gap-2.5">
             {/* Rank badge */}
             <span
-              className="flex size-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
+              className="ui-chip flex size-6 shrink-0 items-center justify-center rounded-full"
               style={{
                 background: 'rgba(135, 175, 255, 0.15)',
                 color: 'var(--axon-accent-blue-strong)',
@@ -63,14 +63,14 @@ function QueryCards({ results }: { results: QueryResult[] }) {
                 href={r.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="block truncate text-[13px] font-medium text-[var(--axon-accent-blue-strong)] transition-colors hover:text-[var(--axon-accent-blue)] hover:underline"
+                className="block truncate text-[length:var(--text-base)] font-medium text-[var(--axon-accent-blue-strong)] transition-colors hover:text-[var(--axon-accent-blue)] hover:underline"
               >
                 {r.url}
               </a>
 
               {/* Source tag if different from URL */}
               {r.source && r.source !== r.url && (
-                <span className="mt-0.5 block truncate text-[11px] text-[var(--axon-text-subtle)]">
+                <span className="ui-meta mt-0.5 block truncate">
                   {r.source}
                 </span>
               )}
@@ -79,7 +79,7 @@ function QueryCards({ results }: { results: QueryResult[] }) {
             {/* Score badges */}
             <div className="flex shrink-0 gap-1.5">
               <span
-                className="rounded-md px-1.5 py-0.5 font-mono text-[10px] font-semibold"
+                className="rounded-md px-1.5 py-0.5 ui-meta ui-mono font-semibold"
                 style={{
                   color: scoreColor(r.score),
                   background: scoreBg(r.score),
@@ -89,7 +89,7 @@ function QueryCards({ results }: { results: QueryResult[] }) {
               </span>
               {r.rerank_score !== undefined && (
                 <span
-                  className="rounded-md px-1.5 py-0.5 font-mono text-[10px] font-semibold"
+                  className="rounded-md px-1.5 py-0.5 ui-meta ui-mono font-semibold"
                   style={{
                     color: scoreColor(r.rerank_score),
                     background: scoreBg(r.rerank_score),
@@ -103,7 +103,7 @@ function QueryCards({ results }: { results: QueryResult[] }) {
           </div>
 
           {/* Snippet */}
-          <p className="text-[12px] leading-relaxed text-[var(--axon-text-muted)]">{r.snippet}</p>
+          <p className="ui-long-copy">{r.snippet}</p>
         </div>
       ))}
     </div>

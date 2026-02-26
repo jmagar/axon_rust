@@ -105,6 +105,26 @@
   --axon-warning: #ffc086;
   --axon-warning-bg: rgba(255, 192, 134, 0.14);
   --axon-danger-bg: rgba(175,215,255, 0.1);
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --text-2xs: 0.625rem;
+  --text-xs: 0.6875rem;
+  --text-sm: 0.75rem;
+  --text-md: 0.8125rem;
+  --text-base: 0.875rem;
+  --leading-tight: 1.35;
+  --leading-copy: 1.5;
+  --pulse-control-h: 1.75rem;
+  --pulse-control-gap: 0.25rem;
+  --pulse-pill-pad-x: 0.375rem;
+  --pulse-pill-pad-y: 0.125rem;
+  --density-compact-row-y: 0.375rem;
+  --density-comfortable-row-y: 0.5rem;
+  --density-compact-cell-x: 0.5rem;
+  --density-comfortable-cell-x: 0.75rem;
 }
 
 .dark {
@@ -153,7 +173,94 @@
       radial-gradient(circle at 82% 18%, rgba(255,135,175, 0.1), transparent 38%),
       linear-gradient(180deg, #02040b 0%, var(--axon-bg) 58%, #040a14 100%);
     color: var(--axon-text-primary);
+    font-feature-settings: 'cv01', 'cv02', 'cv03', 'ss01';
+    line-height: var(--leading-copy);
+    letter-spacing: 0.005em;
   }
+}
+
+.ui-label {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--axon-text-dim);
+}
+
+.ui-meta {
+  font-size: var(--text-xs);
+  line-height: var(--leading-tight);
+  color: var(--axon-text-muted);
+}
+
+.ui-copy {
+  font-size: var(--text-md);
+  line-height: var(--leading-copy);
+  color: var(--axon-text-secondary);
+}
+
+.ui-chip {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ui-chip-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 999px;
+  padding: 0.125rem 0.5rem;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ui-table-dense {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-tight);
+}
+
+.ui-table-head {
+  border-bottom: 1px solid rgba(255, 135, 175, 0.15);
+  padding-bottom: var(--density-compact-row-y);
+  text-align: left;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--axon-text-dim);
+}
+
+.ui-table-cell {
+  padding-top: var(--density-compact-row-y);
+  padding-bottom: var(--density-compact-row-y);
+  color: var(--axon-text-secondary);
+}
+
+.ui-table-cell-muted {
+  color: var(--axon-text-muted);
+}
+
+.ui-mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-tight);
+}
+
+.ui-long-copy {
+  font-size: clamp(var(--text-sm), 0.72rem + 0.2vw, var(--text-base));
+  line-height: var(--leading-copy);
+  color: var(--axon-text-secondary);
+}
+
+.ui-dim-contrast {
+  color: #a8bbd6;
 }
 
 /* Themed scrollbars — outside @layer for specificity over Tailwind resets */

@@ -26,6 +26,7 @@ export function useAxonWsProvider() {
   const [status, setStatus] = useState<WsStatus>('disconnected')
   const [statusLabel, setStatusLabel] = useState('DISCONNECTED')
   const wsRef = useRef<WebSocket | null>(null)
+  const pendingMessagesRef = useRef<WsClientMsg[]>([])
   const attemptsRef = useRef(0)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const handlersRef = useRef(new Set<(msg: WsServerMsg) => void>())
@@ -61,6 +62,13 @@ export function useAxonWsProvider() {
         attemptsRef.current = 0
         setStatus('connected')
         setStatusLabel('CONNECTED')
+        if (pendingMessagesRef.current.length > 0) {
+          const queued = [...pendingMessagesRef.current]
+          pendingMessagesRef.current = []
+          for (const msg of queued) {
+            ws.send(JSON.stringify(msg))
+          }
+        }
       }
 
       ws.onmessage = (event) => {
@@ -89,15 +97,41 @@ export function useAxonWsProvider() {
 
   useEffect(() => {
     connect()
+    const reconnectOnResume = () => {
+      if (wsRef.current?.readyState !== WebSocket.OPEN) {
+        setStatus('reconnecting')
+        setStatusLabel('RECONNECTING')
+        connectRef.current()
+      }
+    }
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') reconnectOnResume()
+    }
+    window.addEventListener('online', reconnectOnResume)
+    window.addEventListener('pageshow', reconnectOnResume)
+    document.addEventListener('visibilitychange', handleVisibility)
     return () => {
       wsRef.current?.close()
       if (timerRef.current) clearTimeout(timerRef.current)
+      window.removeEventListener('online', reconnectOnResume)
+      window.removeEventListener('pageshow', reconnectOnResume)
+      document.removeEventListener('visibilitychange', handleVisibility)
     }
   }, [connect])
 
   const send = useCallback((msg: WsClientMsg) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(msg))
+      return
+    }
+    pendingMessagesRef.current.push(msg)
+    if (
+      wsRef.current?.readyState !== WebSocket.CONNECTING &&
+      wsRef.current?.readyState !== WebSocket.OPEN
+    ) {
+      setStatus('reconnecting')
+      setStatusLabel('RECONNECTING')
+      connectRef.current()
     }
   }, [])
 

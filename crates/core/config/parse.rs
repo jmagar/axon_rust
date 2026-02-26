@@ -1,7 +1,7 @@
 pub(crate) mod excludes;
 mod performance;
 
-use super::cli::{Cli, CliCommand, JobSubcommand};
+use super::cli::{Cli, CliCommand, JobSubcommand, RefreshScheduleSubcommand, RefreshSubcommand};
 use super::help::maybe_print_top_level_help_and_exit;
 use super::types::{CommandKind, Config, RedditSort, RedditTime};
 use clap::Parser;
@@ -65,6 +65,65 @@ fn positional_from_job(job: JobSubcommand) -> Vec<String> {
     }
 }
 
+fn positional_from_refresh_subcommand(action: RefreshSubcommand) -> Vec<String> {
+    match action {
+        RefreshSubcommand::Status { job_id } => vec!["status".to_string(), job_id],
+        RefreshSubcommand::Cancel { job_id } => vec!["cancel".to_string(), job_id],
+        RefreshSubcommand::Errors { job_id } => vec!["errors".to_string(), job_id],
+        RefreshSubcommand::List => vec!["list".to_string()],
+        RefreshSubcommand::Cleanup => vec!["cleanup".to_string()],
+        RefreshSubcommand::Clear => vec!["clear".to_string()],
+        RefreshSubcommand::Worker => vec!["worker".to_string()],
+        RefreshSubcommand::Recover => vec!["recover".to_string()],
+        RefreshSubcommand::Schedule { action } => positional_from_refresh_schedule(action),
+    }
+}
+
+fn positional_from_refresh_schedule(action: RefreshScheduleSubcommand) -> Vec<String> {
+    match action {
+        RefreshScheduleSubcommand::Add {
+            name,
+            seed_url,
+            every_seconds,
+            tier,
+            urls,
+        } => {
+            let mut positional = vec!["schedule".to_string(), "add".to_string(), name];
+            if let Some(every_seconds) = every_seconds {
+                positional.push("--every-seconds".to_string());
+                positional.push(every_seconds.to_string());
+            } else if let Some(tier) = tier {
+                positional.push("--tier".to_string());
+                positional.push(tier);
+            }
+            if let Some(seed_url) = seed_url {
+                positional.push(seed_url);
+            }
+            if let Some(urls) = urls {
+                positional.push("--urls".to_string());
+                positional.push(urls);
+            }
+            positional
+        }
+        RefreshScheduleSubcommand::List => vec!["schedule".to_string(), "list".to_string()],
+        RefreshScheduleSubcommand::Enable { name } => {
+            vec!["schedule".to_string(), "enable".to_string(), name]
+        }
+        RefreshScheduleSubcommand::Disable { name } => {
+            vec!["schedule".to_string(), "disable".to_string(), name]
+        }
+        RefreshScheduleSubcommand::Delete { name } => {
+            vec!["schedule".to_string(), "delete".to_string(), name]
+        }
+        RefreshScheduleSubcommand::RunDue { batch } => vec![
+            "schedule".to_string(),
+            "run-due".to_string(),
+            "--batch".to_string(),
+            batch.to_string(),
+        ],
+    }
+}
+
 /// Parse a viewport string like "1920x1080" into (width, height).
 /// Falls back to (1920, 1080) on any parse failure.
 fn parse_viewport(s: &str) -> (u32, u32) {
@@ -108,8 +167,36 @@ fn into_config(cli: Cli) -> Result<Config, String> {
         ),
         CliCommand::Refresh(args) => (
             CommandKind::Refresh,
-            if let Some(job) = args.job {
-                positional_from_job(job)
+            if let Some(action) = args.action {
+                match action {
+                    RefreshSubcommand::Schedule {
+                        action:
+                            RefreshScheduleSubcommand::Add {
+                                name,
+                                seed_url,
+                                every_seconds,
+                                tier,
+                                urls,
+                            },
+                    } => {
+                        if seed_url.is_none() && urls.is_none() {
+                            return Err(
+                                "refresh schedule add requires either [seed_url] or --urls <csv>"
+                                    .to_string(),
+                            );
+                        }
+                        positional_from_refresh_subcommand(RefreshSubcommand::Schedule {
+                            action: RefreshScheduleSubcommand::Add {
+                                name,
+                                seed_url,
+                                every_seconds,
+                                tier,
+                                urls,
+                            },
+                        })
+                    }
+                    other => positional_from_refresh_subcommand(other),
+                }
             } else {
                 args.positional_urls
             },
@@ -509,12 +596,178 @@ pub fn parse_args() -> Config {
 #[cfg(test)]
 mod tests {
     use super::is_docker_service_host;
+    use crate::crates::core::config::types::CommandKind;
+    use clap::Parser;
     use std::env;
     use std::sync::Mutex;
 
     /// Serializes tests that mutate process-wide environment variables.
     /// Prevents parallel test data races on `std::env::set_var` / `remove_var`.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[allow(unsafe_code)]
+    #[test]
+    fn parse_refresh_schedule_add_maps_positional_tokens() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        const PG: &str = "AXON_PG_URL";
+        const REDIS: &str = "AXON_REDIS_URL";
+        const AMQP: &str = "AXON_AMQP_URL";
+
+        // SAFETY: guarded by ENV_LOCK; no concurrent env mutation in this module.
+        unsafe {
+            env::set_var(PG, "postgresql://axon:postgres@127.0.0.1:53432/axon");
+            env::set_var(REDIS, "redis://127.0.0.1:53379");
+            env::set_var(AMQP, "amqp://axon:axonrabbit@127.0.0.1:45535/%2f");
+        }
+
+        let cli = super::Cli::parse_from([
+            "axon",
+            "refresh",
+            "schedule",
+            "add",
+            "docs-medium",
+            "https://docs.rs",
+            "--every-seconds",
+            "21600",
+        ]);
+
+        let cfg = super::into_config(cli).expect("refresh schedule add should parse");
+        assert!(matches!(cfg.command, CommandKind::Refresh));
+        assert_eq!(
+            cfg.positional,
+            vec![
+                "schedule".to_string(),
+                "add".to_string(),
+                "docs-medium".to_string(),
+                "--every-seconds".to_string(),
+                "21600".to_string(),
+                "https://docs.rs".to_string(),
+            ]
+        );
+
+        // SAFETY: guarded by ENV_LOCK; no concurrent env mutation in this module.
+        unsafe {
+            env::remove_var(PG);
+            env::remove_var(REDIS);
+            env::remove_var(AMQP);
+        }
+    }
+
+    #[allow(unsafe_code)]
+    #[test]
+    fn parse_refresh_schedule_add_rejects_missing_seed_url_and_urls() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        const PG: &str = "AXON_PG_URL";
+        const REDIS: &str = "AXON_REDIS_URL";
+        const AMQP: &str = "AXON_AMQP_URL";
+
+        unsafe {
+            env::set_var(PG, "postgresql://axon:postgres@127.0.0.1:53432/axon");
+            env::set_var(REDIS, "redis://127.0.0.1:53379");
+            env::set_var(AMQP, "amqp://axon:axonrabbit@127.0.0.1:45535/%2f");
+        }
+
+        let cli = super::Cli::parse_from([
+            "axon",
+            "refresh",
+            "schedule",
+            "add",
+            "docs-medium",
+            "--every-seconds",
+            "21600",
+        ]);
+
+        let err = super::into_config(cli).expect_err("missing seed_url/urls should fail");
+        assert!(err.contains("requires either [seed_url] or --urls <csv>"));
+
+        unsafe {
+            env::remove_var(PG);
+            env::remove_var(REDIS);
+            env::remove_var(AMQP);
+        }
+    }
+
+    #[allow(unsafe_code)]
+    #[test]
+    fn parse_refresh_schedule_add_accepts_urls_list() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        const PG: &str = "AXON_PG_URL";
+        const REDIS: &str = "AXON_REDIS_URL";
+        const AMQP: &str = "AXON_AMQP_URL";
+
+        unsafe {
+            env::set_var(PG, "postgresql://axon:postgres@127.0.0.1:53432/axon");
+            env::set_var(REDIS, "redis://127.0.0.1:53379");
+            env::set_var(AMQP, "amqp://axon:axonrabbit@127.0.0.1:45535/%2f");
+        }
+
+        let cli = super::Cli::parse_from([
+            "axon",
+            "refresh",
+            "schedule",
+            "add",
+            "docs-medium",
+            "--every-seconds",
+            "21600",
+            "--urls",
+            "https://docs.rs,https://crates.io",
+        ]);
+
+        let cfg = super::into_config(cli).expect("refresh schedule add with --urls should parse");
+        assert!(matches!(cfg.command, CommandKind::Refresh));
+        assert_eq!(
+            cfg.positional,
+            vec![
+                "schedule".to_string(),
+                "add".to_string(),
+                "docs-medium".to_string(),
+                "--every-seconds".to_string(),
+                "21600".to_string(),
+                "--urls".to_string(),
+                "https://docs.rs,https://crates.io".to_string(),
+            ]
+        );
+
+        unsafe {
+            env::remove_var(PG);
+            env::remove_var(REDIS);
+            env::remove_var(AMQP);
+        }
+    }
+
+    #[allow(unsafe_code)]
+    #[test]
+    fn parse_refresh_schedule_run_due_routes_without_errors() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        const PG: &str = "AXON_PG_URL";
+        const REDIS: &str = "AXON_REDIS_URL";
+        const AMQP: &str = "AXON_AMQP_URL";
+
+        unsafe {
+            env::set_var(PG, "postgresql://axon:postgres@127.0.0.1:53432/axon");
+            env::set_var(REDIS, "redis://127.0.0.1:53379");
+            env::set_var(AMQP, "amqp://axon:axonrabbit@127.0.0.1:45535/%2f");
+        }
+
+        let cli = super::Cli::parse_from(["axon", "refresh", "schedule", "run-due"]);
+        let cfg = super::into_config(cli).expect("refresh schedule run-due should parse");
+        assert!(matches!(cfg.command, CommandKind::Refresh));
+        assert_eq!(
+            cfg.positional,
+            vec![
+                "schedule".to_string(),
+                "run-due".to_string(),
+                "--batch".to_string(),
+                "25".to_string(),
+            ]
+        );
+
+        unsafe {
+            env::remove_var(PG);
+            env::remove_var(REDIS);
+            env::remove_var(AMQP);
+        }
+    }
 
     // --- is_docker_service_host tests ---
 

@@ -40,7 +40,7 @@ const CANVAS_PROFILE_LABELS: Record<NeuralCanvasProfile, string> = {
 export default function DashboardPage() {
   const { subscribe } = useAxonWs()
   const canvasRef = useRef<NeuralCanvasHandle>(null)
-  const { isProcessing, hasResults } = useWsMessages()
+  const { isProcessing, hasResults, workspaceMode, workspacePromptVersion } = useWsMessages()
   const [canvasProfile, setCanvasProfile] = useState<NeuralCanvasProfile>(
     DEFAULT_NEURAL_CANVAS_PROFILE,
   )
@@ -101,6 +101,9 @@ export default function DashboardPage() {
     [isProcessing],
   )
 
+  const isPulseWorkspaceActive =
+    workspaceMode === 'pulse' && hasResults && workspacePromptVersion > 0
+
   return (
     <>
       <NeuralCanvas ref={canvasRef} profile={canvasProfile} />
@@ -148,15 +151,15 @@ export default function DashboardPage() {
 
       {/* Main container — centered vertically, slides up on results */}
       <main
-        className={`relative z-[1] mx-auto max-w-[1060px] transition-[padding] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] ${
+        className={`relative z-[1] mx-auto max-w-[1180px] transition-[padding] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] xl:max-w-[1240px] ${
           hasResults
-            ? 'px-3 pb-6 pt-14 sm:px-5 sm:pb-10'
-            : 'px-3 pb-6 pt-[35vh] sm:px-5 sm:pb-10 sm:pt-[40vh]'
+            ? 'px-2.5 pb-5 pt-12 sm:px-3.5 sm:pb-8'
+            : 'px-2.5 pb-5 pt-[35vh] sm:px-3.5 sm:pb-8 sm:pt-[40vh]'
         }`}
       >
         {/* Interface card — glass-morphic */}
         <div
-          className={`rounded-2xl border p-3 transition-all duration-500 sm:p-5 ${
+          className={`rounded-2xl border p-2 transition-all duration-500 sm:p-3 ${
             isProcessing
               ? 'shadow-[0_0_80px_rgba(175,215,255,0.1),0_0_30px_rgba(255,135,175,0.05),inset_0_1px_0_rgba(255,255,255,0.04)]'
               : 'shadow-[0_0_60px_rgba(255,135,175,0.05),inset_0_1px_0_rgba(255,255,255,0.02)]'
@@ -166,8 +169,26 @@ export default function DashboardPage() {
             background: 'var(--axon-surface-3)',
           }}
         >
-          <Omnibox />
-          <ResultsPanel statsSlot={<DockerStats onStats={handleStats} />} />
+          <div className="flex flex-col gap-2">
+            <div
+              className={`transition-all duration-300 ${
+                isPulseWorkspaceActive ? 'order-2 scale-[0.995]' : 'order-1 scale-100'
+              }`}
+            >
+              <div
+                className={
+                  isPulseWorkspaceActive
+                    ? 'sticky bottom-0 z-20 rounded-lg bg-[rgba(10,18,35,0.62)] p-1 backdrop-blur-xl'
+                    : ''
+                }
+              >
+                <Omnibox />
+              </div>
+            </div>
+            <div className={isPulseWorkspaceActive ? 'order-1' : 'order-2'}>
+              <ResultsPanel statsSlot={<DockerStats onStats={handleStats} />} />
+            </div>
+          </div>
         </div>
       </main>
     </>

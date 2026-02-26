@@ -9,6 +9,7 @@ import {
   rankModeSuggestions,
   replaceActiveMention,
 } from '@/lib/omnibox'
+import { shouldPreservePulseWorkspaceForMode } from '@/components/omnibox'
 import { MODES } from '@/lib/ws-protocol'
 
 describe('omnibox mention parsing', () => {
@@ -125,5 +126,13 @@ describe('omnibox text transforms and phases', () => {
         hasModeFeedback: true,
       }),
     ).toBe('mode-selected')
+  })
+
+  it('keeps pulse workspace mounted for scrape/crawl/extract command mentions', () => {
+    expect(shouldPreservePulseWorkspaceForMode('pulse', 'scrape')).toBe(true)
+    expect(shouldPreservePulseWorkspaceForMode('pulse', 'crawl')).toBe(true)
+    expect(shouldPreservePulseWorkspaceForMode('pulse', 'extract')).toBe(true)
+    expect(shouldPreservePulseWorkspaceForMode('pulse', 'ask')).toBe(false)
+    expect(shouldPreservePulseWorkspaceForMode(null, 'scrape')).toBe(false)
   })
 })

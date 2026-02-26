@@ -1,14 +1,15 @@
 import type { Metadata } from 'next'
-import { DM_Mono, DM_Sans } from 'next/font/google'
+import { JetBrains_Mono, Outfit } from 'next/font/google'
 import { Providers } from './providers'
 import './globals.css'
 
-const dmSans = DM_Sans({
+const outfit = Outfit({
   variable: '--font-sans',
   subsets: ['latin'],
+  weight: ['300', '400', '500', '600', '700'],
 })
 
-const dmMono = DM_Mono({
+const jetbrainsMono = JetBrains_Mono({
   variable: '--font-mono',
   weight: ['400', '500'],
   subsets: ['latin'],
@@ -26,7 +27,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className={`${dmSans.variable} ${dmMono.variable} antialiased`}>
+      <body className={`${outfit.variable} ${jetbrainsMono.variable} antialiased`}>
         <Providers>{children}</Providers>
       </body>
     </html>

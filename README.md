@@ -231,6 +231,7 @@ Axon implements a multi-layered incremental crawl mechanism to minimize network 
 |---------|---------|--------|
 | `scrape <url>...` | Scrape one or more URLs to markdown | No |
 | `crawl <url>...` | Full site crawl for one or more start URLs | Yes (default) |
+| `refresh <url>...` | Revalidate known URLs and update stored content/embeddings | Yes (default) |
 | `map <url>` | Discover all URLs without scraping | No |
 | `extract <urls...>` | LLM-powered structured data extraction | Yes (default) |
 | `search <query>` | Web search via Tavily, auto-queues crawl jobs for results | No |
@@ -254,6 +255,24 @@ Axon implements a multi-layered incremental crawl mechanism to minimize network 
 | `debug` | Run doctor + LLM-assisted troubleshooting | No |
 | `dedupe` | Remove duplicate vectors from Qdrant collection | No |
 | `serve` | Start web UI server (axum + WebSocket + Docker stats) | No |
+
+### Freshness Strategy (Tiered Refresh + Discovery Crawl)
+
+Use `refresh` for ongoing freshness of known URLs, and reserve `crawl` for discovery of newly added URLs.
+
+Recommended tiered refresh cadence:
+
+| Tier | Interval (seconds) | Typical content |
+|------|--------------------|-----------------|
+| `high` | `1800` | Fast-changing docs, changelogs, release pages |
+| `medium` | `21600` | Standard documentation and guides |
+| `low` | `86400` | Stable reference pages and archives |
+
+Recommended production pattern:
+- Add refresh schedules by content volatility (`high`/`medium`/`low`) and run the scheduler continuously.
+- Run `refresh schedule worker` as the scheduler loop that enqueues due refresh jobs.
+- Run `refresh worker` as the refresh job consumer that executes queued refresh jobs.
+- Run `crawl` on an infrequent cadence (daily or weekly) for discovery only, then let refresh maintain known URLs.
 
 ### Job Subcommands (for crawl / extract / embed)
 

@@ -37,7 +37,10 @@ describe('pulse types', () => {
       documentMarkdown: '# Doc\n\nContent here',
       selectedCollections: ['pulse', 'cortex'],
     }
-    expect(PulseChatRequestSchema.parse(req)).toBeTruthy()
+    const parsed = PulseChatRequestSchema.parse(req)
+    expect(parsed).toBeTruthy()
+    expect(parsed.model).toBe('sonnet')
+    expect(parsed.threadSources).toEqual([])
   })
 
   it('rejects empty prompt', () => {
@@ -49,6 +52,6 @@ describe('pulse types', () => {
   })
 
   it('permission levels are correct', () => {
-    expect(PulsePermissionLevel.options).toEqual(['plan', 'training-wheels', 'full-access'])
+    expect(PulsePermissionLevel.options).toEqual(['plan', 'accept-edits', 'bypass-permissions'])
   })
 })

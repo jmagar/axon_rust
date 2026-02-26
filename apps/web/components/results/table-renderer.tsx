@@ -48,7 +48,7 @@ function FilterInput({ value, onChange }: { value: string; onChange: (v: string)
       placeholder="Filter..."
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="mb-3 w-full rounded-md border border-[rgba(255,135,175,0.1)] px-3 py-1.5 text-xs text-[var(--axon-text-secondary)] placeholder-[var(--axon-text-subtle)] outline-none transition-colors focus:border-[rgba(135,175,255,0.3)]"
+      className="mb-3 w-full rounded-md border border-[rgba(255,135,175,0.1)] px-3 py-1.5 text-[length:var(--text-sm)] text-[var(--axon-text-secondary)] placeholder-[var(--axon-text-subtle)] outline-none transition-colors focus:border-[rgba(135,175,255,0.3)]"
       style={{ background: 'rgba(10, 18, 35, 0.6)' }}
     />
   )
@@ -76,7 +76,7 @@ function SortHeader({
   const active = currentSort === sortKey
   return (
     <th
-      className={`cursor-pointer select-none border-b border-[rgba(255,135,175,0.15)] pb-2 text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)] transition-colors hover:text-[var(--axon-accent-blue)] ${align === 'right' ? 'text-right' : 'text-left'}`}
+      className={`cursor-pointer select-none ui-table-head transition-colors hover:text-[var(--axon-accent-blue)] ${align === 'right' ? 'text-right' : 'text-left'}`}
       onClick={() => onSort(sortKey)}
     >
       {label}
@@ -126,7 +126,7 @@ function StatusBadge({ status }: { status: string }) {
     background: 'rgba(147,170,202,0.14)',
   }
   return (
-    <span className="inline-block rounded-full px-2 py-0.5 text-[10px] font-medium" style={style}>
+    <span className="ui-chip-status" style={style}>
       {status}
     </span>
   )
@@ -172,11 +172,11 @@ function KeyValueTable({
   return (
     <div>
       <FilterInput value={filter} onChange={setFilter} />
-      <div className="text-[11px] text-[var(--axon-text-muted)] mb-2">
+      <div className="ui-meta mb-2">
         {fmtNum(rows.length)} entries
       </div>
       <div className="max-h-[55vh] overflow-auto">
-        <table className="w-full border-collapse font-mono text-[12px]">
+        <table className="ui-table-dense">
           <thead className="sticky top-0" style={{ background: 'rgba(3, 7, 18, 0.95)' }}>
             <tr>
               <SortHeader
@@ -202,10 +202,10 @@ function KeyValueTable({
                 key={row.key}
                 className="border-b border-[rgba(255,135,175,0.05)] hover:bg-[rgba(255,135,175,0.03)]"
               >
-                <td className="max-w-[400px] truncate py-1.5 pr-4">
+                <td className="ui-table-cell max-w-[400px] truncate pr-4">
                   <UrlCell url={row.key} />
                 </td>
-                <td className="py-1.5 text-right tabular-nums text-[var(--axon-accent-blue)]">
+                <td className="ui-table-cell text-right tabular-nums text-[var(--axon-accent-blue)]">
                   {fmtNum(row.value)}
                 </td>
               </tr>
@@ -258,11 +258,11 @@ function DomainsTable({ data }: { data: DomainsResult }) {
   return (
     <div>
       <FilterInput value={filter} onChange={setFilter} />
-      <div className="text-[11px] text-[var(--axon-text-muted)] mb-2">
+      <div className="ui-meta mb-2">
         {fmtNum(rows.length)} domains
       </div>
       <div className="max-h-[55vh] overflow-auto">
-        <table className="w-full border-collapse font-mono text-[12px]">
+        <table className="ui-table-dense">
           <thead className="sticky top-0" style={{ background: 'rgba(3, 7, 18, 0.95)' }}>
             <tr>
               <SortHeader
@@ -298,14 +298,14 @@ function DomainsTable({ data }: { data: DomainsResult }) {
                 key={row.domain}
                 className="border-b border-[rgba(255,135,175,0.05)] hover:bg-[rgba(255,135,175,0.03)]"
               >
-                <td className="max-w-[300px] truncate py-1.5 pr-4 text-[var(--axon-text-secondary)]">
+                <td className="ui-table-cell max-w-[300px] truncate pr-4 text-[var(--axon-text-secondary)]">
                   {row.domain}
                 </td>
-                <td className="py-1.5 text-right tabular-nums text-[var(--axon-accent-blue)]">
+                <td className="ui-table-cell text-right tabular-nums text-[var(--axon-accent-blue)]">
                   {fmtNum(row.urlCount)}
                 </td>
                 {hasTuple && (
-                  <td className="py-1.5 text-right tabular-nums text-[var(--axon-success)]">
+                  <td className="ui-table-cell text-right tabular-nums text-[var(--axon-success)]">
                     {fmtNum(row.vecCount)}
                   </td>
                 )}
@@ -332,7 +332,7 @@ function MapTable({ data }: { data: MapResult }) {
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap gap-4 text-[11px] text-[var(--axon-text-muted)]">
+      <div className="ui-meta mb-3 flex flex-wrap gap-4">
         <span>
           Mapped: <span className="text-[var(--axon-accent-blue)]">{fmtNum(data.mapped_urls)}</span>
         </span>
@@ -356,17 +356,17 @@ function MapTable({ data }: { data: MapResult }) {
         </span>
       </div>
       <FilterInput value={filter} onChange={setFilter} />
-      <div className="text-[11px] text-[var(--axon-text-muted)] mb-2">
+      <div className="ui-meta mb-2">
         {fmtNum(filtered.length)} URLs
       </div>
       <div className="max-h-[50vh] overflow-auto">
-        <table className="w-full border-collapse font-mono text-[12px]">
+        <table className="ui-table-dense">
           <thead className="sticky top-0" style={{ background: 'rgba(3, 7, 18, 0.95)' }}>
             <tr>
-              <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)] w-12">
+              <th className="ui-table-head w-12">
                 #
               </th>
-              <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
+              <th className="ui-table-head">
                 URL
               </th>
             </tr>
@@ -377,8 +377,8 @@ function MapTable({ data }: { data: MapResult }) {
                 key={url}
                 className="border-b border-[rgba(255,135,175,0.05)] hover:bg-[rgba(255,135,175,0.03)]"
               >
-                <td className="py-1 text-[var(--axon-text-subtle)] tabular-nums">{i + 1}</td>
-                <td className="py-1 truncate max-w-[600px]">
+                <td className="ui-table-cell ui-table-cell-muted tabular-nums">{i + 1}</td>
+                <td className="ui-table-cell truncate max-w-[600px]">
                   <UrlCell url={url} />
                 </td>
               </tr>
@@ -410,20 +410,20 @@ function StatusTable({ data }: { data: StatusResult }) {
     <div className="space-y-4">
       {queues.map((queue) => (
         <div key={queue.label}>
-          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--axon-text-dim)]">
+          <div className="ui-label mb-1.5">
             {queue.label} ({queue.jobs.length})
           </div>
           <div className="overflow-auto">
-            <table className="w-full border-collapse font-mono text-[12px]">
+            <table className="ui-table-dense">
               <thead>
                 <tr>
-                  <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
+                  <th className="ui-table-head">
                     ID
                   </th>
-                  <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
+                  <th className="ui-table-head">
                     URL
                   </th>
-                  <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
+                  <th className="ui-table-head">
                     Status
                   </th>
                 </tr>
@@ -434,15 +434,15 @@ function StatusTable({ data }: { data: StatusResult }) {
                     key={job.id}
                     className="border-b border-[rgba(255,135,175,0.05)] hover:bg-[rgba(255,135,175,0.03)]"
                   >
-                    <td className="py-1.5 text-[var(--axon-text-muted)]">{job.id.slice(0, 8)}</td>
-                    <td className="py-1.5 max-w-[300px] truncate">
+                    <td className="ui-table-cell ui-table-cell-muted">{job.id.slice(0, 8)}</td>
+                    <td className="ui-table-cell max-w-[300px] truncate">
                       {job.url ? (
                         <UrlCell url={job.url} />
                       ) : (
                         <span className="text-[var(--axon-text-subtle)]">--</span>
                       )}
                     </td>
-                    <td className="py-1.5">
+                    <td className="ui-table-cell">
                       <StatusBadge status={job.status} />
                     </td>
                   </tr>
@@ -475,7 +475,7 @@ function SuggestTable({ data }: { data: SuggestResult }) {
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap gap-4 text-[11px] text-[var(--axon-text-muted)]">
+      <div className="ui-meta mb-3 flex flex-wrap gap-4">
         <span>
           Collection: <span className="text-[var(--axon-accent-blue)]">{data.collection}</span>
         </span>
@@ -495,13 +495,13 @@ function SuggestTable({ data }: { data: SuggestResult }) {
       </div>
       <FilterInput value={filter} onChange={setFilter} />
       <div className="max-h-[50vh] overflow-auto">
-        <table className="w-full border-collapse font-mono text-[12px]">
+        <table className="ui-table-dense">
           <thead className="sticky top-0" style={{ background: 'rgba(3, 7, 18, 0.95)' }}>
             <tr>
-              <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
+              <th className="ui-table-head">
                 URL
               </th>
-              <th className="border-b border-[rgba(255,135,175,0.15)] pb-2 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]">
+              <th className="ui-table-head">
                 Reason
               </th>
             </tr>
@@ -512,10 +512,10 @@ function SuggestTable({ data }: { data: SuggestResult }) {
                 key={s.url}
                 className="border-b border-[rgba(255,135,175,0.05)] hover:bg-[rgba(255,135,175,0.03)]"
               >
-                <td className="py-1.5 max-w-[350px] truncate pr-4">
+                <td className="ui-table-cell max-w-[350px] truncate pr-4">
                   <UrlCell url={s.url} />
                 </td>
-                <td className="py-1.5 text-[var(--axon-text-muted)]">{s.reason}</td>
+                <td className="ui-table-cell ui-table-cell-muted">{s.reason}</td>
               </tr>
             ))}
           </tbody>
@@ -532,7 +532,7 @@ function SuggestTable({ data }: { data: SuggestResult }) {
 function RetrieveView({ data }: { data: RetrieveResult }) {
   return (
     <div>
-      <div className="mb-3 flex flex-wrap gap-4 text-[11px] text-[var(--axon-text-muted)]">
+      <div className="ui-meta mb-3 flex flex-wrap gap-4">
         <span>
           URL: <UrlCell url={data.url} />
         </span>
@@ -541,7 +541,7 @@ function RetrieveView({ data }: { data: RetrieveResult }) {
         </span>
       </div>
       <pre
-        className="max-h-[55vh] overflow-auto whitespace-pre-wrap rounded-lg border border-[rgba(255,135,175,0.08)] p-3 font-mono text-[12px] leading-relaxed text-[var(--axon-text-secondary)]"
+        className="max-h-[55vh] overflow-auto whitespace-pre-wrap rounded-lg border border-[rgba(255,135,175,0.08)] p-3 ui-mono text-[var(--axon-text-secondary)]"
         style={{ background: 'rgba(10, 18, 35, 0.4)' }}
       >
         {data.content}

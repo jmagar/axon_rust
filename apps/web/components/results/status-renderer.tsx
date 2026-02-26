@@ -24,7 +24,7 @@ export function StatusRenderer({ result }: StatusRendererProps) {
 
 function KvRow({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
-    <div className="flex justify-between py-1 text-[12px]">
+    <div className="flex justify-between py-1 text-[length:var(--text-sm)]">
       <span className="text-[var(--axon-text-muted)]">{label}</span>
       <span className={`tabular-nums ${accent ?? 'text-[var(--axon-accent-blue)]'}`}>{value}</span>
     </div>
@@ -33,7 +33,7 @@ function KvRow({ label, value, accent }: { label: string; value: string; accent?
 
 function SectionHeader({ children }: { children: React.ReactNode }) {
   return (
-    <h3 className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wider text-[var(--axon-text-dim)] first:mt-0">
+    <h3 className="ui-label mb-1.5 mt-3 first:mt-0">
       {children}
     </h3>
   )
@@ -102,10 +102,7 @@ function StatsPanel({ data }: { data: StatsResult }) {
           <SectionHeader>Payload Fields</SectionHeader>
           <div className="flex flex-wrap gap-1.5">
             {data.payload_fields.map((f) => (
-              <span
-                key={f}
-                className="rounded-md border border-[rgba(255,135,175,0.1)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--axon-text-muted)]"
-              >
+              <span key={f} className="ui-chip-status ui-mono rounded-md">
                 {f}
               </span>
             ))}

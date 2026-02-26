@@ -38,7 +38,7 @@ export function ScreenshotRenderer({ files, isProcessing }: ScreenshotRendererPr
               href={file.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="block truncate text-[13px] font-medium text-[var(--axon-accent-blue-strong)] transition-colors hover:text-[var(--axon-accent-blue)] hover:underline"
+              className="block truncate text-[length:var(--text-base)] font-medium text-[var(--axon-accent-blue-strong)] transition-colors hover:text-[var(--axon-accent-blue)] hover:underline"
             >
               {file.url}
             </a>
@@ -60,10 +60,10 @@ export function ScreenshotRenderer({ files, isProcessing }: ScreenshotRendererPr
           </div>
 
           {/* Metadata bar */}
-          <div className="flex items-center gap-4 text-[11px] text-[var(--axon-text-subtle)]">
-            <span className="font-mono">{file.name}</span>
+          <div className="ui-meta flex items-center gap-4">
+            <span className="ui-mono">{file.name}</span>
             {file.size_bytes != null && (
-              <span className="font-mono">{formatBytes(file.size_bytes)}</span>
+              <span className="ui-mono">{formatBytes(file.size_bytes)}</span>
             )}
             <a
               href={file.serve_url ?? `/output/screenshots/${file.name}`}

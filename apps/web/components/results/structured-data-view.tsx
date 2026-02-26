@@ -78,7 +78,7 @@ function Section({
       }}
     >
       {title && (
-        <div className="mb-2 text-[11px] font-semibold uppercase text-[var(--axon-text-dim)]">
+        <div className="ui-label mb-2">
           {title}
         </div>
       )}
@@ -90,14 +90,14 @@ function Section({
 function KeyValueTable({ rows }: { rows: Array<{ key: string; value: Scalar }> }) {
   return (
     <div className="overflow-auto">
-      <table className="w-full border-collapse font-mono text-[12px]">
+      <table className="ui-table-dense">
         <tbody>
           {rows.map((row) => (
             <tr key={row.key} className="border-b border-[rgba(255,135,175,0.06)] last:border-b-0">
-              <td className="py-1 pr-4 align-top text-[var(--axon-text-muted)]">
+              <td className="ui-table-cell ui-table-cell-muted pr-4 align-top">
                 {humanizeKey(row.key)}
               </td>
-              <td className="py-1 align-top text-[var(--axon-text-secondary)]">
+              <td className="ui-table-cell align-top">
                 {scalarLabel(row.value)}
               </td>
             </tr>
@@ -113,14 +113,11 @@ function ScalarArrayTable({ rows }: { rows: Array<Record<string, Scalar>> }) {
 
   return (
     <div className="max-h-[55vh] overflow-auto">
-      <table className="w-full border-collapse font-mono text-[12px]">
+      <table className="ui-table-dense">
         <thead className="sticky top-0" style={{ background: 'rgba(3, 7, 18, 0.95)' }}>
           <tr>
             {columns.map((col) => (
-              <th
-                key={col}
-                className="border-b border-[rgba(255,135,175,0.12)] py-1.5 pr-4 text-left text-[10px] uppercase tracking-wider text-[var(--axon-text-muted)]"
-              >
+              <th key={col} className="ui-table-head pr-4">
                 {humanizeKey(col)}
               </th>
             ))}
@@ -130,7 +127,7 @@ function ScalarArrayTable({ rows }: { rows: Array<Record<string, Scalar>> }) {
           {rows.map((row, idx) => (
             <tr key={idx} className="border-b border-[rgba(255,135,175,0.06)] last:border-b-0">
               {columns.map((col) => (
-                <td key={col} className="py-1.5 pr-4 text-[var(--axon-text-secondary)]">
+                <td key={col} className="ui-table-cell pr-4">
                   {scalarLabel(row[col])}
                 </td>
               ))}
@@ -144,11 +141,11 @@ function ScalarArrayTable({ rows }: { rows: Array<Record<string, Scalar>> }) {
 
 function NodeView({ value, title }: { value: unknown; title?: string }) {
   if (isScalar(value)) {
-    return (
-      <Section title={title}>
-        <div className="text-[13px] text-[var(--axon-text-secondary)]">{scalarLabel(value)}</div>
-      </Section>
-    )
+      return (
+        <Section title={title}>
+          <div className="ui-long-copy">{scalarLabel(value)}</div>
+        </Section>
+      )
   }
 
   if (Array.isArray(value)) {
@@ -164,7 +161,7 @@ function NodeView({ value, title }: { value: unknown; title?: string }) {
     if (value.length === 0) {
       return (
         <Section title={title}>
-          <div className="text-[12px] text-[var(--axon-text-muted)]">(empty list)</div>
+          <div className="ui-meta">(empty list)</div>
         </Section>
       )
     }
@@ -195,7 +192,7 @@ function NodeView({ value, title }: { value: unknown; title?: string }) {
             <NodeView key={key} value={nested} title={humanizeKey(key)} />
           ))}
           {scalarRows.length === 0 && nestedRows.length === 0 && (
-            <div className="text-[12px] text-[var(--axon-text-muted)]">(empty object)</div>
+            <div className="ui-meta">(empty object)</div>
           )}
         </div>
       </Section>
@@ -204,7 +201,7 @@ function NodeView({ value, title }: { value: unknown; title?: string }) {
 
   return (
     <Section title={title}>
-      <div className="text-[13px] text-[var(--axon-text-secondary)]">{String(value)}</div>
+      <div className="ui-long-copy">{String(value)}</div>
     </Section>
   )
 }

@@ -44,3 +44,13 @@ crates/vector/ops/commands/ask/context.rs
 crates/vector/ops/commands/ask.rs
 # 704 lines — refresh pipeline landed in one pass; split/refactor follow-up needed (2026-02-26)
 crates/jobs/refresh.rs
+
+# feat/crawl-download-pack additions (2026-02-26)
+# 660 lines — pulse chat pane with streaming tool-use blocks; split planned
+apps/web/components/pulse/pulse-chat-pane.tsx
+# 849 lines — pulse workspace orchestration + crawl file explorer; split planned
+apps/web/components/pulse/pulse-workspace.tsx
+# 711 lines — refresh schedule CRUD handlers; split into sub-handlers planned
+crates/cli/commands/refresh.rs
+# 539 lines — status command with extended job table output; split planned
+crates/cli/commands/status.rs

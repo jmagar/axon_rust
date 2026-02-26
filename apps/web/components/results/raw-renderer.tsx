@@ -44,7 +44,7 @@ export function RawRenderer({ stdoutJson, stdoutLines, isProcessing }: RawRender
           ))}
         </div>
       ) : (
-        <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap font-mono text-[12px] leading-relaxed text-[var(--axon-text-secondary)]">
+        <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap ui-mono text-[var(--axon-text-secondary)]">
           {stdoutLines.join('\n')}
         </pre>
       )}

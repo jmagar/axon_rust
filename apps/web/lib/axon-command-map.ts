@@ -7,7 +7,7 @@
  * - crates/web/execute.rs (current web executor allow-lists / passthrough)
  */
 
-export type AxonCommandCategory = 'content' | 'rag' | 'ingest' | 'ops' | 'service' | 'workspace'
+export type AxonCommandCategory = 'content' | 'rag' | 'ingest' | 'ops' | 'service'
 export type AxonInputKind = 'none' | 'url' | 'urls' | 'text' | 'repo' | 'target' | 'input'
 export type AxonRenderIntent =
   | 'markdown-document'
@@ -18,7 +18,6 @@ export type AxonRenderIntent =
   | 'job-lifecycle'
   | 'status-summary'
   | 'raw-fallback'
-  | 'workspace'
 
 export interface AxonOptionSpec {
   key: string
@@ -277,15 +276,6 @@ export const AXON_COMMAND_SPECS: ReadonlyArray<AxonCommandSpec> = [
     supportsJobs: false,
     commandOptions: ['port'],
     renderIntent: 'raw-fallback',
-  },
-  {
-    id: 'pulse',
-    category: 'workspace',
-    input: 'text',
-    asyncByDefault: false,
-    supportsJobs: false,
-    commandOptions: [],
-    renderIntent: 'workspace',
   },
 ] as const
 

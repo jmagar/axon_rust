@@ -57,6 +57,25 @@ export interface CancelResponseState {
   job_id?: string
 }
 
+export interface WorkspaceContextState {
+  turns: number
+  sourceCount: number
+  threadSourceCount: number
+  promptChars: number
+  documentChars: number
+  conversationChars: number
+  citationChars: number
+  contextCharsTotal: number
+  contextBudgetChars: number
+  lastLatencyMs: number
+  model: 'sonnet' | 'opus' | 'haiku'
+  permissionLevel: 'plan' | 'accept-edits' | 'bypass-permissions'
+  saveStatus?: 'idle' | 'saving' | 'saved' | 'error'
+}
+
+export type PulseWorkspaceModel = 'sonnet' | 'opus' | 'haiku'
+export type PulseWorkspacePermission = 'plan' | 'accept-edits' | 'bypass-permissions'
+
 interface WsMessagesContextValue {
   /** Markdown content from the output file (set by file_content message) */
   markdownContent: string
@@ -97,10 +116,16 @@ interface WsMessagesContextValue {
   workspacePrompt: string | null
   /** Monotonic counter to trigger workspace prompt effects even for identical prompts. */
   workspacePromptVersion: number
+  workspaceContext: WorkspaceContextState | null
+  pulseModel: PulseWorkspaceModel
+  pulsePermissionLevel: PulseWorkspacePermission
+  setPulseModel: (model: PulseWorkspaceModel) => void
+  setPulsePermissionLevel: (level: PulseWorkspacePermission) => void
   activateWorkspace: (mode: string) => void
   submitWorkspacePrompt: (prompt: string) => void
   deactivateWorkspace: () => void
-  startExecution: (mode: string, input?: string) => void
+  updateWorkspaceContext: (context: WorkspaceContextState | null) => void
+  startExecution: (mode: string, input?: string, options?: { preserveWorkspace?: boolean }) => void
 }
 
 const WsMessagesContext = createContext<WsMessagesContextValue | null>(null)
@@ -121,6 +146,22 @@ const WORKSPACE_PROMPT_DEBOUNCE_MS = 250
 function pushCapped<T>(items: T[], item: T): T[] {
   const next = [...items, item]
   return next.length > MAX_STDOUT_ITEMS ? next.slice(-MAX_STDOUT_ITEMS) : next
+}
+
+function truncateText(input: string, maxChars: number): string {
+  if (input.length <= maxChars) return input
+  return `${input.slice(0, maxChars)}\n\n[truncated ${input.length - maxChars} chars]`
+}
+
+function summarizeJsonValue(value: unknown): string {
+  if (value == null) return 'null'
+  if (typeof value === 'string') return truncateText(value, 1200)
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  try {
+    return truncateText(JSON.stringify(value, null, 2), 2400)
+  } catch {
+    return '[unserializable output]'
+  }
 }
 
 export interface WsMessagesRuntimeState {
@@ -238,6 +279,8 @@ export function useWsMessagesProvider() {
   const [hasResults, setHasResults] = useState(false)
   const [crawlFiles, setCrawlFiles] = useState<CrawlFile[]>([])
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
+  const [virtualFileContentByPath, setVirtualFileContentByPath] = useState<Record<string, string>>({})
+  const [currentOutputDir, setCurrentOutputDir] = useState<string | null>(null)
   const currentModeRef = useRef('')
   const currentInputRef = useRef('')
   const [currentMode, setCurrentMode] = useState('')
@@ -250,10 +293,39 @@ export function useWsMessagesProvider() {
   const currentJobIdRef = useRef<string | null>(null)
   const [lifecycleEntries, setLifecycleEntries] = useState<WsLifecycleEntry[]>([])
   const [cancelResponse, setCancelResponse] = useState<CancelResponseState | null>(null)
-  const [workspaceMode, setWorkspaceMode] = useState<string | null>(null)
+  const [workspaceMode, setWorkspaceMode] = useState<string | null>('pulse')
   const [workspacePrompt, setWorkspacePrompt] = useState<string | null>(null)
   const [workspacePromptVersion, setWorkspacePromptVersion] = useState(0)
+  const [workspaceContext, setWorkspaceContext] = useState<WorkspaceContextState | null>(null)
+  const [pulseModel, setPulseModel] = useState<PulseWorkspaceModel>('sonnet')
+  const [pulsePermissionLevel, setPulsePermissionLevel] =
+    useState<PulseWorkspacePermission>('accept-edits')
   const workspacePromptDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const selectedFileRef = useRef<string | null>(null)
+  const crawlFilesRef = useRef<CrawlFile[]>([])
+  const stdoutJsonRef = useRef<unknown[]>([])
+  const currentOutputDirRef = useRef<string | null>(null)
+  const virtualFileContentByPathRef = useRef<Record<string, string>>({})
+
+  useEffect(() => {
+    crawlFilesRef.current = crawlFiles
+  }, [crawlFiles])
+
+  useEffect(() => {
+    selectedFileRef.current = selectedFile
+  }, [selectedFile])
+
+  useEffect(() => {
+    stdoutJsonRef.current = stdoutJson
+  }, [stdoutJson])
+
+  useEffect(() => {
+    currentOutputDirRef.current = currentOutputDir
+  }, [currentOutputDir])
+
+  useEffect(() => {
+    virtualFileContentByPathRef.current = virtualFileContentByPath
+  }, [virtualFileContentByPath])
 
   const setCurrentJobIdTracked = useCallback((jobId: string | null) => {
     currentJobIdRef.current = jobId
@@ -272,12 +344,12 @@ export function useWsMessagesProvider() {
           break
         case 'crawl_files':
           setCrawlFiles(msg.files)
+          setCurrentOutputDir(msg.output_dir)
           setHasResults(true)
           setCurrentJobIdTracked(msg.job_id ?? null)
-          // First file is auto-loaded by the backend
-          if (msg.files.length > 0) {
-            setSelectedFile(msg.files[0].relative_path)
-          }
+          setSelectedFile((prev) =>
+            prev && msg.files.some((file) => file.relative_path === prev) ? prev : null,
+          )
           break
         case 'crawl_progress':
           setCrawlProgress({
@@ -305,6 +377,52 @@ export function useWsMessagesProvider() {
             maybeJobData && typeof maybeJobData.job_id === 'string' ? maybeJobData.job_id : null
           if (maybeJobId) {
             setCurrentJobIdTracked(maybeJobId)
+          }
+          if (maybeJobData && typeof maybeJobData.output_dir === 'string') {
+            setCurrentOutputDir(maybeJobData.output_dir)
+          }
+          if (msg.data.ctx.mode === 'scrape' && maybeJobData) {
+            const markdown =
+              typeof maybeJobData.markdown === 'string' ? maybeJobData.markdown : null
+            const url = typeof maybeJobData.url === 'string' ? maybeJobData.url : currentInputRef.current
+            if (markdown && markdown.length > 0) {
+              const basename = url.replace(/^https?:\/\//i, '').replace(/[^a-z0-9]+/gi, '-')
+              const relativePath = `virtual/scrape-${basename || 'result'}.md`
+              setVirtualFileContentByPath((prev) => ({
+                ...prev,
+                [relativePath]: markdown,
+              }))
+              setCrawlFiles((prev) => {
+                const withoutExisting = prev.filter((f) => f.relative_path !== relativePath)
+                return [
+                  ...withoutExisting,
+                  {
+                    url,
+                    relative_path: relativePath,
+                    markdown_chars: markdown.length,
+                  },
+                ]
+              })
+            }
+          }
+          if (msg.data.ctx.mode === 'extract' && maybeJobData) {
+            const relativePath = 'virtual/extract-result.json'
+            const serialized = summarizeJsonValue(maybeJobData)
+            setVirtualFileContentByPath((prev) => ({
+              ...prev,
+              [relativePath]: serialized,
+            }))
+            setCrawlFiles((prev) => {
+              const withoutExisting = prev.filter((f) => f.relative_path !== relativePath)
+              return [
+                ...withoutExisting,
+                {
+                  url: currentInputRef.current || 'extract://result',
+                  relative_path: relativePath,
+                  markdown_chars: serialized.length,
+                },
+              ]
+            })
           }
           setStdoutJson((prev) => {
             const next = [...prev, msg.data.data]
@@ -371,6 +489,14 @@ export function useWsMessagesProvider() {
           setHasResults(true)
           break
         case 'artifact.content':
+          if (
+            (currentModeRef.current === 'scrape' ||
+              currentModeRef.current === 'crawl' ||
+              currentModeRef.current === 'extract') &&
+            !selectedFileRef.current
+          ) {
+            break
+          }
           setMarkdownContent(msg.data.content)
           setHasResults(true)
           break
@@ -390,6 +516,65 @@ export function useWsMessagesProvider() {
           break
         case 'command.done': {
           setIsProcessing(false)
+          if (
+            msg.data.payload.exit_code === 0 &&
+            (currentModeRef.current === 'scrape' ||
+              currentModeRef.current === 'crawl' ||
+              currentModeRef.current === 'extract')
+          ) {
+            const modeLabel = currentModeRef.current
+            const filesSnapshot = crawlFilesRef.current
+            const targetInput = currentInputRef.current.trim()
+            const outputDir = currentOutputDirRef.current
+            const stdoutSnapshot = stdoutJsonRef.current
+            const summary =
+              stdoutSnapshot.length > 0
+                ? summarizeJsonValue(stdoutSnapshot[stdoutSnapshot.length - 1])
+                : 'No JSON summary available.'
+            let handoffPrompt = ''
+            if (modeLabel === 'scrape') {
+              const scrapeFile =
+                filesSnapshot.find((file) => file.relative_path.startsWith('virtual/scrape-')) ??
+                filesSnapshot[0]
+              const scrapeMarkdown =
+                scrapeFile && virtualFileContentByPathRef.current[scrapeFile.relative_path]
+                  ? virtualFileContentByPathRef.current[scrapeFile.relative_path]
+                  : null
+              handoffPrompt = [
+                `I just scraped: ${targetInput || scrapeFile?.url || 'unknown source'}.`,
+                '',
+                'Use this full scraped page as context for our conversation:',
+                '',
+                scrapeMarkdown ? scrapeMarkdown : '(No scrape markdown captured in-memory.)',
+                '',
+                scrapeFile
+                  ? `If you need to re-open the source, use file explorer item: ${scrapeFile.relative_path}.`
+                  : 'If you need source files, check the file explorer sidebar.',
+              ].join('\n')
+            } else {
+              const listedFiles = filesSnapshot
+                .slice(0, 20)
+                .map((file) => `- ${file.relative_path} (${file.markdown_chars} chars)`)
+                .join('\n')
+              handoffPrompt = [
+                `I just ran ${modeLabel} for: ${targetInput || 'current target'}.`,
+                '',
+                'Start by giving me a concise summary of what was collected.',
+                'Then propose the top next questions/actions.',
+                '',
+                'Use these sidebar files for deeper details:',
+                listedFiles || '- (No files listed yet)',
+                outputDir ? `Base output directory: ${outputDir}` : 'Base output directory: (not provided)',
+                '',
+                'Execution summary payload:',
+                summary,
+              ].join('\n')
+            }
+            setWorkspaceMode('pulse')
+            setHasResults(true)
+            setWorkspacePrompt(handoffPrompt)
+            setWorkspacePromptVersion((prev) => prev + 1)
+          }
           setRecentRuns((prev) => {
             const run: RecentRun = {
               id: `run-${++runIdCounter.current}`,
@@ -431,13 +616,19 @@ export function useWsMessagesProvider() {
     (relativePath: string) => {
       setSelectedFile(relativePath)
       setMarkdownContent('')
+      const virtualContent = virtualFileContentByPathRef.current[relativePath]
+      if (typeof virtualContent === 'string') {
+        setMarkdownContent(virtualContent)
+        return
+      }
       send({ type: 'read_file', path: relativePath })
     },
     [send],
   )
 
   const startExecution = useCallback(
-    (mode: string, input?: string) => {
+    (mode: string, input?: string, options?: { preserveWorkspace?: boolean }) => {
+      const preserveWorkspace = options?.preserveWorkspace === true
       currentModeRef.current = mode
       currentInputRef.current = input ?? ''
       setCurrentMode(mode)
@@ -448,6 +639,8 @@ export function useWsMessagesProvider() {
       setHasResults(true)
       setCrawlFiles([])
       setSelectedFile(null)
+      setVirtualFileContentByPath({})
+      setCurrentOutputDir(null)
       setCrawlProgress(null)
       setStdoutLines([])
       setStdoutJson([])
@@ -456,9 +649,12 @@ export function useWsMessagesProvider() {
       setCurrentJobIdTracked(null)
       setLifecycleEntries([])
       setCancelResponse(null)
-      setWorkspaceMode(null)
-      setWorkspacePrompt(null)
-      setWorkspacePromptVersion(0)
+      if (!preserveWorkspace) {
+        setWorkspaceMode(null)
+        setWorkspacePrompt(null)
+        setWorkspacePromptVersion(0)
+        setWorkspaceContext(null)
+      }
     },
     [setCurrentJobIdTracked],
   )
@@ -471,10 +667,12 @@ export function useWsMessagesProvider() {
       setMarkdownContent('')
       setLogLines([])
       setErrorMessage('')
-      setHasResults(true)
+      setHasResults(false)
       setIsProcessing(false)
       setCrawlFiles([])
       setSelectedFile(null)
+      setVirtualFileContentByPath({})
+      setCurrentOutputDir(null)
       setCrawlProgress(null)
       setStdoutLines([])
       setStdoutJson([])
@@ -486,11 +684,13 @@ export function useWsMessagesProvider() {
       setWorkspaceMode(mode)
       setWorkspacePrompt(null)
       setWorkspacePromptVersion(0)
+      setWorkspaceContext(null)
     },
     [setCurrentJobIdTracked],
   )
 
   const submitWorkspacePrompt = useCallback((prompt: string) => {
+    setWorkspaceMode('pulse')
     setHasResults(true)
     if (workspacePromptDebounceRef.current) {
       clearTimeout(workspacePromptDebounceRef.current)
@@ -513,6 +713,11 @@ export function useWsMessagesProvider() {
     }
     setWorkspacePrompt(null)
     setWorkspacePromptVersion(0)
+    setWorkspaceContext(null)
+  }, [])
+
+  const updateWorkspaceContext = useCallback((context: WorkspaceContextState | null) => {
+    setWorkspaceContext(context)
   }, [])
 
   useEffect(() => {
@@ -546,9 +751,15 @@ export function useWsMessagesProvider() {
     workspaceMode,
     workspacePrompt,
     workspacePromptVersion,
+    workspaceContext,
+    pulseModel,
+    pulsePermissionLevel,
+    setPulseModel,
+    setPulsePermissionLevel,
     activateWorkspace,
     submitWorkspacePrompt,
     deactivateWorkspace,
+    updateWorkspaceContext,
     startExecution,
   }
 }

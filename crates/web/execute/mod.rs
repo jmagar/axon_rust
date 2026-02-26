@@ -279,6 +279,13 @@ fn build_args(mode: &str, input: &str, flags: &serde_json::Value) -> Vec<String>
         args.push("--json".to_string());
     }
 
+    // Scrape: disable embed so the web UI does not depend on TEI being reachable.
+    // The scrape result is delivered as JSON via stdout; embedding is a background concern.
+    if mode == "scrape" {
+        args.push("--embed".to_string());
+        args.push("false".to_string());
+    }
+
     // Whitelist-based flag mapping
     if let Some(obj) = flags.as_object() {
         for (json_key, cli_flag) in ALLOWED_FLAGS {
