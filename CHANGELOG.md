@@ -9,6 +9,7 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
+| `93f51e8` | chore(docker+docs) | align web CLI mounts and refresh changelog |
 | `4756caa` | feat(pulse+docker) | conversation memory fallback + claude binary mount |
 | `4e4a9d2` | docs(changelog) | fix TBD sha → a3b3b76 |
 | `a3b3b76` | fix(docker+test) | expose axon-web on 0.0.0.0, fix test pg_url normalization, update TS snapshots |
@@ -41,6 +42,7 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 ### Highlights
 
 #### Pulse / Runtime (newest)
+- Aligned web runtime mounts to `/home/node/.claude*` and refreshed commit-driven changelog coverage for branch history (`93f51e8`).
 - Added conversation-memory fallback for favorite-color recall in Pulse chat when upstream Claude CLI path fails, ensuring turn continuity for the common “what is my favorite color?” follow-up (`4756caa`).
 - Updated Docker web image/runtime to include `claude` binary mount behavior used by the Pulse chat API subprocess path (`4756caa`).
 
