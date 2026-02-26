@@ -144,14 +144,23 @@ Before deploy:
 git diff -- . ':!*.lock'
 ```
 
+Note: `git diff` only checks current uncommitted/staged changes. It does not detect
+secrets already present in commit history.
+
+For history scans, run a dedicated secret scanner on recent commits, for example:
+
+```bash
+gitleaks detect --source=. --log-opts="HEAD~5..HEAD"
+```
+
 3. Validate local-only bindings in compose.
 4. Run `./scripts/axon doctor`.
 
 After deploy:
 
-1. Verify healthy containers.
-2. Verify no repeated auth/network failures in logs.
-3. Verify API routes return expected status codes on invalid requests.
+1. Confirm healthy containers.
+2. Check logs for repeated auth/network failures.
+3. Ensure API routes return expected status codes on invalid requests.
 
 ## Source Map
 
@@ -164,4 +173,3 @@ After deploy:
 - `apps/web/app/api/ai/copilot/route.ts`
 - `docker-compose.yaml`
 - `.gitignore`
-

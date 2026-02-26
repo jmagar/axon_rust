@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1
 #
-# Three-stage build using cargo-chef for dependency layer caching.
+# Four-stage build using cargo-chef for dependency layer caching + BuildKit cache mounts.
 #
+# Stage 0 (chef):    installs cargo-chef once with registry/git cache mounts.
 # Stage 1 (planner): generates a recipe.json from Cargo.toml + lock files only.
-# Stage 2 (builder): compiles deps from recipe first (cached layer), then source.
+# Stage 2 (builder): cooks deps (cache-mounted target/), then builds binary.
 # Stage 3 (runtime): debian-slim + s6-overlay; only the axon binary is copied in.
 #
 # Build context is the axon_rust directory.
@@ -12,12 +13,19 @@
 # ../spider/spider_agent resolves correctly without widening the build context
 # to the whole workspace.
 
+# ── Stage 0: chef — compile cargo-chef once with cache mounts ─────────────────
+FROM rust:1.93-bookworm AS chef
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-chef --locked
+
 # ── Stage 1: planner ──────────────────────────────────────────────────────────
 FROM rust:1.93-bookworm AS planner
 
 WORKDIR /src
 
-RUN cargo install cargo-chef --locked
+COPY --from=chef /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/cargo-chef
 
 COPY . ./axon_rust/
 COPY --from=spider-agent . ./spider/spider_agent/
@@ -33,7 +41,7 @@ FROM rust:1.93-bookworm AS builder
 
 WORKDIR /src
 
-RUN cargo install cargo-chef --locked
+COPY --from=chef /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/cargo-chef
 
 # Cook dependencies first — this layer is cached as long as recipe.json is
 # unchanged (i.e., Cargo.toml / Cargo.lock have not changed).
@@ -44,7 +52,10 @@ COPY --from=spider-agent-html . ./spider/spider_agent_html/
 
 WORKDIR /src/axon_rust
 
-RUN cargo chef cook --release --recipe-path /src/recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/axon_rust/target \
+    cargo chef cook --release --recipe-path /src/recipe.json
 
 # Now copy the actual source. Only this layer re-runs on source changes.
 WORKDIR /src
@@ -53,7 +64,11 @@ COPY . ./axon_rust/
 
 WORKDIR /src/axon_rust
 
-RUN cargo build --release --bin axon
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/axon_rust/target \
+    cargo build --release --bin axon \
+    && cp target/release/axon /usr/local/bin/axon-release
 
 # ── Stage 3: runtime ──────────────────────────────────────────────────────────
 FROM debian:12.9-slim
@@ -107,7 +122,7 @@ RUN set -eux; \
       "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/${ytdlp_bin}"; \
     chmod +x /usr/local/bin/yt-dlp
 
-COPY --from=builder /src/axon_rust/target/release/axon /usr/local/bin/axon
+COPY --from=builder /usr/local/bin/axon-release /usr/local/bin/axon
 
 COPY docker/s6/cont-init.d/ /etc/cont-init.d/
 COPY docker/s6/s6-rc.d/ /etc/s6-overlay/s6-rc.d/

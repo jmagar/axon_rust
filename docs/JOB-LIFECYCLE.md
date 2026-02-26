@@ -26,7 +26,7 @@ This document defines lifecycle behavior for async jobs across:
 - Crawl
 - Extract
 - Embed
-- Ingest (`github`, `reddit`, `youtube`)
+- Ingest (`github`, `reddit`, `youtube`, `sessions`)
 
 ## Job Families
 
@@ -35,7 +35,7 @@ This document defines lifecycle behavior for async jobs across:
 | Crawl | `axon_crawl_jobs` | `AXON_CRAWL_QUEUE` | `start_crawl_job`, `start_crawl_jobs_batch` |
 | Extract | `axon_extract_jobs` | `AXON_EXTRACT_QUEUE` | `start_extract_job_with_pool` |
 | Embed | `axon_embed_jobs` | `AXON_EMBED_QUEUE` | `start_embed_job_with_pool` |
-| Ingest | `axon_ingest_jobs` | `AXON_INGEST_QUEUE` | `start_ingest_job` |
+| Ingest | `axon_ingest_jobs` | `AXON_INGEST_QUEUE` | `start_ingest_job` (`sessions` uses same ingest table and queue) |
 
 ## State Machine
 
@@ -111,7 +111,7 @@ Controls:
 Recovery paths:
 
 - Automatic periodic sweeps in worker lanes.
-- Manual recover commands (`axon <family> recover`).
+- Manual recovery commands (`axon <family> recover`).
 
 ## Worker Lane Runtime
 
@@ -160,6 +160,7 @@ Ingest aliases route through ingest lifecycle:
 axon github status <job_id>
 axon reddit cancel <job_id>
 axon youtube list
+axon sessions list
 ```
 
 ## Failure Modes
@@ -183,4 +184,3 @@ axon youtube list
 - `crates/jobs/ingest.rs`
 - `crates/jobs/common/amqp.rs`
 - `docs/schema.md`
-

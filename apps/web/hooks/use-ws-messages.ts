@@ -116,6 +116,12 @@ export { WsMessagesContext }
 /** Cap stdout accumulators to prevent unbounded memory growth.
  * Status payloads can be very large JSON documents, so keep a larger window. */
 const MAX_STDOUT_ITEMS = 50000
+const WORKSPACE_PROMPT_DEBOUNCE_MS = 250
+
+function pushCapped<T>(items: T[], item: T): T[] {
+  const next = [...items, item]
+  return next.length > MAX_STDOUT_ITEMS ? next.slice(-MAX_STDOUT_ITEMS) : next
+}
 
 export interface WsMessagesRuntimeState {
   currentJobId: string | null
@@ -155,7 +161,7 @@ export function reduceRuntimeState(
       const maybeJobId =
         maybeJobData && typeof maybeJobData.job_id === 'string' ? maybeJobData.job_id : null
       if (maybeJobId) next.currentJobId = maybeJobId
-      next.stdoutJson = [...state.stdoutJson, msg.data.data]
+      next.stdoutJson = pushCapped(state.stdoutJson, msg.data.data)
       return next
     }
     case 'command.start':
@@ -168,15 +174,15 @@ export function reduceRuntimeState(
       const lifecycle = lifecycleFromJobStatus(msg, state.currentJobId)
       if (!lifecycle) return next
       next.currentJobId = lifecycle.job_id
-      next.lifecycleEntries = [...state.lifecycleEntries, lifecycle]
-      next.stdoutJson = [...state.stdoutJson, lifecycle]
+      next.lifecycleEntries = pushCapped(state.lifecycleEntries, lifecycle)
+      next.stdoutJson = pushCapped(state.stdoutJson, lifecycle)
       return next
     }
     case 'job.progress': {
       const lifecycle = lifecycleFromJobProgress(msg, state.currentJobId)
       if (!lifecycle) return next
-      next.lifecycleEntries = [...state.lifecycleEntries, lifecycle]
-      next.stdoutJson = [...state.stdoutJson, lifecycle]
+      next.lifecycleEntries = pushCapped(state.lifecycleEntries, lifecycle)
+      next.stdoutJson = pushCapped(state.stdoutJson, lifecycle)
       return next
     }
     case 'artifact.list':
@@ -247,6 +253,7 @@ export function useWsMessagesProvider() {
   const [workspaceMode, setWorkspaceMode] = useState<string | null>(null)
   const [workspacePrompt, setWorkspacePrompt] = useState<string | null>(null)
   const [workspacePromptVersion, setWorkspacePromptVersion] = useState(0)
+  const workspacePromptDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const setCurrentJobIdTracked = useCallback((jobId: string | null) => {
     currentJobIdRef.current = jobId
@@ -485,8 +492,14 @@ export function useWsMessagesProvider() {
 
   const submitWorkspacePrompt = useCallback((prompt: string) => {
     setHasResults(true)
-    setWorkspacePrompt(prompt)
-    setWorkspacePromptVersion((prev) => prev + 1)
+    if (workspacePromptDebounceRef.current) {
+      clearTimeout(workspacePromptDebounceRef.current)
+    }
+    workspacePromptDebounceRef.current = setTimeout(() => {
+      setWorkspacePrompt(prompt)
+      setWorkspacePromptVersion((prev) => prev + 1)
+      workspacePromptDebounceRef.current = null
+    }, WORKSPACE_PROMPT_DEBOUNCE_MS)
   }, [])
 
   const deactivateWorkspace = useCallback(() => {
@@ -494,8 +507,21 @@ export function useWsMessagesProvider() {
     currentInputRef.current = ''
     setCurrentMode('')
     setWorkspaceMode(null)
+    if (workspacePromptDebounceRef.current) {
+      clearTimeout(workspacePromptDebounceRef.current)
+      workspacePromptDebounceRef.current = null
+    }
     setWorkspacePrompt(null)
     setWorkspacePromptVersion(0)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (workspacePromptDebounceRef.current) {
+        clearTimeout(workspacePromptDebounceRef.current)
+        workspacePromptDebounceRef.current = null
+      }
+    }
   }, [])
 
   return {

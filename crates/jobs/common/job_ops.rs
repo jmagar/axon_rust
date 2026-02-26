@@ -69,3 +69,18 @@ pub async fn mark_job_failed(
         .with_context(|| format!("mark_job_failed for job {id} in {table_name}"))?;
     Ok(())
 }
+
+/// Touch a running job heartbeat by updating `updated_at`.
+pub async fn touch_running_job(pool: &PgPool, table: JobTable, id: Uuid) -> Result<()> {
+    let table_name = table.as_str();
+    let query = format!(
+        "UPDATE {table_name} SET updated_at=NOW() WHERE id=$1 AND status='{running}'",
+        running = JobStatus::Running.as_str(),
+    );
+    sqlx::query(&query)
+        .bind(id)
+        .execute(pool)
+        .await
+        .with_context(|| format!("touch_running_job for job {id} in {table_name}"))?;
+    Ok(())
+}

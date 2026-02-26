@@ -10,6 +10,7 @@
 mod amqp;
 mod job_ops;
 pub(crate) mod pool;
+mod schema;
 pub(crate) mod stats;
 pub(crate) mod watchdog;
 
@@ -28,8 +29,9 @@ use lapin::options::QueueDeclareOptions;
 // Re-export all public items so existing `use crate::crates::jobs::common::*` continues to work.
 pub use amqp::{batch_enqueue_jobs, enqueue_job, open_amqp_channel};
 pub(crate) use amqp::{open_amqp_connection_and_channel, purge_queue_safe};
-pub use job_ops::{claim_next_pending, claim_pending_by_id, mark_job_failed};
+pub use job_ops::{claim_next_pending, claim_pending_by_id, mark_job_failed, touch_running_job};
 pub use pool::make_pool;
+pub(crate) use schema::begin_schema_migration_tx;
 pub use stats::{count_stale_and_pending_jobs, count_stale_and_pending_jobs_with_pool};
 #[cfg(test)]
 pub(crate) use watchdog::stale_watchdog_confirmed;

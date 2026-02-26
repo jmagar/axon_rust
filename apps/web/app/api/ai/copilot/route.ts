@@ -60,12 +60,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ completion })
   } catch (err) {
-    return NextResponse.json(
-      {
-        error: `Copilot request failed: ${err instanceof Error ? err.message : 'unknown error'}`,
-      },
-      { status: 500 },
-    )
+    console.error('[Copilot] Unhandled error:', err)
+    return NextResponse.json({ error: 'Copilot request failed' }, { status: 500 })
   }
 }
 

@@ -132,7 +132,7 @@ Request schema from `PulseChatRequestSchema` (`apps/web/lib/pulse/types.ts`):
 - `prompt` string
 - `documentMarkdown` string (default `""`)
 - `selectedCollections` string[] (default `["pulse"]`)
-- `conversationHistory` array of `{role: "user"|"assistant", content}`
+- `conversationHistory` array of `{role: "user"|"assistant", content: string}`
 - `permissionLevel`: `plan | training-wheels | full-access`
 
 Response (`PulseChatResponse`):

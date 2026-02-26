@@ -411,6 +411,19 @@ pub struct Config {
     /// Env: `AXON_ASK_MIN_RELEVANCE_SCORE` (clamped -1.0–2.0). Default: 0.45.
     pub ask_min_relevance_score: f64,
 
+    /// Authoritative domains to boost during ask reranking (exact host or suffix match).
+    /// Env: `AXON_ASK_AUTHORITATIVE_DOMAINS` (comma-separated). Default: empty.
+    pub ask_authoritative_domains: Vec<String>,
+
+    /// Extra rerank score boost applied when candidate URL matches an authoritative domain.
+    /// Env: `AXON_ASK_AUTHORITATIVE_BOOST` (clamped 0.0–0.5). Default: 0.0.
+    pub ask_authoritative_boost: f64,
+
+    /// Optional strict allowlist for ask retrieval candidate domains.
+    /// When non-empty, candidates outside this list are excluded.
+    /// Env: `AXON_ASK_AUTHORITATIVE_ALLOWLIST` (comma-separated). Default: empty.
+    pub ask_authoritative_allowlist: Vec<String>,
+
     /// Run the command on a recurring schedule every N seconds (`None` = one-shot). Flag: `--cron-every-seconds`.
     pub cron_every_seconds: Option<u64>,
 
@@ -598,6 +611,9 @@ impl Default for Config {
             ask_doc_fetch_concurrency: 4,
             ask_doc_chunk_limit: 192,
             ask_min_relevance_score: 0.45,
+            ask_authoritative_domains: vec![],
+            ask_authoritative_boost: 0.0,
+            ask_authoritative_allowlist: vec![],
             cron_every_seconds: None,
             cron_max_runs: None,
             watchdog_stale_timeout_secs: 300,
@@ -718,6 +734,12 @@ impl fmt::Debug for Config {
             .field("ask_doc_fetch_concurrency", &self.ask_doc_fetch_concurrency)
             .field("ask_doc_chunk_limit", &self.ask_doc_chunk_limit)
             .field("ask_min_relevance_score", &self.ask_min_relevance_score)
+            .field("ask_authoritative_domains", &self.ask_authoritative_domains)
+            .field("ask_authoritative_boost", &self.ask_authoritative_boost)
+            .field(
+                "ask_authoritative_allowlist",
+                &self.ask_authoritative_allowlist,
+            )
             .field("cron_every_seconds", &self.cron_every_seconds)
             .field("cron_max_runs", &self.cron_max_runs)
             .field(
@@ -807,6 +829,9 @@ mod tests {
         assert_eq!(cfg.ask_max_context_chars, 120_000);
         assert_eq!(cfg.ask_candidate_limit, 64);
         assert!((cfg.ask_min_relevance_score - 0.45).abs() < f64::EPSILON);
+        assert!(cfg.ask_authoritative_domains.is_empty());
+        assert!((cfg.ask_authoritative_boost - 0.0).abs() < f64::EPSILON);
+        assert!(cfg.ask_authoritative_allowlist.is_empty());
     }
 
     #[test]

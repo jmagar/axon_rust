@@ -117,10 +117,10 @@ export function Omnibox() {
       if (msg.type === 'job.cancel.response') {
         setIsProcessing(false)
         const modeLabel = msg.data.payload.mode ?? mode
-        const jobLabel = msg.data.payload.job_id ? ` \\u00b7 ${msg.data.payload.job_id}` : ''
+        const jobLabel = msg.data.payload.job_id ? ` \u00b7 ${msg.data.payload.job_id}` : ''
         const resultMessage =
           msg.data.payload.message ?? (msg.data.payload.ok ? 'cancel accepted' : 'cancel failed')
-        setStatusText(`${modeLabel}${jobLabel} \\u00b7 ${resultMessage}`)
+        setStatusText(`${modeLabel}${jobLabel} \u00b7 ${resultMessage}`)
         setStatusType(msg.data.payload.ok ? 'done' : 'error')
       }
     })

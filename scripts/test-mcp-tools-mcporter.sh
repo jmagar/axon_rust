@@ -87,7 +87,7 @@ run_pipe_case action_stats "mcporter call '$SELECTOR' action:stats --output json
 run_pipe_case action_domains "mcporter call '$SELECTOR' action:domains limit:5 offset:0 --output json | jq -e '.ok == true and .action == \"domains\"' >/dev/null"
 run_pipe_case action_sources "mcporter call '$SELECTOR' action:sources limit:5 offset:0 --output json | jq -e '.ok == true and .action == \"sources\"' >/dev/null"
 run_pipe_case action_query "mcporter call '$SELECTOR' action:query query:'rust mcp sdk' limit:3 offset:0 --output json | jq -e '.ok == true and .action == \"query\"' >/dev/null"
-run_pipe_case action_retrieve "mcporter call '$SELECTOR' action:retrieve url:'/home/jmagar/workspace/axon_rust/docs/MCP.md' --output json | jq -e '.ok == true and .action == \"retrieve\"' >/dev/null"
+run_pipe_case action_retrieve "mcporter call '$SELECTOR' action:retrieve url:"$PWD/docs/MCP.md" --output json | jq -e '.ok == true and .action == \"retrieve\"' >/dev/null"
 run_pipe_case action_map "mcporter call '$SELECTOR' action:map url:'https://example.com' limit:5 offset:0 --output json | jq -e '.ok == true and .action == \"map\"' >/dev/null"
 run_pipe_case action_scrape "mcporter call '$SELECTOR' action:scrape url:'https://example.com' --output json | jq -e '.ok == true and .action == \"scrape\"' >/dev/null"
 run_pipe_case action_crawl_list "mcporter call '$SELECTOR' action:crawl subaction:list limit:5 offset:0 --output json | jq -e '.ok == true and .action == \"crawl\" and .subaction == \"list\"' >/dev/null"

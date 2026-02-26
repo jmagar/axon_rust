@@ -666,6 +666,8 @@ pub(super) async fn handle_cancel(mode: &str, job_id: &str, tx: mpsc::Sender<Str
                     None,
                 )
                 .await;
+            } else {
+                send_done_dual(&tx, &ws_ctx, 0, None).await;
             }
         }
         Err(e) => {

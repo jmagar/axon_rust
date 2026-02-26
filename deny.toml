@@ -1,5 +1,5 @@
 [advisories]
-vulnerability = "deny"
+vulnerabilities = "deny"
 unmaintained = "workspace"
 ignore = []
 

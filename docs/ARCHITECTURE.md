@@ -195,7 +195,7 @@ Job families:
 - Crawl: `crates/jobs/crawl/runtime.rs` (+ runtime worker modules)
 - Extract: `crates/jobs/extract.rs`
 - Embed: `crates/jobs/embed.rs`
-- Ingest (`github`, `reddit`, `youtube`, `sessions`): `crates/jobs/ingest.rs`
+- Ingest (`github`, `reddit`, `youtube`, `sessions`; lifecycle details in `docs/JOB-LIFECYCLE.md`): `crates/jobs/ingest.rs`
 
 ## Vector and RAG Pipeline
 

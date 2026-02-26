@@ -35,3 +35,8 @@ apps/web/components/omnibox.tsx
 crates/mcp/server.rs
 # 584 lines — websocket command execution module with protocol/state handling; refactor planned (2026-02-25)
 crates/web/execute/mod.rs
+
+# pre-existing >500 lines touched during review-fix batch (2026-02-26)
+apps/web/hooks/use-ws-messages.ts
+crates/cli/commands/crawl.rs
+crates/vector/ops/commands/ask/context.rs

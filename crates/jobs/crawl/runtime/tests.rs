@@ -135,6 +135,25 @@ async fn crawl_recover_reclaims_confirmed_stale_running_job() -> Result<(), Box<
     Ok(())
 }
 
+#[tokio::test]
+async fn crawl_ensure_schema_is_concurrency_safe() -> Result<(), Box<dyn Error>> {
+    let Some(pg_url) = pg_url() else {
+        return Ok(());
+    };
+    let cfg = test_config(&pg_url);
+    let pool = make_pool(&cfg).await?;
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let pool = pool.clone();
+        tasks.push(tokio::spawn(async move { ensure_schema(&pool).await }));
+    }
+    for task in tasks {
+        let result = task.await?;
+        result?;
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn crawl_worker_e2e_processes_pending_job_to_terminal_status() -> Result<(), Box<dyn Error>> {
     let local = tokio::task::LocalSet::new();

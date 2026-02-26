@@ -179,6 +179,8 @@ fn build_manifest_lookup(manifest_path: &Path) -> HashMap<String, String> {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
         {
+            // Preserve the raw relative path key for payloads that send `relative_path` directly.
+            out.insert(rel.to_string(), url.to_string());
             let base = base_dir.unwrap_or(Path::new("."));
             base.join(rel)
         } else if let Some(abs) = json

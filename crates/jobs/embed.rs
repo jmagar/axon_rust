@@ -3,8 +3,8 @@ use crate::crates::core::config::Config;
 use crate::crates::core::health::redis_healthy;
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::jobs::common::{
-    JobTable, enqueue_job, make_pool, mark_job_failed, open_amqp_connection_and_channel,
-    purge_queue_safe, reclaim_stale_running_jobs,
+    JobTable, begin_schema_migration_tx, enqueue_job, make_pool, mark_job_failed,
+    open_amqp_connection_and_channel, purge_queue_safe, reclaim_stale_running_jobs,
 };
 use crate::crates::jobs::status::JobStatus;
 use chrono::{DateTime, Utc};
@@ -20,6 +20,7 @@ const TABLE: JobTable = JobTable::Embed;
 const WORKER_CONCURRENCY: usize = 2;
 const EMBED_HEARTBEAT_INTERVAL_SECS: u64 = 15;
 const EMBED_CANCEL_REDIS_TIMEOUT_SECS: u64 = 3;
+const EMBED_SCHEMA_LOCK_KEY: i64 = 0xA804_0002;
 
 mod worker;
 pub use worker::run_embed_worker;
@@ -44,43 +45,48 @@ pub struct EmbedJob {
 }
 
 async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS axon_embed_jobs (
-            id UUID PRIMARY KEY,
-            status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled')),
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            started_at TIMESTAMPTZ,
-            finished_at TIMESTAMPTZ,
-            error_text TEXT,
-            input_text TEXT NOT NULL,
-            result_json JSONB,
-            config_json JSONB NOT NULL
+    let mut tx = begin_schema_migration_tx(pool, EMBED_SCHEMA_LOCK_KEY).await?;
+
+    {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS axon_embed_jobs (
+                id UUID PRIMARY KEY,
+                status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled')),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                started_at TIMESTAMPTZ,
+                finished_at TIMESTAMPTZ,
+                error_text TEXT,
+                input_text TEXT NOT NULL,
+                result_json JSONB,
+                config_json JSONB NOT NULL
+            )
+            "#,
         )
-        "#,
-    )
-    .execute(pool)
-    .await?;
+        .execute(&mut *tx)
+        .await?;
 
-    // Composite partial index for claim_next_pending: WHERE status='pending' ORDER BY created_at
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_axon_embed_jobs_pending ON axon_embed_jobs(created_at ASC) WHERE status = 'pending'"
-    )
-    .execute(pool)
-    .await?;
+        // Composite partial index for claim_next_pending: WHERE status='pending' ORDER BY created_at
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_axon_embed_jobs_pending ON axon_embed_jobs(created_at ASC) WHERE status = 'pending'"
+        )
+        .execute(&mut *tx)
+        .await?;
 
-    // Add CHECK constraint to existing tables (idempotent via IF NOT EXISTS pattern).
-    sqlx::query(
-        r#"DO $$ BEGIN
-            ALTER TABLE axon_embed_jobs ADD CONSTRAINT axon_embed_jobs_status_check
-                CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled'));
-        EXCEPTION WHEN duplicate_object THEN NULL;
-        END $$"#,
-    )
-    .execute(pool)
-    .await?;
+        // Add CHECK constraint to existing tables (idempotent via IF NOT EXISTS pattern).
+        sqlx::query(
+            r#"DO $$ BEGIN
+                ALTER TABLE axon_embed_jobs ADD CONSTRAINT axon_embed_jobs_status_check
+                    CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled'));
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END $$"#,
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
 
+    tx.commit().await?;
     Ok(())
 }
 

@@ -387,6 +387,30 @@ fn into_config(cli: Cli) -> Result<Config, String> {
             -1.0,
             2.0,
         ),
+        ask_authoritative_domains: env::var("AXON_ASK_AUTHORITATIVE_DOMAINS")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .map(|item| item.trim().to_ascii_lowercase())
+                    .filter(|item| !item.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        ask_authoritative_boost: performance::env_f64_clamped(
+            "AXON_ASK_AUTHORITATIVE_BOOST",
+            0.0,
+            0.0,
+            0.5,
+        ),
+        ask_authoritative_allowlist: env::var("AXON_ASK_AUTHORITATIVE_ALLOWLIST")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .map(|item| item.trim().to_ascii_lowercase())
+                    .filter(|item| !item.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
         cron_every_seconds: global.cron_every_seconds.filter(|value| *value > 0),
         cron_max_runs: global.cron_max_runs.filter(|value| *value > 0),
         watchdog_stale_timeout_secs: global.watchdog_stale_timeout_secs.max(30),

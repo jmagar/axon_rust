@@ -4,6 +4,7 @@ use crate::crates::vector::ops::source_display::display_source;
 use crate::crates::vector::ops::{qdrant, ranking, tei};
 use anyhow::{Result, anyhow};
 use futures_util::stream::{self, StreamExt};
+use spider::url::Url;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -71,6 +72,22 @@ fn is_low_signal_source_url(url: &str) -> bool {
         || lower.contains(".cache/")
         || (!is_web_url && lower.contains("/logs/"))
         || (!is_web_url && lower.ends_with(".log"))
+}
+
+fn url_matches_domain_list(url: &str, domains: &[String]) -> bool {
+    if domains.is_empty() {
+        return true;
+    }
+    let host = Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(|h| h.to_ascii_lowercase()));
+    let Some(host) = host else {
+        return false;
+    };
+    domains.iter().any(|domain| {
+        let normalized = domain.trim().to_ascii_lowercase();
+        !normalized.is_empty() && (host == normalized || host.ends_with(&format!(".{normalized}")))
+    })
 }
 
 fn candidate_topical_overlap_count(
@@ -180,6 +197,11 @@ async fn retrieve_ask_candidates(cfg: &Config, query: &str) -> Result<AskRetriev
         if !allow_low_signal && is_low_signal_source_url(&url) {
             continue;
         }
+        if !cfg.ask_authoritative_allowlist.is_empty()
+            && !url_matches_domain_list(&url, &cfg.ask_authoritative_allowlist)
+        {
+            continue;
+        }
         let path = ranking::extract_path_from_url(&url);
         candidates.push(ranking::AskCandidate {
             score: hit.score,
@@ -194,13 +216,18 @@ async fn retrieve_ask_candidates(cfg: &Config, query: &str) -> Result<AskRetriev
     if candidates.is_empty() {
         return Err(anyhow!("No relevant documents found for ask query"));
     }
-    let reranked = ranking::rerank_ask_candidates(&candidates, &query_tokens)
-        .into_iter()
-        .filter(|candidate| {
-            candidate.rerank_score >= cfg.ask_min_relevance_score
-                && candidate_has_topical_overlap(candidate, &query_tokens)
-        })
-        .collect::<Vec<_>>();
+    let reranked = ranking::rerank_ask_candidates(
+        &candidates,
+        &query_tokens,
+        &cfg.ask_authoritative_domains,
+        cfg.ask_authoritative_boost,
+    )
+    .into_iter()
+    .filter(|candidate| {
+        candidate.rerank_score >= cfg.ask_min_relevance_score
+            && candidate_has_topical_overlap(candidate, &query_tokens)
+    })
+    .collect::<Vec<_>>();
     if reranked.is_empty() {
         return Err(anyhow!(
             "No candidates met relevance threshold {:.3}; lower AXON_ASK_MIN_RELEVANCE_SCORE",
@@ -521,6 +548,7 @@ mod tests {
     use super::{
         candidate_has_topical_overlap, collect_supplemental_candidate_indices,
         is_low_signal_source_url, query_requests_low_signal_sources, should_inject_supplemental,
+        url_matches_domain_list,
     };
     use crate::crates::vector::ops::ranking::AskCandidate;
     use std::collections::HashSet;
@@ -643,5 +671,22 @@ mod tests {
             rerank_score: 0.9,
         };
         assert!(candidate_has_topical_overlap(&strong_candidate, &tokens));
+    }
+
+    #[test]
+    fn authoritative_allowlist_matches_exact_and_suffix_hosts() {
+        let allow = vec!["docs.claude.com".to_string(), "openai.com".to_string()];
+        assert!(url_matches_domain_list(
+            "https://docs.claude.com/en/docs/claude-code/overview",
+            &allow
+        ));
+        assert!(url_matches_domain_list(
+            "https://platform.openai.com/docs/overview",
+            &allow
+        ));
+        assert!(!url_matches_domain_list(
+            "https://medium.com/some-post",
+            &allow
+        ));
     }
 }

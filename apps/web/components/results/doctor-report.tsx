@@ -127,7 +127,11 @@ function ServiceRows({ entries }: { entries: Array<[string, DoctorServiceStatus]
   )
 }
 
-export function DoctorReport({ data }: { data: DoctorResult }) {
+export interface DoctorReportProps {
+  data: DoctorResult
+}
+
+export function DoctorReport({ data }: DoctorReportProps) {
   const serviceEntries = Object.entries(data.services).sort(([, a], [, b]) =>
     Number(a.ok) === Number(b.ok) ? 0 : a.ok ? 1 : -1,
   )

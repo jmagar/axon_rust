@@ -24,8 +24,28 @@ interface ResultsPanelProps {
   statsSlot?: ReactNode
 }
 
-export function selectNormalizedItems(stdoutJson: unknown[], _stdoutLines: string[]): unknown[] {
-  return stdoutJson.filter((item) => !isLifecycleEntry(item))
+function parseStructuredStdoutLines(stdoutLines: string[]): unknown[] {
+  const parsed: unknown[] = []
+  for (const line of stdoutLines) {
+    const trimmed = line.trim()
+    if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) continue
+    try {
+      const value = JSON.parse(trimmed) as unknown
+      if (Array.isArray(value)) {
+        parsed.push(...value)
+      } else {
+        parsed.push(value)
+      }
+    } catch {
+      // Ignore non-JSON log lines.
+    }
+  }
+  return parsed
+}
+
+export function selectNormalizedItems(stdoutJson: unknown[], stdoutLines: string[]): unknown[] {
+  const source = stdoutJson.length > 0 ? stdoutJson : parseStructuredStdoutLines(stdoutLines)
+  return source.filter((item) => !isLifecycleEntry(item))
 }
 
 function isLifecycleEntry(item: unknown): boolean {

@@ -67,7 +67,7 @@ impl AxonMcpServer {
     async fn scrape_payload(&self, url: &str) -> Result<serde_json::Value, ErrorData> {
         cli_scrape_payload(self.cfg.as_ref(), url)
             .await
-            .map_err(|e| invalid_params(e.to_string()))
+            .map_err(|e| internal_error(e.to_string()))
     }
 
     fn parse_viewport(viewport: Option<&str>, fallback_w: u32, fallback_h: u32) -> (u32, u32) {
@@ -226,6 +226,31 @@ fn validate_artifact_path(raw: &str) -> Result<PathBuf, ErrorData> {
         ));
     }
     Ok(canonical)
+}
+
+fn resolve_artifact_output_path(raw: &str) -> Result<PathBuf, ErrorData> {
+    let candidate = PathBuf::from(raw);
+    if candidate.as_os_str().is_empty() {
+        return Err(invalid_params("output path cannot be empty"));
+    }
+    if candidate.is_absolute() {
+        return Err(invalid_params(
+            "output path must be relative to .cache/axon-mcp",
+        ));
+    }
+    if candidate.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return Err(invalid_params(
+            "output path cannot contain traversal components",
+        ));
+    }
+    Ok(ensure_artifact_root()?.join(candidate))
 }
 
 fn clip_inline_json(value: &serde_json::Value, max_chars: usize) -> (serde_json::Value, bool) {
@@ -503,7 +528,7 @@ impl AxonMcpServer {
     }
 
     async fn handle_extract(&self, req: ExtractRequest) -> Result<AxonToolResponse, ErrorData> {
-        let _response_mode = parse_response_mode(req.response_mode);
+        let response_mode = parse_response_mode(req.response_mode);
         match req.subaction {
             ExtractSubaction::Start => {
                 let urls = req
@@ -529,11 +554,13 @@ impl AxonMcpServer {
                 let job = get_extract_job(self.cfg.as_ref(), id)
                     .await
                     .map_err(|e| internal_error(e.to_string()))?;
-                Ok(AxonToolResponse::ok(
+                respond_with_mode(
                     "extract",
                     "status",
+                    response_mode,
+                    &format!("extract-status-{id}"),
                     serde_json::json!({ "job": job }),
-                ))
+                )
             }
             ExtractSubaction::Cancel => {
                 let id = parse_job_id(req.job_id.as_ref())?;
@@ -558,11 +585,13 @@ impl AxonMcpServer {
                     .skip(offset)
                     .take(limit as usize)
                     .collect::<Vec<_>>();
-                Ok(AxonToolResponse::ok(
+                respond_with_mode(
                     "extract",
                     "list",
+                    response_mode,
+                    "extract-list",
                     serde_json::json!({ "jobs": jobs, "limit": limit, "offset": offset }),
-                ))
+                )
             }
             ExtractSubaction::Cleanup => {
                 let deleted = cleanup_extract_jobs(self.cfg.as_ref())
@@ -598,7 +627,7 @@ impl AxonMcpServer {
     }
 
     async fn handle_embed(&self, req: EmbedRequest) -> Result<AxonToolResponse, ErrorData> {
-        let _response_mode = parse_response_mode(req.response_mode);
+        let response_mode = parse_response_mode(req.response_mode);
         match req.subaction {
             EmbedSubaction::Start => {
                 let input = req
@@ -618,11 +647,13 @@ impl AxonMcpServer {
                 let job = get_embed_job(self.cfg.as_ref(), id)
                     .await
                     .map_err(|e| internal_error(e.to_string()))?;
-                Ok(AxonToolResponse::ok(
+                respond_with_mode(
                     "embed",
                     "status",
+                    response_mode,
+                    &format!("embed-status-{id}"),
                     serde_json::json!({ "job": job }),
-                ))
+                )
             }
             EmbedSubaction::Cancel => {
                 let id = parse_job_id(req.job_id.as_ref())?;
@@ -647,11 +678,13 @@ impl AxonMcpServer {
                     .skip(offset)
                     .take(limit as usize)
                     .collect::<Vec<_>>();
-                Ok(AxonToolResponse::ok(
+                respond_with_mode(
                     "embed",
                     "list",
+                    response_mode,
+                    "embed-list",
                     serde_json::json!({ "jobs": jobs, "limit": limit, "offset": offset }),
-                ))
+                )
             }
             EmbedSubaction::Cleanup => {
                 let deleted = cleanup_embed_jobs(self.cfg.as_ref())
@@ -687,7 +720,7 @@ impl AxonMcpServer {
     }
 
     async fn handle_ingest(&self, req: IngestRequest) -> Result<AxonToolResponse, ErrorData> {
-        let _response_mode = parse_response_mode(req.response_mode);
+        let response_mode = parse_response_mode(req.response_mode);
         match req.subaction {
             IngestSubaction::Start => {
                 let source_type = req
@@ -744,11 +777,13 @@ impl AxonMcpServer {
                 let job = get_ingest_job(self.cfg.as_ref(), id)
                     .await
                     .map_err(|e| internal_error(e.to_string()))?;
-                Ok(AxonToolResponse::ok(
+                respond_with_mode(
                     "ingest",
                     "status",
+                    response_mode,
+                    &format!("ingest-status-{id}"),
                     serde_json::json!({ "job": job }),
-                ))
+                )
             }
             IngestSubaction::Cancel => {
                 let id = parse_job_id(req.job_id.as_ref())?;
@@ -773,11 +808,13 @@ impl AxonMcpServer {
                     .skip(offset)
                     .take(limit as usize)
                     .collect::<Vec<_>>();
-                Ok(AxonToolResponse::ok(
+                respond_with_mode(
                     "ingest",
                     "list",
+                    response_mode,
+                    "ingest-list",
                     serde_json::json!({ "jobs": jobs, "limit": limit, "offset": offset }),
-                ))
+                )
             }
             IngestSubaction::Cleanup => {
                 let deleted = cleanup_ingest_jobs(self.cfg.as_ref())
@@ -1052,7 +1089,7 @@ impl AxonMcpServer {
         .map_err(|e| internal_error(e.to_string()))?;
 
         let path = if let Some(output) = req.output {
-            PathBuf::from(output)
+            resolve_artifact_output_path(&output)?
         } else {
             ensure_artifact_root()?
                 .join("screenshots")
@@ -1190,10 +1227,7 @@ impl AxonMcpServer {
                     "domains": ["domains"],
                     "sources": ["sources"],
                     "stats": ["stats"],
-                    "head": ["head"],
-                    "grep": ["grep"],
-                    "wc": ["wc"],
-                    "read": ["read"]
+                    "artifacts": ["head", "grep", "wc", "read"]
                 },
                 "resources": [
                     MCP_TOOL_SCHEMA_URI

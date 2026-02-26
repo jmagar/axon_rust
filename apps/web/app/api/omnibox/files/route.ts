@@ -1,18 +1,11 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { NextResponse } from 'next/server'
+import type { LocalDocFile } from '@/lib/omnibox'
 import { listPulseDocs } from '@/lib/pulse/storage'
 import { getWorkspaceRoot } from '@/lib/pulse/workspace-root'
 
-type LocalDocSource = 'docs' | 'pulse'
-
-interface LocalDocFile {
-  id: string
-  label: string
-  path: string
-  source: LocalDocSource
-  updatedAt?: string
-}
+type LocalDocSource = LocalDocFile['source']
 
 const ALLOWED_DOC_EXTENSIONS = new Set(['.md', '.mdx', '.txt', '.rst'])
 
@@ -104,20 +97,25 @@ async function resolveFileById(workspaceRoot: string, id: string) {
 }
 
 export async function GET(request: Request) {
-  const url = new URL(request.url)
-  const requestedId = url.searchParams.get('id')
-  const workspaceRoot = getWorkspaceRoot()
+  try {
+    const url = new URL(request.url)
+    const requestedId = url.searchParams.get('id')
+    const workspaceRoot = getWorkspaceRoot()
 
-  if (requestedId) {
-    const file = await resolveFileById(workspaceRoot, requestedId)
-    if (!file) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    return NextResponse.json({ file })
+    if (requestedId) {
+      const file = await resolveFileById(workspaceRoot, requestedId)
+      if (!file) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+      return NextResponse.json({ file })
+    }
+
+    const [docsFiles, pulseFiles] = await Promise.all([
+      collectDocsDir(path.join(workspaceRoot, 'docs')),
+      collectPulseDocs(),
+    ])
+
+    return NextResponse.json({ files: [...pulseFiles, ...docsFiles] })
+  } catch (err) {
+    console.error('[Omnibox] Files route error:', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
-
-  const [docsFiles, pulseFiles] = await Promise.all([
-    collectDocsDir(path.join(workspaceRoot, 'docs')),
-    collectPulseDocs(),
-  ])
-
-  return NextResponse.json({ files: [...pulseFiles, ...docsFiles] })
 }

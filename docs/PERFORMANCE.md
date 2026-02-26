@@ -2,7 +2,7 @@
 Last Modified: 2026-02-25
 
 Version: 1.0.0
-Last Updated: 01:26:53 | 02/25/2026 EST
+Last Updated: 2026-02-25T01:26:53-05:00
 
 ## Table of Contents
 
@@ -117,7 +117,7 @@ Qdrant controls:
 
 - `AXON_COLLECTION`
 - `QDRANT_URL`
-- upsert batching via `AXON_QDRANT_UPSERT_BATCH_SIZE` (if set)
+- upsert batching via `AXON_QDRANT_UPSERT_BATCH_SIZE` (default: `256` when unset)
 
 ## Ask/RAG Tuning
 
@@ -134,13 +134,13 @@ Qdrant controls:
 
 Tuning strategy:
 
-1. If recall is poor, raise `CANDIDATE_LIMIT` and/or lower `MIN_RELEVANCE_SCORE`.
-2. If latency is high, lower candidate/chunk limits and context chars.
-3. If answer quality is low for long docs, increase `FULL_DOCS` and backfill chunks gradually.
+1. For poor recall, raise `CANDIDATE_LIMIT` and/or lower `MIN_RELEVANCE_SCORE`.
+2. To reduce latency, lower candidate/chunk limits and context chars.
+3. For low answer quality on long docs, increase `FULL_DOCS` and backfill chunks gradually.
 
 ## Pulse API Tuning
 
-Pulse endpoints (`/api/pulse/chat`, `/api/ai/copilot`) currently use 20s upstream timeout.
+Pulse endpoints (`/api/pulse/chat`, `/api/ai/copilot`) enforce upstream timeouts in their route handlers; treat route source as the current source of truth.
 
 For high-latency models:
 
@@ -204,4 +204,3 @@ Track:
 - `crates/vector/ops/commands/*`
 - `apps/web/app/api/pulse/chat/route.ts`
 - `apps/web/app/api/ai/copilot/route.ts`
-

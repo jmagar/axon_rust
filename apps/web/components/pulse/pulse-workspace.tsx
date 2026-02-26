@@ -29,6 +29,14 @@ export function PulseWorkspace() {
   const [pendingOps, setPendingOps] = useState<DocOperation[] | null>(null)
   const [pendingValidation, setPendingValidation] = useState<ValidationResult | null>(null)
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autosaveAbortRef = useRef<AbortController | null>(null)
+  const lastSavedSnapshotRef = useRef('')
+  const lastHandledPromptVersionRef = useRef(0)
+  const chatHistoryRef = useRef<ChatMessage[]>([])
+
+  useEffect(() => {
+    chatHistoryRef.current = chatHistory
+  }, [chatHistory])
 
   const applyOperations = useCallback((ops: DocOperation[]) => {
     setDocumentMarkdown((prev) => {
@@ -54,11 +62,21 @@ export function PulseWorkspace() {
   }, [])
 
   useEffect(() => {
-    if (workspacePromptVersion === 0 || !workspacePrompt) return
+    if (workspacePromptVersion === 0) {
+      lastHandledPromptVersionRef.current = 0
+      return
+    }
+    if (!workspacePrompt) return
+    if (workspacePromptVersion <= lastHandledPromptVersionRef.current) return
+    lastHandledPromptVersionRef.current = workspacePromptVersion
 
     const prompt = workspacePrompt
     setChatHistory((prev) => [...prev, { role: 'user', content: prompt }])
     setIsChatLoading(true)
+    const conversationHistory = chatHistoryRef.current.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }))
 
     void (async () => {
       try {
@@ -69,13 +87,29 @@ export function PulseWorkspace() {
             prompt,
             documentMarkdown,
             selectedCollections: ['pulse', 'cortex'],
-            conversationHistory: chatHistory.map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
+            conversationHistory,
             permissionLevel,
           }),
         })
+        if (!response.ok) {
+          const errorBody = await response.text()
+          let detail = ''
+          if (errorBody) {
+            try {
+              const parsed = JSON.parse(errorBody) as { error?: unknown; message?: unknown }
+              detail =
+                typeof parsed.error === 'string'
+                  ? parsed.error
+                  : typeof parsed.message === 'string'
+                    ? parsed.message
+                    : errorBody
+            } catch {
+              detail = errorBody
+            }
+          }
+          const suffix = detail ? `: ${detail}` : ''
+          throw new Error(`Pulse chat failed (${response.status})${suffix}`)
+        }
 
         const data = (await response.json()) as PulseChatResponse
         setChatHistory((prev) => [
@@ -113,7 +147,6 @@ export function PulseWorkspace() {
     workspacePromptVersion,
     workspacePrompt,
     documentMarkdown,
-    chatHistory,
     permissionLevel,
     applyOperations,
   ])
@@ -122,23 +155,41 @@ export function PulseWorkspace() {
     if (!documentMarkdown || !documentTitle) return
 
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+    const snapshot = `${documentTitle}\n---\n${documentMarkdown}`
+    if (snapshot === lastSavedSnapshotRef.current) return
     autosaveTimerRef.current = setTimeout(() => {
       void (async () => {
+        if (autosaveAbortRef.current) {
+          autosaveAbortRef.current.abort()
+        }
+        const controller = new AbortController()
+        autosaveAbortRef.current = controller
         try {
           setSaveStatus('saving')
           const response = await fetch('/api/pulse/save', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
             body: JSON.stringify({
               title: documentTitle,
               markdown: documentMarkdown,
               embed: true,
             }),
           })
-          setSaveStatus(response.ok ? 'saved' : 'error')
+          if (response.ok) {
+            lastSavedSnapshotRef.current = snapshot
+            setSaveStatus('saved')
+          } else {
+            setSaveStatus('error')
+          }
           setTimeout(() => setSaveStatus('idle'), 2000)
-        } catch {
+        } catch (error: unknown) {
+          if (error instanceof Error && error.name === 'AbortError') return
           setSaveStatus('error')
+        } finally {
+          if (autosaveAbortRef.current === controller) {
+            autosaveAbortRef.current = null
+          }
         }
       })()
     }, 1500)
@@ -147,6 +198,15 @@ export function PulseWorkspace() {
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
     }
   }, [documentMarkdown, documentTitle])
+
+  useEffect(() => {
+    return () => {
+      if (autosaveAbortRef.current) {
+        autosaveAbortRef.current.abort()
+        autosaveAbortRef.current = null
+      }
+    }
+  }, [])
 
   return (
     <div className="mt-3 flex flex-col gap-2">

@@ -32,7 +32,7 @@ Required:
 
 - Docker Engine + Compose plugin
 - Valid `.env` file (copied from `.env.example`)
-- Reachable TEI service
+- Reachable TEI (Text Embeddings Inference) service
 - Reachable OpenAI-compatible LLM endpoint
 
 Recommended:
@@ -59,27 +59,27 @@ Ensure `.env` is never committed. `.env.example` remains tracked.
 docker compose build
 ```
 
-2. Start stack:
+1. Start stack:
 
 ```bash
 docker compose up -d
 ```
 
-3. Verify health:
+1. Verify health:
 
 ```bash
 docker compose ps
 ./scripts/axon doctor
 ```
 
-4. Smoke test:
+1. Smoke test:
 
 ```bash
 ./scripts/axon scrape https://example.com --wait true
 ./scripts/axon status
 ```
 
-5. Observe workers:
+1. Observe workers:
 
 ```bash
 docker compose logs --tail=200 axon-workers
@@ -103,29 +103,29 @@ Rollback is compose-based and image-based.
 docker compose down
 ```
 
-2. Revert deployment inputs:
+1. Revert deployment inputs:
 
 - previous git revision for compose/docker files
 - previous env values if changed
 - previous image tags if using tagged images
 
-3. Rebuild/restart:
+1. Rebuild/restart:
 
 ```bash
 docker compose build
 docker compose up -d
 ```
 
-4. Re-run validation checklist.
+1. Re-run validation checklist.
 
 ## Upgrade Procedure
 
 For code/config upgrades:
 
 1. Review release diff (especially schema, queue names, env vars).
-2. Update `.env` with any new required values.
-3. Rebuild and redeploy with standard procedure.
-4. Run lifecycle checks:
+1. Update `.env` with any new required values.
+1. Rebuild and redeploy with standard procedure.
+1. Run lifecycle checks:
 
 ```bash
 ./scripts/axon status
@@ -133,7 +133,7 @@ For code/config upgrades:
 ./scripts/axon ingest list
 ```
 
-5. If stale runs from prior version appear, run recover commands.
+1. If stale runs from prior version appear, run recover commands.
 
 ## Notes for Web UI Paths
 
@@ -152,4 +152,3 @@ If deploying Next.js:
 - `docs/OPERATIONS.md`
 - `docs/JOB-LIFECYCLE.md`
 - `apps/web/app/api/*`
-

@@ -185,6 +185,9 @@ The `ask` command retrieves chunks from Qdrant, reranks them, and builds a conte
 | `AXON_ASK_DOC_FETCH_CONCURRENCY` | `4` | `1`–`16` | Concurrent Qdrant fetches during full-doc backfill. |
 | `AXON_ASK_DOC_CHUNK_LIMIT` | `192` | `8`–`2000` | Maximum chunks fetched per document during backfill. |
 | `AXON_ASK_MAX_CONTEXT_CHARS` | `120000` | `20000`–`400000` | Total characters of context passed to the LLM. Raise for large-context models; lower to reduce token cost. |
+| `AXON_ASK_AUTHORITATIVE_DOMAINS` | `` | — | Optional comma-separated domain list to boost during reranking (exact host or suffix match). Example: `docs.claude.com,developers.openai.com`. |
+| `AXON_ASK_AUTHORITATIVE_BOOST` | `0.0` | `0.0`–`0.5` | Extra rerank score added when a candidate matches `AXON_ASK_AUTHORITATIVE_DOMAINS`. |
+| `AXON_ASK_AUTHORITATIVE_ALLOWLIST` | `` | — | Optional comma-separated strict domain allowlist. When set, ask retrieval excludes candidates outside these domains. |
 
 Notes:
 - Container runtime uses service DNS names (`axon-postgres`, `axon-redis`, etc.).

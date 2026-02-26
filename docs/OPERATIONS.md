@@ -227,8 +227,6 @@ If draining is needed first:
 
 - `docker-compose.yaml`
 - `README.md`
-- `CLAUDE.md`
 - `crates/jobs/*`
 - `crates/web.rs`
 - `apps/web/app/api/*`
-

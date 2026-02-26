@@ -44,7 +44,12 @@ pub async fn query_results(
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
-    let reranked = ranking::rerank_ask_candidates(&candidates, &query_tokens);
+    let reranked = ranking::rerank_ask_candidates(
+        &candidates,
+        &query_tokens,
+        &cfg.ask_authoritative_domains,
+        cfg.ask_authoritative_boost,
+    );
     let selected_indices =
         ranking::select_diverse_candidates(&reranked, (limit + offset).max(1), 2);
 

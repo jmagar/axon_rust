@@ -83,59 +83,84 @@ async fn extract_recover_reclaims_confirmed_stale_running_job() -> Result<(), Bo
     Ok(())
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn extract_worker_e2e_processes_pending_job_to_terminal_status() -> Result<(), Box<dyn Error>>
-{
+#[tokio::test]
+async fn extract_ensure_schema_is_concurrency_safe() -> Result<(), Box<dyn Error>> {
     let Some(pg_url) = pg_url() else {
         return Ok(());
     };
-    let mut cfg = test_config(&pg_url);
-    cfg.query = Some("extract worker e2e prompt".to_string());
-    let url = format!("https://example.com/extract-worker/{}", Uuid::new_v4());
-    let urls = vec![url];
-    let id = start_extract_job(&cfg, &urls, cfg.query.clone()).await?;
-
-    let worker_cfg = cfg.clone();
-    let worker = tokio::task::spawn_local(async move {
-        let _ = run_extract_worker(&worker_cfg).await;
-    });
-
+    let cfg = test_config(&pg_url);
     let pool = make_pool(&cfg).await?;
-    let wait = timeout(TokioDuration::from_secs(8), async {
-        loop {
-            let status: Option<String> =
-                sqlx::query_scalar("SELECT status FROM axon_extract_jobs WHERE id=$1")
-                    .bind(id)
-                    .fetch_optional(&pool)
-                    .await
-                    .ok()
-                    .flatten();
-            if matches!(status.as_deref(), Some("completed" | "failed" | "canceled")) {
-                break;
-            }
-            sleep(TokioDuration::from_millis(100)).await;
-        }
-    })
-    .await;
-    worker.abort();
-    let _ = worker.await;
-    assert!(
-        wait.is_ok(),
-        "extract worker did not reach terminal state in time"
-    );
-
-    let status: String = sqlx::query_scalar("SELECT status FROM axon_extract_jobs WHERE id = $1")
-        .bind(id)
-        .fetch_one(&pool)
-        .await?;
-    assert!(matches!(
-        status.as_str(),
-        "completed" | "failed" | "canceled"
-    ));
-
-    let _ = sqlx::query("DELETE FROM axon_extract_jobs WHERE id = $1")
-        .bind(id)
-        .execute(&pool)
-        .await;
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let pool = pool.clone();
+        tasks.push(tokio::spawn(async move { ensure_schema(&pool).await }));
+    }
+    for task in tasks {
+        let result = task.await?;
+        result?;
+    }
     Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn extract_worker_e2e_processes_pending_job_to_terminal_status() -> Result<(), Box<dyn Error>>
+{
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let Some(pg_url) = pg_url() else {
+                return Ok(());
+            };
+            let mut cfg = test_config(&pg_url);
+            cfg.query = Some("extract worker e2e prompt".to_string());
+            let url = format!("https://example.com/extract-worker/{}", Uuid::new_v4());
+            let urls = vec![url];
+            let id = start_extract_job(&cfg, &urls, cfg.query.clone()).await?;
+
+            let worker_cfg = cfg.clone();
+            let worker = tokio::task::spawn_local(async move {
+                let _ = run_extract_worker(&worker_cfg).await;
+            });
+
+            let pool = make_pool(&cfg).await?;
+            let wait = timeout(TokioDuration::from_secs(8), async {
+                loop {
+                    let status: Option<String> =
+                        sqlx::query_scalar("SELECT status FROM axon_extract_jobs WHERE id=$1")
+                            .bind(id)
+                            .fetch_optional(&pool)
+                            .await
+                            .ok()
+                            .flatten();
+                    if matches!(status.as_deref(), Some("completed" | "failed" | "canceled")) {
+                        break;
+                    }
+                    sleep(TokioDuration::from_millis(100)).await;
+                }
+            })
+            .await;
+            worker.abort();
+            let _ = worker.await;
+            assert!(
+                wait.is_ok(),
+                "extract worker did not reach terminal state in time"
+            );
+
+            let status: String =
+                sqlx::query_scalar("SELECT status FROM axon_extract_jobs WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await?;
+            assert!(matches!(
+                status.as_str(),
+                "completed" | "failed" | "canceled"
+            ));
+
+            let _ = sqlx::query("DELETE FROM axon_extract_jobs WHERE id = $1")
+                .bind(id)
+                .execute(&pool)
+                .await;
+            Ok::<(), Box<dyn Error>>(())
+        })
+        .await
 }

@@ -121,6 +121,7 @@ export function CrawlFileExplorer({
     <button
       type="button"
       onClick={() => setOpen(!open)}
+      aria-label={open ? 'Collapse file explorer' : 'Expand file explorer'}
       className="hidden w-10 flex-shrink-0 items-start justify-center self-stretch border-r border-[rgba(255,135,175,0.08)] pt-3 text-[var(--axon-text-muted)] transition-colors hover:text-[var(--axon-accent-blue)] md:flex"
       style={{ background: 'rgba(3, 7, 18, 0.3)' }}
       title={open ? 'Collapse file explorer' : 'Expand file explorer'}
@@ -145,6 +146,7 @@ export function CrawlFileExplorer({
     <button
       type="button"
       onClick={() => setOpen(true)}
+      aria-label="Open file explorer"
       className="fixed bottom-4 left-4 z-30 flex h-10 w-10 items-center justify-center rounded-full border border-[rgba(255,135,175,0.15)] shadow-lg backdrop-blur-sm transition-all active:scale-95 md:hidden"
       style={{ background: 'rgba(8, 15, 30, 0.85)' }}
       title="Open file explorer"
@@ -198,6 +200,7 @@ export function CrawlFileExplorer({
         <button
           type="button"
           onClick={() => setOpen(false)}
+          aria-label="Collapse file explorer"
           className="ml-2 flex-shrink-0 rounded p-1 text-[var(--axon-text-muted)] transition-colors hover:bg-[rgba(255,135,175,0.06)] hover:text-[var(--axon-accent-blue)]"
           title="Collapse file explorer"
         >

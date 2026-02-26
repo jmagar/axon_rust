@@ -55,11 +55,15 @@ async fn build_judge_reference(
     if candidates.is_empty() {
         return Ok((NO_REFERENCE.to_string(), 0));
     }
-    let reranked: Vec<ranking::AskCandidate> =
-        ranking::rerank_ask_candidates(&candidates, &query_tokens)
-            .into_iter()
-            .filter(|c| c.rerank_score >= cfg.ask_min_relevance_score)
-            .collect();
+    let reranked: Vec<ranking::AskCandidate> = ranking::rerank_ask_candidates(
+        &candidates,
+        &query_tokens,
+        &cfg.ask_authoritative_domains,
+        cfg.ask_authoritative_boost,
+    )
+    .into_iter()
+    .filter(|c| c.rerank_score >= cfg.ask_min_relevance_score)
+    .collect();
     if reranked.is_empty() {
         return Ok((NO_REFERENCE.to_string(), 0));
     }

@@ -10,6 +10,19 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  advisory-lock-policy:
+    name: advisory-lock-policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ban session-scoped advisory lock APIs
+        run: |
+          set -euo pipefail
+          if rg -n "pg_advisory_lock\\s*\\(|pg_advisory_unlock\\s*\\(" crates; then
+            echo "Found banned session-scoped advisory lock usage. Use pg_advisory_xact_lock via begin_schema_migration_tx."
+            exit 1
+          fi
+
   monolith:
     name: monolith
     runs-on: ubuntu-latest
@@ -151,7 +164,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Install mcporter
-        run: cargo install --locked mcporter
+        run: npm install -g mcporter@0.7.3
 
       - name: Restore Hugging Face cache
         uses: actions/cache@v4

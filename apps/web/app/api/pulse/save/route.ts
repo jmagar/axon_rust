@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { ensureRepoRootEnvLoaded } from '@/lib/pulse/server-env'
 import { savePulseDoc } from '@/lib/pulse/storage'
 
 const SaveRequestSchema = z.object({
@@ -26,6 +27,7 @@ function chunkText(text: string, size: number, overlap: number): string[] {
 
 export async function POST(request: Request) {
   try {
+    ensureRepoRootEnvLoaded()
     const body = await request.json()
     const parsed = SaveRequestSchema.safeParse(body)
     if (!parsed.success) {
@@ -97,11 +99,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ path, filename, saved: true })
   } catch (err) {
-    return NextResponse.json(
-      {
-        error: `Save failed: ${err instanceof Error ? err.message : 'unknown error'}`,
-      },
-      { status: 500 },
-    )
+    console.error('[Pulse] Save route error:', err)
+    return NextResponse.json({ error: 'Save failed' }, { status: 500 })
   }
 }
