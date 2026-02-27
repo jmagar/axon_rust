@@ -69,7 +69,6 @@ const PLACEHOLDER_TEXTS = [
 ]
 
 export function Omnibox() {
-  const router = useRouter()
   const { send, subscribe } = useAxonWs()
   const {
     startExecution,
