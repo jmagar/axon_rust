@@ -197,6 +197,9 @@ pub(super) async fn poll_async_job(
     let poll_start = Instant::now();
 
     loop {
+        if tx.is_closed() {
+            break;
+        }
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         // Check timeout before issuing the next status query

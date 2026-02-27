@@ -1,27 +1,18 @@
 use super::*;
-use crate::crates::jobs::common::test_config;
+use crate::crates::jobs::common::{open_amqp_channel, resolve_test_pg_url, test_config};
 use chrono::{DateTime, Duration, Utc};
-use std::env;
 use tokio::time::{Duration as TokioDuration, sleep, timeout};
 
-fn pg_url() -> Option<String> {
-    let url = env::var("AXON_TEST_PG_URL")
-        .ok()
-        .or_else(|| env::var("AXON_PG_URL").ok())
-        .filter(|v| !v.trim().is_empty())?;
-    Some(crate::crates::core::config::parse::normalize_local_service_url(url))
-}
-
 fn amqp_url() -> Option<String> {
-    env::var("AXON_TEST_AMQP_URL")
+    std::env::var("AXON_TEST_AMQP_URL")
         .ok()
-        .or_else(|| env::var("AXON_AMQP_URL").ok())
+        .or_else(|| std::env::var("AXON_AMQP_URL").ok())
         .filter(|v| !v.trim().is_empty())
 }
 
 #[tokio::test]
 async fn extract_start_job_dedupes_active_pending_job() -> Result<(), Box<dyn Error>> {
-    let Some(pg_url) = pg_url() else {
+    let Some(pg_url) = resolve_test_pg_url() else {
         return Ok(());
     };
     let cfg = test_config(&pg_url);
@@ -42,7 +33,7 @@ async fn extract_start_job_dedupes_active_pending_job() -> Result<(), Box<dyn Er
 
 #[tokio::test]
 async fn extract_recover_reclaims_confirmed_stale_running_job() -> Result<(), Box<dyn Error>> {
-    let Some(pg_url) = pg_url() else {
+    let Some(pg_url) = resolve_test_pg_url() else {
         return Ok(());
     };
     let cfg = test_config(&pg_url);
@@ -93,7 +84,7 @@ async fn extract_recover_reclaims_confirmed_stale_running_job() -> Result<(), Bo
 
 #[tokio::test]
 async fn extract_ensure_schema_is_concurrency_safe() -> Result<(), Box<dyn Error>> {
-    let Some(pg_url) = pg_url() else {
+    let Some(pg_url) = resolve_test_pg_url() else {
         return Ok(());
     };
     let cfg = test_config(&pg_url);
@@ -116,13 +107,16 @@ async fn extract_worker_e2e_processes_pending_job_to_terminal_status() -> Result
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
-            let Some(pg_url) = pg_url() else {
+            let Some(pg_url) = resolve_test_pg_url() else {
                 return Ok(());
             };
             let Some(_) = amqp_url() else {
                 return Ok(());
             };
             let mut cfg = test_config(&pg_url);
+            if open_amqp_channel(&cfg, &cfg.extract_queue).await.is_err() {
+                return Ok(());
+            }
             cfg.query = Some("extract worker e2e prompt".to_string());
             let url = format!("https://example.com/extract-worker/{}", Uuid::new_v4());
             let urls = vec![url];

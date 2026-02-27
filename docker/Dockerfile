@@ -67,7 +67,7 @@ WORKDIR /src/axon_rust
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/src/axon_rust/target \
-    cargo build --release --bin axon \
+    cargo build --release --locked --bin axon \
     && cp target/release/axon /usr/local/bin/axon-release
 
 # ── Stage 3: runtime ──────────────────────────────────────────────────────────

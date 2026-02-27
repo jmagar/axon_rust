@@ -82,7 +82,19 @@ jobs:
       - name: cargo check (warnings are errors)
         env:
           RUSTFLAGS: -D warnings
-        run: cargo check --all-targets
+        run: cargo check --all-targets --locked
+
+  msrv:
+    name: msrv
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.87.0
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check (MSRV)
+        run: cargo check --all-targets --locked
 
   clippy:
     name: clippy
@@ -95,7 +107,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
   test:
     name: test
@@ -123,7 +135,7 @@ jobs:
           toolchain: 1.93.1
       - uses: Swatinem/rust-cache@v2
       - name: cargo test
-        run: cargo test --all
+        run: cargo test --all --locked
 
       - name: ask quality regression fixtures
         run: ./scripts/test-ask-quality-regressions.sh
@@ -139,13 +151,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        run: cargo install cargo-audit --version 0.22.1 --locked
 
       - name: cargo audit
         run: cargo audit
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny
+        run: cargo install cargo-deny --version 0.19.0 --locked
 
       - name: cargo deny check
         run: cargo deny check
@@ -176,7 +188,7 @@ jobs:
           key: hf-tei-${{ runner.os }}-BAAI-bge-small-en-v1.5-v1
 
       - name: Build axon binaries (release)
-        run: cargo build --release --bin axon --bin axon-mcp
+        run: cargo build --release --locked --bin axon --bin axon-mcp
 
       - name: Write CI mcporter config
         run: |

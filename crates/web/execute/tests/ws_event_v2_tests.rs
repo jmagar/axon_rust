@@ -462,3 +462,12 @@ fn cancel_ok_from_output_prefers_ok_field_and_falls_back_to_status() {
     assert!(super::cancel_ok_from_output(None, true));
     assert!(!super::cancel_ok_from_output(None, false));
 }
+
+#[test]
+fn cancel_job_id_validation_accepts_only_uuid() {
+    assert!(super::is_valid_cancel_job_id(
+        "550e8400-e29b-41d4-a716-446655440000"
+    ));
+    assert!(!super::is_valid_cancel_job_id("not-a-uuid"));
+    assert!(!super::is_valid_cancel_job_id(""));
+}

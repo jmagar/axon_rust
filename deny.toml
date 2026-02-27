@@ -1,4 +1,5 @@
 [advisories]
+# Canonical advisory policy file for this repo.
 # vulnerability = "deny" is the default in cargo-deny 0.19+ (no need to specify)
 # unmaintained = "workspace" limits unmaintained checks to workspace-local crates only,
 # avoiding noise from transitive dependency churn in the spider/octocrab ecosystem.

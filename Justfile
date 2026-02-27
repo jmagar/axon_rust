@@ -4,16 +4,16 @@ default:
     @just --list
 
 check:
-    cargo check -q
+    cargo check -q --locked
 
 test:
-    cargo test -q
+    cargo test -q --locked
 
 test-fast:
-    cargo test -q --lib
+    cargo test -q --lib --locked
 
 test-all:
-    cargo test --all-targets --all-features
+    cargo test --all-targets --all-features --locked
 
 fmt:
     cargo fmt --all
@@ -22,13 +22,13 @@ fmt-check:
     cargo fmt --all -- --check
 
 clippy:
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --all-targets --locked -- -D warnings
 
 build:
-    cargo build --release
+    cargo build --release --locked
 
 install:
-    cargo build --release
+    cargo build --release --locked
     mkdir -p ~/.local/bin
     ln -sf "$(pwd)/target/release/axon" ~/.local/bin/axon
 
@@ -56,7 +56,7 @@ precommit:
 
 fix:
     cargo fmt --all
-    cargo clippy --fix --all-targets --allow-dirty --allow-staged
+    cargo clippy --fix --all-targets --locked --allow-dirty --allow-staged
 
 fix-all:
     just fix
@@ -81,7 +81,7 @@ docker-down:
     docker compose down
 
 watch-check:
-    cargo watch -x 'check -q' -x 'test -q --lib'
+    cargo watch -x 'check -q --locked' -x 'test -q --lib --locked'
 
 rebuild:
     just check

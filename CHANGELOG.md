@@ -9,6 +9,9 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
+| `d6b01b2` | fix(pulse) | ensure Qdrant collection exists before upsert |
+| `75d4ee7` | fix(pulse) | default save collection to AXON_COLLECTION / cortex instead of `pulse` |
+| `ab79a0c` | docs(changelog) | update ccbccfd TBD sha references and session doc |
 | `ccbccfd` | fix(docker+web) | dereference claude symlink for node user + path-traversal hardening in download.rs |
 | `6f8f7c7` | feat(docker) | install AI CLIs in web image, non-root node user, AXON_WORKSPACE + ~/.ssh mounts |
 | `f5eb415` | fix(docker) | pin codex cli package in web image |
@@ -45,13 +48,16 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 ### Highlights
 
 #### Pulse / Runtime (newest)
+- Fixed Pulse persistence path to ensure the target Qdrant collection exists before upserts, eliminating first-write failures when collection bootstrap lagged (`d6b01b2`).
+- Fixed Pulse save default collection selection to use `AXON_COLLECTION` (fallback `cortex`) instead of hardcoded `pulse` (`75d4ee7`).
+- Changelog hygiene pass replaced leftover `TBD` SHA references from prior branch notes and refreshed linked session metadata (`ab79a0c`).
 - Fixed: `spawn claude EACCES` in Pulse chat — `docker/web/Dockerfile` now dereferences the symlink (`readlink -f`) when copying the claude binary so `node` user can execute it without traversing `/root/.local/` (700 perms) (`ccbccfd`).
 - `AXON_SERVE_HOST=0.0.0.0` moved to `.env`/`.env.example` (removed from inline docker-compose env) per single-source-of-truth policy (`ccbccfd`).
 - Security: `download.rs` hardened with `is_safe_relative_manifest_path()` + `canonicalize()`-based path traversal prevention (`ccbccfd`).
 - `axon-web` now runs as non-root `node` user; Claude, Codex, Gemini CLIs installed from official sources inside the image (`6f8f7c7`).
-- `AXON_WORKSPACE` env var mounts host workspace dir at `/workspace` inside the container (`TBD`).
-- `~/.ssh` and `~/.claude.json` bind-mounted into `axon-web` for key-based git ops and Claude auth (`TBD`).
-- `docker/web/Dockerfile` switched to `node:24-slim`; legacy static web UI files removed (`TBD`).
+- `AXON_WORKSPACE` env var mounts host workspace dir at `/workspace` inside the container (`6f8f7c7`).
+- `~/.ssh` and `~/.claude.json` bind-mounted into `axon-web` for key-based git ops and Claude auth (`6f8f7c7`).
+- `docker/web/Dockerfile` switched to `node:24-slim`; legacy static web UI files removed (`6f8f7c7`).
 - Fixed: pinned `@openai/codex` to `0.105.0` to avoid broken `@latest` tarball (`f5eb415`).
 - Aligned web runtime mounts to `/home/node/.claude*` and refreshed commit-driven changelog coverage for branch history (`93f51e8`).
 - Added conversation-memory fallback for favorite-color recall in Pulse chat when upstream Claude CLI path fails, ensuring turn continuity for the common “what is my favorite color?” follow-up (`4756caa`).

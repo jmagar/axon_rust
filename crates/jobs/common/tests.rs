@@ -1,7 +1,5 @@
 use super::*;
-use crate::crates::core::config::parse::normalize_local_service_url;
 use chrono::Duration;
-use std::env;
 use uuid::Uuid;
 
 fn watchdog_json(observed: DateTime<Utc>, first_seen: &str) -> Value {
@@ -77,9 +75,8 @@ fn stale_watchdog_confirmed_true_after_confirmation_window_elapsed() {
 
 #[tokio::test]
 async fn reclaim_stale_running_jobs_two_pass_flow_marks_then_reclaims() -> Result<()> {
-    let pg_url = match env::var("AXON_TEST_PG_URL").or_else(|_| env::var("AXON_PG_URL")) {
-        Ok(url) if !url.trim().is_empty() => normalize_local_service_url(url),
-        _ => return Ok(()),
+    let Some(pg_url) = resolve_test_pg_url() else {
+        return Ok(());
     };
     let pool = PgPoolOptions::new()
         .max_connections(1)
@@ -152,9 +149,8 @@ async fn reclaim_stale_running_jobs_two_pass_flow_marks_then_reclaims() -> Resul
 
 #[tokio::test]
 async fn claim_and_fail_lifecycle_transitions_are_state_guarded() -> Result<()> {
-    let pg_url = match env::var("AXON_TEST_PG_URL").or_else(|_| env::var("AXON_PG_URL")) {
-        Ok(url) if !url.trim().is_empty() => normalize_local_service_url(url),
-        _ => return Ok(()),
+    let Some(pg_url) = resolve_test_pg_url() else {
+        return Ok(());
     };
     let pool = PgPoolOptions::new()
         .max_connections(1)

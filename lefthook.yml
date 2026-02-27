@@ -1,14 +1,22 @@
 pre-commit:
   parallel: true
   commands:
+    claude-symlinks:
+      run: ./scripts/check_claude_symlinks.sh
     skills-ref:
       glob: "skills/**"
       run: ./scripts/validate_skills_ref.sh
     monolith:
       run: if [ -f "$HOME/.claude/hooks/enforce_monoliths.py" ]; then python3 "$HOME/.claude/hooks/enforce_monoliths.py" --staged; else echo "[skip] global monolith enforcer not found at ~/.claude/hooks/enforce_monoliths.py"; fi
     rustfmt:
-      glob: "*.rs"
+      glob: "**/*.rs"
       run: cargo fmt -- --check
     clippy:
-      glob: "*.{rs,toml}"
-      run: cargo clippy --all-targets -- -D warnings
+      glob: "**/*.{rs,toml}"
+      run: cargo clippy --all-targets --locked -- -D warnings
+    check:
+      glob: "**/*.{rs,toml}"
+      run: cargo check --all-targets --locked
+    test:
+      glob: "**/*.{rs,toml}"
+      run: cargo test --all --locked

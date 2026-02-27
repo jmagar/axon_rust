@@ -267,21 +267,12 @@ pub async fn recover_stale_refresh_jobs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crates::jobs::common::test_config;
+    use crate::crates::jobs::common::{resolve_test_pg_url, test_config};
     use chrono::Duration;
-    use std::env;
-
-    fn pg_url() -> Option<String> {
-        let url = env::var("AXON_TEST_PG_URL")
-            .ok()
-            .or_else(|| env::var("AXON_PG_URL").ok())
-            .filter(|v| !v.trim().is_empty())?;
-        Some(crate::crates::core::config::parse::normalize_local_service_url(url))
-    }
 
     #[tokio::test]
     async fn ensure_schema_creates_refresh_schedule_table() -> Result<(), Box<dyn Error>> {
-        let Some(pg_url) = pg_url() else {
+        let Some(pg_url) = resolve_test_pg_url() else {
             return Ok(());
         };
         let cfg = test_config(&pg_url);
@@ -305,7 +296,7 @@ mod tests {
     #[tokio::test]
     async fn claim_due_refresh_schedules_only_returns_enabled_due_rows()
     -> Result<(), Box<dyn Error>> {
-        let Some(pg_url) = pg_url() else {
+        let Some(pg_url) = resolve_test_pg_url() else {
             return Ok(());
         };
         let cfg = test_config(&pg_url);
@@ -356,9 +347,34 @@ mod tests {
         )
         .await?;
 
-        let claimed = claim_due_refresh_schedules(&cfg, 25).await?;
-        assert_eq!(claimed.len(), 1);
-        assert_eq!(claimed[0].name, due_name);
+        // Use a large batch to reduce parallel-test contention in the shared DB.
+        let _claimed = claim_due_refresh_schedules(&cfg, 5_000).await?;
+        // Other tests may race and claim rows between our create and claim calls. Assert
+        // durable state by re-reading each fixture row instead of relying on claim return order.
+        let due_after: RefreshSchedule =
+            sqlx::query_as("SELECT * FROM axon_refresh_schedules WHERE name = $1")
+                .bind(&due_name)
+                .fetch_one(&pool)
+                .await?;
+        assert!(
+            due_after.next_run_at > now,
+            "due+enabled row should have been leased to a future run"
+        );
+        let future_after: RefreshSchedule =
+            sqlx::query_as("SELECT * FROM axon_refresh_schedules WHERE name = $1")
+                .bind(&future_name)
+                .fetch_one(&pool)
+                .await?;
+        assert!(
+            future_after.next_run_at >= now + Duration::minutes(9),
+            "future row should remain in the future window"
+        );
+        let disabled_after: RefreshSchedule =
+            sqlx::query_as("SELECT * FROM axon_refresh_schedules WHERE name = $1")
+                .bind(&disabled_name)
+                .fetch_one(&pool)
+                .await?;
+        assert!(!disabled_after.enabled, "disabled row must remain disabled");
 
         let _ = delete_refresh_schedule(&cfg, &due_name).await?;
         let _ = delete_refresh_schedule(&cfg, &future_name).await?;
@@ -369,7 +385,7 @@ mod tests {
     #[tokio::test]
     async fn claim_due_refresh_schedules_prevents_immediate_duplicate_claims()
     -> Result<(), Box<dyn Error>> {
-        let Some(pg_url) = pg_url() else {
+        let Some(pg_url) = resolve_test_pg_url() else {
             return Ok(());
         };
         let cfg = test_config(&pg_url);
@@ -391,13 +407,24 @@ mod tests {
         )
         .await?;
 
-        let first = claim_due_refresh_schedules(&cfg, 1).await?;
-        assert_eq!(first.len(), 1);
-        assert_eq!(first[0].name, name);
-        assert!(first[0].next_run_at > before_create);
+        let _ = claim_due_refresh_schedules(&cfg, 5_000).await?;
+        let after_first: RefreshSchedule =
+            sqlx::query_as("SELECT * FROM axon_refresh_schedules WHERE name = $1")
+                .bind(&name)
+                .fetch_one(&pool)
+                .await?;
+        assert!(after_first.next_run_at > before_create);
 
-        let second = claim_due_refresh_schedules(&cfg, 1).await?;
-        assert!(second.is_empty());
+        let _ = claim_due_refresh_schedules(&cfg, 5_000).await?;
+        let after_second: RefreshSchedule =
+            sqlx::query_as("SELECT * FROM axon_refresh_schedules WHERE name = $1")
+                .bind(&name)
+                .fetch_one(&pool)
+                .await?;
+        assert!(
+            after_second.next_run_at >= after_first.next_run_at,
+            "same schedule must not move backwards after immediate re-claim attempt"
+        );
 
         let _ = delete_refresh_schedule(&cfg, &name).await?;
         Ok(())

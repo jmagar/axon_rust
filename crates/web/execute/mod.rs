@@ -58,6 +58,10 @@ fn cancel_ok_from_output(parsed: Option<&serde_json::Value>, status_success: boo
         .unwrap_or(status_success)
 }
 
+fn is_valid_cancel_job_id(job_id: &str) -> bool {
+    Uuid::parse_str(job_id).is_ok()
+}
+
 async fn send_command_start(tx: &mpsc::Sender<String>, context: &ExecCommandContext) {
     if let Some(v2) = serialize_v2_event(WsEventV2::CommandStart {
         ctx: context.to_ws_ctx(),
@@ -607,6 +611,27 @@ pub(super) async fn handle_cancel(mode: &str, job_id: &str, tx: mpsc::Sender<Str
         mode: cancel_mode.to_string(),
         input: job_id.to_string(),
     };
+    if !is_valid_cancel_job_id(job_id) {
+        if let Some(v2) = serialize_v2_event(WsEventV2::JobCancelResponse {
+            ctx: ws_ctx.clone(),
+            payload: JobCancelResponsePayload {
+                ok: false,
+                mode: Some(cancel_mode.to_string()),
+                job_id: Some(job_id.to_string()),
+                message: Some("invalid job_id format".to_string()),
+            },
+        }) {
+            let _ = tx.send(v2).await;
+        }
+        send_error_dual(
+            &tx,
+            &ws_ctx,
+            "cancel failed: invalid job_id format".to_string(),
+            None,
+        )
+        .await;
+        return;
+    }
     let exe = match resolve_exe() {
         Ok(p) => p,
         Err(e) => {
