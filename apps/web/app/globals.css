@@ -356,10 +356,10 @@
   caret-color: #afd7ff;
 }
 
-/* Placeholder text: axon dim text */
-.axon-editor [data-slate-placeholder] {
-  color: var(--axon-text-dim) !important;
-  opacity: 1 !important;
+/* Placeholder text: axon dim text — higher specificity to override Slate defaults */
+:root .axon-editor [data-slate-placeholder] {
+  color: var(--axon-text-dim);
+  opacity: 1;
 }
 
 /* Inline code styling */
