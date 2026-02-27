@@ -219,8 +219,8 @@ services:
       - ./apps/web:/app               # bind-mount source for hot reload
       - /app/node_modules             # anonymous vol: preserves container's node_modules
       - /app/.next                    # anonymous vol: preserves Next.js build cache
-      - ${HOST_HOME:-${HOME}}/.claude:/home/node/.claude
-      - ${HOST_HOME:-${HOME}}/.claude.json:/home/node/.claude.json
+      - ${AXON_DATA_DIR:-./data}/axon/claude:/home/node/.claude
+      - ${HOST_HOME:-${HOME}}/.claude.json:/home/node/.claude.json  # auth file — separate from config dir
       # - ${HOST_HOME:-${HOME}}/.ssh:/home/node/.ssh:ro  # opt-in: uncomment to expose SSH keys
       - ${AXON_WORKSPACE:-${HOME}/workspace}:/workspace
     depends_on:

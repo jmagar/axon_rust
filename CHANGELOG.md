@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-02-26
+Last Modified: 2026-02-27
 
 ## [Unreleased] — feat/crawl-download-pack
 
@@ -9,6 +9,10 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
+| `c246b22` | fix(rust) | address 5 PR review comments (env_bool fallback, authoritative_ratio, touch_running_job dedup, cancel exit 130) |
+| `375e737` | fix(web) | use Number.isNaN instead of global isNaN (Biome lint) |
+| `04d12e0` | fix(web) | address 6 PR review comments (JSON guard, timeout ref, block immutability, NaN split, stale comment, empty vector guard) |
+| `93dd150` | fix(infra+docs) | address 4 PR review comments (pnpm sentinel gate, SSH mount opt-in, SERVE.md cleanup, crawl.md subcommands) |
 | `7be0ba0` | refactor(web+pulse+ask) | pulse module splits + ask gates + omnibox/toolbar polish |
 | `ddc19a0` | feat(web+docker+pulse) | pulse thinking blocks + empty bubble fix + claude hot-reload s6 + sccache |
 | `aea1c5c` | fix(web+jobs+ci) | land review fixes, test env alignment, and changelog/session plumbing |
@@ -49,6 +53,11 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 | `1dd74f2` | feat(web) | crawl download routes — pack, zip, and per-file downloads |
 
 ### Highlights
+
+#### PR Review Batch (93dd150..c246b22)
+- **Rust (5 fixes):** `env_bool()` now falls back to `default` for unknown/typo env values (not `false`); `authoritative_ratio` returns 0.0 when domain list is empty; `touch_running_extract_job` / `touch_running_ingest_job` removed — replaced with shared `common::job_ops::touch_running_job`; `handle_cancel` emits exit code 130 (SIGINT convention) instead of 0 so UI doesn't log canceled jobs as successful.
+- **TypeScript (7 fixes):** `tool-badge.tsx` guards `JSON.stringify` undefined before `.slice`; `use-pulse-autosave` clears `setTimeout` ref on unmount; `use-pulse-chat` block update is now immutable (spread instead of mutation); `workspace-persistence` NaN-safe `parseSplit()` helper; pulse/chat route stale comment removed; pulse/save route guards empty embedding response before `ensureCollection`.
+- **Infra / Docs (4 fixes):** `20-pnpm-install` sentinel touch gated on successful install (exits 1 on failure); `docker-compose.yaml` SSH mount commented out (opt-in); `docs/SERVE.md` legacy browser-UI instructions removed; `commands/axon/crawl.md` `errors`/`worker` subcommands added to argument-hint.
 
 #### Pulse Module Splits (TBD)
 - Broke three over-limit files into 13 focused modules — no behavioral changes, zero re-exports:

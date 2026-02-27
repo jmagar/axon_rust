@@ -70,6 +70,17 @@ export function buildClaudeArgs(prompt: string, systemPrompt: string, model: Pul
     // none of the globally-configured MCPs are reachable. Without this flag
     // the CLI hangs trying to connect to all servers before answering.
     '--strict-mcp-config',
+    // No TTY in the container — skip all interactive permission prompts.
+    '--dangerously-skip-permissions',
+    // Stream partial tool inputs and thinking blocks as they arrive.
+    // Requires -p + stream-json (both already set above).
+    '--include-partial-messages',
+    // Calibrate inference effort for document-grounded Q&A.
+    '--effort',
+    'medium',
+    // Explicit plugin dir inside the project-owned ~/.claude mount.
+    '--plugin-dir',
+    '/home/node/.claude/plugins',
   ]
   const modelArg = CLAUDE_MODEL_ARG[model]
   if (modelArg) {
