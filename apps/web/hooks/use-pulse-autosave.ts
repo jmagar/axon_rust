@@ -6,6 +6,7 @@ export function usePulseAutosave(documentMarkdown: string, documentTitle: string
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autosaveAbortRef = useRef<AbortController | null>(null)
+  const idleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedSnapshotRef = useRef('')
 
   // Debounced save effect — 1500ms debounce, POST to /api/pulse/save
@@ -40,7 +41,8 @@ export function usePulseAutosave(documentMarkdown: string, documentTitle: string
           } else {
             setSaveStatus('error')
           }
-          setTimeout(() => setSaveStatus('idle'), 2000)
+          if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current)
+          idleTimeoutRef.current = setTimeout(() => setSaveStatus('idle'), 2000)
         } catch (error: unknown) {
           if (error instanceof Error && error.name === 'AbortError') return
           setSaveStatus('error')
@@ -60,6 +62,7 @@ export function usePulseAutosave(documentMarkdown: string, documentTitle: string
   // Cleanup on unmount — abort both timers and requests
   useEffect(() => {
     return () => {
+      if (idleTimeoutRef.current) clearTimeout(idleTimeoutRef.current)
       if (autosaveAbortRef.current) {
         autosaveAbortRef.current.abort()
         autosaveAbortRef.current = null

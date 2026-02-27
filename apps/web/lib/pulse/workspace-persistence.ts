@@ -58,6 +58,11 @@ export function clampSplit(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
+function parseSplit(v: unknown, def: number): number {
+  const n = Number(v ?? def)
+  return isNaN(n) ? def : n
+}
+
 export function parsePersistedWorkspaceState(
   raw: string | null,
 ): PersistedPulseWorkspaceState | null {
@@ -89,8 +94,8 @@ export function parsePersistedWorkspaceState(
       activeThreadSources: Array.isArray(parsed.activeThreadSources)
         ? parsed.activeThreadSources.slice(-50)
         : [],
-      desktopSplitPercent: clampSplit(Number(parsed.desktopSplitPercent ?? 62), 42, 74),
-      mobileSplitPercent: clampSplit(Number(parsed.mobileSplitPercent ?? 56), 35, 70),
+      desktopSplitPercent: clampSplit(parseSplit(parsed.desktopSplitPercent, 62), 42, 74),
+      mobileSplitPercent: clampSplit(parseSplit(parsed.mobileSplitPercent, 56), 35, 70),
       lastResponseLatencyMs:
         typeof parsed.lastResponseLatencyMs === 'number' ? parsed.lastResponseLatencyMs : null,
       lastResponseModel:

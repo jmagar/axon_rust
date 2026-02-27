@@ -229,7 +229,10 @@ export function usePulseChat({
               partialText += event.delta
               const lastBlock = partialBlocks[partialBlocks.length - 1]
               if (lastBlock?.type === 'text') {
-                lastBlock.content += event.delta
+                partialBlocks[partialBlocks.length - 1] = {
+                  ...lastBlock,
+                  content: lastBlock.content + event.delta,
+                }
               } else {
                 partialBlocks.push({ type: 'text', content: event.delta })
               }

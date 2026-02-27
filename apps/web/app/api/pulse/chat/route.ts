@@ -348,7 +348,7 @@ export async function POST(request: Request) {
             type: 'done',
             response: {
               text,
-              sessionId: parserState.sessionId ?? undefined, // session resumption disabled — see --resume comment above
+              sessionId: parserState.sessionId ?? undefined,
               citations,
               operations,
               toolUses,

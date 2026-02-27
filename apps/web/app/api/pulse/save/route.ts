@@ -84,7 +84,11 @@ export async function POST(request: Request) {
 
           if (embedResponse.ok) {
             const vectors = (await embedResponse.json()) as number[][]
-            await ensureCollection(qdrantUrl, collection, vectors[0]?.length ?? 0)
+            const vectorSize = vectors[0]?.length
+            if (!vectorSize) {
+              throw new Error('[Pulse] Embed response returned no vectors')
+            }
+            await ensureCollection(qdrantUrl, collection, vectorSize)
             const points = vectors.map((vector, i) => ({
               id: randomUUID(),
               vector,

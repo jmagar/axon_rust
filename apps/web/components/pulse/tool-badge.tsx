@@ -143,7 +143,7 @@ export function ToolCallBadge({ tool }: { tool: BadgeTool }) {
     .slice(0, 4)
     .map(([k, v]) => ({
       key: k,
-      val: (typeof v === 'string' ? v : JSON.stringify(v)).slice(0, 80),
+      val: (typeof v === 'string' ? v : (JSON.stringify(v) ?? '')).slice(0, 80),
     }))
 
   return (
