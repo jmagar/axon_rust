@@ -221,7 +221,7 @@ services:
       - /app/.next                    # anonymous vol: preserves Next.js build cache
       - ${HOST_HOME:-${HOME}}/.claude:/home/node/.claude
       - ${HOST_HOME:-${HOME}}/.claude.json:/home/node/.claude.json
-      - ${HOST_HOME:-${HOME}}/.ssh:/home/node/.ssh:ro
+      # - ${HOST_HOME:-${HOME}}/.ssh:/home/node/.ssh:ro  # opt-in: uncomment to expose SSH keys
       - ${AXON_WORKSPACE:-${HOME}/workspace}:/workspace
     depends_on:
       axon-workers:

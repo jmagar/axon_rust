@@ -10,16 +10,14 @@ Last Updated: 02/26/2026
 
 Current canonical WebSocket contract documentation lives in [`docs/API.md`](API.md).
 
-Starts a native web UI server that provides a browser-based interface for all Axon commands, with real-time Docker container stats driving a neural network canvas animation.
-
 ## Usage
 
 ```bash
-axon serve              # default port 3939
+axon serve              # default port 49000
 axon serve --port 8080  # custom port
 ```
 
-Then open `http://localhost:3939` in a browser.
+The server exposes HTTP endpoints and a WebSocket at `/ws`. Connect the Next.js frontend (`apps/web`) to this backend via `AXON_BACKEND_URL`.
 
 ## Architecture
 
