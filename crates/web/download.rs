@@ -54,6 +54,23 @@ fn sanitize_filename(raw: &str) -> String {
     }
 }
 
+/// Validate that a manifest relative path is a safe, non-traversing relative path.
+fn is_safe_relative_manifest_path(rel_path: &str) -> bool {
+    if rel_path.is_empty() || rel_path.contains('\0') {
+        return false;
+    }
+    let path = Path::new(rel_path);
+    if path.is_absolute() {
+        return false;
+    }
+    path.components().all(|component| {
+        matches!(
+            component,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    })
+}
+
 /// Validate a job ID string: must be a valid UUID (hex + dashes, 36 chars).
 fn is_valid_job_id(id: &str) -> bool {
     id.len() == 36
@@ -108,7 +125,7 @@ async fn read_manifest(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        if !rel.is_empty() {
+        if is_safe_relative_manifest_path(&rel) {
             entries.push((url, rel));
         }
     }
@@ -128,13 +145,23 @@ async fn load_all_files(
     job_dir: &Path,
 ) -> Result<(String, Vec<(String, String, String)>), (StatusCode, &'static str)> {
     let manifest_entries = read_manifest(job_dir).await?;
+    let canonical_base = tokio::fs::canonicalize(job_dir)
+        .await
+        .map_err(|_| (StatusCode::NOT_FOUND, "job output directory not found"))?;
+    let mut resolved_entries: Vec<(String, String, PathBuf)> = Vec::new();
 
     // Pre-check total file size before loading anything into memory
     let byte_limit = max_download_bytes();
     let mut total_bytes: u64 = 0;
-    for (_url, rel_path) in &manifest_entries {
-        let file_path = job_dir.join(rel_path);
-        if let Ok(meta) = tokio::fs::metadata(&file_path).await {
+    for (url, rel_path) in &manifest_entries {
+        let file_path = canonical_base.join(rel_path);
+        let Ok(canonical_file) = tokio::fs::canonicalize(&file_path).await else {
+            continue;
+        };
+        if !canonical_file.starts_with(&canonical_base) {
+            continue;
+        }
+        if let Ok(meta) = tokio::fs::metadata(&canonical_file).await {
             total_bytes += meta.len();
             if total_bytes > byte_limit {
                 return Err((
@@ -142,20 +169,20 @@ async fn load_all_files(
                     "total download size exceeds AXON_DOWNLOAD_MAX_BYTES limit",
                 ));
             }
+            resolved_entries.push((url.clone(), rel_path.clone(), canonical_file));
         }
     }
 
-    let mut loaded = Vec::with_capacity(manifest_entries.len());
+    let mut loaded = Vec::with_capacity(resolved_entries.len());
     let mut domain = String::new();
 
-    for (url, rel_path) in &manifest_entries {
+    for (url, rel_path, canonical_file) in &resolved_entries {
         if domain.is_empty() {
             if let Ok(parsed) = reqwest::Url::parse(url) {
                 domain = parsed.host_str().unwrap_or("unknown").to_string();
             }
         }
-        let file_path = job_dir.join(rel_path);
-        match tokio::fs::read_to_string(&file_path).await {
+        match tokio::fs::read_to_string(canonical_file).await {
             Ok(content) => loaded.push((url.clone(), rel_path.clone(), content)),
             Err(_) => continue, // skip unreadable files
         }
@@ -189,7 +216,7 @@ pub async fn serve_pack_md(
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
-        "text/markdown; charset=utf-8".parse().unwrap(),
+        header::HeaderValue::from_static("text/markdown; charset=utf-8"),
     );
     headers.insert(
         header::CONTENT_DISPOSITION,
@@ -224,7 +251,7 @@ pub async fn serve_pack_xml(
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
-        "application/xml; charset=utf-8".parse().unwrap(),
+        header::HeaderValue::from_static("application/xml; charset=utf-8"),
     );
     headers.insert(
         header::CONTENT_DISPOSITION,
@@ -260,7 +287,10 @@ pub async fn serve_zip(
     match zip_result {
         Ok(Ok(bytes)) => {
             let mut headers = HeaderMap::new();
-            headers.insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
+            headers.insert(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static("application/zip"),
+            );
             let safe_filename = sanitize_filename(&filename);
             headers.insert(
                 header::CONTENT_DISPOSITION,
@@ -348,7 +378,7 @@ pub async fn serve_file(
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
-        "text/markdown; charset=utf-8".parse().unwrap(),
+        header::HeaderValue::from_static("text/markdown; charset=utf-8"),
     );
     let safe_filename = sanitize_filename(&filename);
     headers.insert(
@@ -392,6 +422,18 @@ mod tests {
             "_xample.com-pack.md"
         );
         assert_eq!(sanitize_filename(""), "download");
+    }
+
+    #[test]
+    fn manifest_relative_path_rejects_traversal_and_absolute_paths() {
+        assert!(is_safe_relative_manifest_path("markdown/a.md"));
+        assert!(is_safe_relative_manifest_path("./markdown/a.md"));
+        assert!(!is_safe_relative_manifest_path("../secrets.txt"));
+        assert!(!is_safe_relative_manifest_path(
+            "markdown/../../secrets.txt"
+        ));
+        assert!(!is_safe_relative_manifest_path("/etc/passwd"));
+        assert!(!is_safe_relative_manifest_path(""));
     }
 
     #[test]
@@ -482,5 +524,35 @@ mod tests {
         assert!(!bytes.is_empty());
         // Verify it's a valid ZIP by checking magic bytes
         assert_eq!(&bytes[0..2], b"PK");
+    }
+
+    #[tokio::test]
+    async fn load_all_files_ignores_manifest_traversal_entries() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let job_dir = temp.path().join("job");
+        std::fs::create_dir_all(job_dir.join("markdown")).expect("mkdir");
+        std::fs::write(job_dir.join("markdown").join("ok.md"), "ok").expect("write");
+        std::fs::write(
+            job_dir.join("manifest.jsonl"),
+            [
+                serde_json::json!({
+                    "url": "https://example.com/ok",
+                    "relative_path": "markdown/ok.md"
+                })
+                .to_string(),
+                serde_json::json!({
+                    "url": "https://example.com/bad",
+                    "relative_path": "../../etc/passwd"
+                })
+                .to_string(),
+            ]
+            .join("\n"),
+        )
+        .expect("manifest");
+
+        let (_domain, loaded) = load_all_files(&job_dir).await.expect("load files");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].1, "markdown/ok.md");
+        assert_eq!(loaded[0].2, "ok");
     }
 }

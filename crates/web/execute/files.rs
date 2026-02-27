@@ -3,11 +3,7 @@ use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use super::events::{ArtifactEntry, CommandContext, WsEventV2};
-
-fn serialize_v2_event(event: WsEventV2) -> Option<String> {
-    serde_json::to_string(&event).ok()
-}
+use super::events::{ArtifactEntry, CommandContext, WsEventV2, serialize_v2_event};
 
 async fn send_artifact_content_dual(
     tx: &mpsc::Sender<String>,
@@ -72,7 +68,7 @@ pub(super) async fn send_scrape_file(tx: &mpsc::Sender<String>, ctx: &CommandCon
     match newest_md_file(&md_dir).await {
         Some(path) => match tokio::fs::read_to_string(&path).await {
             Ok(content) => {
-                send_artifact_content_dual(tx, ctx, path.to_string_lossy().to_string(), content)
+                send_artifact_content_dual(tx, ctx, path.to_string_lossy().into_owned(), content)
                     .await;
             }
             Err(e) => {
@@ -192,7 +188,7 @@ pub(super) async fn send_crawl_manifest(
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
                 if !rel.is_empty() {
-                    let path = base_dir.join(rel).to_string_lossy().to_string();
+                    let path = base_dir.join(rel).to_string_lossy().into_owned();
                     files.push(json!({
                         "url": url,
                         "relative_path": rel,
@@ -227,7 +223,7 @@ pub(super) async fn send_crawl_manifest(
                         send_artifact_content_dual(
                             tx,
                             ctx,
-                            full.to_string_lossy().to_string(),
+                            full.to_string_lossy().into_owned(),
                             content,
                         )
                         .await;
@@ -284,7 +280,7 @@ pub(crate) async fn handle_read_file(
             send_artifact_content_dual(
                 &tx,
                 &ctx,
-                canonical_path.to_string_lossy().to_string(),
+                canonical_path.to_string_lossy().into_owned(),
                 content,
             )
             .await;

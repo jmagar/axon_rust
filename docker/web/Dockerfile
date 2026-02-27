@@ -4,9 +4,13 @@ FROM node:24-slim
 # Install system deps + AI CLIs as root into system paths
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates openssh-client && rm -rf /var/lib/apt/lists/*
 
-# Claude: installer drops binary into $HOME/.local/bin — promote to system path
+# Claude: installer drops a symlink into $HOME/.local/bin pointing to the real
+# binary under $HOME/.local/share/claude/versions/. Move the actual binary
+# (dereference the symlink) so that non-root users can execute it without
+# needing to traverse /root/.local/ (which is 700).
 RUN curl -fsSL https://claude.ai/install.sh | bash && \
-    mv /root/.local/bin/claude /usr/local/bin/claude
+    cp "$(readlink -f /root/.local/bin/claude)" /usr/local/bin/claude && \
+    chmod 755 /usr/local/bin/claude
 
 # Codex + Gemini CLI
 RUN npm install -g @openai/codex@0.105.0 --no-fund --no-audit

@@ -1,3 +1,8 @@
+//! Command execution bridge for `axon serve`.
+//!
+//! This module validates frontend requests, launches `axon` subprocesses,
+//! streams command output to WebSocket clients, and orchestrates async job
+//! polling/cancel flows.
 pub(crate) mod events;
 pub(crate) mod files;
 mod polling;
@@ -17,7 +22,10 @@ use tokio::process::Command;
 use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
 
-use events::{CommandDonePayload, CommandErrorPayload, JobCancelResponsePayload, WsEventV2};
+use events::{
+    CommandDonePayload, CommandErrorPayload, JobCancelResponsePayload, WsEventV2,
+    serialize_v2_event,
+};
 use files::send_scrape_file;
 use polling::poll_async_job;
 
@@ -26,7 +34,6 @@ struct ExecCommandContext {
     exec_id: String,
     mode: String,
     input: String,
-    job_id: Option<String>,
 }
 
 impl ExecCommandContext {
@@ -37,10 +44,6 @@ impl ExecCommandContext {
             input: self.input.clone(),
         }
     }
-}
-
-fn serialize_v2_event(event: WsEventV2) -> Option<String> {
-    serde_json::to_string(&event).ok()
 }
 
 fn cancel_ok_from_output(parsed: Option<&serde_json::Value>, status_success: bool) -> bool {
@@ -335,7 +338,6 @@ pub(super) async fn handle_command(
         exec_id: format!("exec-{}", Uuid::new_v4()),
         mode: mode.to_string(),
         input: input.to_string(),
-        job_id: None,
     };
     let ws_ctx = context.to_ws_ctx();
 
@@ -449,8 +451,6 @@ async fn handle_async_command(
     let job_id = stdout_capture.await.ok().flatten();
 
     if let Some(id) = job_id {
-        context.job_id = Some(id.clone());
-
         // Store job ID for cancel support
         *crawl_job_id.lock().await = Some(id.clone());
 
@@ -467,7 +467,6 @@ async fn handle_async_command(
         poll_async_job(&id, &mode_str, &input_str, &ws_ctx, tx, start).await;
 
         // Clear job ID after completion
-        context.job_id = None;
         *crawl_job_id.lock().await = None;
     } else {
         let elapsed = start.elapsed().as_millis() as u64;
@@ -575,16 +574,15 @@ async fn handle_sync_command(
 
     let status = child.wait().await;
     let elapsed = start.elapsed().as_millis() as u64;
-    let mode_owned = context.mode.clone();
 
     match status {
         Ok(exit) => {
             let code = exit.code().unwrap_or(-1);
             if code == 0 {
-                if mode_owned == "scrape" {
+                if context.mode == "scrape" {
                     send_scrape_file(tx, &ws_ctx).await;
                 }
-                if mode_owned == "screenshot" {
+                if context.mode == "screenshot" {
                     // Build screenshot_files from captured stdout JSON
                     // (deterministic — no filesystem timestamp scan)
                     files::send_screenshot_files_from_json(&screenshot_jsons, tx, &ws_ctx).await;
@@ -603,13 +601,10 @@ async fn handle_sync_command(
 /// Cancel a running async job by spawning `axon <mode> cancel <id>`.
 /// Falls back to `crawl` if no mode is specified (legacy callers).
 pub(super) async fn handle_cancel(mode: &str, job_id: &str, tx: mpsc::Sender<String>) {
+    let cancel_mode = if mode.is_empty() { "crawl" } else { mode };
     let ws_ctx = events::CommandContext {
         exec_id: format!("exec-{}", Uuid::new_v4()),
-        mode: if mode.is_empty() {
-            "crawl".to_string()
-        } else {
-            mode.to_string()
-        },
+        mode: cancel_mode.to_string(),
         input: job_id.to_string(),
     };
     let exe = match resolve_exe() {
@@ -620,8 +615,6 @@ pub(super) async fn handle_cancel(mode: &str, job_id: &str, tx: mpsc::Sender<Str
         }
     };
 
-    // Use the command's own mode so cancel works for crawl, extract, embed, etc.
-    let cancel_mode = if mode.is_empty() { "crawl" } else { mode };
     let output = Command::new(&exe)
         .args([cancel_mode, "cancel", job_id, "--json"])
         .output()

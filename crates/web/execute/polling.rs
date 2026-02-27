@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-use super::events::{CommandContext, JobProgressPayload, JobStatusPayload, WsEventV2};
+use super::events::{
+    CommandContext, JobProgressPayload, JobStatusPayload, WsEventV2, serialize_v2_event,
+};
 use super::files::{output_dir, send_crawl_manifest};
 use super::{resolve_exe, send_done_dual, send_error_dual};
 
@@ -63,10 +65,6 @@ fn legacy_crawl_progress_message(
         "phase": m.get("phase").and_then(|v| v.as_str()).unwrap_or("pending"),
     })
     .to_string()
-}
-
-fn serialize_v2_event(event: WsEventV2) -> Option<String> {
-    serde_json::to_string(&event).ok()
 }
 
 fn metrics_map(status_json: &serde_json::Value) -> Option<BTreeMap<String, serde_json::Value>> {
@@ -181,7 +179,20 @@ pub(super) async fn poll_async_job(
     start: Instant,
 ) {
     // Status subcommand: `axon <mode> status <job_id> --json`
-    let status_cmd = mode.to_string();
+    let status_mode = mode.to_string();
+    let exe = match resolve_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            send_error_dual(
+                tx,
+                ctx,
+                format!("poll aborted: cannot find axon binary: {e}"),
+                Some(start.elapsed().as_millis() as u64),
+            )
+            .await;
+            return;
+        }
+    };
     let timeout = poll_timeout();
     let poll_start = Instant::now();
 
@@ -201,22 +212,8 @@ pub(super) async fn poll_async_job(
             break;
         }
 
-        let exe = match resolve_exe() {
-            Ok(e) => e,
-            Err(e) => {
-                send_error_dual(
-                    tx,
-                    ctx,
-                    format!("poll aborted: cannot find axon binary: {e}"),
-                    Some(start.elapsed().as_millis() as u64),
-                )
-                .await;
-                break;
-            }
-        };
-
         let out = Command::new(&exe)
-            .args([&status_cmd, "status", job_id, "--json"])
+            .args([&status_mode, "status", job_id, "--json"])
             .output()
             .await;
 

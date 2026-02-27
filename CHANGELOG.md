@@ -9,7 +9,8 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
-| `TBD` | feat(docker) | install AI CLIs in web image, non-root node user, AXON_WORKSPACE + ~/.ssh mounts |
+| `TBD` | fix(docker+web) | dereference claude symlink for node user + path-traversal hardening in download.rs |
+| `6f8f7c7` | feat(docker) | install AI CLIs in web image, non-root node user, AXON_WORKSPACE + ~/.ssh mounts |
 | `f5eb415` | fix(docker) | pin codex cli package in web image |
 | `93f51e8` | chore(docker+docs) | align web CLI mounts and refresh changelog |
 | `4756caa` | feat(pulse+docker) | conversation memory fallback + claude binary mount |
@@ -44,7 +45,10 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 ### Highlights
 
 #### Pulse / Runtime (newest)
-- `axon-web` now runs as non-root `node` user; Claude, Codex, Gemini CLIs installed from official sources inside the image (`TBD`).
+- Fixed: `spawn claude EACCES` in Pulse chat — `docker/web/Dockerfile` now dereferences the symlink (`readlink -f`) when copying the claude binary so `node` user can execute it without traversing `/root/.local/` (700 perms) (`TBD`).
+- `AXON_SERVE_HOST=0.0.0.0` moved to `.env`/`.env.example` (removed from inline docker-compose env) per single-source-of-truth policy (`TBD`).
+- Security: `download.rs` hardened with `is_safe_relative_manifest_path()` + `canonicalize()`-based path traversal prevention (`TBD`).
+- `axon-web` now runs as non-root `node` user; Claude, Codex, Gemini CLIs installed from official sources inside the image (`6f8f7c7`).
 - `AXON_WORKSPACE` env var mounts host workspace dir at `/workspace` inside the container (`TBD`).
 - `~/.ssh` and `~/.claude.json` bind-mounted into `axon-web` for key-based git ops and Claude auth (`TBD`).
 - `docker/web/Dockerfile` switched to `node:24-slim`; legacy static web UI files removed (`TBD`).
