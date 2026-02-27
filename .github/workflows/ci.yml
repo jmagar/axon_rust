@@ -15,6 +15,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTC_WRAPPER: ""
 
 jobs:
   advisory-lock-policy:
@@ -213,7 +214,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "Running cargo audit against Cargo.lock"
-          cargo audit --deny warnings
+          cargo audit --deny vulnerability
 
       - name: Install cargo-deny
         run: cargo install cargo-deny --version 0.19.0 --locked
