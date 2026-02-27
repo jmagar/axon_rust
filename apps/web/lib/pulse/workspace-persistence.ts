@@ -60,7 +60,7 @@ export function clampSplit(value: number, min: number, max: number): number {
 
 function parseSplit(v: unknown, def: number): number {
   const n = Number(v ?? def)
-  return isNaN(n) ? def : n
+  return Number.isNaN(n) ? def : n
 }
 
 export function parsePersistedWorkspaceState(
