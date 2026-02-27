@@ -9,6 +9,8 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
+| `d3f8047` | fix(ci) | resolve sccache and cargo audit failures |
+| `03b1ef3` | fix(web) | remove dangling useRouter() call from omnibox |
 | `9d98e86` | fix(web) | replace !important with :root specificity for slate placeholder CSS |
 | `054e262` | feat(web) | settings redesign, MCP config/agents pages, PlateJS theming, MCP status indicators, nav icons in header, 72 tests |
 | `f6e5e11` | feat(web) | settings page, session cards, workspace persistence, PWA scaffold |
