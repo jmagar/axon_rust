@@ -9,7 +9,8 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
-| `TBD` | feat(web) | settings redesign, MCP config page, agents listing, PlateJS theming, MCP status indicators, nav icons in header, 72 tests |
+| `9d98e86` | fix(web) | replace !important with :root specificity for slate placeholder CSS |
+| `054e262` | feat(web) | settings redesign, MCP config/agents pages, PlateJS theming, MCP status indicators, nav icons in header, 72 tests |
 | `f6e5e11` | feat(web) | settings page, session cards, workspace persistence, PWA scaffold |
 | `884af14` | fix(web) | fix Pulse chat 'Claude CLI exited 1' due to root-owned .claude dirs |
 | `d7ad5bb` | fix(ask) | remove brittle Gate 5/6 URL heuristics; trust LLM citation grounding |
@@ -63,7 +64,7 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 - **TypeScript (7 fixes):** `tool-badge.tsx` guards `JSON.stringify` undefined before `.slice`; `use-pulse-autosave` clears `setTimeout` ref on unmount; `use-pulse-chat` block update is now immutable (spread instead of mutation); `workspace-persistence` NaN-safe `parseSplit()` helper; pulse/chat route stale comment removed; pulse/save route guards empty embedding response before `ensureCollection`.
 - **Infra / Docs (4 fixes):** `20-pnpm-install` sentinel touch gated on successful install (exits 1 on failure); `docker-compose.yaml` SSH mount commented out (opt-in); `docs/SERVE.md` legacy browser-UI instructions removed; `commands/axon/crawl.md` `errors`/`worker` subcommands added to argument-hint.
 
-#### MCP Config, Agents, Status Indicators, Omnibox Nav (TBD)
+#### MCP Config, Agents, Status Indicators, Nav Icons (`054e262`, `9d98e86`)
 - **MCP configuration page** (`/mcp`): full CRUD for `~/.claude/mcp.json` — form-based (stdio command+args / HTTP URL) and raw JSON editor tab, delete confirmation, glass-morphic design. Accessible directly from the omnibox Network icon.
 - **MCP server status indicators**: `/api/mcp/status` probes each server on page load — HTTP via `AbortSignal.timeout(4s)` fetch, stdio via `which <command>`. Cards show animated status dot (green glow = online, red = offline, yellow pulse = checking).
 - **Agents listing page** (`/agents`): parses `claude agents` CLI output into grouped card grid with source badges (Built-in/Project/Global). Shimmer skeleton loading and empty state with actionable message.
