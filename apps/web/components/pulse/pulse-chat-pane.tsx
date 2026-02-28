@@ -37,7 +37,7 @@ export function PulseChatPane({
   messages,
   isLoading,
   streamingPhase,
-  liveToolUses = [],
+  liveToolUses: _liveToolUses = [],
   onCancelRequest,
   indexedSources,
   activeThreadSources,

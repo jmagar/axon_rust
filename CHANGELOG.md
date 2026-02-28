@@ -9,7 +9,7 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
-| `TBD` | fix(web) | fix duplicate tool badges and raw-JSON response text in Pulse chat |
+| `bc62851` | fix(web) | fix duplicate tool badges and raw-JSON response text in Pulse chat |
 | `b20a7a3` | fix | address all 12 PR review comments from cubic-dev-ai |
 | `d9823b2` | feat(web+jobs+mcp) | SSRF hardening, AMQP reconnect backoff, multi-lane workers, expanded tests |
 | `ebca63c` | fix(web) | add Settings2 icon import to omnibox + changelog update |
