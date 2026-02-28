@@ -1,7 +1,7 @@
 'use client'
 
 import { Globe, Pencil, Plus, Terminal, Trash2, X } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -312,13 +312,13 @@ export function McpServerForm({
     onSave(form.name.trim(), formToConfig(form))
   }
 
-  const handleSave = useCallback(() => {
+  function handleSave() {
     if (activeTab === 'form') {
       handleSaveForm()
     } else {
       handleSaveJson()
     }
-  }, [activeTab, form, rawJson])
+  }
 
   const nameConflict = !isEditing && existingNames.includes(form.name.trim())
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import type { RetrieveResult, SourcesResult, StatusResult, SuggestResult } from '@/lib/result-types'
+import type { RetrieveResult, StatusResult, SuggestResult } from '@/lib/result-types'
 import { FilterInput, fmtNum, StatusBadge, UrlCell } from './table-primitives'
 
 // ---------------------------------------------------------------------------
