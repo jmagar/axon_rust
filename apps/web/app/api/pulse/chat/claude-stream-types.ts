@@ -79,9 +79,18 @@ export interface ClaudeBuildExtra {
 const ALLOWED_DIR_ROOTS = ['/home/node', '/tmp', '/workspace']
 
 function validateAddDir(dir: string): string | null {
-  const resolved = path.resolve(dir)
-  if (ALLOWED_DIR_ROOTS.some((root) => resolved.startsWith(root + path.sep) || resolved === root)) {
-    return resolved
+  // Resolve the path first, then follow symlinks so a symlink inside an allowed
+  // root (e.g. /tmp/evil → /etc) cannot bypass the allowlist check.
+  let real: string
+  try {
+    real = fs.realpathSync(path.resolve(dir))
+  } catch {
+    // Path does not exist yet — fall back to lexical resolution.
+    // Non-existent paths cannot be symlinks, so path.resolve is safe here.
+    real = path.resolve(dir)
+  }
+  if (ALLOWED_DIR_ROOTS.some((root) => real.startsWith(root + path.sep) || real === root)) {
+    return real
   }
   return null
 }

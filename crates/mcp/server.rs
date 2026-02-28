@@ -338,6 +338,9 @@ fn apply_crawl_overrides(cfg: &Config, req: &CrawlRequest) -> Config {
     if let Some(discover_sitemaps) = req.discover_sitemaps {
         out.discover_sitemaps = discover_sitemaps;
     }
+    if let Some(sitemap_since_days) = req.sitemap_since_days {
+        out.sitemap_since_days = sitemap_since_days;
+    }
     if let Some(render_mode) = req.render_mode {
         out.render_mode = map_render_mode(render_mode);
     }
@@ -423,7 +426,7 @@ impl AxonMcpServer {
 
     async fn handle_crawl(&self, req: CrawlRequest) -> Result<AxonToolResponse, ErrorData> {
         let cfg = apply_crawl_overrides(self.cfg.as_ref(), &req);
-        let _response_mode = parse_response_mode(req.response_mode);
+        let response_mode = parse_response_mode(req.response_mode);
         match req.subaction {
             CrawlSubaction::Start => {
                 let urls = req
@@ -491,11 +494,13 @@ impl AxonMcpServer {
                     .skip(offset)
                     .take(limit as usize)
                     .collect::<Vec<_>>();
-                Ok(AxonToolResponse::ok(
+                respond_with_mode(
                     "crawl",
                     "list",
+                    response_mode,
+                    "crawl-list",
                     serde_json::json!({ "jobs": jobs, "limit": limit, "offset": offset }),
-                ))
+                )
             }
             CrawlSubaction::Cleanup => {
                 let deleted = cleanup_jobs(&cfg)
@@ -1452,19 +1457,21 @@ impl AxonMcpServer {
     async fn handle_domains(&self, req: DomainsRequest) -> Result<AxonToolResponse, ErrorData> {
         let limit = parse_limit_usize(req.limit, 25, 500);
         let offset = parse_offset(req.offset);
+        let response_mode = parse_response_mode(req.response_mode);
         let payload = domains_payload(self.cfg.as_ref(), limit, offset)
             .await
             .map_err(|e| internal_error(e.to_string()))?;
-        Ok(AxonToolResponse::ok("domains", "domains", payload))
+        respond_with_mode("domains", "domains", response_mode, "domains", payload)
     }
 
     async fn handle_sources(&self, req: SourcesRequest) -> Result<AxonToolResponse, ErrorData> {
         let limit = parse_limit_usize(req.limit, 25, 500);
         let offset = parse_offset(req.offset);
+        let response_mode = parse_response_mode(req.response_mode);
         let payload = sources_payload(self.cfg.as_ref(), limit, offset)
             .await
             .map_err(|e| internal_error(e.to_string()))?;
-        Ok(AxonToolResponse::ok("sources", "sources", payload))
+        respond_with_mode("sources", "sources", response_mode, "sources", payload)
     }
 
     async fn handle_stats(&self, _req: StatsRequest) -> Result<AxonToolResponse, ErrorData> {

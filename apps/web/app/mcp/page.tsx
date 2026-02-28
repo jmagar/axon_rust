@@ -73,10 +73,12 @@ function McpPageInner() {
   }, [loadConfig])
 
   async function saveServer(name: string, cfg: McpServerConfig) {
-    // Capture the merged config before any async work to avoid stale closure on config state.
-    // Using the functional updater form so we always merge against the latest prev value.
+    // Capture both the previous state (for rollback) and the merged state (for the PUT).
+    // Using the functional updater form so we always read the latest prev value.
+    let previousConfig: McpConfig = { mcpServers: {} }
     let mergedConfig: McpConfig = { mcpServers: {} }
     setConfig((prev) => {
+      previousConfig = prev
       mergedConfig = { mcpServers: { ...prev.mcpServers, [name]: cfg } }
       return mergedConfig
     })
@@ -90,6 +92,9 @@ function McpPageInner() {
       body: JSON.stringify(mergedConfig),
     })
     if (!res.ok) {
+      // Roll back to the state before the optimistic update so the UI stays
+      // consistent with the server.
+      setConfig(previousConfig)
       setError('Save failed')
     }
   }

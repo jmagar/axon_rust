@@ -170,6 +170,7 @@ const ALLOWED_FLAGS: &[(&str, &str)] = &[
     ("render_mode", "--render-mode"),
     ("include_subdomains", "--include-subdomains"),
     ("discover_sitemaps", "--discover-sitemaps"),
+    ("sitemap_since_days", "--sitemap-since-days"),
     ("embed", "--embed"),
     ("diagnostics", "--diagnostics"),
     ("yes", "--yes"),
@@ -692,7 +693,10 @@ pub(super) async fn handle_cancel(mode: &str, job_id: &str, tx: mpsc::Sender<Str
                 )
                 .await;
             } else {
-                send_done_dual(&tx, &ws_ctx, 130, None).await;
+                // Use exit code 0 for a successful cancel — the UI treats non-zero
+                // codes as failures, so 130 (SIGINT) would incorrectly show the job
+                // as failed even when the cancel completed successfully.
+                send_done_dual(&tx, &ws_ctx, 0, None).await;
             }
         }
         Err(e) => {

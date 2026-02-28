@@ -221,7 +221,8 @@ services:
       - /app/.next                    # anonymous vol: preserves Next.js build cache
       - ${AXON_DATA_DIR:-./data}/axon/claude:/home/node/.claude
       - ${HOST_HOME:-${HOME}}/.claude.json:/home/node/.claude.json  # auth file — separate from config dir
-      - ${HOST_HOME:-${HOME}}/.ssh:/home/node/.ssh:ro
+      # Uncomment to mount host SSH keys (opt-in — exposes keys to the container):
+      # - ${HOST_HOME:-${HOME}}/.ssh:/home/node/.ssh:ro
       - ${AXON_WORKSPACE:-${HOME}/workspace}:/workspace
     depends_on:
       axon-workers:

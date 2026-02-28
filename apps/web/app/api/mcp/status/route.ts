@@ -32,9 +32,15 @@ const PRIVATE_IP_PATTERNS = [
   /^169\.254\./,
   /^fc[0-9a-f]{2}:/i,
   /^fd[0-9a-f]{2}:/i,
+  // IPv4-mapped IPv6 in dotted-decimal form: ::ffff:127.x, ::ffff:10.x, etc.
+  /^::ffff:(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.)/i,
+  // IPv4-mapped IPv6 in hex-group form (e.g. ::ffff:7f00:1)
+  /^::ffff:[0-9a-f]{1,4}:[0-9a-f]{1,4}$/i,
+  // Link-local IPv6
+  /^fe80:/i,
 ]
 
-function validateStatusUrl(url: string): boolean {
+export function validateStatusUrl(url: string): boolean {
   let parsed: URL
   try {
     parsed = new URL(url)
@@ -43,7 +49,8 @@ function validateStatusUrl(url: string): boolean {
   }
   if (!['http:', 'https:'].includes(parsed.protocol)) return false
   // parsed.hostname includes brackets for IPv6 addresses (e.g. "[::1]") — strip them.
-  const hostname = parsed.hostname.replace(/^\[|\]$/g, '')
+  // Also normalise trailing dots (e.g. "localhost." → "localhost").
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, '').replace(/\.+$/, '')
   if (BLOCKED_HOSTNAMES.has(hostname)) return false
   if (PRIVATE_IP_PATTERNS.some((p) => p.test(hostname))) return false
   return true
@@ -63,31 +70,47 @@ async function readMcpConfig(): Promise<McpConfig> {
   }
 }
 
-async function checkHttpServer(url: string): Promise<ServerStatus> {
+async function checkHttpServer(name: string, url: string): Promise<ServerStatus> {
   try {
     const signal = AbortSignal.timeout(4_000)
     const res = await fetch(url, { method: 'HEAD', signal })
     // Any HTTP response (even 404/405) means the server is reachable
     return res.status < 600 ? 'online' : 'offline'
-  } catch {
+  } catch (err) {
+    console.error(
+      '[mcp-status] checkHttpServer error for',
+      name,
+      err instanceof Error ? err.message : String(err),
+    )
     return 'offline'
   }
 }
 
-async function checkStdioServer(command: string): Promise<ServerStatus> {
+async function checkStdioServer(name: string, command: string): Promise<ServerStatus> {
   if (!command.trim()) return 'unknown'
-  // Reject commands containing path separators to prevent directory traversal
-  if (command.includes('/') || command.includes('\\')) return 'offline'
+  // Reject Windows-style paths — this server runs on Linux/macOS
+  if (command.includes('\\')) return 'offline'
   try {
-    // Absolute path → check file existence directly
     if (path.isAbsolute(command)) {
+      // Absolute path (e.g. /usr/local/bin/mcp-server): guard against .. *components*
+      // only (not .. as part of a filename), then check existence.
+      if (command.split('/').some((seg) => seg === '..')) return 'offline'
       await fs.access(command)
       return 'online'
     }
-    // Relative command → check if it's on PATH
+    // Relative command (e.g. python3, uvx, npx): must be a bare name — no separators,
+    // no traversal sequences, no relative-path prefixes.
+    if (command.includes('/') || command.includes('..') || command.startsWith('.')) {
+      return 'offline'
+    }
     await execFileAsync('which', [command], { timeout: 3_000 })
     return 'online'
-  } catch {
+  } catch (err) {
+    console.error(
+      '[mcp-status] checkStdioServer error for',
+      name,
+      err instanceof Error ? err.message : String(err),
+    )
     return 'offline'
   }
 }
@@ -103,11 +126,11 @@ export async function GET() {
           if (!validateStatusUrl(cfg.url)) {
             return [name, { status: 'offline', error: 'invalid_url' }]
           }
-          const status = await checkHttpServer(cfg.url)
+          const status = await checkHttpServer(name, cfg.url)
           return [name, { status }]
         }
         if (cfg.command) {
-          const status = await checkStdioServer(cfg.command)
+          const status = await checkStdioServer(name, cfg.command)
           return [name, { status }]
         }
         return [name, { status: 'unknown' }]

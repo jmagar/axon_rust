@@ -21,7 +21,9 @@ export function parseClaudeJsonl(raw: string): ParsedMessage[] {
     if (!trimmed) continue
 
     // Reject lines that exceed the per-line size cap.
-    if (trimmed.length > MAX_LINE_BYTES) continue
+    // Buffer.byteLength counts UTF-8 bytes, not UTF-16 code units, so multi-byte
+    // characters are correctly accounted for (trimmed.length would undercount them).
+    if (Buffer.byteLength(trimmed, 'utf8') > MAX_LINE_BYTES) continue
 
     let val: Record<string, unknown>
     try {

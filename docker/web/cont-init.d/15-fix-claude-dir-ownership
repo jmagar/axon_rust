@@ -13,7 +13,10 @@
 # of the current ownership. It runs on every container start; chown on already-correct
 # ownership is a no-op.
 
-CLAUDE_DIR="${HOME:-/home/node}/.claude"
+# Use the node user's home directly — $HOME resolves to /root when this cont-init
+# script runs as PID 1 (s6-overlay requires root at init time), which would silently
+# skip the actual /home/node/.claude bind-mount.
+CLAUDE_DIR="/home/node/.claude"
 
 if [ ! -d "$CLAUDE_DIR" ]; then
     echo "[15-fix-claude-dir-ownership] ${CLAUDE_DIR} not found — skipping" >&2

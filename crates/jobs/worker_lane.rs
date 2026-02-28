@@ -13,7 +13,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio;
 use uuid::Uuid;
 
 const STALE_SWEEP_INTERVAL_SECS: u64 = 30;
@@ -52,23 +51,20 @@ pub(crate) struct WorkerConfig {
 /// Note: this checks for the presence of at least one variable per service, not
 /// the validity of the URL. Connection errors are still reported at connect time.
 pub(crate) fn validate_worker_env_vars() -> Result<(), String> {
-    let mut missing: Vec<&'static str> = Vec::new();
+    let mut missing: Vec<&'static str> = Vec::with_capacity(3);
 
     // Postgres: AXON_PG_URL
-    let pg_ok = std::env::var("AXON_PG_URL").is_ok();
-    if !pg_ok {
+    if std::env::var("AXON_PG_URL").is_err() {
         missing.push("AXON_PG_URL");
     }
 
     // Redis: AXON_REDIS_URL
-    let redis_ok = std::env::var("AXON_REDIS_URL").is_ok();
-    if !redis_ok {
+    if std::env::var("AXON_REDIS_URL").is_err() {
         missing.push("AXON_REDIS_URL");
     }
 
     // AMQP: AXON_AMQP_URL
-    let amqp_ok = std::env::var("AXON_AMQP_URL").is_ok();
-    if !amqp_ok {
+    if std::env::var("AXON_AMQP_URL").is_err() {
         missing.push("AXON_AMQP_URL");
     }
 
@@ -193,17 +189,13 @@ async fn claim_delivery(
     }
 }
 
-/// Generic AMQP consumer lane. Listens for job IDs on the queue, claims them,
-/// and dispatches to `process_fn` concurrently using `FuturesUnordered` with a
-/// semaphore for backpressure. Runs stale sweeps on idle timeout.
-async fn run_amqp_lane(
+/// Open an AMQP connection, set QoS, declare a consumer, and log startup.
+/// Returns `(Connection, Channel, Consumer)` ready to receive deliveries.
+async fn setup_amqp_consumer(
     cfg: &Config,
-    pool: PgPool,
     wc: &WorkerConfig,
     lane: usize,
-    process_fn: &ProcessFn,
-    semaphore: Arc<tokio::sync::Semaphore>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(lapin::Connection, lapin::Channel, lapin::Consumer), Box<dyn std::error::Error>> {
     let (conn, ch) = open_amqp_connection_and_channel(cfg, &wc.queue_name).await?;
 
     // Tell the broker to only push one unacked message at a time per consumer,
@@ -211,7 +203,7 @@ async fn run_amqp_lane(
     ch.basic_qos(1, BasicQosOptions::default()).await?;
 
     let tag = format!("{}-{lane}", wc.consumer_tag_prefix);
-    let mut consumer = ch
+    let consumer = ch
         .basic_consume(
             &wc.queue_name,
             &tag,
@@ -224,6 +216,22 @@ async fn run_amqp_lane(
         "{} worker lane={lane} listening on queue={} concurrency={}",
         wc.job_kind, wc.queue_name, wc.lane_count
     ));
+
+    Ok((conn, ch, consumer))
+}
+
+/// Generic AMQP consumer lane. Listens for job IDs on the queue, claims them,
+/// and dispatches to `process_fn` concurrently using `FuturesUnordered` with a
+/// semaphore for backpressure. Runs stale sweeps on idle timeout.
+async fn run_amqp_lane(
+    cfg: &Config,
+    pool: PgPool,
+    wc: &WorkerConfig,
+    lane: usize,
+    process_fn: &ProcessFn,
+    semaphore: Arc<tokio::sync::Semaphore>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (conn, ch, mut consumer) = setup_amqp_consumer(cfg, wc, lane).await?;
 
     // ProcessFn returns !Send futures; the lane runs on a single task so Send
     // is not required.
@@ -308,6 +316,20 @@ async fn run_amqp_lane(
     .into())
 }
 
+/// Sleep for `duration`, but return early if an in-flight job completes.
+/// Returns `true` if a job completed (caller should `continue` the loop).
+async fn sleep_or_drain_one<F>(duration: Duration, inflight: &mut FuturesUnordered<F>) -> bool
+where
+    F: Future<Output = ()>,
+{
+    let sleep = tokio::time::sleep(duration);
+    tokio::pin!(sleep);
+    tokio::select! {
+        _ = &mut sleep => false,
+        done = inflight.next(), if !inflight.is_empty() => done.is_some(),
+    }
+}
+
 /// Generic polling lane. Claims pending jobs via SQL polling with exponential
 /// backoff (100ms -> 6400ms on idle, reset on job found). Dispatches to
 /// `process_fn` concurrently using `FuturesUnordered` with semaphore backpressure.
@@ -369,15 +391,8 @@ async fn run_polling_lane(
             }
             Ok(None) => {
                 drop(permit);
-                let sleep = tokio::time::sleep(Duration::from_millis(backoff_ms));
-                tokio::pin!(sleep);
-                tokio::select! {
-                    _ = &mut sleep => {}
-                    done = inflight.next(), if !inflight.is_empty() => {
-                        if done.is_some() {
-                            continue;
-                        }
-                    }
+                if sleep_or_drain_one(Duration::from_millis(backoff_ms), &mut inflight).await {
+                    continue;
                 }
                 backoff_ms = (backoff_ms * 2).min(POLL_BACKOFF_MAX_MS);
             }
@@ -387,15 +402,8 @@ async fn run_polling_lane(
                     "{} worker polling lane={lane} DB error; retrying in 5s: {err}",
                     wc.job_kind
                 ));
-                let sleep = tokio::time::sleep(Duration::from_secs(5));
-                tokio::pin!(sleep);
-                tokio::select! {
-                    _ = &mut sleep => {}
-                    done = inflight.next(), if !inflight.is_empty() => {
-                        if done.is_some() {
-                            continue;
-                        }
-                    }
+                if sleep_or_drain_one(Duration::from_secs(5), &mut inflight).await {
+                    continue;
                 }
             }
         }
@@ -441,12 +449,14 @@ pub(crate) async fn run_job_worker(
     if amqp_available {
         let mut reconnect_delay_secs = AMQP_RECONNECT_INIT_SECS;
         loop {
+            let lane_start = tokio::time::Instant::now();
             let futs: Vec<_> = (1..=wc.lane_count)
                 .map(|lane| {
                     run_amqp_lane(cfg, pool.clone(), wc, lane, &process_fn, semaphore.clone())
                 })
                 .collect();
             let results = futures_util::future::join_all(futs).await;
+            let ran_for_secs = lane_start.elapsed().as_secs();
             let mut any_unexpected = false;
             for result in results {
                 if let Err(err) = result {
@@ -457,25 +467,32 @@ pub(crate) async fn run_job_worker(
                     any_unexpected = true;
                 }
             }
-            // Back off only on failures; a clean shutdown (no errors) resets
-            // the delay so the next cold-start reconnects quickly.
+            // run_amqp_lane always returns Err — there is no clean-exit Ok path.
+            // Reset the backoff when lanes ran stably long enough to prove the
+            // connection was healthy (ran longer than the max backoff window).
+            // This matches the documented CLAUDE.md contract: "On successful
+            // reconnect the backoff resets to the initial value."
             if any_unexpected {
+                if ran_for_secs >= AMQP_RECONNECT_MAX_SECS {
+                    reconnect_delay_secs = AMQP_RECONNECT_INIT_SECS;
+                }
                 log_warn(&format!(
                     "{} worker restarting AMQP lanes in {reconnect_delay_secs}s",
                     wc.job_kind
                 ));
                 tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)).await;
                 reconnect_delay_secs = (reconnect_delay_secs * 2).min(AMQP_RECONNECT_MAX_SECS);
-            } else {
-                reconnect_delay_secs = AMQP_RECONNECT_INIT_SECS;
-                log_warn(&format!(
-                    "{} worker AMQP lanes exited cleanly, reconnecting immediately",
-                    wc.job_kind
-                ));
             }
         }
     }
 
+    // Polling fallback: AMQP was unavailable at startup so we fall back to
+    // SQL polling.  Unlike the AMQP path, the polling path has no internal
+    // reconnect loop — a Postgres restart will kill the worker permanently.
+    // Recovery is intentionally delegated to the s6 process supervisor, which
+    // will restart the worker binary automatically.  Do NOT add a reconnect
+    // loop here without carefully considering the implications of concurrent
+    // polling restarts stomping on each other's state.
     log_warn(&format!(
         "amqp unavailable; running {} worker in postgres polling mode",
         wc.job_kind
@@ -649,8 +666,33 @@ mod tests {
         assert_eq!(POLL_BACKOFF_MAX_MS, POLL_BACKOFF_INIT_MS * 64);
     }
 
+    /// Verify the AMQP reconnect backoff sequence:
+    /// 2 → 4 → 8 → 16 → 32 → 60 → 60 → 60 (capped at AMQP_RECONNECT_MAX_SECS).
+    /// Mirrors the doubling logic in `run_job_worker`.
+    #[test]
+    fn amqp_reconnect_backoff_doubles_and_caps() {
+        let mut backoff_secs = AMQP_RECONNECT_INIT_SECS;
+        let expected = [2u64, 4, 8, 16, 32, 60, 60, 60];
+
+        for (i, &expected_secs) in expected.iter().enumerate() {
+            assert_eq!(
+                backoff_secs, expected_secs,
+                "iteration {i}: expected {expected_secs}s, got {backoff_secs}s"
+            );
+            // Simulate failure: double and cap (same logic as run_job_worker).
+            backoff_secs = (backoff_secs * 2).min(AMQP_RECONNECT_MAX_SECS);
+        }
+
+        // Verify constants are self-consistent.
+        assert_eq!(AMQP_RECONNECT_INIT_SECS, 2);
+        assert_eq!(AMQP_RECONNECT_MAX_SECS, 60);
+    }
+
     /// Verify validate_worker_env_vars passes when all required vars are present.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "SAFETY: test-only env var manipulation, no actual unsafe invariant"
+    )]
     #[test]
     fn validate_env_vars_passes_when_all_set() {
         // Set all required vars.
@@ -674,7 +716,10 @@ mod tests {
     }
 
     /// Verify canonical variables are required and missing vars fail recognition.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "SAFETY: test-only env var manipulation, no actual unsafe invariant"
+    )]
     #[test]
     fn validate_env_vars_requires_canonical_names() {
         unsafe {
