@@ -1,5 +1,5 @@
 # crates/jobs — AMQP Job Workers
-Last Modified: 2026-02-25
+Last Modified: 2026-02-27
 
 Async job workers backed by RabbitMQ (lapin) + PostgreSQL (sqlx).
 
@@ -37,6 +37,13 @@ PgPool is expensive. Each worker creates one pool at startup and passes `&PgPool
 ### AMQP Channel (`common/`)
 
 `open_amqp_channel()` has a **5-second connection timeout**. On failure it returns an error — callers should backoff and retry at the worker loop level, not in the channel helper itself.
+
+### AMQP Reconnect Backoff (crawl worker)
+
+`run_amqp_lane_with_reconnect()` in `crawl/runtime/worker/loops.rs` wraps the consumer loop in an infinite reconnect cycle. When the channel dies (broker restart, consumer_timeout, network blip):
+- Backoff starts at **2s**, doubles on each attempt, capped at **60s**
+- On successful reconnect the backoff resets to 2s
+- In-flight jobs are not lost — they hold no AMQP reference and complete normally before reconnect fires
 
 ### Bounded Channels
 

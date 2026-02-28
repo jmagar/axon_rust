@@ -49,6 +49,7 @@ pub struct CrawlRequest {
     pub include_subdomains: Option<bool>,
     pub respect_robots: Option<bool>,
     pub discover_sitemaps: Option<bool>,
+    pub sitemap_since_days: Option<u32>,
     pub render_mode: Option<McpRenderMode>,
     pub delay_ms: Option<u64>,
 }

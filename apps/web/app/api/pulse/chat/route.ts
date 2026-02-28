@@ -188,11 +188,8 @@ export async function POST(request: Request) {
         // Strip CLAUDECODE so the spawned claude CLI doesn't refuse to launch
         // inside an existing Claude Code session.
         const { CLAUDECODE: _cc, ...childEnv } = process.env
-        // Use a neutral cwd (not the repo root) so Claude Code doesn't load the
-        // axon_rust CLAUDE.md and override the Pulse persona with "I'm a Rust
-        // coding assistant."
         const child = spawn('claude', args, {
-          cwd: os.tmpdir(),
+          cwd: process.env.AXON_WORKSPACE ?? os.tmpdir(),
           env: childEnv,
           stdio: ['ignore', 'pipe', 'pipe'],
         })
@@ -296,6 +293,9 @@ export async function POST(request: Request) {
           }
 
           if (code !== 0) {
+            console.error('[pulse/chat] Claude CLI exited', code, {
+              stderr: (stderr || '').slice(0, 500),
+            })
             const memoryFallbackText = resolveConversationMemoryAnswer(
               req.prompt,
               req.conversationHistory,
@@ -313,6 +313,7 @@ export async function POST(request: Request) {
                   metadata: {
                     model: req.model,
                     ...buildTelemetry(),
+                    fallback_source: 'conversation_memory' as const,
                   },
                 },
               })

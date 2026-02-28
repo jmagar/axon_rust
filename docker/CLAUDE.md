@@ -1,5 +1,5 @@
 # docker/ — Container Build & s6 Supervision
-Last Modified: 2026-02-25
+Last Modified: 2026-02-27
 
 ## Files
 ```
@@ -21,7 +21,6 @@ docker/
     │   └── 10-load-axon-env  # Loads .env on container startup (runs as root before services)
     └── s6-rc.d/
         ├── crawl-worker/
-        ├── batch-worker/
         ├── extract-worker/
         ├── embed-worker/
         ├── ingest-worker/

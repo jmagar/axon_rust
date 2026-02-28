@@ -238,7 +238,17 @@ export function usePulseChat({
             }
             if (event.type === 'thinking_content' && event.content) {
               ensureDraftAdded()
-              partialBlocks.push({ type: 'thinking', content: event.content })
+              // Partial-message update: update the last thinking block in-place to avoid
+              // stacking multiple "Reasoning" boxes as the thinking grows incrementally.
+              const lastBlock = partialBlocks[partialBlocks.length - 1]
+              if (lastBlock?.type === 'thinking') {
+                partialBlocks[partialBlocks.length - 1] = {
+                  type: 'thinking',
+                  content: event.content,
+                }
+              } else {
+                partialBlocks.push({ type: 'thinking', content: event.content })
+              }
               updateChatMessage(assistantDraft.id!, (m) => ({ ...m, blocks: [...partialBlocks] }))
               return
             }

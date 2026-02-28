@@ -335,6 +335,11 @@ pub(super) struct GlobalArgs {
     #[arg(global = true, long, action = ArgAction::Set, default_value_t = true)]
     pub(super) discover_sitemaps: bool,
 
+    /// Only backfill sitemap URLs with a `<lastmod>` date within the last N days (0 = no filter).
+    /// URLs without a `<lastmod>` tag are always included.
+    #[arg(global = true, long, default_value_t = 0)]
+    pub(super) sitemap_since_days: u32,
+
     /// Enable crawl cache reuse. Disable with `--cache false`.
     #[arg(global = true, long, action = ArgAction::Set, default_value_t = true)]
     pub(super) cache: bool,

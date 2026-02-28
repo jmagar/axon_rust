@@ -28,6 +28,10 @@ vi.mock('next/server', () => ({
   },
 }))
 
+// Mocks required by status/route.ts (execFile + promisify)
+vi.mock('node:child_process', () => ({ execFile: vi.fn() }))
+vi.mock('node:util', () => ({ promisify: (fn: unknown) => fn }))
+
 // ── Import after mocks are registered ────────────────────────────────────────
 
 // Dynamic import so that the module picks up the mocked dependencies.
@@ -317,11 +321,13 @@ describe('DELETE /api/mcp', () => {
 })
 
 describe('SSRF protection — validateStatusUrl', () => {
-  // These tests exercise the URL validation logic indirectly through the status
-  // route. Because status/route.ts reads mcp.json and then checks each server,
-  // we test the validation logic's contract via the exported symbols from
-  // route.ts where the schemas live. The status route's SSRF guard is verified
-  // here through behavioral assertions against the validation patterns.
+  // Import the real function so tests stay in sync with the implementation.
+  let validateStatusUrl: (url: string) => boolean
+
+  beforeEach(async () => {
+    const mod = await import('@/app/api/mcp/status/route')
+    validateStatusUrl = mod.validateStatusUrl
+  })
 
   const blockedUrls = [
     'http://localhost/sse',
@@ -342,33 +348,6 @@ describe('SSRF protection — validateStatusUrl', () => {
     'https://203.0.113.1/sse', // TEST-NET-3, public
   ]
 
-  // We re-implement the same logic as the source to keep tests in sync.
-  const BLOCKED_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1'])
-  const PRIVATE_IP_PATTERNS = [
-    /^127\./,
-    /^10\./,
-    /^172\.(1[6-9]|2[0-9]|3[01])\./,
-    /^192\.168\./,
-    /^169\.254\./,
-    /^fc[0-9a-f]{2}:/i,
-    /^fd[0-9a-f]{2}:/i,
-  ]
-
-  function validateStatusUrl(url: string): boolean {
-    let parsed: URL
-    try {
-      parsed = new URL(url)
-    } catch {
-      return false
-    }
-    if (!['http:', 'https:'].includes(parsed.protocol)) return false
-    // Strip brackets from IPv6 addresses (e.g. "[::1]" → "::1")
-    const hostname = parsed.hostname.replace(/^\[|\]$/g, '')
-    if (BLOCKED_HOSTNAMES.has(hostname)) return false
-    if (PRIVATE_IP_PATTERNS.some((p) => p.test(hostname))) return false
-    return true
-  }
-
   for (const url of blockedUrls) {
     it(`blocks ${url}`, () => {
       expect(validateStatusUrl(url)).toBe(false)
@@ -385,5 +364,26 @@ describe('SSRF protection — validateStatusUrl', () => {
     expect(validateStatusUrl('not a url')).toBe(false)
     expect(validateStatusUrl('')).toBe(false)
     expect(validateStatusUrl('://broken')).toBe(false)
+  })
+
+  // IPv4-mapped IPv6 and trailing-dot bypass cases
+  it('blocks http://[::ffff:127.0.0.1]/sse (IPv4-mapped loopback)', () => {
+    expect(validateStatusUrl('http://[::ffff:127.0.0.1]/sse')).toBe(false)
+  })
+
+  it('blocks http://[::ffff:10.0.0.1]/sse (IPv4-mapped RFC-1918 10.x)', () => {
+    expect(validateStatusUrl('http://[::ffff:10.0.0.1]/sse')).toBe(false)
+  })
+
+  it('blocks http://[::ffff:192.168.1.1]/sse (IPv4-mapped RFC-1918 192.168.x)', () => {
+    expect(validateStatusUrl('http://[::ffff:192.168.1.1]/sse')).toBe(false)
+  })
+
+  it('blocks http://localhost./sse (trailing-dot localhost)', () => {
+    expect(validateStatusUrl('http://localhost./sse')).toBe(false)
+  })
+
+  it('blocks http://[fe80::1]/sse (link-local IPv6)', () => {
+    expect(validateStatusUrl('http://[fe80::1]/sse')).toBe(false)
   })
 })

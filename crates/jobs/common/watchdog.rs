@@ -9,11 +9,12 @@ use uuid::Uuid;
 
 use super::JobTable;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct WatchdogSweepStats {
     pub stale_candidates: u64,
     pub marked_candidates: u64,
     pub reclaimed_jobs: u64,
+    pub reclaimed_ids: Vec<Uuid>,
 }
 
 pub(crate) fn stale_watchdog_payload(
@@ -141,6 +142,9 @@ pub async fn reclaim_stale_running_jobs(
                 .await?
                 .rows_affected();
             stats.reclaimed_jobs += affected;
+            if affected > 0 {
+                stats.reclaimed_ids.push(id);
+            }
             continue;
         }
 

@@ -1,5 +1,5 @@
 # crates/web — WebSocket Execution Bridge
-Last Modified: 2026-02-26
+Last Modified: 2026-02-27
 
 ## Role
 
@@ -21,9 +21,10 @@ For branding, theme, layout, and frontend UX decisions: `apps/web`.
 - `crates/web/execute/polling.rs`: job-completion polling loop
 - `crates/web/execute/tests/`: execute integration tests
 - `crates/web/docker_stats.rs`: container stats streaming
-- `crates/web/download.rs`: artifact download endpoints
-- `crates/web/pack.rs`: output packaging helpers
+- `crates/web/download.rs`: HTTP endpoints for crawl artifact downloads (individual files + zip archives)
+- `crates/web/pack.rs`: output packaging helpers — assembles crawl results into downloadable bundles
 - `crates/web/logs/`: log streaming support
+- `crates/web/snapshots/`: insta snapshot files for integration tests (committed; update with `cargo insta review`)
 
 ## WebSocket Protocol
 

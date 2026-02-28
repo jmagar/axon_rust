@@ -1,12 +1,13 @@
-/// HTTP download handlers for crawl results.
-///
-/// Four routes:
-/// - `GET /download/{job_id}/pack.md`  — Repomix-style packed Markdown
-/// - `GET /download/{job_id}/pack.xml` — Repomix-style packed XML
-/// - `GET /download/{job_id}/archive.zip` — ZIP of all markdown files
-/// - `GET /download/{job_id}/file/*path` — Single file download
+//! HTTP download handlers for crawl results.
+//!
+//! Four routes:
+//! - `GET /download/{job_id}/pack.md`  — Repomix-style packed Markdown
+//! - `GET /download/{job_id}/pack.xml` — Repomix-style packed XML
+//! - `GET /download/{job_id}/archive.zip` — ZIP of all markdown files
+//! - `GET /download/{job_id}/file/*path` — Single file download
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -14,24 +15,34 @@ use axum::response::{IntoResponse, Response};
 use dashmap::DashMap;
 use std::sync::Arc;
 
+use tracing::warn;
+
 use super::pack;
 
 /// Maximum files per download (guards against zip bombs / OOM).
 /// Override with `AXON_DOWNLOAD_MAX_FILES` env var.
-fn max_files() -> usize {
+static MAX_DOWNLOAD_FILES: LazyLock<usize> = LazyLock::new(|| {
     std::env::var("AXON_DOWNLOAD_MAX_FILES")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(2000)
-}
+});
 
 /// Maximum total bytes across all files before zipping.
 /// Override with `AXON_DOWNLOAD_MAX_BYTES` env var. Default: 500 MB.
-fn max_download_bytes() -> u64 {
+static MAX_DOWNLOAD_BYTES: LazyLock<u64> = LazyLock::new(|| {
     std::env::var("AXON_DOWNLOAD_MAX_BYTES")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(500 * 1024 * 1024)
+});
+
+fn max_files() -> usize {
+    *MAX_DOWNLOAD_FILES
+}
+
+fn max_download_bytes() -> u64 {
+    *MAX_DOWNLOAD_BYTES
 }
 
 /// Sanitize a filename for use in Content-Disposition headers.
@@ -79,7 +90,10 @@ fn is_valid_job_id(id: &str) -> bool {
 }
 
 /// Look up and validate the job directory from the DashMap registry.
-fn validate_job_dir(
+///
+/// Uses `tokio::fs::metadata` instead of the blocking `Path::is_dir()` to
+/// avoid stalling the Tokio runtime thread on a synchronous filesystem stat.
+async fn validate_job_dir(
     job_dirs: &DashMap<String, PathBuf>,
     job_id: &str,
 ) -> Result<PathBuf, (StatusCode, &'static str)> {
@@ -91,7 +105,11 @@ fn validate_job_dir(
         .map(|r| r.value().clone())
         .ok_or((StatusCode::NOT_FOUND, "job not found in registry"))?;
 
-    if !dir.is_dir() {
+    let is_dir = tokio::fs::metadata(&dir)
+        .await
+        .map(|m| m.is_dir())
+        .unwrap_or(false);
+    if !is_dir {
         return Err((StatusCode::NOT_FOUND, "job output directory not found"));
     }
     Ok(dir)
@@ -113,6 +131,7 @@ async fn read_manifest(
             continue;
         }
         let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+            warn!("download: skipping malformed manifest line: {:?}", line);
             continue;
         };
         let url = entry
@@ -184,7 +203,13 @@ async fn load_all_files(
         }
         match tokio::fs::read_to_string(canonical_file).await {
             Ok(content) => loaded.push((url.clone(), rel_path.clone(), content)),
-            Err(_) => continue, // skip unreadable files
+            Err(e) => {
+                warn!(
+                    "download: skipping unreadable file {}: {e}",
+                    canonical_file.display()
+                );
+                continue;
+            }
         }
     }
 
@@ -200,7 +225,7 @@ pub async fn serve_pack_md(
     AxumPath(job_id): AxumPath<String>,
     State(job_dirs): State<Arc<DashMap<String, PathBuf>>>,
 ) -> Response {
-    let job_dir = match validate_job_dir(&job_dirs, &job_id) {
+    let job_dir = match validate_job_dir(&job_dirs, &job_id).await {
         Ok(d) => d,
         Err((status, msg)) => return (status, msg).into_response(),
     };
@@ -235,7 +260,7 @@ pub async fn serve_pack_xml(
     AxumPath(job_id): AxumPath<String>,
     State(job_dirs): State<Arc<DashMap<String, PathBuf>>>,
 ) -> Response {
-    let job_dir = match validate_job_dir(&job_dirs, &job_id) {
+    let job_dir = match validate_job_dir(&job_dirs, &job_id).await {
         Ok(d) => d,
         Err((status, msg)) => return (status, msg).into_response(),
     };
@@ -270,7 +295,7 @@ pub async fn serve_zip(
     AxumPath(job_id): AxumPath<String>,
     State(job_dirs): State<Arc<DashMap<String, PathBuf>>>,
 ) -> Response {
-    let job_dir = match validate_job_dir(&job_dirs, &job_id) {
+    let job_dir = match validate_job_dir(&job_dirs, &job_id).await {
         Ok(d) => d,
         Err((status, msg)) => return (status, msg).into_response(),
     };
@@ -341,7 +366,7 @@ pub async fn serve_file(
     AxumPath((job_id, file_path)): AxumPath<(String, String)>,
     State(job_dirs): State<Arc<DashMap<String, PathBuf>>>,
 ) -> Response {
-    let job_dir = match validate_job_dir(&job_dirs, &job_id) {
+    let job_dir = match validate_job_dir(&job_dirs, &job_id).await {
         Ok(d) => d,
         Err((status, msg)) => return (status, msg).into_response(),
     };
@@ -397,162 +422,174 @@ pub async fn serve_file(
 mod tests {
     use super::*;
 
-    #[test]
-    fn valid_job_ids() {
-        assert!(is_valid_job_id("550e8400-e29b-41d4-a716-446655440000"));
-        assert!(is_valid_job_id("a1b2c3d4-e5f6-7890-abcd-ef1234567890"));
+    mod job_id_validation {
+        use super::*;
+
+        #[test]
+        fn validate_job_id_accepts_uuid_and_alphanum() {
+            assert!(is_valid_job_id("550e8400-e29b-41d4-a716-446655440000"));
+            assert!(is_valid_job_id("a1b2c3d4-e5f6-7890-abcd-ef1234567890"));
+        }
+
+        #[test]
+        fn validate_job_id_rejects_traversal_and_special_chars() {
+            assert!(!is_valid_job_id(""));
+            assert!(!is_valid_job_id("../../../etc/passwd"));
+            assert!(!is_valid_job_id("not-a-uuid-at-all"));
+            assert!(!is_valid_job_id("550e8400-e29b-41d4-a716-44665544000")); // 35 chars
+            assert!(!is_valid_job_id("550e8400-e29b-41d4-a716-4466554400000")); // 37 chars
+            assert!(!is_valid_job_id("550e8400%e29b-41d4-a716-446655440000")); // % char
+        }
+
+        #[test]
+        fn valid_job_id_rejects_path_traversal() {
+            assert!(!is_valid_job_id("../../../etc/passwd"));
+            assert!(!is_valid_job_id("..%2f..%2fetc%2fpasswd"));
+            assert!(!is_valid_job_id("a/../b/../c/../d/../e/../"));
+        }
+
+        #[test]
+        fn valid_job_id_rejects_null_bytes() {
+            assert!(!is_valid_job_id("550e8400-e29b-41d4-a716-44665544\x00"));
+        }
+
+        #[tokio::test]
+        async fn validate_job_dir_rejects_unknown_id() {
+            let dirs = DashMap::new();
+            let result = validate_job_dir(&dirs, "550e8400-e29b-41d4-a716-446655440000").await;
+            assert!(result.is_err());
+            let (status, _msg) = result.unwrap_err();
+            assert_eq!(status, StatusCode::NOT_FOUND);
+        }
+
+        #[tokio::test]
+        async fn validate_job_dir_rejects_bad_format() {
+            let dirs = DashMap::new();
+            let result = validate_job_dir(&dirs, "../../../etc").await;
+            assert!(result.is_err());
+            let (status, _msg) = result.unwrap_err();
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+        }
+
+        #[tokio::test]
+        async fn validate_job_dir_rejects_nonexistent_dir() {
+            let dirs = DashMap::new();
+            let fake_id = "550e8400-e29b-41d4-a716-446655440000";
+            dirs.insert(
+                fake_id.to_string(),
+                PathBuf::from("/tmp/nonexistent-axon-test-dir-xyz"),
+            );
+            let result = validate_job_dir(&dirs, fake_id).await;
+            assert!(result.is_err());
+            let (status, _msg) = result.unwrap_err();
+            assert_eq!(status, StatusCode::NOT_FOUND);
+        }
     }
 
-    #[test]
-    fn invalid_job_ids() {
-        assert!(!is_valid_job_id(""));
-        assert!(!is_valid_job_id("../../../etc/passwd"));
-        assert!(!is_valid_job_id("not-a-uuid-at-all"));
-        assert!(!is_valid_job_id("550e8400-e29b-41d4-a716-44665544000")); // 35 chars
-        assert!(!is_valid_job_id("550e8400-e29b-41d4-a716-4466554400000")); // 37 chars
-        assert!(!is_valid_job_id("550e8400%e29b-41d4-a716-446655440000")); // % char
-    }
+    mod path_security {
+        use super::*;
 
-    #[test]
-    fn sanitize_filename_strips_non_ascii() {
-        assert_eq!(sanitize_filename("example.com"), "example.com");
-        assert_eq!(sanitize_filename("[::1]-pack.md"), "___1_-pack.md");
-        assert_eq!(
-            sanitize_filename("\u{00e9}xample.com-pack.md"),
-            "_xample.com-pack.md"
-        );
-        assert_eq!(sanitize_filename(""), "download");
-    }
+        #[test]
+        fn sanitize_filename_strips_non_ascii() {
+            assert_eq!(sanitize_filename("example.com"), "example.com");
+            assert_eq!(sanitize_filename("[::1]-pack.md"), "___1_-pack.md");
+            assert_eq!(
+                sanitize_filename("\u{00e9}xample.com-pack.md"),
+                "_xample.com-pack.md"
+            );
+            assert_eq!(sanitize_filename(""), "download");
+        }
 
-    #[test]
-    fn manifest_relative_path_rejects_traversal_and_absolute_paths() {
-        assert!(is_safe_relative_manifest_path("markdown/a.md"));
-        assert!(is_safe_relative_manifest_path("./markdown/a.md"));
-        assert!(!is_safe_relative_manifest_path("../secrets.txt"));
-        assert!(!is_safe_relative_manifest_path(
-            "markdown/../../secrets.txt"
-        ));
-        assert!(!is_safe_relative_manifest_path("/etc/passwd"));
-        assert!(!is_safe_relative_manifest_path(""));
-    }
+        #[test]
+        fn manifest_relative_path_rejects_traversal_and_absolute_paths() {
+            assert!(is_safe_relative_manifest_path("markdown/a.md"));
+            assert!(is_safe_relative_manifest_path("./markdown/a.md"));
+            assert!(!is_safe_relative_manifest_path("../secrets.txt"));
+            assert!(!is_safe_relative_manifest_path(
+                "markdown/../../secrets.txt"
+            ));
+            assert!(!is_safe_relative_manifest_path("/etc/passwd"));
+            assert!(!is_safe_relative_manifest_path(""));
+        }
 
-    #[test]
-    fn valid_job_id_rejects_path_traversal() {
-        assert!(!is_valid_job_id("../../../etc/passwd"));
-        assert!(!is_valid_job_id("..%2f..%2fetc%2fpasswd"));
-        assert!(!is_valid_job_id("a/../b/../c/../d/../e/../"));
-    }
+        #[test]
+        fn path_traversal_dotdot_detected() {
+            // The serve_file handler rejects paths containing ".." before touching the filesystem
+            let attack_paths = [
+                "../sibling/secret.txt",
+                "../../etc/passwd",
+                "a/../../b",
+                "markdown/../../../etc/shadow",
+            ];
+            for p in attack_paths {
+                assert!(
+                    p.contains(".."),
+                    "test path {p} should contain '..' to trigger the guard"
+                );
+            }
+        }
 
-    #[test]
-    fn valid_job_id_rejects_null_bytes() {
-        assert!(!is_valid_job_id("550e8400-e29b-41d4-a716-44665544\x00"));
-    }
-
-    #[test]
-    fn path_traversal_dotdot_detected() {
-        // The serve_file handler rejects paths containing ".." before touching the filesystem
-        let attack_paths = [
-            "../sibling/secret.txt",
-            "../../etc/passwd",
-            "a/../../b",
-            "markdown/../../../etc/shadow",
-        ];
-        for p in attack_paths {
+        #[test]
+        fn path_traversal_null_byte_rejected() {
+            let null_path = "markdown/good\0.md";
             assert!(
-                p.contains(".."),
-                "test path {p} should contain '..' to trigger the guard"
+                null_path.contains('\0'),
+                "null byte path should be caught by the serve_file guard"
             );
         }
     }
 
-    #[test]
-    fn path_traversal_null_byte_rejected() {
-        let null_path = "markdown/good\0.md";
-        assert!(
-            null_path.contains('\0'),
-            "null byte path should be caught by the serve_file guard"
-        );
-    }
+    mod zip_and_manifest {
+        use super::*;
 
-    #[test]
-    fn validate_job_dir_rejects_unknown_id() {
-        let dirs = DashMap::new();
-        let result = validate_job_dir(&dirs, "550e8400-e29b-41d4-a716-446655440000");
-        assert!(result.is_err());
-        let (status, _msg) = result.unwrap_err();
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
+        #[test]
+        fn zip_roundtrip() {
+            let entries = vec![
+                (
+                    "https://example.com/a".to_string(),
+                    "markdown/a.md".to_string(),
+                    "Hello from A".to_string(),
+                ),
+                (
+                    "https://example.com/b".to_string(),
+                    "markdown/b.md".to_string(),
+                    "Hello from B".to_string(),
+                ),
+            ];
+            let bytes = build_zip("example.com", &entries).expect("zip should build");
+            assert!(!bytes.is_empty());
+            // Verify it's a valid ZIP by checking magic bytes
+            assert_eq!(&bytes[0..2], b"PK");
+        }
 
-    #[test]
-    fn validate_job_dir_rejects_bad_format() {
-        let dirs = DashMap::new();
-        let result = validate_job_dir(&dirs, "../../../etc");
-        assert!(result.is_err());
-        let (status, _msg) = result.unwrap_err();
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-    }
+        #[tokio::test]
+        async fn load_all_files_ignores_manifest_traversal_entries() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let job_dir = temp.path().join("job");
+            std::fs::create_dir_all(job_dir.join("markdown")).expect("mkdir");
+            std::fs::write(job_dir.join("markdown").join("ok.md"), "ok").expect("write");
+            std::fs::write(
+                job_dir.join("manifest.jsonl"),
+                [
+                    serde_json::json!({
+                        "url": "https://example.com/ok",
+                        "relative_path": "markdown/ok.md"
+                    })
+                    .to_string(),
+                    serde_json::json!({
+                        "url": "https://example.com/bad",
+                        "relative_path": "../../etc/passwd"
+                    })
+                    .to_string(),
+                ]
+                .join("\n"),
+            )
+            .expect("manifest");
 
-    #[test]
-    fn validate_job_dir_rejects_nonexistent_dir() {
-        let dirs = DashMap::new();
-        let fake_id = "550e8400-e29b-41d4-a716-446655440000";
-        dirs.insert(
-            fake_id.to_string(),
-            PathBuf::from("/tmp/nonexistent-axon-test-dir-xyz"),
-        );
-        let result = validate_job_dir(&dirs, fake_id);
-        assert!(result.is_err());
-        let (status, _msg) = result.unwrap_err();
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-
-    #[test]
-    fn zip_roundtrip() {
-        let entries = vec![
-            (
-                "https://example.com/a".to_string(),
-                "markdown/a.md".to_string(),
-                "Hello from A".to_string(),
-            ),
-            (
-                "https://example.com/b".to_string(),
-                "markdown/b.md".to_string(),
-                "Hello from B".to_string(),
-            ),
-        ];
-        let bytes = build_zip("example.com", &entries).expect("zip should build");
-        assert!(!bytes.is_empty());
-        // Verify it's a valid ZIP by checking magic bytes
-        assert_eq!(&bytes[0..2], b"PK");
-    }
-
-    #[tokio::test]
-    async fn load_all_files_ignores_manifest_traversal_entries() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let job_dir = temp.path().join("job");
-        std::fs::create_dir_all(job_dir.join("markdown")).expect("mkdir");
-        std::fs::write(job_dir.join("markdown").join("ok.md"), "ok").expect("write");
-        std::fs::write(
-            job_dir.join("manifest.jsonl"),
-            [
-                serde_json::json!({
-                    "url": "https://example.com/ok",
-                    "relative_path": "markdown/ok.md"
-                })
-                .to_string(),
-                serde_json::json!({
-                    "url": "https://example.com/bad",
-                    "relative_path": "../../etc/passwd"
-                })
-                .to_string(),
-            ]
-            .join("\n"),
-        )
-        .expect("manifest");
-
-        let (_domain, loaded) = load_all_files(&job_dir).await.expect("load files");
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].1, "markdown/ok.md");
-        assert_eq!(loaded[0].2, "ok");
+            let (_domain, loaded) = load_all_files(&job_dir).await.expect("load files");
+            assert_eq!(loaded.len(), 1);
+            assert_eq!(loaded[0].1, "markdown/ok.md");
+            assert_eq!(loaded[0].2, "ok");
+        }
     }
 }

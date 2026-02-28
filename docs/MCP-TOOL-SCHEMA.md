@@ -60,6 +60,21 @@ These actions do not require `subaction`:
 - `ask`
 - `screenshot`
 
+## Crawl Start Parameters
+Optional fields accepted on `{ "action": "crawl", "subaction": "start", ... }`:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | string | — | Seed URL (required) |
+| `max_pages` | u32 | 0 (uncapped) | Page limit |
+| `max_depth` | usize | 5 | Max crawl depth |
+| `include_subdomains` | bool | true | Include subdomains |
+| `respect_robots` | bool | false | Honour robots.txt |
+| `discover_sitemaps` | bool | true | Run sitemap backfill after crawl |
+| `sitemap_since_days` | u32 | 0 | Only backfill sitemap URLs with `<lastmod>` within last N days (0 = no filter) |
+| `render_mode` | enum | `auto_switch` | `http`, `chrome`, `auto_switch` |
+| `delay_ms` | u64 | 0 | Per-request delay ms |
+
 ## Lifecycle Action Families
 - `crawl`: `start|status|cancel|list|cleanup|clear|recover`
 - `extract`: `start|status|cancel|list|cleanup|clear|recover`

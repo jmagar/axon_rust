@@ -73,6 +73,7 @@ fn build_job_config(cfg: &Config, parsed: &CrawlJobConfig, id: Uuid, url: &str) 
     job_cfg.min_markdown_chars = parsed.min_markdown_chars;
     job_cfg.drop_thin_markdown = parsed.drop_thin_markdown;
     job_cfg.discover_sitemaps = parsed.discover_sitemaps;
+    job_cfg.sitemap_since_days = parsed.sitemap_since_days;
     job_cfg.embed = parsed.embed;
     job_cfg.render_mode = parsed.render_mode;
     job_cfg.collection = parsed.collection.clone();

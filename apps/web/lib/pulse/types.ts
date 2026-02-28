@@ -71,9 +71,15 @@ export const PulseChatRequestSchema = z.object({
   /** --add-dir: comma-separated directories Claude can access beyond the working dir */
   addDir: z.string().optional(),
   /** --betas: comma-separated beta headers (e.g. interleaved-thinking) */
-  betas: z.string().optional(),
+  betas: z
+    .string()
+    .regex(/^[a-zA-Z0-9,\-.:]*$/, 'betas contains invalid characters')
+    .optional(),
   /** --tools: restrict which built-in tools are available */
-  toolsRestrict: z.string().optional(),
+  toolsRestrict: z
+    .string()
+    .regex(/^[a-zA-Z0-9,\-.:]*$/, 'toolsRestrict contains invalid characters')
+    .optional(),
 })
 
 export type PulseChatRequest = z.infer<typeof PulseChatRequestSchema>
@@ -112,6 +118,7 @@ export interface PulseChatResponse {
     time_to_done_ms?: number
     delta_count?: number
     aborted?: boolean
+    fallback_source?: 'conversation_memory'
   }
 }
 

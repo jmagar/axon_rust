@@ -347,6 +347,7 @@ All flags are global (usable with any subcommand).
 | `--respect-robots <bool>` | bool | `false` | Respect `robots.txt` directives. **Note:** defaults `false` — consider legal/ethical implications. |
 | `--discover-sitemaps <bool>` | bool | `true` | Discover and backfill URLs from sitemap.xml after crawl. |
 | `--max-sitemaps <n>` | usize | `512` | Maximum sitemap URLs to backfill per crawl. |
+| `--sitemap-since-days <n>` | u32 | `0` | Only backfill sitemap URLs with `<lastmod>` within the last N days (0 = no filter). URLs without `<lastmod>` are always included. |
 | `--min-markdown-chars <n>` | usize | `200` | Minimum markdown character count; pages below this are flagged as "thin". |
 | `--drop-thin-markdown <bool>` | bool | `true` | Skip thin pages — do not save or embed them. |
 | `--delay-ms <ms>` | u64 | `0` | Delay between requests in milliseconds. |
@@ -613,7 +614,7 @@ Pages with fewer than `--min-markdown-chars` (default: 200) are flagged as thin.
 The default Qdrant collection is `cortex` (set via `AXON_COLLECTION` or `--collection`). If you previously used an older build that defaulted to `spider_rust`, pass `--collection spider_rust` explicitly.
 
 ### Sitemap backfill
-After a crawl, `append_sitemap_backfill()` discovers URLs via sitemap.xml that the crawler missed and fetches them individually. Respects `--max-sitemaps` (default: 512) and `--include-subdomains`.
+After a crawl, `append_sitemap_backfill()` discovers URLs via sitemap.xml that the crawler missed and fetches them individually. Respects `--max-sitemaps` (default: 512) and `--include-subdomains`. Use `--sitemap-since-days N` to restrict backfill to URLs whose `<lastmod>` falls within the last N days; URLs without `<lastmod>` are always included.
 
 ### Docker build context
 The `Dockerfile` is at `docker/Dockerfile`. Run `docker compose build` from this directory (not a parent workspace). The binary built inside the container is `axon`.

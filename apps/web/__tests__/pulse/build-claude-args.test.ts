@@ -198,6 +198,26 @@ describe('buildClaudeArgs', () => {
       const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL)
       expect(args).not.toContain('--allowedTools')
     })
+
+    it('strips shell injection after semicolon — Bash;rm -rf / emits only Bash', () => {
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { allowedTools: 'Bash;rm -rf /' })
+      // TOOL_ENTRY_RE rejects "Bash;rm -rf /" as a single entry; "Bash" (before semicolon) is
+      // not split on semicolons — the whole string is one comma-separated token, so the entire
+      // value fails the regex and --allowedTools is omitted.
+      const toolsValue = argAfter(args, '--allowedTools')
+      // If anything appears, it must not contain the injection payload
+      if (toolsValue !== undefined) {
+        expect(toolsValue).not.toContain('rm')
+        expect(toolsValue).not.toContain(';')
+      }
+    })
+
+    it('strips subshell injection — Bash,$(malicious) emits only Bash', () => {
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { allowedTools: 'Bash,$(malicious)' })
+      const toolsValue = argAfter(args, '--allowedTools')
+      // $(malicious) fails TOOL_ENTRY_RE; only Bash survives the filter
+      expect(toolsValue).toBe('Bash')
+    })
   })
 
   describe('disallowedTools', () => {
@@ -208,6 +228,16 @@ describe('buildClaudeArgs', () => {
 
     it('does not include --disallowedTools when omitted', () => {
       const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL)
+      expect(args).not.toContain('--disallowedTools')
+    })
+
+    it('strips null-byte from tool entries — Bash\\x00null is filtered out', () => {
+      // Split is on comma; the single entry "Bash\x00null" fails TOOL_ENTRY_RE
+      // (null byte is not in the allowed character class), so it is dropped.
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, {
+        disallowedTools: 'Bash\x00null',
+      })
+      // The poisoned entry is rejected, so --disallowedTools should be absent entirely
       expect(args).not.toContain('--disallowedTools')
     })
   })
@@ -263,6 +293,28 @@ describe('buildClaudeArgs', () => {
       // Neither --add-dir nor the resolved traversal path should be present
       expect(args).not.toContain('--add-dir')
       expect(args).not.toContain('/etc/passwd')
+    })
+
+    it('allows /home/node/workspace — valid subdirectory of an allowed root', () => {
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { addDir: '/home/node/workspace' })
+      const idx = args.indexOf('--add-dir')
+      expect(idx).not.toBe(-1)
+      expect(args[idx + 1]).toBe('/home/node/workspace')
+    })
+
+    it('rejects /tmpevil — prefix match on /tmp must require a path separator boundary', () => {
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { addDir: '/tmpevil' })
+      expect(args).not.toContain('--add-dir')
+    })
+
+    it('rejects /workspace-adjacent — not inside any allowed root', () => {
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { addDir: '/workspace-adjacent' })
+      expect(args).not.toContain('--add-dir')
+    })
+
+    it('rejects /home/nodemodules — not inside /home/node', () => {
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { addDir: '/home/nodemodules' })
+      expect(args).not.toContain('--add-dir')
     })
   })
 

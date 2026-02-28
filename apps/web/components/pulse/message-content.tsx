@@ -114,8 +114,13 @@ export function MessageContent({ msg }: { msg: ChatMessage }) {
             return <ThinkingBlock key={i} content={group.content} />
           }
           if (group.kind === 'text') {
+            // Prefer msg.content (parsed clean text set after completion) over
+            // group.content, which may contain the raw JSON wrapper Claude uses
+            // to encode document operations alongside the response text.
+            const displayContent =
+              msg.role === 'assistant' && msg.content ? msg.content : group.content
             return msg.role === 'assistant' ? (
-              <PulseMarkdown key={i} content={group.content} />
+              <PulseMarkdown key={i} content={displayContent} />
             ) : (
               <p key={i} className="ui-copy whitespace-pre-wrap">
                 {group.content}
@@ -175,7 +180,7 @@ export function MessageBubble({ msg, onRetry, copyStatus, onCopyError }: Message
                   isUser ? 'bg-[var(--axon-accent-pink)]' : 'bg-[var(--axon-accent-blue)]'
                 }`}
               />
-              {isUser ? 'You' : 'Claude'}
+              {isUser ? 'You' : 'Cortex'}
             </span>
             <span className="text-[length:var(--text-2xs)] text-[var(--axon-text-dim)]">
               {formatMessageTime(msg.createdAt)}

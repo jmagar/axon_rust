@@ -381,6 +381,7 @@ fn into_config(cli: Cli) -> Result<Config, String> {
         min_markdown_chars: global.min_markdown_chars,
         drop_thin_markdown: global.drop_thin_markdown,
         discover_sitemaps: global.discover_sitemaps,
+        sitemap_since_days: global.sitemap_since_days,
         cache: global.cache,
         cache_skip_browser: global.cache_skip_browser,
         format: global.format,

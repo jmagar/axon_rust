@@ -76,6 +76,7 @@ regex = "1"
 # tei_embed 413-retry logic, ensure_collection idempotency, and API clients
 # without requiring live services.
 httpmock = "0.8"
+insta = "1"
 
 [lints.rust]
 unsafe_code = "deny"

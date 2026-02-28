@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { validateStatusUrl } from './status/route'
 
 const McpServerConfigSchema = z.object({
   command: z
@@ -11,7 +12,7 @@ const McpServerConfigSchema = z.object({
     .regex(/^(?!.*\.\.)([/a-zA-Z0-9._-]+)$/)
     .optional(),
   args: z.array(z.string().max(500)).max(20).optional(),
-  env: z.record(z.string().regex(/^[A-Z_][A-Z0-9_]*/), z.string().max(1000)).optional(),
+  env: z.record(z.string().regex(/^[A-Z_][A-Z0-9_]*$/), z.string().max(1000)).optional(),
   url: z.string().url().optional(),
   headers: z.record(z.string().max(200), z.string().max(1000)).optional(),
 })
@@ -29,11 +30,13 @@ const MCP_JSON_PATH = path.join(os.homedir(), '.claude', 'mcp.json')
 async function readMcpConfig(): Promise<McpConfig> {
   try {
     const raw = await fs.readFile(MCP_JSON_PATH, 'utf8')
-    const parsed = JSON.parse(raw) as McpConfig
-    if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object') {
+    const json = JSON.parse(raw) as unknown
+    const result = McpConfigSchema.safeParse(json)
+    if (!result.success) {
+      console.error('[mcp] Config validation failed on read:', result.error)
       return { mcpServers: {} }
     }
-    return parsed
+    return result.data
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return { mcpServers: {} }
@@ -74,6 +77,15 @@ export async function PUT(request: Request) {
         },
         { status: 400 },
       )
+    }
+    // SSRF guard: validate any HTTP server URLs before persisting
+    for (const [, serverCfg] of Object.entries(result.data.mcpServers)) {
+      if (serverCfg.url !== undefined && !validateStatusUrl(serverCfg.url)) {
+        return NextResponse.json(
+          { error: 'Server URL is not allowed (SSRF protection)' },
+          { status: 400 },
+        )
+      }
     }
     await writeMcpConfig(result.data)
     return NextResponse.json({ ok: true })

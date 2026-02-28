@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-02-27
+Last Modified: 2026-02-28
 
 ## [Unreleased] — feat/crawl-download-pack
 
@@ -9,6 +9,9 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
+| `TBD` | fix(web) | fix duplicate tool badges and raw-JSON response text in Pulse chat |
+| `b20a7a3` | fix | address all 12 PR review comments from cubic-dev-ai |
+| `d9823b2` | feat(web+jobs+mcp) | SSRF hardening, AMQP reconnect backoff, multi-lane workers, expanded tests |
 | `ebca63c` | fix(web) | add Settings2 icon import to omnibox + changelog update |
 | `d3f8047` | fix(ci) | resolve sccache and cargo audit failures |
 | `03b1ef3` | fix(web) | remove dangling useRouter() call from omnibox |

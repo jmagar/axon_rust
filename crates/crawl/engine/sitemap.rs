@@ -1,8 +1,10 @@
 use super::{
-    canonicalize_url_for_dedupe, is_excluded_url_path, CrawlSummary, SitemapBackfillStats,
+    CrawlSummary, SitemapBackfillStats, canonicalize_url_for_dedupe, is_excluded_url_path,
 };
 use crate::axon_cli::crates::core::config::Config;
-use crate::axon_cli::crates::core::content::{extract_loc_values, to_markdown, url_to_filename};
+use crate::axon_cli::crates::core::content::{
+    extract_loc_values, extract_loc_with_lastmod, to_markdown, url_to_filename,
+};
 use crate::axon_cli::crates::core::http::validate_url;
 use crate::axon_cli::crates::core::logging::log_info;
 use spider::tokio;
@@ -56,6 +58,19 @@ fn sitemap_seed_queue(scheme: &str, host: &str) -> VecDeque<String> {
     queue.push_back(format!("{scheme}://{host}/sitemap_index.xml"));
     queue.push_back(format!("{scheme}://{host}/sitemap-index.xml"));
     queue
+}
+
+/// Returns `true` if `lastmod` (ISO 8601 date or datetime string) falls within the last
+/// `since_days` days. Unknown / unparseable dates are treated as recent (not filtered out).
+fn lastmod_is_recent(lastmod: &str, since_days: u32) -> bool {
+    use chrono::{NaiveDate, Utc};
+    let cutoff = Utc::now().date_naive() - chrono::Duration::days(i64::from(since_days));
+    // Accept both "YYYY-MM-DD" and "YYYY-MM-DDTHH:MM:SSZ" by taking the first 10 chars.
+    let prefix = lastmod.get(..10).unwrap_or(lastmod);
+    match NaiveDate::parse_from_str(prefix, "%Y-%m-%d") {
+        Ok(date) => date >= cutoff,
+        Err(_) => true, // unparseable → include (don't silently drop)
+    }
 }
 
 fn sitemap_loc_in_scope(
@@ -117,18 +132,39 @@ async fn process_sitemap_batch(
             .as_bytes()
             .windows(b"<sitemapindex".len())
             .any(|w| w.eq_ignore_ascii_case(b"<sitemapindex"));
-        for loc in extract_loc_values(&xml) {
-            if let Some(canonical_loc) = sitemap_loc_in_scope(
-                cfg,
-                &loc,
-                scope.start_host,
-                scope.start_path,
-                scope.scoped_to_root,
-            ) {
-                if is_index && !output.seen_sitemaps.contains(&canonical_loc) {
-                    output.queue.push_back(canonical_loc);
-                } else if !is_index {
+        let since_days = cfg.sitemap_since_days;
+        if !is_index && since_days > 0 {
+            // Date-filtered path: use block-level parsing to get <lastmod> per URL.
+            for (loc, lastmod) in extract_loc_with_lastmod(&xml) {
+                if let Some(ref lm) = lastmod {
+                    if !lastmod_is_recent(lm, since_days) {
+                        continue;
+                    }
+                }
+                if let Some(canonical_loc) = sitemap_loc_in_scope(
+                    cfg,
+                    &loc,
+                    scope.start_host,
+                    scope.start_path,
+                    scope.scoped_to_root,
+                ) {
                     output.out.insert(canonical_loc);
+                }
+            }
+        } else {
+            for loc in extract_loc_values(&xml) {
+                if let Some(canonical_loc) = sitemap_loc_in_scope(
+                    cfg,
+                    &loc,
+                    scope.start_host,
+                    scope.start_path,
+                    scope.scoped_to_root,
+                ) {
+                    if is_index && !output.seen_sitemaps.contains(&canonical_loc) {
+                        output.queue.push_back(canonical_loc);
+                    } else if !is_index {
+                        output.out.insert(canonical_loc);
+                    }
                 }
             }
         }

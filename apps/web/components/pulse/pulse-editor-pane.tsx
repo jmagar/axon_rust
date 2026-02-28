@@ -122,7 +122,7 @@ export function PulseEditorPane({
           variant="axon"
           className="min-h-0 flex-1"
         >
-          <Editor variant="axon" placeholder="Start writing, or ask Pulse to help..." />
+          <Editor variant="axon" placeholder="Start writing, or ask Cortex to help..." />
         </EditorContainer>
       </div>
     </Plate>

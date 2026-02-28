@@ -56,7 +56,7 @@ async fn process_job_impl(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), B
             log_done(&format!("worker completed crawl job {id}"));
         }
         Err(err) => {
-            let is_canceled = err.contains("canceled");
+            let is_canceled = err.contains(CANCEL_SENTINEL);
             let status = if is_canceled {
                 JobStatus::Canceled
             } else {
@@ -82,6 +82,11 @@ async fn process_job_impl(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), B
 }
 
 const DEFAULT_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
+
+/// Sentinel string embedded in errors produced by the cancel path.
+/// Used by `save_job_result` to distinguish user cancellations from real failures.
+/// Must not appear in any error message from external libraries.
+const CANCEL_SENTINEL: &str = "AXON_JOB_CANCELED";
 
 async fn maybe_complete_cache_hit(
     pool: &PgPool,
@@ -170,7 +175,11 @@ fn spawn_progress_task(
     let progress_pool = pool.clone();
     let progress_job_id = id;
     let progress_task = tokio::spawn(async move {
+        let mut last_update = std::time::Instant::now();
         while let Some(progress) = progress_rx.recv().await {
+            if last_update.elapsed() < Duration::from_millis(500) {
+                continue; // drain channel, skip DB write
+            }
             let pages_crawled = progress.pages_seen as u64;
             let filtered_urls = pages_crawled.saturating_sub(progress.markdown_files as u64);
 
@@ -191,6 +200,7 @@ fn spawn_progress_task(
             .bind(progress_json)
             .execute(&progress_pool)
             .await;
+            last_update = std::time::Instant::now();
         }
     });
 
@@ -456,7 +466,7 @@ async fn run_active_crawl_job(
             result = run_primary_with_optional_chrome_fallback(ctx, id, progress_tx) => result?,
             _ = poll_cancel_key(&ctx.job_cfg, id) => {
                 log_info(&format!("crawl job {id} canceled mid-crawl; stopping"));
-                return Err(format!("crawl job {id} canceled").into());
+                return Err(format!("crawl job {id} {CANCEL_SENTINEL}").into());
             }
         };
 

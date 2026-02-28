@@ -26,6 +26,8 @@ struct CrawlJobConfig {
     min_markdown_chars: usize,
     drop_thin_markdown: bool,
     discover_sitemaps: bool,
+    #[serde(default)]
+    sitemap_since_days: u32,
     embed: bool,
     render_mode: RenderMode,
     collection: String,
@@ -61,11 +63,12 @@ pub struct CrawlJob {
     pub result_json: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct CrawlWatchdogSweepStats {
     stale_candidates: u64,
     marked_candidates: u64,
     reclaimed_jobs: u64,
+    reclaimed_ids: Vec<Uuid>,
 }
 
 fn to_job_config(cfg: &Config) -> CrawlJobConfig {
@@ -78,6 +81,7 @@ fn to_job_config(cfg: &Config) -> CrawlJobConfig {
         min_markdown_chars: cfg.min_markdown_chars,
         drop_thin_markdown: cfg.drop_thin_markdown,
         discover_sitemaps: cfg.discover_sitemaps,
+        sitemap_since_days: cfg.sitemap_since_days,
         embed: cfg.embed,
         render_mode: cfg.render_mode,
         collection: cfg.collection.clone(),

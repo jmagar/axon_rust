@@ -1,5 +1,5 @@
 # axon_cli — Axon CLI (Rust + Spider.rs)
-Last Modified: 2026-02-25
+Last Modified: 2026-02-27
 
 Web crawl, scrape, extract, embed, and query — all in one binary backed by a self-hosted RAG stack.
 
@@ -12,6 +12,9 @@ docker compose up -d
 # Recommended: use the wrapper script (auto-sources .env)
 ./scripts/axon doctor
 ./scripts/axon scrape https://example.com --wait true
+
+# MCP server wrapper (auto-sources .env)
+./scripts/axon-mcp
 
 # Or build and run the binary directly
 cargo build --release --bin axon
@@ -101,6 +104,7 @@ All flags are `--global` (usable with any subcommand).
 | `--respect-robots <bool>` | bool | `false` | Respect `robots.txt` directives. **Note:** defaults `false` — legal/ethical implications. |
 | `--discover-sitemaps <bool>` | bool | `true` | Discover and backfill URLs from sitemap.xml after crawl. |
 | `--max-sitemaps <n>` | usize | `512` | Maximum sitemap URLs to backfill per crawl. |
+| `--sitemap-since-days <n>` | u32 | `0` | Only backfill sitemap URLs with `<lastmod>` within the last N days (0 = no filter). URLs without `<lastmod>` are always included. |
 | `--min-markdown-chars <n>` | usize | `200` | Minimum markdown character count; pages below this are flagged as "thin". |
 | `--drop-thin-markdown <bool>` | bool | `true` | Skip thin pages — do not save or embed them. |
 | `--delay-ms <ms>` | u64 | `0` | Delay between requests in milliseconds. Useful for polite crawling. |
@@ -319,7 +323,7 @@ Pages with fewer than `--min-markdown-chars` (default: 200) are flagged as thin.
 `ensure_collection()` does a GET first; only issues PUT on 404 (collection not found). This means it's safe on existing collections — no 409 Conflict. Safe to call on every embed.
 
 ### Sitemap backfill
-After a crawl, `append_sitemap_backfill()` discovers URLs via sitemap.xml that the crawler missed and fetches them individually. Respects `--max-sitemaps` (default: 512) and `--include-subdomains`.
+After a crawl, `append_sitemap_backfill()` discovers URLs via sitemap.xml that the crawler missed and fetches them individually. Respects `--max-sitemaps` (default: 512) and `--include-subdomains`. Use `--sitemap-since-days N` to restrict backfill to URLs whose `<lastmod>` falls within the last N days; URLs without `<lastmod>` are always included.
 
 ### Docker build context
 The `Dockerfile` builds from `docker/Dockerfile`. The build command inside the container is:
@@ -340,6 +344,9 @@ spider_agent = { version = "2.45", default-features = false, features = ["search
 
 ### Subprocess stdout vs stderr
 CLI commands output JSON data to stdout and progress/logs to stderr (Spinner via indicatif, tracing via `log_info`/`log_done`). The web UI streams both: stdout as `"type": "output"`, stderr as `"type": "log"`. ANSI codes stripped via `console::strip_ansi_codes()`.
+
+### AMQP reconnect backoff
+When a crawl worker's AMQP channel dies (broker restart, consumer_timeout, network blip), the lane reconnects automatically with exponential backoff: starts at 2s, doubles each attempt, capped at 60s. On successful reconnect the backoff resets to the initial value. The current job is not lost — it holds no AMQP reference and completes normally before the reconnect loop fires.
 
 ### Adding fields to `Config` struct
 When adding a new non-`Option` field to `Config` in `crates/core/config.rs`, you **must** also update the inline `Config { .. }` struct literals used in test helpers:

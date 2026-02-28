@@ -16,7 +16,6 @@ import {
   SOURCE_VIRTUAL_THRESHOLD,
 } from './chat-utils'
 import { MessageBubble } from './message-content'
-import { ToolCallBadge } from './tool-badge'
 
 // ── Main component ─────────────────────────────────────────────────────────────
 interface PulseChatPaneProps {
@@ -362,7 +361,7 @@ export function PulseChatPane({
                 Start the thread from omnibox.
               </p>
               <p className="ui-meta mt-0.5">
-                Ask a question to chat with Claude, or paste a URL to run the selected command.
+                Ask a question to chat with Cortex, or paste a URL to run the selected command.
               </p>
             </div>
           </div>
@@ -392,10 +391,10 @@ export function PulseChatPane({
         )}
 
         {isLoading && (
-          <div className="space-y-1.5 rounded-md border border-[rgba(175,215,255,0.2)] bg-[rgba(10,18,35,0.45)] px-2 py-1.5 text-[length:var(--text-xs)] text-[var(--axon-text-dim)]">
+          <div className="rounded-md border border-[rgba(175,215,255,0.2)] bg-[rgba(10,18,35,0.45)] px-2 py-1.5 text-[length:var(--text-xs)] text-[var(--axon-text-dim)]">
             <div className="flex items-center gap-2">
               <span className="inline-block size-1.5 animate-pulse rounded-full bg-[var(--axon-accent-pink)]" />
-              <span>Claude {formatStreamPhaseLabel(streamingPhase).toLowerCase()}...</span>
+              <span>Cortex {formatStreamPhaseLabel(streamingPhase).toLowerCase()}...</span>
               {onCancelRequest && (
                 <button
                   type="button"
@@ -407,13 +406,6 @@ export function PulseChatPane({
                 </button>
               )}
             </div>
-            {liveToolUses.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {liveToolUses.map((toolUse, index) => (
-                  <ToolCallBadge key={`${toolUse.name}-${index}`} tool={toolUse} />
-                ))}
-              </div>
-            )}
           </div>
         )}
 

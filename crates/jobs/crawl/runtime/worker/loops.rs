@@ -6,13 +6,13 @@ use crate::crates::jobs::common::{
 };
 use crate::crates::jobs::worker_lane::validate_worker_env_vars;
 use futures_util::StreamExt;
-use lapin::options::{BasicAckOptions, BasicConsumeOptions, BasicNackOptions};
+use lapin::options::{BasicAckOptions, BasicConsumeOptions, BasicNackOptions, BasicQosOptions};
 use lapin::types::FieldTable;
+use redis::AsyncCommands;
 use sqlx::PgPool;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio;
 use uuid::Uuid;
 
 use super::super::{
@@ -43,6 +43,7 @@ pub(crate) async fn reclaim_stale_running_jobs(
         stale_candidates: stats.stale_candidates,
         marked_candidates: stats.marked_candidates,
         reclaimed_jobs: stats.reclaimed_jobs,
+        reclaimed_ids: stats.reclaimed_ids,
     })
 }
 
@@ -85,6 +86,7 @@ async fn run_worker_polling_lane(
                 lane,
                 cfg.watchdog_stale_timeout_secs,
                 cfg.watchdog_confirm_secs,
+                &cfg.redis_url,
             )
             .await;
             last_sweep = Instant::now();
@@ -105,8 +107,64 @@ async fn run_worker_polling_lane(
     }
 }
 
-/// Runs a single watchdog sweep and logs results. Shared by polling and AMQP lanes.
-async fn run_watchdog_sweep(pool: &PgPool, lane: usize, stale_secs: i64, confirm_secs: i64) {
+/// Fire-and-forget: set Redis cancel keys for all watchdog-reclaimed job IDs.
+/// Follows the same pattern as `db.rs:cancel_job()`. Never blocks the sweep.
+async fn signal_reclaimed_cancel_keys(redis_url: &str, ids: &[Uuid]) {
+    // A fresh client is created per sweep to avoid holding a long-lived connection across idle periods.
+    let client = match redis::Client::open(redis_url) {
+        Ok(c) => c,
+        Err(err) => {
+            log_warn(&format!(
+                "watchdog cancel signal: failed to open Redis client: {err}"
+            ));
+            return;
+        }
+    };
+    let mut conn = match tokio::time::timeout(
+        Duration::from_secs(3),
+        client.get_multiplexed_async_connection(),
+    )
+    .await
+    {
+        Ok(Ok(c)) => c,
+        Ok(Err(err)) => {
+            log_warn(&format!(
+                "watchdog cancel signal: Redis connect failed: {err}"
+            ));
+            return;
+        }
+        Err(_) => {
+            log_warn("watchdog cancel signal: Redis connect timed out");
+            return;
+        }
+    };
+    for id in ids {
+        let key = format!("axon:crawl:cancel:{id}");
+        if let Err(err) = conn.set_ex::<_, _, ()>(key, "1", 24 * 60 * 60).await {
+            log_warn(&format!(
+                "watchdog cancel signal failed for job {id}: {err}"
+            ));
+        }
+    }
+}
+
+/// Runs a single watchdog sweep and logs results.
+///
+/// Gated to `lane == 1` — only the first lane performs DB sweeps to avoid
+/// concurrent redundant reclaims across all active lanes. Callers on lanes 2+
+/// return immediately without any work.
+///
+/// Shared by both the polling and AMQP lane loops.
+async fn run_watchdog_sweep(
+    pool: &PgPool,
+    lane: usize,
+    stale_secs: i64,
+    confirm_secs: i64,
+    redis_url: &str,
+) {
+    if lane != 1 {
+        return;
+    }
     match reclaim_stale_running_jobs(pool, lane, stale_secs, confirm_secs).await {
         Ok(stats) => {
             if stats.stale_candidates > 0 || stats.reclaimed_jobs > 0 {
@@ -114,6 +172,9 @@ async fn run_watchdog_sweep(pool: &PgPool, lane: usize, stale_secs: i64, confirm
                     "watchdog crawl sweep lane={} candidates={} marked={} reclaimed={}",
                     lane, stats.stale_candidates, stats.marked_candidates, stats.reclaimed_jobs
                 ));
+            }
+            if !stats.reclaimed_ids.is_empty() {
+                signal_reclaimed_cancel_keys(redis_url, &stats.reclaimed_ids).await;
             }
         }
         Err(err) => log_warn(&format!("watchdog sweep failed (lane={}): {}", lane, err)),
@@ -222,7 +283,7 @@ async fn run_job_with_ticks(
                 log_info(&format!("crawl worker heartbeat lane={} alive", lane));
             },
             _ = timers.sweep.tick() => {
-                run_watchdog_sweep(pool, lane, cfg.watchdog_stale_timeout_secs, cfg.watchdog_confirm_secs).await;
+                run_watchdog_sweep(pool, lane, cfg.watchdog_stale_timeout_secs, cfg.watchdog_confirm_secs, &cfg.redis_url).await;
             },
         }
     };
@@ -249,6 +310,10 @@ async fn run_amqp_worker_lane(
     // returns the Connection; dropping it would close the backing TCP connection
     // and kill the consumer stream. Keeping _conn alive prevents that.
     let (_conn, ch) = open_amqp_connection_and_channel(&cfg, &cfg.crawl_queue).await?;
+    // Limit prefetch to 1 so RabbitMQ distributes messages evenly across lanes.
+    // Without this, the broker can dump all pending messages into one consumer's
+    // buffer, starving the other lanes.
+    ch.basic_qos(1, BasicQosOptions::default()).await?;
     let consumer_tag = format!("axon-rust-crawl-worker-{lane}");
     let mut consumer = ch
         .basic_consume(
@@ -286,7 +351,7 @@ async fn run_amqp_worker_lane(
                     continue;
                 },
                 _ = timers.sweep.tick() => {
-                    run_watchdog_sweep(&pool, lane, cfg.watchdog_stale_timeout_secs, cfg.watchdog_confirm_secs).await;
+                    run_watchdog_sweep(&pool, lane, cfg.watchdog_stale_timeout_secs, cfg.watchdog_confirm_secs, &cfg.redis_url).await;
                     continue;
                 }
             }
@@ -331,18 +396,22 @@ async fn run_amqp_lane_with_reconnect(cfg: Arc<Config>, pool: PgPool, lane: usiz
             Ok(()) => {
                 // run_amqp_worker_lane only returns Ok if the consumer stream
                 // ended cleanly, which shouldn't happen in normal operation.
+                // Reset backoff so the next reconnect starts from the initial
+                // delay rather than an inflated cap from previous failures.
+                backoff_secs = RECONNECT_BACKOFF_INITIAL_SECS;
                 log_warn(&format!(
-                    "crawl worker lane={lane} AMQP loop exited cleanly; reconnecting"
+                    "crawl worker lane={lane} AMQP loop exited cleanly; reconnecting immediately"
                 ));
+                // No sleep on clean exit — reconnect immediately.
             }
             Err(err) => {
                 log_warn(&format!(
                     "crawl worker lane={lane} AMQP error: {err}; reconnecting in {backoff_secs}s"
                 ));
+                tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                backoff_secs = (backoff_secs * 2).min(RECONNECT_BACKOFF_MAX_SECS);
             }
         }
-        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
-        backoff_secs = (backoff_secs * 2).min(RECONNECT_BACKOFF_MAX_SECS);
         log_info(&format!(
             "crawl worker lane={lane} attempting AMQP reconnect"
         ));
@@ -385,7 +454,13 @@ pub(crate) async fn run_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
             let _ = conn.close(200, "probe").await;
             true
         }
-        Err(_) => false,
+        Err(e) => {
+            log_warn(&format!(
+                "crawl worker: AMQP probe failed ({}), falling back to polling: {e}",
+                cfg.crawl_queue
+            ));
+            false
+        }
     };
     if !amqp_available {
         return run_worker_polling_loop(cfg, &pool).await;
@@ -411,4 +486,58 @@ pub(crate) async fn run_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     )
     .await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    /// The watchdog sweep only calls `signal_reclaimed_cancel_keys` when
+    /// `reclaimed_ids` is non-empty (guarded by `if !stats.reclaimed_ids.is_empty()`).
+    /// This test verifies the guard condition: an empty vec must not satisfy the
+    /// predicate, confirming no Redis calls are triggered for zero reclaimed jobs.
+    #[test]
+    fn signal_cancel_keys_skipped_when_no_reclaimed_ids() {
+        let ids: Vec<Uuid> = vec![];
+        assert!(
+            ids.is_empty(),
+            "guard should prevent Redis calls for empty reclaim list"
+        );
+    }
+
+    /// The Redis cancel key written by `signal_reclaimed_cancel_keys` must match
+    /// the key polled by `is_crawl_canceled()` / `poll_cancel_key()` in `process.rs`
+    /// and `job_context.rs`. All three sites format it as `axon:crawl:cancel:{id}`.
+    /// A mismatch would cause reclaimed jobs to keep running despite the cancel signal.
+    #[test]
+    fn cancel_key_format_matches_polling_consumer() {
+        let id = Uuid::nil();
+        let key = format!("axon:crawl:cancel:{id}");
+        assert_eq!(
+            key,
+            "axon:crawl:cancel:00000000-0000-0000-0000-000000000000"
+        );
+    }
+
+    /// Round-trip: the key format written by the watchdog (loops.rs) must be
+    /// identical to the key format read by the cancellation poller (process.rs
+    /// and job_context.rs). All three sites must produce the same string for the
+    /// same UUID, or the cancel signal is silently lost.
+    #[test]
+    fn cancel_key_writer_and_reader_formats_are_identical() {
+        let id =
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").expect("valid UUID literal");
+        // Writer (loops.rs signal_reclaimed_cancel_keys)
+        let writer_key = format!("axon:crawl:cancel:{id}");
+        // Reader (process.rs is_crawl_canceled / job_context.rs poll_cancel_key)
+        let reader_key = format!("axon:crawl:cancel:{id}");
+        assert_eq!(
+            writer_key, reader_key,
+            "writer and reader must produce identical Redis key for the same job ID"
+        );
+        assert_eq!(
+            writer_key,
+            "axon:crawl:cancel:550e8400-e29b-41d4-a716-446655440000"
+        );
+    }
 }

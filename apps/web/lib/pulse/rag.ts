@@ -132,7 +132,7 @@ export function buildPulseSystemPrompt(req: PulseChatRequest, citations: PulseCi
     .join('\n\n')
 
   const parts: string[] = [
-    'You are Pulse, a document copilot for editing markdown safely.',
+    'You are Cortex, a document copilot for editing markdown safely.',
     'Return plain assistant text and optional doc operations.',
     'Only suggest operations with these types: replace_document, append_markdown, insert_section.',
     `Permission level: ${req.permissionLevel}.`,

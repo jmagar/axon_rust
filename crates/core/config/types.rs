@@ -246,6 +246,9 @@ pub struct Config {
     /// Discover and backfill URLs from `sitemap.xml` after the main crawl. Flag: `--discover-sitemaps`.
     pub discover_sitemaps: bool,
 
+    /// Only backfill sitemap URLs with `<lastmod>` within the last N days (0 = no filter). Flag: `--sitemap-since-days`.
+    pub sitemap_since_days: u32,
+
     /// Enable Spider's built-in crawl-result caching. Flag: `--cache`.
     pub cache: bool,
 
@@ -567,6 +570,7 @@ impl Default for Config {
             min_markdown_chars: 200,
             drop_thin_markdown: true,
             discover_sitemaps: true,
+            sitemap_since_days: 0,
             cache: true,
             cache_skip_browser: false,
             format: ScrapeFormat::Markdown,
@@ -689,6 +693,7 @@ impl fmt::Debug for Config {
             .field("min_markdown_chars", &self.min_markdown_chars)
             .field("drop_thin_markdown", &self.drop_thin_markdown)
             .field("discover_sitemaps", &self.discover_sitemaps)
+            .field("sitemap_since_days", &self.sitemap_since_days)
             .field("cache", &self.cache)
             .field("cache_skip_browser", &self.cache_skip_browser)
             .field("format", &self.format)

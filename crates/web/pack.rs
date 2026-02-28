@@ -61,16 +61,30 @@ pub fn build_pack_xml(domain: &str, entries: &[(String, String, String)]) -> Str
 }
 
 fn escape_xml_attr(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+    let mut out = String::with_capacity(s.len() + 16);
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn escape_xml_text(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+    let mut out = String::with_capacity(s.len() + 8);
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -78,7 +92,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pack_md_basic() {
+    fn pack_md_basic_snapshot() {
         let entries = vec![
             (
                 "https://example.com/a".into(),
@@ -92,12 +106,7 @@ mod tests {
             ),
         ];
         let result = build_pack_md("example.com", &entries);
-        assert!(result.contains("# Crawl Pack: example.com"));
-        assert!(result.contains("## File: a.md"));
-        assert!(result.contains("Source: https://example.com/a"));
-        assert!(result.contains("Hello world"));
-        assert!(result.contains("## File: b.md"));
-        assert!(result.contains("2 pages"));
+        insta::assert_snapshot!(result);
     }
 
     #[test]

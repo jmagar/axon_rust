@@ -103,22 +103,39 @@ export function parseClaudeStreamLine(
         outEvents.push({ type: 'assistant_delta', delta: block.text })
       }
       if (block.type === 'tool_use' && block.name) {
-        const tool: PulseToolUse = {
-          name: block.name,
-          input: block.input ?? {},
+        const existingIdx = block.id ? state.toolUseIdToIdx.get(block.id) : undefined
+        if (existingIdx !== undefined) {
+          // Partial-message update: same tool ID seen again with more complete input.
+          // Update the existing block in-place instead of creating a duplicate.
+          const existingBlock = state.blocks[existingIdx]
+          if (existingBlock?.type === 'tool_use') {
+            existingBlock.input = block.input ?? {}
+          }
+        } else {
+          const tool: PulseToolUse = {
+            name: block.name,
+            input: block.input ?? {},
+          }
+          const idx = state.blocks.length
+          state.blocks.push({
+            type: 'tool_use',
+            name: block.name,
+            input: block.input ?? {},
+          })
+          if (block.id) state.toolUseIdToIdx.set(block.id, idx)
+          state.toolUses.push(tool)
+          outEvents.push({ type: 'tool_use', tool })
         }
-        const idx = state.blocks.length
-        state.blocks.push({
-          type: 'tool_use',
-          name: block.name,
-          input: block.input ?? {},
-        })
-        if (block.id) state.toolUseIdToIdx.set(block.id, idx)
-        state.toolUses.push(tool)
-        outEvents.push({ type: 'tool_use', tool })
       }
       if (block.type === 'thinking' && block.thinking) {
-        state.blocks.push({ type: 'thinking', content: block.thinking })
+        // Partial-message update: growing thinking block — update in-place if the
+        // previous block is already a thinking block to avoid duplicate Reasoning boxes.
+        const lastBlock = state.blocks[state.blocks.length - 1]
+        if (lastBlock?.type === 'thinking') {
+          lastBlock.content = block.thinking
+        } else {
+          state.blocks.push({ type: 'thinking', content: block.thinking })
+        }
         outEvents.push({ type: 'thinking_content', content: block.thinking })
       }
     }
