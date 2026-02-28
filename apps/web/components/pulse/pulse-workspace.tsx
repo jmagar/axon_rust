@@ -311,7 +311,7 @@ export function PulseWorkspace() {
           onNewSession={handleNewSession}
         />
       )}
-      <div className="flex h-[calc(100dvh-9rem)] overflow-hidden rounded-xl border border-[rgba(255,135,175,0.1)] bg-[rgba(10,18,35,0.42)] lg:h-[calc(100vh-12rem)]">
+      <div className="flex h-[calc(100dvh-9rem)] overflow-hidden rounded-xl border border-[rgba(255,135,175,0.1)] bg-[rgba(10,18,35,0.42)] shadow-[var(--shadow-md)] lg:h-[calc(100vh-12rem)]">
         {crawlFiles.length > 0 && (
           <CrawlFileExplorer
             files={crawlFiles}
@@ -348,18 +348,27 @@ export function PulseWorkspace() {
           <div
             ref={splitHandleRef}
             role="separator"
-            aria-valuenow={0}
+            aria-label="Resize pane — drag left/right"
             aria-orientation="vertical"
-            className={`w-2 cursor-col-resize rounded bg-[rgba(255,135,175,0.14)] transition-colors hover:bg-[rgba(175,215,255,0.2)] ${desktopViewMode === 'both' ? 'hidden lg:block' : 'hidden'}`}
+            aria-valuenow={Math.round(desktopSplitPercent)}
+            aria-valuemin={20}
+            aria-valuemax={80}
+            className={`group flex w-3 cursor-col-resize items-center justify-center rounded-sm transition-colors hover:bg-[var(--border-subtle)] ${desktopViewMode === 'both' ? 'hidden lg:flex' : 'hidden'}`}
             style={{ order: isDesktop ? 2 : 2 }}
             onPointerDown={(event) => {
               dragStartRef.current = {
                 pointerX: event.clientX,
                 startPercent: desktopSplitPercent,
               }
-              splitHandleRef.current?.classList.add('bg-[rgba(175,215,255,0.3)]')
+              splitHandleRef.current?.classList.add('bg-[var(--border-standard)]')
             }}
-          />
+          >
+            <div className="flex flex-col gap-0.5 opacity-30 group-hover:opacity-70 transition-opacity">
+              {[0, 1, 2, 3, 4].map((i) => (
+                <div key={i} className="size-0.5 rounded-full bg-[var(--text-muted)]" />
+              ))}
+            </div>
+          </div>
           <div
             className={`${
               isDesktop

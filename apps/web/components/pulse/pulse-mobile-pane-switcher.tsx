@@ -14,36 +14,38 @@ export function PulseMobilePaneSwitcher({
   return (
     <div
       role="tablist"
-      aria-label="Mobile pane switcher"
-      className="inline-flex items-center gap-1 rounded-md border border-[rgba(255,135,175,0.16)] bg-[rgba(10,18,35,0.42)] p-0.5"
+      aria-label="Workspace pane"
+      className="inline-flex items-center gap-1 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-base)] p-1"
     >
       <button
         type="button"
         role="tab"
         aria-selected={mobilePane === 'chat'}
-        aria-label="Show chat pane"
+        aria-label="Chat pane"
         onClick={() => onMobilePaneChange('chat')}
-        className={`inline-flex items-center justify-center rounded p-1 transition-colors ${
+        className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-all duration-200 ${
           mobilePane === 'chat'
-            ? 'bg-[rgba(175,215,255,0.18)] text-[var(--axon-accent-pink-strong)]'
-            : 'text-[var(--axon-text-dim)]'
+            ? 'bg-[var(--axon-primary)] text-[var(--axon-bg)] shadow-[var(--shadow-sm)]'
+            : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
         }`}
       >
         <MessageSquare className="size-3.5" />
+        <span>Chat</span>
       </button>
       <button
         type="button"
         role="tab"
         aria-selected={mobilePane === 'editor'}
-        aria-label="Show editor pane"
+        aria-label="Editor pane"
         onClick={() => onMobilePaneChange('editor')}
-        className={`inline-flex items-center justify-center rounded p-1 transition-colors ${
+        className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-all duration-200 ${
           mobilePane === 'editor'
-            ? 'bg-[rgba(175,215,255,0.18)] text-[var(--axon-accent-pink-strong)]'
-            : 'text-[var(--axon-text-dim)]'
+            ? 'bg-[var(--axon-secondary)] text-[var(--axon-bg)] shadow-[var(--shadow-sm)]'
+            : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
         }`}
       >
         <PenLine className="size-3.5" />
+        <span>Edit</span>
       </button>
     </div>
   )

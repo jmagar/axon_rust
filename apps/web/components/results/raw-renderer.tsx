@@ -1,5 +1,6 @@
 'use client'
 
+import { TerminalSquare } from 'lucide-react'
 import { StructuredDataView } from '@/components/results/structured-data-view'
 import { CopyButton } from '@/components/ui/copy-button'
 import { formatStructuredText } from '@/lib/structured-text'
@@ -17,15 +18,36 @@ export function RawRenderer({ stdoutJson, stdoutLines, isProcessing }: RawRender
   if (!hasJson && !hasLines) {
     if (isProcessing) {
       return (
-        <div className="flex items-center gap-2 text-[var(--axon-text-muted)]">
-          <span className="inline-block size-2.5 animate-spin rounded-full border-[1.5px] border-[rgba(175,215,255,0.2)] border-t-[var(--axon-accent-pink)]" />
-          <span className="text-xs">Processing...</span>
+        <div className="flex h-40 flex-col items-center justify-center gap-3 animate-fade-in">
+          <div className="flex gap-1">
+            {[0, 1, 2].map((i) => (
+              <span
+                key={i}
+                className="inline-block size-1.5 rounded-full bg-[var(--axon-primary)]"
+                style={{ animation: `breathing 1.4s ease-in-out ${i * 180}ms infinite` }}
+              />
+            ))}
+          </div>
+          <div className="text-center">
+            <p className="text-sm text-[var(--text-secondary)] animate-breathing">Processing...</p>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">
+              Large operations may take several minutes
+            </p>
+          </div>
         </div>
       )
     }
     return (
-      <div className="flex h-32 items-center justify-center text-sm text-[var(--axon-text-muted)]">
-        No output
+      <div className="flex h-40 flex-col items-center justify-center gap-3">
+        <div className="size-8 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-elevated)] flex items-center justify-center">
+          <TerminalSquare className="size-4 text-[var(--text-dim)]" />
+        </div>
+        <div className="text-center">
+          <p className="text-sm font-medium text-[var(--text-secondary)]">No output yet</p>
+          <p className="text-xs text-[var(--text-muted)] mt-0.5">
+            Run a command to see results here
+          </p>
+        </div>
       </div>
     )
   }
@@ -44,7 +66,7 @@ export function RawRenderer({ stdoutJson, stdoutLines, isProcessing }: RawRender
           ))}
         </div>
       ) : (
-        <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap ui-mono text-[var(--axon-text-secondary)]">
+        <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap ui-mono text-[var(--text-secondary)]">
           {stdoutLines.join('\n')}
         </pre>
       )}

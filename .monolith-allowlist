@@ -56,3 +56,6 @@ crates/cli/commands/refresh.rs
 crates/cli/commands/status.rs
 # 802 lines — cyberpunk glass observatory redesign + 3 new CLI fields (addDir/betas/toolsRestrict) + NeuralCanvas bg; split planned (2026-02-27)
 apps/web/app/settings/page.tsx
+
+# 630 lines — pre-existing table renderer for results panel; split planned (2026-02-28)
+apps/web/components/results/table-renderer.tsx

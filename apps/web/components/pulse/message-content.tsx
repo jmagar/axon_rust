@@ -1,6 +1,6 @@
 'use client'
 
-import { Brain, ChevronDown, Copy, History, RotateCcw } from 'lucide-react'
+import { Brain, Check, ChevronDown, Copy, History, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
 import type { PulseMessageBlock } from '@/lib/pulse/types'
 import type { ChatMessage } from '@/lib/pulse/workspace-persistence'
@@ -13,24 +13,25 @@ import { type BadgeTool, ToolCallBadge } from './tool-badge'
 
 function ThinkingBlock({ content }: { content: string }) {
   const [open, setOpen] = useState(false)
+  const wordCount = content.trim().split(/\s+/).filter(Boolean).length
   return (
     <div className="rounded-lg border border-[rgba(167,139,250,0.2)] bg-[rgba(15,5,30,0.4)]">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left"
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left hover:bg-[rgba(167,139,250,0.08)] transition-colors rounded-t-lg"
       >
         <Brain className="size-3 shrink-0 text-violet-400" />
         <span className="text-[length:var(--text-xs)] font-medium text-violet-300">Reasoning</span>
         <span className="ml-auto text-[length:var(--text-2xs)] text-[var(--axon-text-dim)]">
-          {open ? 'hide' : `${content.length} chars`}
+          {open ? 'hide' : `${wordCount} ${wordCount === 1 ? 'word' : 'words'}`}
         </span>
         <ChevronDown
           className={`size-3 text-violet-300 transition-transform ${open ? 'rotate-180' : ''}`}
         />
       </button>
       {open && (
-        <div className="border-t border-[rgba(167,139,250,0.15)] px-2.5 py-2">
+        <div className="border-t border-[rgba(167,139,250,0.15)] px-2.5 py-2 animate-fade-in">
           <p className="whitespace-pre-wrap font-mono text-[length:var(--text-xs)] leading-relaxed text-[var(--axon-text-secondary)]">
             {content}
           </p>
@@ -149,21 +150,34 @@ export function MessageContent({ msg }: { msg: ChatMessage }) {
 
 interface MessageBubbleProps {
   msg: ChatMessage
+  index: number
   onRetry: (prompt: string) => void
   copyStatus: 'idle' | 'copied' | 'failed'
   onCopyError: (content: string) => void
 }
 
-export function MessageBubble({ msg, onRetry, copyStatus, onCopyError }: MessageBubbleProps) {
+export function MessageBubble({
+  msg,
+  index,
+  onRetry,
+  copyStatus,
+  onCopyError,
+}: MessageBubbleProps) {
   const isUser = msg.role === 'user'
+  const [copyAnim, setCopyAnim] = useState(false)
   return (
-    <article className="w-full space-y-1.5">
-      <div className={`flex w-full ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex w-full ${isUser ? 'justify-end' : 'justify-start'}`}>
+      <article
+        className={`w-full space-y-1.5 animate-fade-in-up ${
+          isUser ? 'mr-4 max-w-[72%]' : 'ml-2 max-w-[80%]'
+        }`}
+        style={{ animationDelay: `${index * 25}ms` }}
+      >
         <div
-          className={`rounded-xl border px-3 py-2.5 shadow-[0_6px_18px_rgba(3,7,18,0.3)] ${
+          className={`rounded-xl border px-3 py-2.5 ${
             isUser
-              ? 'max-w-[86%] border-[rgba(175,215,255,0.26)] bg-[linear-gradient(140deg,rgba(175,215,255,0.2),rgba(175,215,255,0.08))] text-[var(--axon-text-primary)] md:max-w-[78%] lg:max-w-[70%]'
-              : 'max-w-[92%] border-[rgba(255,135,175,0.18)] bg-[linear-gradient(140deg,rgba(255,135,175,0.1),rgba(10,18,35,0.55))] text-[var(--axon-text-secondary)] md:max-w-[86%] lg:max-w-[78%]'
+              ? 'border-[var(--border-standard)] bg-[linear-gradient(140deg,rgba(135,175,255,0.28),rgba(135,175,255,0.12))] shadow-[var(--shadow-md)] text-[var(--axon-text-primary)]'
+              : 'border-[rgba(255,135,175,0.18)] bg-[linear-gradient(140deg,rgba(255,135,175,0.1),rgba(10,18,35,0.55))] shadow-[0_6px_18px_rgba(3,7,18,0.3)] text-[var(--axon-text-secondary)]'
           }`}
         >
           {/* Header: role label + timestamp */}
@@ -182,7 +196,7 @@ export function MessageBubble({ msg, onRetry, copyStatus, onCopyError }: Message
               />
               {isUser ? 'You' : 'Cortex'}
             </span>
-            <span className="text-[length:var(--text-2xs)] text-[var(--axon-text-dim)]">
+            <span className="text-[11px] text-[var(--text-muted)] font-medium">
               {formatMessageTime(msg.createdAt)}
             </span>
           </div>
@@ -203,10 +217,24 @@ export function MessageBubble({ msg, onRetry, copyStatus, onCopyError }: Message
                 </button>
                 <button
                   type="button"
-                  onClick={() => onCopyError(msg.content)}
-                  className="ui-chip inline-flex items-center gap-1 rounded border border-[rgba(95,135,175,0.3)] bg-[rgba(10,18,35,0.44)] px-2 py-1 text-[var(--axon-text-dim)]"
+                  onClick={() => {
+                    onCopyError(msg.content)
+                    setCopyAnim(true)
+                    setTimeout(() => setCopyAnim(false), 1400)
+                  }}
+                  className={`ui-chip inline-flex items-center gap-1 rounded border px-2 py-1 transition-all duration-200 ${
+                    copyStatus === 'copied'
+                      ? 'border-[rgba(130,217,160,0.4)] bg-[rgba(130,217,160,0.12)] text-[var(--axon-success)]'
+                      : copyStatus === 'failed'
+                        ? 'border-[rgba(255,135,175,0.4)] bg-[rgba(255,135,175,0.08)] text-[var(--axon-secondary)]'
+                        : 'border-[rgba(95,135,175,0.3)] bg-[var(--surface-float)] text-[var(--text-dim)]'
+                  }`}
                 >
-                  <Copy className="size-3" />
+                  {copyStatus === 'copied' ? (
+                    <Check className={`size-3 ${copyAnim ? 'animate-check-bounce' : ''}`} />
+                  ) : (
+                    <Copy className="size-3" />
+                  )}
                   {copyStatus === 'copied'
                     ? 'Copied'
                     : copyStatus === 'failed'
@@ -233,7 +261,7 @@ export function MessageBubble({ msg, onRetry, copyStatus, onCopyError }: Message
             </div>
           )}
         </div>
-      </div>
-    </article>
+      </article>
+    </div>
   )
 }

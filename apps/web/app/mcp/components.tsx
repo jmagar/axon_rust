@@ -1,7 +1,7 @@
 'use client'
 
 import { Globe, Pencil, Plus, Terminal, Trash2, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -175,7 +175,7 @@ const STATUS_DOT: Record<McpServerStatus, string> = {
   online: 'bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.7)]',
   offline: 'bg-red-400',
   unknown: 'bg-[rgba(255,255,255,0.2)]',
-  checking: 'animate-pulse bg-yellow-400',
+  checking: 'bg-[var(--axon-primary)] animate-pulse',
 }
 
 const STATUS_LABEL: Record<McpServerStatus, string> = {
@@ -311,6 +311,14 @@ export function McpServerForm({
     if (!form.name.trim()) return
     onSave(form.name.trim(), formToConfig(form))
   }
+
+  const handleSave = useCallback(() => {
+    if (activeTab === 'form') {
+      handleSaveForm()
+    } else {
+      handleSaveJson()
+    }
+  }, [activeTab, form, rawJson])
 
   const nameConflict = !isEditing && existingNames.includes(form.name.trim())
 
@@ -451,24 +459,6 @@ export function McpServerForm({
                 />
               </>
             )}
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={onCancel}
-                className="rounded-lg px-3.5 py-2 text-[12px] font-medium text-[var(--axon-text-dim)] transition-colors hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-text-secondary)]"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveForm}
-                disabled={!form.name.trim() || nameConflict}
-                className="rounded-lg bg-[rgba(175,215,255,0.12)] px-4 py-2 text-[12px] font-semibold text-[var(--axon-accent-pink)] transition-colors hover:bg-[rgba(175,215,255,0.18)] disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Save
-              </button>
-            </div>
           </div>
         ) : (
           <div className="space-y-3">
@@ -486,24 +476,25 @@ export function McpServerForm({
               className="w-full resize-none rounded-lg border border-[rgba(255,135,175,0.15)] bg-[rgba(10,18,35,0.6)] px-3 py-2.5 font-mono text-[12px] leading-relaxed text-[var(--axon-text-secondary)] outline-none focus:border-[rgba(175,215,255,0.35)]"
             />
             {jsonError && <p className="text-[11px] text-red-400">{jsonError}</p>}
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={onCancel}
-                className="rounded-lg px-3.5 py-2 text-[12px] font-medium text-[var(--axon-text-dim)] transition-colors hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-text-secondary)]"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveJson}
-                className="rounded-lg bg-[rgba(175,215,255,0.12)] px-4 py-2 text-[12px] font-semibold text-[var(--axon-accent-pink)] transition-colors hover:bg-[rgba(175,215,255,0.18)]"
-              >
-                Save JSON
-              </button>
-            </div>
           </div>
         )}
+      </div>
+
+      {/* Sticky save footer */}
+      <div className="sticky bottom-0 border-t border-[var(--border-subtle)] bg-[var(--surface-base)] p-3">
+        <div className="flex items-center justify-between gap-3">
+          {activeTab === 'json' && (
+            <span className="text-xs text-[var(--text-dim)]">JSON reflects form values</span>
+          )}
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={activeTab === 'form' && (!form.name.trim() || nameConflict)}
+            className="ml-auto rounded-md bg-[rgba(135,175,255,0.15)] border border-[var(--border-standard)] px-4 py-1.5 text-xs font-medium text-[var(--axon-primary)] hover:bg-[rgba(135,175,255,0.25)] transition-all hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {isEditing ? 'Save changes' : 'Add server'}
+          </button>
+        </div>
       </div>
     </div>
   )

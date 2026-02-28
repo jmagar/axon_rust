@@ -159,12 +159,19 @@ export function ToolCallBadge({ tool }: { tool: BadgeTool }) {
       <button
         type="button"
         onClick={() => setPinned((v) => !v)}
-        className={`inline-flex size-5 items-center justify-center rounded border transition-colors duration-100 ${style.border} ${style.bg} ${style.label}`}
-        aria-label={tool.name}
-        title={tool.name}
+        className={`inline-flex size-5 items-center justify-center rounded border transition-all duration-150 hover:scale-110 hover:animate-badge-glow ${style.border} ${style.bg} ${style.label}`}
+        aria-label={`${tool.name} — click to pin`}
+        title={`${tool.name} — click to pin`}
       >
         <CategoryIcon category={category} />
       </button>
+      {pinned && (
+        <span
+          className="pointer-events-none absolute -right-0.5 -top-0.5 size-2 rounded-full bg-[var(--axon-primary)] ring-1 ring-[var(--axon-bg)] animate-fade-in"
+          role="img"
+          aria-label="pinned"
+        />
+      )}
 
       {isOpen && (
         <div className="absolute bottom-full left-0 z-50 mb-1.5 w-52 rounded-lg border border-[rgba(255,255,255,0.1)] bg-[rgba(8,12,22,0.97)] shadow-[0_8px_24px_rgba(3,7,18,0.55)] backdrop-blur-sm">

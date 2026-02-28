@@ -5,10 +5,10 @@ import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DockerStats } from '@/components/docker-stats'
+import { LandingCards } from '@/components/landing-cards'
 import type { NeuralCanvasHandle } from '@/components/neural-canvas'
 import { Omnibox } from '@/components/omnibox'
 import { PulseMobilePaneSwitcher } from '@/components/pulse/pulse-mobile-pane-switcher'
-import { RecentSessions } from '@/components/recent-sessions'
 import { ResultsPanel } from '@/components/results-panel'
 import { WsIndicator } from '@/components/ws-indicator'
 import { useAxonWs } from '@/hooks/use-axon-ws'
@@ -147,7 +147,7 @@ export default function DashboardPage() {
                 className={`order-1 scale-100 ${landingMobilePane === 'editor' ? 'hidden lg:block' : 'block'}`}
               >
                 <Omnibox />
-                {!hasResults && <RecentSessions />}
+                {!hasResults && <LandingCards />}
               </div>
             )}
             <div className={isPulseWorkspaceActive ? 'order-1' : 'order-2'}>

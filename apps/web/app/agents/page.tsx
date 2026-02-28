@@ -263,28 +263,18 @@ function AgentsPageInner() {
 
           {/* Empty state */}
           {!loading && !error && agents.length === 0 && (
-            <div
-              className="rounded-xl border px-6 py-8 text-center"
-              style={{
-                background: 'rgba(10,18,35,0.55)',
-                backdropFilter: 'blur(12px)',
-                borderColor: 'rgba(255,135,175,0.12)',
-              }}
-            >
-              <Bot className="mx-auto mb-3 size-8 text-[var(--axon-text-dim)]" />
-              <p className="mb-1 text-[13px] font-medium text-[var(--axon-text-secondary)]">
-                No agents found
-              </p>
-              <p className="text-[11px] leading-relaxed text-[var(--axon-text-dim)]">
-                Run{' '}
-                <code
-                  className="rounded px-1 py-0.5 text-[10px] text-[var(--axon-text-muted)]"
-                  style={{ background: 'rgba(175,215,255,0.07)' }}
-                >
-                  claude agents
-                </code>{' '}
-                in your terminal to verify the CLI is configured.
-              </p>
+            <div className="flex flex-col items-center justify-center gap-3 py-12 text-center animate-fade-in">
+              <Bot className="size-8 text-[var(--text-dim)]" />
+              <div>
+                <p className="text-sm font-medium text-[var(--text-secondary)]">No agents found</p>
+                <p className="text-xs text-[var(--text-muted)] mt-1">
+                  Run{' '}
+                  <code className="rounded border border-[var(--border-subtle)] px-1 text-[var(--axon-primary)]">
+                    claude agents
+                  </code>{' '}
+                  in your terminal to verify the CLI is configured.
+                </p>
+              </div>
             </div>
           )}
 

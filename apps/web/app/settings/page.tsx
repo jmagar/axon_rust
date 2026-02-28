@@ -123,17 +123,14 @@ function SectionHeader({
 }) {
   return (
     <div className="mb-5">
-      <div className="flex items-center gap-2.5">
-        <div
-          className="flex size-7 shrink-0 items-center justify-center rounded-md border border-[rgba(255,135,175,0.18)] bg-[rgba(255,135,175,0.07)]"
-          style={{ boxShadow: '0 0 12px rgba(255,135,175,0.08)' }}
-        >
-          <Icon className="size-3.5 text-[var(--axon-accent-pink)]" />
+      <div className="flex items-center gap-3">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border-accent)] bg-[rgba(255,135,175,0.08)] shadow-[var(--shadow-sm)]">
+          <Icon className="size-4 text-[var(--axon-secondary)]" />
         </div>
-        <h2 className="text-sm font-semibold text-[var(--axon-text-primary)]">{label}</h2>
+        <h2 className="font-display text-base font-bold text-[var(--text-primary)]">{label}</h2>
       </div>
       {description && (
-        <p className="mt-1.5 pl-[2.375rem] text-[12px] leading-relaxed text-[var(--axon-text-dim)]">
+        <p className="mt-1.5 ml-11 text-sm leading-relaxed text-[var(--text-muted)]">
           {description}
         </p>
       )}
@@ -148,7 +145,9 @@ function FieldHint({ children }: { children: React.ReactNode }) {
 }
 
 function SectionDivider() {
-  return <div className="my-8 h-px bg-[rgba(255,135,175,0.07)]" />
+  return (
+    <div className="my-8 h-px bg-gradient-to-r from-transparent via-[var(--border-subtle)] to-transparent" />
+  )
 }
 
 function ToggleRow({
@@ -243,12 +242,6 @@ export default function SettingsPage() {
     canvasRef.current?.setIntensity(0.06)
   }, [])
 
-  useEffect(() => {
-    if (!resetConfirming) return
-    const t = setTimeout(() => setResetConfirming(false), 5000)
-    return () => clearTimeout(t)
-  }, [resetConfirming])
-
   function handleReset() {
     updateSettings(DEFAULT_PULSE_SETTINGS)
     setPulseModel('sonnet')
@@ -300,47 +293,24 @@ export default function SettingsPage() {
             <h1 className="text-[14px] font-semibold text-[var(--axon-text-primary)]">Settings</h1>
           </div>
           <div className="flex-1" />
-          {resetConfirming ? (
-            <>
-              <button
-                type="button"
-                onClick={() => {
-                  handleReset()
-                  setResetConfirming(false)
-                }}
-                className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium text-[var(--axon-accent-pink-strong)] transition-all duration-200 bg-[rgba(255,135,175,0.12)] hover:bg-[rgba(255,135,175,0.2)]"
-              >
-                Confirm Reset?
-              </button>
-              <button
-                type="button"
-                onClick={() => setResetConfirming(false)}
-                className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium text-[var(--axon-text-dim)] transition-all duration-200 hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-text-secondary)]"
-              >
-                Cancel
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setResetConfirming(true)}
-              className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium text-[var(--axon-text-dim)] transition-all duration-200 hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-accent-pink-strong)]"
-              title="Reset all settings to defaults"
-            >
-              <RotateCcw className="size-3" />
-              Reset to defaults
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setResetConfirming(true)}
+            className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium text-[var(--axon-text-dim)] transition-all duration-200 hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-accent-pink-strong)]"
+            title="Reset all settings to defaults"
+          >
+            <RotateCcw className="size-3" />
+            Reset to defaults
+          </button>
         </header>
 
         {/* Body */}
         <div className="flex flex-1">
           {/* Sidebar nav — hidden below lg breakpoint */}
           <nav
-            className="sticky hidden h-[calc(100vh-3.25rem)] w-52 shrink-0 flex-col gap-0.5 overflow-y-auto border-r p-3 lg:flex"
+            className="sticky hidden h-[calc(100vh-3.25rem)] w-56 shrink-0 overflow-y-auto border-r border-r-[var(--border-subtle)] py-6 pr-4 lg:flex lg:flex-col"
             style={{
               top: '3.25rem',
-              borderColor: 'rgba(255,135,175,0.08)',
               background: 'rgba(3,7,18,0.70)',
               backdropFilter: 'blur(16px)',
             }}
@@ -389,49 +359,29 @@ export default function SettingsPage() {
             </div>
 
             <div className="mt-auto pt-4">
-              {resetConfirming ? (
-                <div className="flex flex-col gap-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleReset()
-                      setResetConfirming(false)
-                    }}
-                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-medium text-[var(--axon-accent-pink-strong)] transition-all duration-200 bg-[rgba(255,135,175,0.12)] hover:bg-[rgba(255,135,175,0.2)]"
-                  >
-                    Confirm Reset?
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setResetConfirming(false)}
-                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-medium text-[var(--axon-text-dim)] transition-all duration-200 hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-text-secondary)]"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setResetConfirming(true)}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-medium text-[var(--axon-text-dim)] transition-all duration-200 hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-accent-pink-strong)]"
-                >
-                  <RotateCcw className="size-3 shrink-0" />
-                  Reset all to defaults
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => setResetConfirming(true)}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-medium text-[var(--axon-text-dim)] transition-all duration-200 hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-accent-pink-strong)]"
+              >
+                <RotateCcw className="size-3 shrink-0" />
+                Reset all to defaults
+              </button>
             </div>
           </nav>
 
           {/* Main content column */}
           <main className="flex-1 overflow-y-auto">
-            <div className="mx-auto max-w-[720px] px-4 py-8 sm:px-6">
+            <div className="mx-auto max-w-[780px] px-4 py-8 sm:px-6">
               {/* ── Model ─────────────────────────────────────────────── */}
               <section id="settings-section-model" className="scroll-mt-20">
-                <SectionHeader
-                  icon={Cpu}
-                  label="Model"
-                  description="The Claude model used for all Pulse chat sessions. Passed as --model to the Claude CLI."
-                />
+                <div className="border-l-2 border-l-[var(--border-accent)] pl-3">
+                  <SectionHeader
+                    icon={Cpu}
+                    label="Model"
+                    description="The Claude model used for all Pulse chat sessions. Passed as --model to the Claude CLI."
+                  />
+                </div>
                 <select
                   value={pulseModel}
                   onChange={(e) => setPulseModel(e.target.value as PulseModel)}
@@ -461,11 +411,13 @@ export default function SettingsPage() {
 
               {/* ── Permission Mode ───────────────────────────────────── */}
               <section id="settings-section-permission" className="scroll-mt-20">
-                <SectionHeader
-                  icon={Shield}
-                  label="Permission Mode"
-                  description="Controls how Claude interacts with your filesystem and shell. Passed as --permission-mode to the Claude CLI."
-                />
+                <div className="border-l-2 border-l-[var(--border-accent)] pl-3">
+                  <SectionHeader
+                    icon={Shield}
+                    label="Permission Mode"
+                    description="Controls how Claude interacts with your filesystem and shell. Passed as --permission-mode to the Claude CLI."
+                  />
+                </div>
                 <select
                   value={pulsePermissionLevel}
                   onChange={(e) => setPulsePermissionLevel(e.target.value as PulsePermissionLevel)}
@@ -489,11 +441,13 @@ export default function SettingsPage() {
 
               {/* ── Reasoning Effort ──────────────────────────────────── */}
               <section id="settings-section-effort" className="scroll-mt-20">
-                <SectionHeader
-                  icon={Brain}
-                  label="Reasoning Effort"
-                  description="Controls how much thinking budget Claude uses per response. Passed as --effort to the Claude CLI."
-                />
+                <div className="border-l-2 border-l-[var(--border-accent)] pl-3">
+                  <SectionHeader
+                    icon={Brain}
+                    label="Reasoning Effort"
+                    description="Controls how much thinking budget Claude uses per response. Passed as --effort to the Claude CLI."
+                  />
+                </div>
                 <select
                   value={settings.effort}
                   onChange={(e) =>
@@ -519,11 +473,13 @@ export default function SettingsPage() {
 
               {/* ── Limits ───────────────────────────────────────────── */}
               <section id="settings-section-limits" className="scroll-mt-20">
-                <SectionHeader
-                  icon={Gauge}
-                  label="Limits"
-                  description="Hard caps on agentic run length and API spend. 0 means unlimited (CLI default)."
-                />
+                <div className="border-l-2 border-l-[var(--border-accent)] pl-3">
+                  <SectionHeader
+                    icon={Gauge}
+                    label="Limits"
+                    description="Hard caps on agentic run length and API spend. 0 means unlimited (CLI default)."
+                  />
+                </div>
                 <div className="grid gap-5 sm:grid-cols-2">
                   <div>
                     <label
@@ -589,11 +545,13 @@ export default function SettingsPage() {
 
               {/* ── Custom Instructions ──────────────────────────────── */}
               <section id="settings-section-instructions" className="scroll-mt-20">
-                <SectionHeader
-                  icon={Sparkles}
-                  label="Custom Instructions"
-                  description="Appended to the system prompt on every Pulse request via --append-system-prompt. Adds rules without replacing Claude's built-in behavior."
-                />
+                <div className="border-l-2 border-l-[var(--border-accent)] pl-3">
+                  <SectionHeader
+                    icon={Sparkles}
+                    label="Custom Instructions"
+                    description="Appended to the system prompt on every Pulse request via --append-system-prompt. Adds rules without replacing Claude's built-in behavior."
+                  />
+                </div>
                 <textarea
                   id="settings-append-system-prompt"
                   value={settings.appendSystemPrompt}
@@ -614,11 +572,13 @@ export default function SettingsPage() {
 
               {/* ── Tools & Permissions ──────────────────────────────── */}
               <section id="settings-section-tools" className="scroll-mt-20">
-                <SectionHeader
-                  icon={Wrench}
-                  label="Tools & Permissions"
-                  description="Fine-grained control over which tools Claude can use. Supports permission rule syntax (e.g. Bash(git log *), Read, Edit)."
-                />
+                <div className="border-l-2 border-l-[var(--border-accent)] pl-3">
+                  <SectionHeader
+                    icon={Wrench}
+                    label="Tools & Permissions"
+                    description="Fine-grained control over which tools Claude can use. Supports permission rule syntax (e.g. Bash(git log *), Read, Edit)."
+                  />
+                </div>
                 <div className="space-y-5">
                   <div>
                     <label
@@ -708,11 +668,13 @@ export default function SettingsPage() {
 
               {/* ── Session Behavior ─────────────────────────────────── */}
               <section id="settings-section-session" className="scroll-mt-20">
-                <SectionHeader
-                  icon={Terminal}
-                  label="Session Behavior"
-                  description="Control how the Claude CLI manages sessions and handles built-in commands during each chat."
-                />
+                <div className="border-l-2 border-l-[var(--border-accent)] pl-3">
+                  <SectionHeader
+                    icon={Terminal}
+                    label="Session Behavior"
+                    description="Control how the Claude CLI manages sessions and handles built-in commands during each chat."
+                  />
+                </div>
                 <div className="space-y-3">
                   <ToggleRow
                     id="settings-disable-slash-commands"
@@ -806,11 +768,13 @@ export default function SettingsPage() {
 
               {/* ── Keyboard Shortcuts ───────────────────────────────── */}
               <section id="settings-section-shortcuts" className="scroll-mt-20">
-                <SectionHeader
-                  icon={Zap}
-                  label="Keyboard Shortcuts"
-                  description="Global shortcuts available throughout the Pulse workspace and omnibox."
-                />
+                <div className="border-l-2 border-l-[var(--border-accent)] pl-3">
+                  <SectionHeader
+                    icon={Zap}
+                    label="Keyboard Shortcuts"
+                    description="Global shortcuts available throughout the Pulse workspace and omnibox."
+                  />
+                </div>
                 <div
                   className="overflow-hidden rounded-xl border border-[rgba(255,135,175,0.1)]"
                   style={{ background: 'rgba(10,18,35,0.58)', backdropFilter: 'blur(8px)' }}
@@ -848,6 +812,43 @@ export default function SettingsPage() {
           </main>
         </div>
       </div>
+
+      {/* Reset confirmation modal */}
+      {resetConfirming && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(3,7,18,0.75)] backdrop-blur-sm animate-fade-in">
+          <div className="w-full max-w-sm rounded-xl border border-[var(--border-standard)] bg-[var(--surface-base)] p-5 shadow-[var(--shadow-xl)] animate-scale-in">
+            <div className="mb-1 flex items-center gap-2">
+              <RotateCcw className="size-4 text-[var(--axon-secondary)]" />
+              <h3 className="font-display text-sm font-semibold text-[var(--text-primary)]">
+                Reset all settings?
+              </h3>
+            </div>
+            <p className="mb-4 text-xs text-[var(--text-muted)]">
+              This will restore all settings to their defaults. Your MCP server configurations will
+              not be affected.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setResetConfirming(false)}
+                className="rounded-md border border-[var(--border-subtle)] bg-transparent px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-float)] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  handleReset()
+                  setResetConfirming(false)
+                }}
+                className="rounded-md bg-[rgba(255,135,175,0.15)] border border-[var(--border-accent)] px-3 py-1.5 text-xs text-[var(--axon-secondary)] hover:bg-[rgba(255,135,175,0.25)] transition-colors"
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

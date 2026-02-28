@@ -11,6 +11,7 @@ import {
   Settings2,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
+import { useState } from 'react'
 
 type DesktopViewMode = 'chat' | 'editor' | 'both'
 type DesktopPaneOrder = 'editor-first' | 'chat-first'
@@ -37,16 +38,28 @@ export function PulseToolbar({
   onNewSession,
 }: PulseToolbarProps) {
   const router = useRouter()
+  const [isDirty, setIsDirty] = useState(false)
   return (
     <div className="flex items-center gap-x-[var(--pulse-control-gap)] rounded-lg border border-[rgba(255,135,175,0.08)] bg-[rgba(10,18,35,0.32)] px-[var(--space-2)] py-[var(--space-2)]">
-      <input
-        id="pulse-document-title"
-        name="pulse_document_title"
-        value={title}
-        onChange={(e) => onTitleChange(e.target.value)}
-        className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-[var(--space-2)] py-[var(--pulse-pill-pad-y)] text-[length:var(--text-md)] font-medium text-[var(--axon-text-primary)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[rgba(175,215,255,0.35)] focus:bg-[rgba(10,18,35,0.35)] sm:flex-none sm:w-[40ch]"
-        placeholder="Document title..."
-      />
+      <div className="relative flex min-w-0 flex-1 sm:flex-none sm:w-[40ch]">
+        <input
+          id="pulse-document-title"
+          name="pulse_document_title"
+          value={title}
+          onChange={(e) => {
+            onTitleChange(e.target.value)
+            setIsDirty(true)
+          }}
+          className="w-full rounded-md border border-transparent bg-transparent px-[var(--space-2)] py-[var(--pulse-pill-pad-y)] text-[length:var(--text-md)] font-medium text-[var(--axon-text-primary)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[var(--border-standard)] focus:bg-[var(--surface-elevated)]"
+          placeholder="Document title..."
+        />
+        {isDirty && (
+          <span
+            className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 size-1.5 rounded-full bg-[var(--axon-secondary)] animate-pulse"
+            title="Unsaved changes"
+          />
+        )}
+      </div>
 
       {isDesktop && (
         <div className="ml-auto flex items-center gap-1">

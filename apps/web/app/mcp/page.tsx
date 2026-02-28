@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowLeft, Network, Plus } from 'lucide-react'
+import { ArrowLeft, Network, Plus, Trash2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
@@ -24,7 +24,7 @@ function McpPageInner() {
   const [error, setError] = useState('')
   const [formOpen, setFormOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<string | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [deleteModal, setDeleteModal] = useState<{ name: string } | null>(null)
   const [statusMap, setStatusMap] = useState<Record<string, McpServerStatus>>({})
 
   const loadStatus = useCallback(async (signal?: AbortSignal) => {
@@ -109,7 +109,6 @@ function McpPageInner() {
       setError('Delete failed')
       return
     }
-    setDeleteTarget(null)
     const controller = new AbortController()
     await loadConfig(controller.signal)
   }
@@ -209,71 +208,83 @@ function McpPageInner() {
               <div className="size-6 animate-spin rounded-full border-2 border-[rgba(175,215,255,0.2)] border-t-[var(--axon-accent-pink)]" />
             </div>
           ) : servers.length === 0 && !formOpen ? (
-            <div
-              className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[rgba(255,135,175,0.18)] bg-[rgba(3,7,18,0.5)] py-16 text-center"
-              style={{ backdropFilter: 'blur(12px)' }}
-            >
-              <Network className="mb-3 size-8 text-[rgba(175,215,255,0.25)]" />
-              <p className="text-[13px] font-medium text-[var(--axon-text-dim)]">
-                No MCP servers configured.
-              </p>
-              <p className="mt-1 text-[11px] text-[var(--axon-text-subtle)]">
-                Add your first server to give Claude access to external tools and data.
-              </p>
+            <div className="flex h-full min-h-[300px] flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-[var(--border-subtle)] bg-[var(--surface-float)] p-8 text-center animate-fade-in">
+              <div className="relative">
+                <div className="absolute inset-0 bg-[radial-gradient(circle,rgba(135,175,255,0.15),transparent)] blur-xl" />
+                <Network className="relative size-10 text-[var(--axon-primary)]" />
+              </div>
+              <div className="space-y-1.5">
+                <h3 className="font-display text-sm font-semibold text-[var(--text-primary)]">
+                  No MCP servers configured
+                </h3>
+                <p className="max-w-xs text-xs leading-relaxed text-[var(--text-muted)]">
+                  MCP servers extend Claude&apos;s capabilities with external tools, APIs, and data
+                  sources.
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={openAdd}
-                className="mt-5 flex items-center gap-1.5 rounded-lg border border-[rgba(175,215,255,0.18)] bg-[rgba(175,215,255,0.07)] px-4 py-2 text-[12px] font-semibold text-[var(--axon-accent-pink)] transition-colors hover:bg-[rgba(175,215,255,0.13)]"
+                className="mt-1 flex items-center gap-1.5 rounded-lg border border-[var(--border-standard)] bg-[rgba(135,175,255,0.15)] px-4 py-2 text-[12px] font-semibold text-[var(--axon-primary)] transition-colors hover:bg-[rgba(135,175,255,0.25)]"
               >
                 <Plus className="size-3.5" />
-                Add Server
+                Add your first server
               </button>
             </div>
           ) : (
             <div className="space-y-2">
-              {servers.map(([name, cfg]) =>
-                deleteTarget === name ? (
-                  <div
-                    key={name}
-                    className="flex items-center justify-between rounded-xl border border-[rgba(255,80,80,0.2)] bg-[rgba(255,80,80,0.08)] px-4 py-3.5"
-                  >
-                    <p className="text-[13px] text-red-400">
-                      Delete <strong>{name}</strong>? This cannot be undone.
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setDeleteTarget(null)}
-                        className="rounded-md px-3 py-1.5 text-[12px] text-[var(--axon-text-dim)] hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-text-secondary)]"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => deleteServer(name)}
-                        className="rounded-md bg-[rgba(255,80,80,0.15)] px-3 py-1.5 text-[12px] font-semibold text-red-400 hover:bg-[rgba(255,80,80,0.25)]"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <McpServerCard
-                    key={name}
-                    name={name}
-                    cfg={cfg}
-                    status={statusMap[name] ?? 'unknown'}
-                    onEdit={() => openEdit(name)}
-                    onDelete={() => setDeleteTarget(name)}
-                  />
-                ),
-              )}
+              {servers.map(([name, cfg]) => (
+                <McpServerCard
+                  key={name}
+                  name={name}
+                  cfg={cfg}
+                  status={statusMap[name] ?? 'unknown'}
+                  onEdit={() => openEdit(name)}
+                  onDelete={() => setDeleteModal({ name })}
+                />
+              ))}
             </div>
           )}
 
           <div className="h-16" />
         </div>
       </main>
+
+      {/* Delete confirmation modal */}
+      {deleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(3,7,18,0.75)] backdrop-blur-sm animate-fade-in">
+          <div className="w-full max-w-sm rounded-xl border border-[var(--border-standard)] bg-[var(--surface-base)] p-5 shadow-[var(--shadow-xl)] animate-scale-in">
+            <div className="mb-1 flex items-center gap-2">
+              <Trash2 className="size-4 text-[var(--axon-secondary)]" />
+              <h3 className="font-display text-sm font-semibold text-[var(--text-primary)]">
+                Delete &ldquo;{deleteModal.name}&rdquo;?
+              </h3>
+            </div>
+            <p className="mb-4 text-xs text-[var(--text-muted)]">
+              This MCP server configuration will be permanently removed. You can add it back later.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteModal(null)}
+                className="rounded-md border border-[var(--border-subtle)] bg-transparent px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-float)] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  deleteServer(deleteModal.name)
+                  setDeleteModal(null)
+                }}
+                className="rounded-md bg-[rgba(255,135,175,0.15)] border border-[var(--border-accent)] px-3 py-1.5 text-xs text-[var(--axon-secondary)] hover:bg-[rgba(255,135,175,0.25)] transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
