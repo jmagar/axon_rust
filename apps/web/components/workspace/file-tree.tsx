@@ -76,6 +76,7 @@ function TreeNode({
   return (
     <div>
       <button
+        type="button"
         onClick={toggle}
         className={[
           'flex w-full items-center gap-1.5 rounded px-2 py-[3px] text-left',
