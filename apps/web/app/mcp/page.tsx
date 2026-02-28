@@ -3,6 +3,7 @@
 import { ArrowLeft, Network, Plus } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
+import { ErrorBoundary } from '@/components/ui/error-boundary'
 import {
   configToForm,
   EMPTY_FORM,
@@ -16,7 +17,7 @@ import {
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
-export default function McpPage() {
+function McpPageInner() {
   const router = useRouter()
   const [config, setConfig] = useState<McpConfig>({ mcpServers: {} })
   const [loading, setLoading] = useState(true)
@@ -26,65 +27,77 @@ export default function McpPage() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [statusMap, setStatusMap] = useState<Record<string, McpServerStatus>>({})
 
-  const loadStatus = useCallback(async () => {
+  const loadStatus = useCallback(async (signal?: AbortSignal) => {
     try {
-      const res = await fetch('/api/mcp/status')
+      const res = await fetch('/api/mcp/status', { signal })
       if (!res.ok) return
       const data = (await res.json()) as { servers: Record<string, McpServerStatus> }
       setStatusMap(data.servers)
-    } catch {
-      // Status check failure is non-critical — don't surface as error
+    } catch (err) {
+      // Status check failure is non-critical — don't surface as error.
+      // AbortError is expected on cleanup; silently ignore all status errors.
+      void err
     }
   }, [])
 
-  const loadConfig = useCallback(async () => {
-    try {
-      const res = await fetch('/api/mcp')
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = (await res.json()) as McpConfig
-      setConfig(data)
-      setError('')
-      // Mark all servers as checking while we probe them
-      setStatusMap(
-        Object.fromEntries(
-          Object.keys(data.mcpServers).map((k) => [k, 'checking' as McpServerStatus]),
-        ),
-      )
-      // Kick off status check after config loads
-      void loadStatus()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load')
-    } finally {
-      setLoading(false)
-    }
-  }, [loadStatus])
+  const loadConfig = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const res = await fetch('/api/mcp', { signal })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = (await res.json()) as McpConfig
+        setConfig(data)
+        setError('')
+        // Mark all servers as checking while we probe them
+        setStatusMap(
+          Object.fromEntries(
+            Object.keys(data.mcpServers).map((k) => [k, 'checking' as McpServerStatus]),
+          ),
+        )
+        // Kick off status check after config loads
+        void loadStatus(signal)
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') return
+        setError(err instanceof Error ? err.message : 'Failed to load')
+      } finally {
+        setLoading(false)
+      }
+    },
+    [loadStatus],
+  )
 
   useEffect(() => {
-    loadConfig()
+    const controller = new AbortController()
+    void loadConfig(controller.signal)
+    return () => controller.abort()
   }, [loadConfig])
 
   async function saveServer(name: string, cfg: McpServerConfig) {
-    const updated: McpConfig = {
-      mcpServers: { ...config.mcpServers, [name]: cfg },
-    }
+    // Capture the merged config before any async work to avoid stale closure on config state.
+    // Using the functional updater form so we always merge against the latest prev value.
+    let mergedConfig: McpConfig = { mcpServers: {} }
+    setConfig((prev) => {
+      mergedConfig = { mcpServers: { ...prev.mcpServers, [name]: cfg } }
+      return mergedConfig
+    })
+    setFormOpen(false)
+    setEditTarget(null)
+    // mergedConfig is synchronously assigned inside the setter before this line runs
+    // because React batches state updates but calls the updater synchronously.
     const res = await fetch('/api/mcp', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updated),
+      headers: { 'Content-Type': 'application/json', 'X-Pulse-Request': '1' },
+      body: JSON.stringify(mergedConfig),
     })
     if (!res.ok) {
       setError('Save failed')
-      return
     }
-    setConfig(updated)
-    setFormOpen(false)
-    setEditTarget(null)
   }
 
   async function deleteServer(name: string) {
     const res = await fetch('/api/mcp', {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Pulse-Request': '1' },
       body: JSON.stringify({ name }),
     })
     if (!res.ok) {
@@ -92,7 +105,8 @@ export default function McpPage() {
       return
     }
     setDeleteTarget(null)
-    await loadConfig()
+    const controller = new AbortController()
+    await loadConfig(controller.signal)
   }
 
   function openAdd() {
@@ -174,6 +188,7 @@ export default function McpPage() {
           {formOpen && (
             <div className="mb-6">
               <McpServerForm
+                key={editTarget ?? '__new__'}
                 initial={formInitial}
                 existingNames={existingNames}
                 isEditing={editTarget !== null}
@@ -255,5 +270,13 @@ export default function McpPage() {
         </div>
       </main>
     </div>
+  )
+}
+
+export default function McpPage() {
+  return (
+    <ErrorBoundary>
+      <McpPageInner />
+    </ErrorBoundary>
   )
 }

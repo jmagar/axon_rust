@@ -169,7 +169,7 @@ function ToggleRow({
   return (
     <div
       className="flex items-start justify-between gap-4 rounded-xl border border-[rgba(255,135,175,0.1)] px-4 py-3.5 transition-all duration-200"
-      style={{ background: 'rgba(10,18,35,0.38)', backdropFilter: 'blur(8px)' }}
+      style={{ background: 'rgba(10,18,35,0.58)', backdropFilter: 'blur(8px)' }}
     >
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-medium text-[var(--axon-text-secondary)]">{label}</p>
@@ -219,14 +219,14 @@ function TextInput({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className={`w-full rounded-lg border border-[rgba(255,135,175,0.15)] bg-[rgba(10,18,35,0.5)] px-3 py-2.5 text-[13px] text-[var(--axon-text-secondary)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[rgba(175,215,255,0.35)] focus:bg-[rgba(10,18,35,0.7)] transition-all duration-200 ${mono ? 'font-mono' : ''}`}
+      className={`w-full rounded-lg border border-[rgba(255,135,175,0.15)] bg-[rgba(10,18,35,0.65)] px-3 py-2.5 text-[13px] text-[var(--axon-text-secondary)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[rgba(175,215,255,0.35)] focus:bg-[rgba(10,18,35,0.82)] transition-all duration-200 ${mono ? 'font-mono' : ''}`}
       style={{ backdropFilter: 'blur(4px)' }}
     />
   )
 }
 
 const GLASS_SELECT =
-  'w-full rounded-lg border border-[rgba(255,135,175,0.2)] bg-[rgba(10,18,35,0.5)] px-3 py-2.5 text-[13px] text-[var(--axon-text-secondary)] outline-none focus:border-[rgba(175,215,255,0.4)] focus:bg-[rgba(10,18,35,0.7)] cursor-pointer appearance-none transition-all duration-200'
+  'w-full rounded-lg border border-[rgba(255,135,175,0.2)] bg-[rgba(10,18,35,0.65)] px-3 py-2.5 text-[13px] text-[var(--axon-text-secondary)] outline-none focus:border-[rgba(175,215,255,0.4)] focus:bg-[rgba(10,18,35,0.82)] cursor-pointer appearance-none transition-all duration-200'
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
@@ -237,10 +237,17 @@ export default function SettingsPage() {
   const { settings, updateSettings } = usePulseSettings()
   const [activeSection, setActiveSection] = useState('model')
   const canvasRef = useRef<NeuralCanvasHandle>(null)
+  const [resetConfirming, setResetConfirming] = useState(false)
 
   useEffect(() => {
     canvasRef.current?.setIntensity(0.06)
   }, [])
+
+  useEffect(() => {
+    if (!resetConfirming) return
+    const t = setTimeout(() => setResetConfirming(false), 5000)
+    return () => clearTimeout(t)
+  }, [resetConfirming])
 
   function handleReset() {
     updateSettings(DEFAULT_PULSE_SETTINGS)
@@ -273,7 +280,7 @@ export default function SettingsPage() {
           className="sticky top-0 z-30 flex h-13 shrink-0 items-center gap-3 border-b px-4"
           style={{
             borderColor: 'rgba(255,135,175,0.1)',
-            background: 'rgba(3,7,18,0.72)',
+            background: 'rgba(3,7,18,0.86)',
             backdropFilter: 'blur(20px) saturate(180%)',
             height: '3.25rem',
           }}
@@ -293,15 +300,37 @@ export default function SettingsPage() {
             <h1 className="text-[14px] font-semibold text-[var(--axon-text-primary)]">Settings</h1>
           </div>
           <div className="flex-1" />
-          <button
-            type="button"
-            onClick={handleReset}
-            className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium text-[var(--axon-text-dim)] transition-all duration-200 hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-accent-pink-strong)]"
-            title="Reset all settings to defaults"
-          >
-            <RotateCcw className="size-3" />
-            Reset to defaults
-          </button>
+          {resetConfirming ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  handleReset()
+                  setResetConfirming(false)
+                }}
+                className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium text-[var(--axon-accent-pink-strong)] transition-all duration-200 bg-[rgba(255,135,175,0.12)] hover:bg-[rgba(255,135,175,0.2)]"
+              >
+                Confirm Reset?
+              </button>
+              <button
+                type="button"
+                onClick={() => setResetConfirming(false)}
+                className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium text-[var(--axon-text-dim)] transition-all duration-200 hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-text-secondary)]"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setResetConfirming(true)}
+              className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium text-[var(--axon-text-dim)] transition-all duration-200 hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-accent-pink-strong)]"
+              title="Reset all settings to defaults"
+            >
+              <RotateCcw className="size-3" />
+              Reset to defaults
+            </button>
+          )}
         </header>
 
         {/* Body */}
@@ -312,7 +341,7 @@ export default function SettingsPage() {
             style={{
               top: '3.25rem',
               borderColor: 'rgba(255,135,175,0.08)',
-              background: 'rgba(3,7,18,0.55)',
+              background: 'rgba(3,7,18,0.70)',
               backdropFilter: 'blur(16px)',
             }}
           >
@@ -360,14 +389,36 @@ export default function SettingsPage() {
             </div>
 
             <div className="mt-auto pt-4">
-              <button
-                type="button"
-                onClick={handleReset}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-medium text-[var(--axon-text-dim)] transition-all duration-200 hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-accent-pink-strong)]"
-              >
-                <RotateCcw className="size-3 shrink-0" />
-                Reset all to defaults
-              </button>
+              {resetConfirming ? (
+                <div className="flex flex-col gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleReset()
+                      setResetConfirming(false)
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-medium text-[var(--axon-accent-pink-strong)] transition-all duration-200 bg-[rgba(255,135,175,0.12)] hover:bg-[rgba(255,135,175,0.2)]"
+                  >
+                    Confirm Reset?
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setResetConfirming(false)}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-medium text-[var(--axon-text-dim)] transition-all duration-200 hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-text-secondary)]"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setResetConfirming(true)}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] font-medium text-[var(--axon-text-dim)] transition-all duration-200 hover:bg-[rgba(255,135,175,0.08)] hover:text-[var(--axon-accent-pink-strong)]"
+                >
+                  <RotateCcw className="size-3 shrink-0" />
+                  Reset all to defaults
+                </button>
+              )}
             </div>
           </nav>
 
@@ -495,7 +546,7 @@ export default function SettingsPage() {
                           maxTurns: Math.max(0, Math.min(200, Number(e.target.value))),
                         })
                       }
-                      className="w-full rounded-lg border border-[rgba(255,135,175,0.15)] bg-[rgba(10,18,35,0.5)] px-3 py-2.5 text-[13px] text-[var(--axon-text-secondary)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[rgba(175,215,255,0.35)] focus:bg-[rgba(10,18,35,0.7)] transition-all duration-200"
+                      className="w-full rounded-lg border border-[rgba(255,135,175,0.15)] bg-[rgba(10,18,35,0.65)] px-3 py-2.5 text-[13px] text-[var(--axon-text-secondary)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[rgba(175,215,255,0.35)] focus:bg-[rgba(10,18,35,0.82)] transition-all duration-200"
                       placeholder="0 (unlimited)"
                       style={{ backdropFilter: 'blur(4px)' }}
                     />
@@ -525,7 +576,7 @@ export default function SettingsPage() {
                           maxBudgetUsd: Math.max(0, Math.min(1000, Number(e.target.value))),
                         })
                       }
-                      className="w-full rounded-lg border border-[rgba(255,135,175,0.15)] bg-[rgba(10,18,35,0.5)] px-3 py-2.5 text-[13px] text-[var(--axon-text-secondary)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[rgba(175,215,255,0.35)] focus:bg-[rgba(10,18,35,0.7)] transition-all duration-200"
+                      className="w-full rounded-lg border border-[rgba(255,135,175,0.15)] bg-[rgba(10,18,35,0.65)] px-3 py-2.5 text-[13px] text-[var(--axon-text-secondary)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[rgba(175,215,255,0.35)] focus:bg-[rgba(10,18,35,0.82)] transition-all duration-200"
                       placeholder="0 (unlimited)"
                       style={{ backdropFilter: 'blur(4px)' }}
                     />
@@ -550,7 +601,7 @@ export default function SettingsPage() {
                   placeholder="e.g. Always respond in bullet points. Prefer TypeScript. Be concise."
                   rows={5}
                   maxLength={4000}
-                  className="w-full resize-none rounded-lg border border-[rgba(255,135,175,0.15)] bg-[rgba(10,18,35,0.5)] px-3 py-2.5 text-[13px] leading-relaxed text-[var(--axon-text-secondary)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[rgba(255,135,175,0.3)] focus:bg-[rgba(10,18,35,0.7)] transition-all duration-200"
+                  className="w-full resize-none rounded-lg border border-[rgba(255,135,175,0.15)] bg-[rgba(10,18,35,0.65)] px-3 py-2.5 text-[13px] leading-relaxed text-[var(--axon-text-secondary)] outline-none placeholder:text-[var(--axon-text-subtle)] focus:border-[rgba(255,135,175,0.3)] focus:bg-[rgba(10,18,35,0.82)] transition-all duration-200"
                   style={{ backdropFilter: 'blur(4px)' }}
                 />
                 <div className="mt-1.5 flex justify-between text-[10px] text-[var(--axon-text-subtle)]">
@@ -638,7 +689,7 @@ export default function SettingsPage() {
 
                   <div
                     className="flex items-start gap-2.5 rounded-lg border border-[rgba(175,215,255,0.12)] px-3.5 py-3 transition-all duration-200"
-                    style={{ background: 'rgba(10,18,35,0.38)', backdropFilter: 'blur(8px)' }}
+                    style={{ background: 'rgba(10,18,35,0.58)', backdropFilter: 'blur(8px)' }}
                   >
                     <Info className="mt-0.5 size-3.5 shrink-0 text-[var(--axon-accent-pink)]" />
                     <p className="text-[11px] leading-relaxed text-[var(--axon-text-dim)]">
@@ -762,7 +813,7 @@ export default function SettingsPage() {
                 />
                 <div
                   className="overflow-hidden rounded-xl border border-[rgba(255,135,175,0.1)]"
-                  style={{ background: 'rgba(10,18,35,0.38)', backdropFilter: 'blur(8px)' }}
+                  style={{ background: 'rgba(10,18,35,0.58)', backdropFilter: 'blur(8px)' }}
                 >
                   {KEYBOARD_SHORTCUTS.map(({ keys, desc }, idx) => (
                     <div

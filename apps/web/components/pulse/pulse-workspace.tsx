@@ -139,6 +139,7 @@ export function PulseWorkspace() {
   }, [chatHistory])
 
   const handleNewSession = useCallback(() => {
+    handleCancelPrompt()
     setChatHistory([])
     setDocumentMarkdown('')
     setDocumentTitle('Untitled')
@@ -150,7 +151,13 @@ export function PulseWorkspace() {
     } catch {
       // Ignore storage errors.
     }
-  }, [setChatHistory, setChatSessionId, setIndexedSources, setActiveThreadSources])
+  }, [
+    handleCancelPrompt,
+    setChatHistory,
+    setChatSessionId,
+    setIndexedSources,
+    setActiveThreadSources,
+  ])
 
   usePulsePersistence({
     permissionLevel,
@@ -264,7 +271,7 @@ export function PulseWorkspace() {
     <div className={`space-y-1.5 ${isDesktop ? 'mt-1' : 'pt-11'}`}>
       {/* Fixed mobile header — title + SRC + pane switcher */}
       {!isDesktop && chatHistory.length > 0 && (
-        <div className="fixed left-0 right-0 top-0 z-[9] flex h-11 items-center gap-2 border-b border-[rgba(255,135,175,0.1)] bg-[rgba(3,7,18,0.45)] px-3 backdrop-blur-lg lg:hidden">
+        <div className="fixed left-0 right-0 top-0 z-[9] flex h-11 items-center gap-2 border-b border-[rgba(255,135,175,0.1)] bg-[rgba(3,7,18,0.45)] pl-3 pr-28 backdrop-blur-lg lg:hidden">
           {/* Space for AXON logo (fixed left-6 top-5 z-10) */}
           <div className="w-14 shrink-0" />
           {/* Spacer */}

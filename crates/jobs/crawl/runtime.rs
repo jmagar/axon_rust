@@ -11,7 +11,7 @@ use uuid::Uuid;
 static SCHEMA_INIT: OnceLock<()> = OnceLock::new();
 
 const TABLE: JobTable = JobTable::Crawl;
-const WORKER_CONCURRENCY: usize = 2;
+const WORKER_CONCURRENCY: usize = 5;
 const STALE_SWEEP_INTERVAL_SECS: u64 = 30;
 const CRAWL_SCHEMA_LOCK_KEY: i64 = 0xA804_0003;
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { Globe, Pencil, Plus, Terminal, Trash2, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -19,7 +19,7 @@ export type McpConfig = {
 
 export type ServerType = 'stdio' | 'http'
 
-export type KvPair = { key: string; value: string }
+export type KvPair = { id: string; key: string; value: string }
 
 export type FormState = {
   name: string
@@ -81,9 +81,17 @@ export function configToForm(name: string, cfg: McpServerConfig): FormState {
     type: isHttp ? 'http' : 'stdio',
     command: cfg.command ?? '',
     args: (cfg.args ?? []).join('\n'),
-    envPairs: Object.entries(cfg.env ?? {}).map(([key, value]) => ({ key, value })),
+    envPairs: Object.entries(cfg.env ?? {}).map(([key, value]) => ({
+      id: crypto.randomUUID(),
+      key,
+      value,
+    })),
     url: cfg.url ?? '',
-    headerPairs: Object.entries(cfg.headers ?? {}).map(([key, value]) => ({ key, value })),
+    headerPairs: Object.entries(cfg.headers ?? {}).map(([key, value]) => ({
+      id: crypto.randomUUID(),
+      key,
+      value,
+    })),
   }
 }
 
@@ -99,7 +107,7 @@ export function KvEditor({
   onChange: (pairs: KvPair[]) => void
 }) {
   function addPair() {
-    onChange([...pairs, { key: '', value: '' }])
+    onChange([...pairs, { id: crypto.randomUUID(), key: '', value: '' }])
   }
 
   function removePair(idx: number) {
@@ -128,7 +136,7 @@ export function KvEditor({
       ) : (
         <div className="space-y-2">
           {pairs.map((p, i) => (
-            <div key={`kv-${label}-${i}`} className="flex items-center gap-2">
+            <div key={`kv-${p.id}`} className="flex items-center gap-2">
               <input
                 type="text"
                 value={p.key}
@@ -262,9 +270,10 @@ export function McpServerForm({
   const [activeTab, setActiveTab] = useState<'form' | 'json'>('form')
   const [rawJson, setRawJson] = useState('')
   const [jsonError, setJsonError] = useState('')
+  const jsonEditedManuallyRef = useRef(false)
 
   useEffect(() => {
-    if (activeTab === 'json') {
+    if (activeTab === 'json' && !jsonEditedManuallyRef.current) {
       try {
         const config = formToConfig(form)
         const full = { mcpServers: { [form.name || 'server-name']: config } }
@@ -273,6 +282,9 @@ export function McpServerForm({
       } catch {
         // keep existing raw
       }
+    }
+    if (activeTab !== 'json') {
+      jsonEditedManuallyRef.current = false
     }
   }, [activeTab, form])
 
@@ -287,6 +299,7 @@ export function McpServerForm({
       const entries = Object.entries(parsed.mcpServers)
       if (entries.length === 0) throw new Error('No servers in mcpServers')
       const [serverName, serverCfg] = entries[0] as [string, McpServerConfig]
+      jsonEditedManuallyRef.current = false
       onSave(serverName, serverCfg)
       setJsonError('')
     } catch (err) {
@@ -464,7 +477,10 @@ export function McpServerForm({
             </p>
             <textarea
               value={rawJson}
-              onChange={(e) => setRawJson(e.target.value)}
+              onChange={(e) => {
+                jsonEditedManuallyRef.current = true
+                setRawJson(e.target.value)
+              }}
               rows={14}
               spellCheck={false}
               className="w-full resize-none rounded-lg border border-[rgba(255,135,175,0.15)] bg-[rgba(10,18,35,0.6)] px-3 py-2.5 font-mono text-[12px] leading-relaxed text-[var(--axon-text-secondary)] outline-none focus:border-[rgba(175,215,255,0.35)]"

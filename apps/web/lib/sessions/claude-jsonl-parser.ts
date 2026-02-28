@@ -3,6 +3,9 @@ export interface ParsedMessage {
   content: string
 }
 
+/** Maximum byte length of a single JSONL line we are willing to parse. */
+const MAX_LINE_BYTES = 512_000 // 512 KB
+
 /**
  * Parse Claude Code JSONL session content into structured messages.
  * Port of the Rust logic in crates/ingest/sessions/claude.rs.
@@ -11,9 +14,14 @@ export interface ParsedMessage {
 export function parseClaudeJsonl(raw: string): ParsedMessage[] {
   const messages: ParsedMessage[] = []
 
-  for (const line of raw.split('\n')) {
+  // Strip null bytes before any further processing.
+  const sanitized = raw.replace(/\0/g, '')
+  for (const line of sanitized.split('\n')) {
     const trimmed = line.trim()
     if (!trimmed) continue
+
+    // Reject lines that exceed the per-line size cap.
+    if (trimmed.length > MAX_LINE_BYTES) continue
 
     let val: Record<string, unknown>
     try {

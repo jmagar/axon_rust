@@ -53,7 +53,9 @@ export function PulseChatPane({
   const [isNearBottom, setIsNearBottom] = useState(true)
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
   const [sourceListOpen, setSourceListOpen] = useState(false)
-  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [copyStatuses, setCopyStatuses] = useState<Map<string, 'idle' | 'copied' | 'failed'>>(
+    new Map(),
+  )
   const [sourceListScrollTop, setSourceListScrollTop] = useState(0)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(0)
@@ -170,7 +172,7 @@ export function PulseChatPane({
     }
   }, [isNearBottom, messages])
 
-  async function handleCopyError(content: string) {
+  async function handleCopyError(content: string, messageId: string) {
     try {
       const canUseClipboard =
         typeof navigator !== 'undefined' &&
@@ -193,11 +195,23 @@ export function PulseChatPane({
       } else {
         throw new Error('clipboard_unavailable')
       }
-      setCopyStatus('copied')
-      setTimeout(() => setCopyStatus('idle'), 1200)
+      setCopyStatuses((prev) => new Map(prev).set(messageId, 'copied'))
+      setTimeout(() => {
+        setCopyStatuses((prev) => {
+          const next = new Map(prev)
+          next.delete(messageId)
+          return next
+        })
+      }, 1200)
     } catch {
-      setCopyStatus('failed')
-      setTimeout(() => setCopyStatus('idle'), 1400)
+      setCopyStatuses((prev) => new Map(prev).set(messageId, 'failed'))
+      setTimeout(() => {
+        setCopyStatuses((prev) => {
+          const next = new Map(prev)
+          next.delete(messageId)
+          return next
+        })
+      }, 1400)
     }
   }
 
@@ -357,14 +371,16 @@ export function PulseChatPane({
             {topSpacerHeight > 0 && <div style={{ height: `${topSpacerHeight}px` }} aria-hidden />}
             {virtualMessages.map((msg, index) => {
               const absoluteIndex = virtualStartIndex + index
+              const messageKey =
+                msg.id ?? `legacy-${absoluteIndex}-${msg.role}-${msg.content.slice(0, 24)}`
               return (
                 <MessageBubble
-                  key={msg.id ?? `legacy-${absoluteIndex}-${msg.role}-${msg.content.slice(0, 24)}`}
+                  key={messageKey}
                   msg={msg}
                   onRetry={onRetry}
-                  copyStatus={copyStatus}
+                  copyStatus={copyStatuses.get(messageKey) ?? 'idle'}
                   onCopyError={(content) => {
-                    void handleCopyError(content)
+                    void handleCopyError(content, messageKey)
                   }}
                 />
               )

@@ -9,6 +9,7 @@ import {
   Square,
   Wrench,
 } from 'lucide-react'
+import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAxonWs } from '@/hooks/use-axon-ws'
 import { useWsMessages } from '@/hooks/use-ws-messages'
@@ -558,13 +559,13 @@ export function Omnibox() {
   return (
     <div ref={omniboxRef} className="space-y-2">
       <div
-        className={`relative flex min-h-[44px] items-center rounded-2xl transition-all duration-300 ${
+        className={`relative flex min-h-[52px] items-center rounded-2xl transition-all duration-300 sm:min-h-[44px] ${
           isProcessing
             ? 'border-[rgba(175,215,255,0.4)] shadow-[0_0_20px_rgba(175,215,255,0.15)]'
             : 'border-[rgba(255,135,175,0.18)]'
         } focus-within:border-[rgba(255,135,175,0.4)] focus-within:shadow-[0_0_0_3px_rgba(255,135,175,0.18)]`}
         style={{
-          background: 'rgba(10, 18, 35, 0.65)',
+          background: 'rgba(10, 18, 35, 0.80)',
           borderWidth: '1.5px',
           borderStyle: 'solid',
           borderColor: isProcessing ? 'rgba(175,215,255, 0.4)' : 'rgba(255,135,175, 0.18)',
@@ -611,7 +612,7 @@ export function Omnibox() {
           onFocus={() => setIsFocused(true)}
           onBlur={() => setIsFocused(false)}
           placeholder={PLACEHOLDER_TEXTS[0]}
-          className="min-w-0 flex-1 bg-transparent px-3 py-2 font-mono text-sm leading-[var(--leading-tight)] text-foreground outline-none placeholder:opacity-0 sm:px-4"
+          className="min-w-0 flex-1 bg-transparent px-3 py-3 font-mono text-sm leading-[var(--leading-tight)] text-foreground outline-none placeholder:opacity-0 sm:py-2 sm:px-4"
           disabled={isProcessing}
         />
         {/* Animated placeholder overlay */}
@@ -677,15 +678,14 @@ export function Omnibox() {
 
         {/* Settings — navigates to /settings full page */}
         <div className="h-[20px] w-px shrink-0 bg-[rgba(255,135,175,0.12)]" />
-        <button
-          type="button"
-          onClick={() => router.push('/settings')}
-          className="flex items-center justify-center bg-transparent px-2 py-1.5 text-[var(--axon-text-muted)] transition-colors duration-150 hover:text-[var(--axon-accent-blue)]"
+        <Link
+          href="/settings"
+          className="flex items-center justify-center bg-transparent px-2 py-1.5 text-[var(--axon-accent-blue)] transition-colors duration-150 hover:text-white"
           title="Settings"
           aria-label="Open settings"
         >
           <Settings2 className="size-3.5" />
-        </button>
+        </Link>
 
         {workspaceMode === 'pulse' && (
           <>
@@ -698,8 +698,8 @@ export function Omnibox() {
                   setDropdownOpen(false)
                   setOptionsOpen(false)
                 }}
-                className={`relative flex items-center justify-center bg-transparent px-2 py-1.5 text-[var(--axon-text-muted)] transition-colors duration-150 hover:text-[var(--axon-accent-blue)] ${
-                  toolsOpen ? 'text-[var(--axon-accent-blue)]' : ''
+                className={`relative flex items-center justify-center bg-transparent px-2 py-1.5 text-[var(--axon-accent-blue)] transition-colors duration-150 hover:text-white ${
+                  toolsOpen ? 'text-white' : ''
                 }`}
                 title={`Pulse tools · ${pulseModel} · ${pulsePermissionLevel}`}
                 aria-label="Pulse tools"

@@ -83,19 +83,15 @@ pub(super) async fn collect_crawl_pages(
         if chars < col.min_chars {
             summary.thin_pages += 1;
             if col.drop_thin {
-                if summary.pages_seen.is_multiple_of(5) {
-                    if let Some(tx) = col.progress_tx.as_ref() {
-                        tx.send(summary.clone()).await.ok();
-                    }
+                if let Some(tx) = col.progress_tx.as_ref() {
+                    tx.send(summary.clone()).await.ok();
                 }
                 continue;
             }
         }
         if trimmed.is_empty() {
-            if summary.pages_seen.is_multiple_of(5) {
-                if let Some(tx) = col.progress_tx.as_ref() {
-                    tx.send(summary.clone()).await.ok();
-                }
+            if let Some(tx) = col.progress_tx.as_ref() {
+                tx.send(summary.clone()).await.ok();
             }
             continue;
         }
@@ -141,10 +137,8 @@ pub(super) async fn collect_crawl_pages(
                             .await
                             .map_err(|e| format!("manifest failed: {e}"))?;
 
-                        if summary.pages_seen.is_multiple_of(5) {
-                            if let Some(tx) = col.progress_tx.as_ref() {
-                                tx.send(summary.clone()).await.ok();
-                            }
+                        if let Some(tx) = col.progress_tx.as_ref() {
+                            tx.send(summary.clone()).await.ok();
                         }
                         continue;
                     }
@@ -174,10 +168,8 @@ pub(super) async fn collect_crawl_pages(
             .await
             .map_err(|e| format!("manifest failed: {e}"))?;
 
-        if summary.pages_seen.is_multiple_of(5) {
-            if let Some(tx) = col.progress_tx.as_ref() {
-                tx.send(summary.clone()).await.ok();
-            }
+        if let Some(tx) = col.progress_tx.as_ref() {
+            tx.send(summary.clone()).await.ok();
         }
     }
 

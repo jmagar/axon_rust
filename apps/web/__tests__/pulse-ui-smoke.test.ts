@@ -1,6 +1,15 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
+
+// PulseToolbar uses useRouter() which requires the Next.js App Router context.
+// Provide a minimal stub so renderToStaticMarkup doesn't throw.
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn(), back: vi.fn(), forward: vi.fn(), replace: vi.fn() }),
+  usePathname: () => '/',
+  useSearchParams: () => new URLSearchParams(),
+}))
+
 import { PulseChatPane } from '@/components/pulse/pulse-chat-pane'
 import { PulseToolbar } from '@/components/pulse/pulse-toolbar'
 import { detectPulsePromptIntent } from '@/lib/pulse/prompt-intent'
@@ -53,14 +62,13 @@ describe('pulse UI smoke workflow', () => {
         activeThreadSources: ['https://example.com/docs'],
         onRemoveSource: vi.fn(),
         onRetry: vi.fn(),
-        mobilePane: 'chat' as const,
-        onMobilePaneChange: vi.fn(),
-        isDesktop: true,
+        sourcesExpanded: false,
+        onSourcesExpandedChange: vi.fn(),
       }),
     )
 
-    expect(markup).toContain('Pulse Chat')
-    expect(markup).toContain('1 src')
+    // "Pulse Chat" header was removed when the pane was refactored to a pure content area.
+    // "1 src" count moved to the workspace toolbar — not rendered inside PulseChatPane.
     expect(markup).toContain('Retry')
     expect(markup).toContain('Copy')
   })

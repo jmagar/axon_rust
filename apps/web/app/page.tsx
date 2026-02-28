@@ -25,12 +25,6 @@ const NeuralCanvas = dynamic(() => import('@/components/neural-canvas'), {
 })
 const CANVAS_PROFILE_STORAGE_KEY = 'axon.web.neural-canvas.profile'
 const CANVAS_PROFILE_OPTIONS: NeuralCanvasProfile[] = ['current', 'subtle', 'cinematic', 'electric']
-const _CANVAS_PROFILE_LABELS: Record<NeuralCanvasProfile, string> = {
-  current: 'Current',
-  subtle: 'Subtle',
-  cinematic: 'Cinematic',
-  electric: 'Electric',
-}
 
 export default function DashboardPage() {
   const router = useRouter()
@@ -67,17 +61,6 @@ export default function DashboardPage() {
     setLandingMobilePane(pane)
     try {
       window.localStorage.setItem(MOBILE_PANE_STORAGE_KEY, pane)
-    } catch {
-      // Ignore storage errors.
-    }
-  }, [])
-
-  const _handleCanvasProfileChange = useCallback((value: string) => {
-    if (!CANVAS_PROFILE_OPTIONS.includes(value as NeuralCanvasProfile)) return
-    const profile = value as NeuralCanvasProfile
-    setCanvasProfile(profile)
-    try {
-      window.localStorage.setItem(CANVAS_PROFILE_STORAGE_KEY, profile)
     } catch {
       // Ignore storage errors.
     }
@@ -160,12 +143,19 @@ export default function DashboardPage() {
         >
           <div className="flex flex-col gap-2">
             {!isPulseWorkspaceActive && (
-              <div className="order-1 scale-100">
+              <div
+                className={`order-1 scale-100 ${landingMobilePane === 'editor' ? 'hidden lg:block' : 'block'}`}
+              >
                 <Omnibox />
                 {!hasResults && <RecentSessions />}
               </div>
             )}
             <div className={isPulseWorkspaceActive ? 'order-1' : 'order-2'}>
+              {!isPulseWorkspaceActive && landingMobilePane === 'editor' && !hasResults && (
+                <div className="flex items-center justify-center rounded-xl border border-[rgba(255,135,175,0.1)] py-14 text-sm text-[var(--axon-text-dim)] lg:hidden">
+                  Run a command to see results here
+                </div>
+              )}
               <ResultsPanel statsSlot={<DockerStats onStats={handleStats} />} />
             </div>
           </div>
@@ -221,7 +211,7 @@ export default function DashboardPage() {
               className="rounded-xl border p-1 backdrop-blur-xl"
               style={{
                 borderColor: isProcessing ? 'rgba(175,215,255,0.25)' : 'rgba(255,135,175,0.12)',
-                background: 'rgba(10,18,35,0.72)',
+                background: 'rgba(10,18,35,0.85)',
               }}
             >
               <Omnibox />

@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { buildClaudeArgs } from '@/app/api/pulse/chat/claude-stream-types'
+import { PulseChatRequestSchema } from '@/lib/pulse/types'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -212,50 +213,56 @@ describe('buildClaudeArgs', () => {
   })
 
   describe('addDir', () => {
-    it('appends one --add-dir pair for a single path', () => {
+    it('appends one --add-dir pair for a single allowed path', () => {
       const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { addDir: '/workspace' })
       const idx = args.indexOf('--add-dir')
       expect(idx).not.toBe(-1)
       expect(args[idx + 1]).toBe('/workspace')
     })
 
-    it('appends multiple --add-dir pairs for comma-separated paths', () => {
-      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { addDir: '/a,/b' })
-      // Collect all --add-dir values
+    it('appends multiple --add-dir pairs for comma-separated allowed paths', () => {
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { addDir: '/workspace,/tmp' })
       const dirs: string[] = []
       for (let i = 0; i < args.length - 1; i++) {
         if (args[i] === '--add-dir') {
           dirs.push(args[i + 1] as string)
         }
       }
-      expect(dirs).toEqual(['/a', '/b'])
+      expect(dirs).toEqual(['/workspace', '/tmp'])
     })
 
     it('trims spaces around commas', () => {
-      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { addDir: ' /a , /b ' })
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { addDir: ' /workspace , /tmp ' })
       const dirs: string[] = []
       for (let i = 0; i < args.length - 1; i++) {
         if (args[i] === '--add-dir') {
           dirs.push(args[i + 1] as string)
         }
       }
-      expect(dirs).toEqual(['/a', '/b'])
+      expect(dirs).toEqual(['/workspace', '/tmp'])
     })
 
     it('skips empty segments from consecutive commas', () => {
-      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { addDir: '/a,,/b' })
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { addDir: '/workspace,,/tmp' })
       const dirs: string[] = []
       for (let i = 0; i < args.length - 1; i++) {
         if (args[i] === '--add-dir') {
           dirs.push(args[i + 1] as string)
         }
       }
-      expect(dirs).toEqual(['/a', '/b'])
+      expect(dirs).toEqual(['/workspace', '/tmp'])
     })
 
     it('does not include --add-dir when omitted', () => {
       const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL)
       expect(args).not.toContain('--add-dir')
+    })
+
+    it('rejects path traversal attempts — ../../etc/passwd must not appear in args', () => {
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL, { addDir: '../../etc/passwd' })
+      // Neither --add-dir nor the resolved traversal path should be present
+      expect(args).not.toContain('--add-dir')
+      expect(args).not.toContain('/etc/passwd')
     })
   })
 
@@ -295,5 +302,77 @@ describe('buildClaudeArgs', () => {
       const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL)
       expect(args).not.toContain('--tools')
     })
+  })
+
+  describe('PULSE_SKIP_PERMISSIONS env gate', () => {
+    let originalValue: string | undefined
+
+    beforeEach(() => {
+      originalValue = process.env.PULSE_SKIP_PERMISSIONS
+    })
+
+    afterEach(() => {
+      if (originalValue === undefined) {
+        delete process.env.PULSE_SKIP_PERMISSIONS
+      } else {
+        process.env.PULSE_SKIP_PERMISSIONS = originalValue
+      }
+    })
+
+    it('includes --dangerously-skip-permissions by default', () => {
+      delete process.env.PULSE_SKIP_PERMISSIONS
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL)
+      expect(args).toContain('--dangerously-skip-permissions')
+    })
+
+    it('omits --dangerously-skip-permissions when PULSE_SKIP_PERMISSIONS=false', () => {
+      process.env.PULSE_SKIP_PERMISSIONS = 'false'
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL)
+      expect(args).not.toContain('--dangerously-skip-permissions')
+    })
+
+    it('includes --dangerously-skip-permissions when PULSE_SKIP_PERMISSIONS=true', () => {
+      process.env.PULSE_SKIP_PERMISSIONS = 'true'
+      const args = buildClaudeArgs(PROMPT, SYSTEM, MODEL)
+      expect(args).toContain('--dangerously-skip-permissions')
+    })
+  })
+})
+
+describe('PulseChatRequestSchema — sessionId validation', () => {
+  const base = {
+    prompt: 'Hello',
+  }
+
+  it('rejects sessionId that is too short (fewer than 8 hex/dash chars)', () => {
+    const result = PulseChatRequestSchema.safeParse({ ...base, sessionId: 'abc' })
+    expect(result.success).toBe(false)
+  })
+
+  it('accepts a short 8-char hex session hash', () => {
+    const result = PulseChatRequestSchema.safeParse({ ...base, sessionId: 'abc12345' })
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts a full UUID-format sessionId', () => {
+    const result = PulseChatRequestSchema.safeParse({
+      ...base,
+      sessionId: 'abc12345-1234-1234-1234-123456789012',
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects sessionId containing invalid characters (path traversal attempt)', () => {
+    const result = PulseChatRequestSchema.safeParse({
+      ...base,
+      sessionId: '../../../etc/passwd',
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('accepts sessionId as undefined (optional field)', () => {
+    const result = PulseChatRequestSchema.safeParse({ ...base })
+    expect(result.success).toBe(true)
+    expect(result.data?.sessionId).toBeUndefined()
   })
 })

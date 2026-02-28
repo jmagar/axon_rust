@@ -22,6 +22,11 @@ const STALE_SWEEP_INTERVAL_SECS: u64 = 30;
 const POLL_BACKOFF_INIT_MS: u64 = 100;
 const POLL_BACKOFF_MAX_MS: u64 = 6400;
 
+/// AMQP reconnect backoff: starts at 2s, doubles on each consecutive failure,
+/// capped at 60s.  Reset to the initial value on a successful connection.
+const AMQP_RECONNECT_INIT_SECS: u64 = 2;
+const AMQP_RECONNECT_MAX_SECS: u64 = 60;
+
 /// A boxed async function that processes a single claimed job.
 /// It must handle its own error logging/marking internally (returns `()`).
 pub(crate) type ProcessFn =
@@ -116,6 +121,78 @@ async fn sweep_stale_jobs(
     }
 }
 
+/// Claim a delivery, ack/nack appropriately, and return the job future to push
+/// into the in-flight set (if the job was successfully claimed) along with its
+/// permit (which must be dropped when the job completes).
+///
+/// Returns `Ok(Some(fut))` — job was claimed, caller pushes to inflight.
+/// Returns `Ok(None)` — delivery was malformed or already claimed; acked+skipped.
+/// Returns `Err(_)` — ack/nack failed or semaphore closed; lane should exit.
+///
+/// The returned future is NOT `Send` because `ProcessFn` returns a `!Send`
+/// future.  This is fine — the entire lane runs on a single async task.
+async fn claim_delivery(
+    delivery: lapin::message::Delivery,
+    cfg: &Config,
+    pool: &PgPool,
+    wc: &WorkerConfig,
+    lane: usize,
+    process_fn: &ProcessFn,
+    semaphore: &Arc<tokio::sync::Semaphore>,
+) -> Result<Option<Pin<Box<dyn Future<Output = ()>>>>, Box<dyn std::error::Error>> {
+    let parsed = std::str::from_utf8(&delivery.data)
+        .ok()
+        .and_then(|s| Uuid::parse_str(s.trim()).ok());
+    let Some(job_id) = parsed else {
+        log_warn(&format!(
+            "{} worker lane={lane} malformed delivery payload (len={}), acking and skipping",
+            wc.job_kind,
+            delivery.data.len()
+        ));
+        delivery.ack(BasicAckOptions::default()).await?;
+        return Ok(None);
+    };
+
+    // Reserve capacity first so we never claim a job without a runnable slot.
+    let permit = semaphore.clone().acquire_owned().await?;
+    match claim_pending_by_id(pool, wc.table, job_id).await {
+        Ok(true) => {
+            delivery.ack(BasicAckOptions::default()).await?;
+            let fut = process_fn(cfg.clone(), pool.clone(), job_id);
+            Ok(Some(Box::pin(async move {
+                fut.await;
+                drop(permit);
+            })))
+        }
+        Ok(false) => {
+            drop(permit);
+            // Another lane claimed this ID first; ack and skip.
+            delivery.ack(BasicAckOptions::default()).await?;
+            Ok(None)
+        }
+        Err(e) => {
+            drop(permit);
+            log_warn(&format!(
+                "{} worker lane={lane} DB error claiming job {job_id}; nacking for retry: {e}",
+                wc.job_kind
+            ));
+            if let Err(nack_err) = delivery
+                .nack(BasicNackOptions {
+                    requeue: true,
+                    ..Default::default()
+                })
+                .await
+            {
+                log_warn(&format!(
+                    "{} worker lane={lane} failed to nack delivery: {nack_err}",
+                    wc.job_kind
+                ));
+            }
+            Ok(None)
+        }
+    }
+}
+
 /// Generic AMQP consumer lane. Listens for job IDs on the queue, claims them,
 /// and dispatches to `process_fn` concurrently using `FuturesUnordered` with a
 /// semaphore for backpressure. Runs stale sweeps on idle timeout.
@@ -148,14 +225,28 @@ async fn run_amqp_lane(
         wc.job_kind, wc.queue_name, wc.lane_count
     ));
 
-    let mut inflight = FuturesUnordered::new();
+    // ProcessFn returns !Send futures; the lane runs on a single task so Send
+    // is not required.
+    let mut inflight: FuturesUnordered<Pin<Box<dyn Future<Output = ()>>>> = FuturesUnordered::new();
+
+    // Sweep interval used in the full-capacity backpressure path so that
+    // watchdog sweeps keep firing even when all semaphore permits are held.
+    let mut sweep_interval = tokio::time::interval(Duration::from_secs(STALE_SWEEP_INTERVAL_SECS));
+    sweep_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    sweep_interval.tick().await; // consume the immediate first tick
 
     loop {
         // If all permits are consumed, block until at least one in-flight job
-        // completes. This guarantees forward progress and prevents claiming new
-        // jobs that cannot run yet.
+        // completes OR the sweep interval fires.  Without the select! here,
+        // sweeps stop firing for the entire duration of any saturated burst,
+        // which can span hours for long-running jobs.
         if semaphore.available_permits() == 0 && !inflight.is_empty() {
-            let _ = inflight.next().await;
+            tokio::select! {
+                _ = inflight.next() => {}
+                _ = sweep_interval.tick() => {
+                    sweep_stale_jobs(cfg, &pool, wc, "amqp", lane).await;
+                }
+            }
             continue;
         }
 
@@ -195,54 +286,10 @@ async fn run_amqp_lane(
             }
         };
 
-        let parsed = std::str::from_utf8(&delivery.data)
-            .ok()
-            .and_then(|s| Uuid::parse_str(s.trim()).ok());
-        let Some(job_id) = parsed else {
-            log_warn(&format!(
-                "{} worker lane={lane} malformed delivery payload (len={}), acking and skipping",
-                wc.job_kind,
-                delivery.data.len()
-            ));
-            delivery.ack(BasicAckOptions::default()).await?;
-            continue;
-        };
-
-        // Reserve capacity first so we never claim a job without a runnable slot.
-        let permit = semaphore.clone().acquire_owned().await?;
-        match claim_pending_by_id(&pool, wc.table, job_id).await {
-            Ok(true) => {
-                delivery.ack(BasicAckOptions::default()).await?;
-                let fut = process_fn(cfg.clone(), pool.clone(), job_id);
-                inflight.push(async move {
-                    fut.await;
-                    drop(permit);
-                });
-            }
-            Ok(false) => {
-                drop(permit);
-                // Another lane claimed this ID first; ack and skip.
-                delivery.ack(BasicAckOptions::default()).await?;
-            }
-            Err(e) => {
-                drop(permit);
-                log_warn(&format!(
-                    "{} worker lane={lane} DB error claiming job {job_id}; nacking for retry: {e}",
-                    wc.job_kind
-                ));
-                if let Err(nack_err) = delivery
-                    .nack(BasicNackOptions {
-                        requeue: true,
-                        ..Default::default()
-                    })
-                    .await
-                {
-                    log_warn(&format!(
-                        "{} worker lane={lane} failed to nack delivery: {nack_err}",
-                        wc.job_kind
-                    ));
-                }
-            }
+        if let Some(job_fut) =
+            claim_delivery(delivery, cfg, &pool, wc, lane, process_fn, &semaphore).await?
+        {
+            inflight.push(job_fut);
         }
     }
 
@@ -282,10 +329,26 @@ async fn run_polling_lane(
     let mut inflight = FuturesUnordered::new();
 
     loop {
-        // If all permits are consumed, block until one in-flight job completes.
-        // Without this gate, permit acquisition can starve in-flight polling.
+        // If all permits are consumed, block until one in-flight job completes
+        // OR the sweep interval fires.  Using a plain .await here would block
+        // sweeps for the entire duration of any saturated burst.
         if semaphore.available_permits() == 0 && !inflight.is_empty() {
-            let _ = inflight.next().await;
+            let sweep_due = last_sweep.elapsed() >= Duration::from_secs(STALE_SWEEP_INTERVAL_SECS);
+            if sweep_due {
+                sweep_stale_jobs(cfg, &pool, wc, "polling", lane).await;
+                last_sweep = Instant::now();
+                continue;
+            }
+            let remaining = Duration::from_secs(STALE_SWEEP_INTERVAL_SECS) - last_sweep.elapsed();
+            let sleep = tokio::time::sleep(remaining);
+            tokio::pin!(sleep);
+            tokio::select! {
+                _ = inflight.next() => {}
+                _ = &mut sleep => {
+                    sweep_stale_jobs(cfg, &pool, wc, "polling", lane).await;
+                    last_sweep = Instant::now();
+                }
+            }
             continue;
         }
 
@@ -376,6 +439,7 @@ pub(crate) async fn run_job_worker(
     };
 
     if amqp_available {
+        let mut reconnect_delay_secs = AMQP_RECONNECT_INIT_SECS;
         loop {
             let futs: Vec<_> = (1..=wc.lane_count)
                 .map(|lane| {
@@ -383,19 +447,32 @@ pub(crate) async fn run_job_worker(
                 })
                 .collect();
             let results = futures_util::future::join_all(futs).await;
+            let mut any_unexpected = false;
             for result in results {
                 if let Err(err) = result {
                     log_warn(&format!(
                         "{} worker lane terminated unexpectedly: {err}",
                         wc.job_kind
                     ));
+                    any_unexpected = true;
                 }
             }
-            log_warn(&format!(
-                "{} worker restarting AMQP lanes in 2s",
-                wc.job_kind
-            ));
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            // Back off only on failures; a clean shutdown (no errors) resets
+            // the delay so the next cold-start reconnects quickly.
+            if any_unexpected {
+                log_warn(&format!(
+                    "{} worker restarting AMQP lanes in {reconnect_delay_secs}s",
+                    wc.job_kind
+                ));
+                tokio::time::sleep(Duration::from_secs(reconnect_delay_secs)).await;
+                reconnect_delay_secs = (reconnect_delay_secs * 2).min(AMQP_RECONNECT_MAX_SECS);
+            } else {
+                reconnect_delay_secs = AMQP_RECONNECT_INIT_SECS;
+                log_warn(&format!(
+                    "{} worker AMQP lanes exited cleanly, reconnecting immediately",
+                    wc.job_kind
+                ));
+            }
         }
     }
 

@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { buildPulseSystemPrompt } from '@/lib/pulse/rag'
 
+// Defaults for the fields added after these tests were originally written.
+const BASE_REQUEST_EXTRAS = {
+  disableSlashCommands: false,
+  noSessionPersistence: false,
+  fallbackModel: '',
+  allowedTools: '',
+  disallowedTools: '',
+} as const
+
 describe('pulse rag prompt builder', () => {
   it('includes permission level', () => {
     const prompt = buildPulseSystemPrompt(
@@ -16,6 +25,7 @@ describe('pulse rag prompt builder', () => {
         maxTurns: 0,
         maxBudgetUsd: 0,
         appendSystemPrompt: '',
+        ...BASE_REQUEST_EXTRAS,
       },
       [],
     )
@@ -36,6 +46,7 @@ describe('pulse rag prompt builder', () => {
         maxTurns: 0,
         maxBudgetUsd: 0,
         appendSystemPrompt: '',
+        ...BASE_REQUEST_EXTRAS,
       },
       [
         {
@@ -67,6 +78,7 @@ describe('pulse rag prompt builder', () => {
         maxTurns: 0,
         maxBudgetUsd: 0,
         appendSystemPrompt: '',
+        ...BASE_REQUEST_EXTRAS,
       },
       [],
     )
@@ -95,6 +107,7 @@ describe('pulse rag prompt builder', () => {
         maxTurns: 0,
         maxBudgetUsd: 0,
         appendSystemPrompt: '',
+        ...BASE_REQUEST_EXTRAS,
       },
       [],
     )
@@ -117,6 +130,7 @@ describe('pulse rag prompt builder', () => {
         maxTurns: 0,
         maxBudgetUsd: 0,
         appendSystemPrompt: '',
+        ...BASE_REQUEST_EXTRAS,
       },
       [],
     )

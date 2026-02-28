@@ -1,57 +1,14 @@
 /**
- * Tests for the agent output parser logic from app/api/agents/route.ts.
+ * Tests for parseAgentsOutput from lib/agents/parser.ts.
  *
- * parseAgentsOutput is not exported from the route, so the logic is replicated
- * here verbatim. If the route implementation changes, update this copy to match.
- *
- * Parser rules (from route.ts):
+ * Parser rules:
  *  - Group header: no leading whitespace, ends with ':'
  *  - Agent line: starts with 2 spaces, contains ' \u2014 ' (em-dash with spaces)
  *  - Description: everything after the FIRST occurrence of ' \u2014 '
  */
 
 import { describe, expect, it } from 'vitest'
-
-// ── Local replica of parseAgentsOutput from app/api/agents/route.ts ──────────
-
-interface Agent {
-  name: string
-  description: string
-  source: string
-}
-
-function parseAgentsOutput(stdout: string): { agents: Agent[]; groups: string[] } {
-  const agents: Agent[] = []
-  const groups: string[] = []
-  let currentGroup = ''
-
-  for (const raw of stdout.split('\n')) {
-    const line = raw.trimEnd()
-    if (!line) continue
-
-    // Group header: no leading whitespace, ends with ':'
-    if (!line.startsWith(' ') && line.endsWith(':')) {
-      currentGroup = line.slice(0, -1).trim()
-      if (!groups.includes(currentGroup)) {
-        groups.push(currentGroup)
-      }
-      continue
-    }
-
-    // Agent line: starts with 2 spaces and contains ' — '
-    if (line.startsWith('  ') && line.includes(' \u2014 ')) {
-      const trimmed = line.trim()
-      const sepIdx = trimmed.indexOf(' \u2014 ')
-      if (sepIdx !== -1) {
-        const name = trimmed.slice(0, sepIdx).trim()
-        const description = trimmed.slice(sepIdx + 3).trim()
-        agents.push({ name, description, source: currentGroup })
-      }
-    }
-  }
-
-  return { agents, groups }
-}
+import { parseAgentsOutput } from '@/lib/agents/parser'
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

@@ -33,9 +33,8 @@ describe('pulse chat pane snapshots', () => {
         activeThreadSources: [],
         onRemoveSource: vi.fn(),
         onRetry: vi.fn(),
-        mobilePane: 'chat' as const,
-        onMobilePaneChange: vi.fn(),
-        isDesktop: true,
+        sourcesExpanded: false,
+        onSourcesExpandedChange: vi.fn(),
       }),
     )
 
@@ -75,9 +74,8 @@ describe('pulse chat pane snapshots', () => {
         activeThreadSources: ['https://tailwindcss.com/docs'],
         onRemoveSource: vi.fn(),
         onRetry: vi.fn(),
-        mobilePane: 'chat' as const,
-        onMobilePaneChange: vi.fn(),
-        isDesktop: false,
+        sourcesExpanded: false,
+        onSourcesExpandedChange: vi.fn(),
         requestNotice: 'Previous request replaced by your latest prompt.',
       }),
     )

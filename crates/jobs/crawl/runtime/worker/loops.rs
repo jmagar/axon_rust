@@ -10,6 +10,7 @@ use lapin::options::{BasicAckOptions, BasicConsumeOptions, BasicNackOptions};
 use lapin::types::FieldTable;
 use sqlx::PgPool;
 use std::error::Error;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio;
 use uuid::Uuid;
@@ -50,14 +51,15 @@ async fn run_worker_polling_loop(cfg: &Config, pool: &PgPool) -> Result<(), Box<
     if WORKER_CONCURRENCY <= 1 {
         return run_worker_polling_lane(cfg, pool, 1).await;
     }
-    // Use join! so a lane failure does not abruptly cancel the sibling lane
+    // Use join_all so a lane failure does not abruptly cancel sibling lanes
     // mid-job (which would leave jobs stuck in 'running' until the watchdog reclaims them).
-    let (r1, r2) = tokio::join!(
-        run_worker_polling_lane(cfg, pool, 1),
-        run_worker_polling_lane(cfg, pool, 2)
-    );
-    r1?;
-    r2?;
+    let results = futures_util::future::join_all(
+        (1..=WORKER_CONCURRENCY).map(|lane| run_worker_polling_lane(cfg, pool, lane)),
+    )
+    .await;
+    for r in results {
+        r?;
+    }
     Ok(())
 }
 
@@ -78,27 +80,13 @@ async fn run_worker_polling_lane(
             last_heartbeat = Instant::now();
         }
         if last_sweep.elapsed() >= Duration::from_secs(STALE_SWEEP_INTERVAL_SECS) {
-            match reclaim_stale_running_jobs(
+            run_watchdog_sweep(
                 pool,
                 lane,
                 cfg.watchdog_stale_timeout_secs,
                 cfg.watchdog_confirm_secs,
             )
-            .await
-            {
-                Ok(stats) => {
-                    if stats.stale_candidates > 0 || stats.reclaimed_jobs > 0 {
-                        log_info(&format!(
-                            "watchdog crawl sweep lane={} candidates={} marked={} reclaimed={}",
-                            lane,
-                            stats.stale_candidates,
-                            stats.marked_candidates,
-                            stats.reclaimed_jobs
-                        ));
-                    }
-                }
-                Err(err) => log_warn(&format!("watchdog sweep failed (lane={}): {}", lane, err)),
-            }
+            .await;
             last_sweep = Instant::now();
         }
         if let Some(job_id) = claim_next_pending(pool, TABLE).await? {
@@ -117,12 +105,31 @@ async fn run_worker_polling_lane(
     }
 }
 
-async fn handle_crawl_delivery(
-    cfg: &Config,
+/// Runs a single watchdog sweep and logs results. Shared by polling and AMQP lanes.
+async fn run_watchdog_sweep(pool: &PgPool, lane: usize, stale_secs: i64, confirm_secs: i64) {
+    match reclaim_stale_running_jobs(pool, lane, stale_secs, confirm_secs).await {
+        Ok(stats) => {
+            if stats.stale_candidates > 0 || stats.reclaimed_jobs > 0 {
+                log_info(&format!(
+                    "watchdog crawl sweep lane={} candidates={} marked={} reclaimed={}",
+                    lane, stats.stale_candidates, stats.marked_candidates, stats.reclaimed_jobs
+                ));
+            }
+        }
+        Err(err) => log_warn(&format!("watchdog sweep failed (lane={}): {}", lane, err)),
+    }
+}
+
+/// Parses, claims, and acks a single AMQP delivery.
+///
+/// Returns `Some(job_id)` when the delivery was successfully claimed and the
+/// ack was sent, or `None` if the delivery was malformed, already claimed, or
+/// encountered a DB error (in which case the delivery is nacked).
+async fn claim_delivery(
     pool: &PgPool,
     delivery: lapin::message::Delivery,
     lane: usize,
-) {
+) -> Option<Uuid> {
     let parsed = std::str::from_utf8(&delivery.data)
         .ok()
         .and_then(|s| Uuid::parse_str(s.trim()).ok());
@@ -136,7 +143,7 @@ async fn handle_crawl_delivery(
                 "failed to ack malformed crawl delivery (lane={lane}): {err}"
             ));
         }
-        return;
+        return None;
     };
 
     match claim_pending_by_id(pool, TABLE, job_id).await {
@@ -153,15 +160,7 @@ async fn handle_crawl_delivery(
                     "failed to ack crawl delivery (lane={lane}), processing anyway: {err}"
                 ));
             }
-            if let Err(err) = process_job(cfg, pool, job_id).await {
-                let error_text = err.to_string();
-                if let Err(mark_err) = mark_job_failed(pool, TABLE, job_id, &error_text).await {
-                    log_warn(&format!(
-                        "mark_job_failed error for crawl job {job_id}: {mark_err}"
-                    ));
-                }
-                log_warn(&format!("worker failed crawl job {job_id}: {error_text}"));
-            }
+            Some(job_id)
         }
         Ok(false) => {
             if let Err(err) = delivery.ack(BasicAckOptions::default()).await {
@@ -169,6 +168,7 @@ async fn handle_crawl_delivery(
                     "failed to ack already-claimed crawl delivery (lane={lane}): {err}"
                 ));
             }
+            None
         }
         Err(err) => {
             log_warn(&format!(
@@ -188,19 +188,67 @@ async fn handle_crawl_delivery(
                     "failed to nack crawl delivery for job {job_id} (lane={lane}): {nack_err}"
                 ));
             }
+            None
         }
     }
 }
 
-async fn run_amqp_worker_lane(
+/// Mutable interval handles shared across a single lane's consumer loop.
+struct LaneTimers<'a> {
+    heartbeat: &'a mut tokio::time::Interval,
+    sweep: &'a mut tokio::time::Interval,
+}
+
+/// Runs `process_job` for the given `job_id` while keeping heartbeat and watchdog
+/// sweep intervals alive. Returns once the job completes (success or failure).
+///
+/// `process_job` returns `Box<dyn Error>` which is `!Send`, so we cannot use
+/// `tokio::spawn`. Instead we pin the future and poll it inside a `select!` loop
+/// alongside the interval ticks. This keeps ticks responsive during long crawls
+/// while preserving the 1-job-per-lane guarantee.
+async fn run_job_with_ticks(
     cfg: &Config,
     pool: &PgPool,
+    job_id: Uuid,
+    lane: usize,
+    timers: &mut LaneTimers<'_>,
+) {
+    let job_fut = process_job(cfg, pool, job_id);
+    tokio::pin!(job_fut);
+    let result = loop {
+        tokio::select! {
+            result = &mut job_fut => break result,
+            _ = timers.heartbeat.tick() => {
+                log_info(&format!("crawl worker heartbeat lane={} alive", lane));
+            },
+            _ = timers.sweep.tick() => {
+                run_watchdog_sweep(pool, lane, cfg.watchdog_stale_timeout_secs, cfg.watchdog_confirm_secs).await;
+            },
+        }
+    };
+    if let Err(err) = result {
+        let error_text = err.to_string();
+        if let Err(mark_err) = mark_job_failed(pool, TABLE, job_id, &error_text).await {
+            log_warn(&format!(
+                "mark_job_failed error for crawl job {job_id}: {mark_err}"
+            ));
+        }
+        log_warn(&format!("worker failed crawl job {job_id}: {error_text}"));
+    }
+}
+
+/// Runs one AMQP consumer loop for a single lane. Returns an error when the
+/// consumer stream ends or the channel is closed. Callers wrap this in a
+/// reconnect loop via `run_amqp_lane_with_reconnect`.
+async fn run_amqp_worker_lane(
+    cfg: Arc<Config>,
+    pool: PgPool,
     lane: usize,
 ) -> Result<(), Box<dyn Error>> {
     // Hold `_conn` in scope for the entire consumer loop. open_amqp_connection_and_channel
     // returns the Connection; dropping it would close the backing TCP connection
     // and kill the consumer stream. Keeping _conn alive prevents that.
-    let (_conn, ch) = open_amqp_connection_and_channel(cfg, &cfg.crawl_queue).await?;
+    let (_conn, ch) = open_amqp_connection_and_channel(&cfg, &cfg.crawl_queue).await?;
     let consumer_tag = format!("axon-rust-crawl-worker-{lane}");
     let mut consumer = ch
         .basic_consume(
@@ -222,40 +270,25 @@ async fn run_amqp_worker_lane(
     heartbeat_interval.tick().await; // consume the immediate first tick
 
     loop {
-        let msg = tokio::select! {
-            msg = consumer.next() => match msg {
-                Some(msg) => msg,
-                None => break,
-            },
-            _ = heartbeat_interval.tick() => {
-                log_info(&format!("crawl worker heartbeat lane={} alive", lane));
-                continue;
-            },
-            _ = sweep_interval.tick() => {
-                match reclaim_stale_running_jobs(
-                    pool,
-                    lane,
-                    cfg.watchdog_stale_timeout_secs,
-                    cfg.watchdog_confirm_secs,
-                )
-                .await
-                {
-                    Ok(stats) => {
-                        if stats.stale_candidates > 0 || stats.reclaimed_jobs > 0 {
-                            log_info(&format!(
-                                "watchdog crawl sweep lane={} candidates={} marked={} reclaimed={}",
-                                lane,
-                                stats.stale_candidates,
-                                stats.marked_candidates,
-                                stats.reclaimed_jobs
-                            ));
-                        }
-                    }
-                    Err(err) => {
-                        log_warn(&format!("watchdog sweep failed (lane={}): {}", lane, err))
-                    }
+        // Poll for the next AMQP message while keeping heartbeat and sweep ticks alive.
+        let msg = {
+            let timers = LaneTimers {
+                heartbeat: &mut heartbeat_interval,
+                sweep: &mut sweep_interval,
+            };
+            tokio::select! {
+                msg = consumer.next() => match msg {
+                    Some(msg) => msg,
+                    None => break,
+                },
+                _ = timers.heartbeat.tick() => {
+                    log_info(&format!("crawl worker heartbeat lane={} alive", lane));
+                    continue;
+                },
+                _ = timers.sweep.tick() => {
+                    run_watchdog_sweep(&pool, lane, cfg.watchdog_stale_timeout_secs, cfg.watchdog_confirm_secs).await;
+                    continue;
                 }
-                continue;
             }
         };
         let delivery = match msg {
@@ -265,11 +298,55 @@ async fn run_amqp_worker_lane(
                 continue;
             }
         };
-
-        handle_crawl_delivery(cfg, pool, delivery, lane).await;
+        // Claim the delivery; skip if malformed, already taken, or DB error.
+        let Some(job_id) = claim_delivery(&pool, delivery, lane).await else {
+            continue;
+        };
+        // Run the job while keeping heartbeat and sweep ticks responsive.
+        // process_job is !Send (Box<dyn Error>), so we pin it here rather than spawning.
+        // This preserves the 1-job-per-lane guarantee.
+        let mut timers = LaneTimers {
+            heartbeat: &mut heartbeat_interval,
+            sweep: &mut sweep_interval,
+        };
+        run_job_with_ticks(&cfg, &pool, job_id, lane, &mut timers).await;
     }
 
     Err(format!("crawl worker consumer stream ended unexpectedly (lane={lane})").into())
+}
+
+/// Initial reconnect backoff in seconds. Doubles on each attempt, capped at 60s.
+const RECONNECT_BACKOFF_INITIAL_SECS: u64 = 2;
+const RECONNECT_BACKOFF_MAX_SECS: u64 = 60;
+
+/// Wraps `run_amqp_worker_lane` in an infinite reconnect loop with exponential
+/// backoff. When the channel dies (AMQP consumer_timeout, broker restart, etc.),
+/// the current job completes normally (it holds no AMQP channel reference), then
+/// the lane reconnects and resumes. This function never returns; callers use
+/// `tokio::join!` to run multiple lanes concurrently.
+async fn run_amqp_lane_with_reconnect(cfg: Arc<Config>, pool: PgPool, lane: usize) {
+    let mut backoff_secs = RECONNECT_BACKOFF_INITIAL_SECS;
+    loop {
+        match run_amqp_worker_lane(Arc::clone(&cfg), pool.clone(), lane).await {
+            Ok(()) => {
+                // run_amqp_worker_lane only returns Ok if the consumer stream
+                // ended cleanly, which shouldn't happen in normal operation.
+                log_warn(&format!(
+                    "crawl worker lane={lane} AMQP loop exited cleanly; reconnecting"
+                ));
+            }
+            Err(err) => {
+                log_warn(&format!(
+                    "crawl worker lane={lane} AMQP error: {err}; reconnecting in {backoff_secs}s"
+                ));
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+        backoff_secs = (backoff_secs * 2).min(RECONNECT_BACKOFF_MAX_SECS);
+        log_info(&format!(
+            "crawl worker lane={lane} attempting AMQP reconnect"
+        ));
+    }
 }
 
 pub(crate) async fn run_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
@@ -313,16 +390,25 @@ pub(crate) async fn run_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     if !amqp_available {
         return run_worker_polling_loop(cfg, &pool).await;
     }
+    let cfg_arc = Arc::new(cfg.clone());
     if WORKER_CONCURRENCY <= 1 {
-        return run_amqp_worker_lane(cfg, &pool, 1).await;
+        run_amqp_lane_with_reconnect(cfg_arc, pool, 1).await;
+        return Ok(());
     }
-    // Use join! so a lane failure does not abruptly cancel the sibling lane
-    // mid-job (which would leave jobs stuck in 'running' until the watchdog reclaims them).
-    let (r1, r2) = tokio::join!(
-        run_amqp_worker_lane(cfg, &pool, 1),
-        run_amqp_worker_lane(cfg, &pool, 2)
-    );
-    r1?;
-    r2?;
+
+    // Run all lanes concurrently. Each lane has its own reconnect loop, so a
+    // channel death in one lane does not affect the others — each reconnects
+    // independently. Lane independence is achieved by the reconnect loop, not
+    // by separate OS threads: if one lane's channel dies it reconnects while
+    // the others continue uninterrupted.
+    //
+    // Note: run_amqp_lane_with_reconnect is !Send (process_job uses Box<dyn Error>),
+    // so tokio::spawn cannot be used here. join_all runs all lanes on the same
+    // task, which is correct — each lane has its own reconnect guard.
+    futures_util::future::join_all(
+        (1..=WORKER_CONCURRENCY)
+            .map(|lane| run_amqp_lane_with_reconnect(Arc::clone(&cfg_arc), pool.clone(), lane)),
+    )
+    .await;
     Ok(())
 }

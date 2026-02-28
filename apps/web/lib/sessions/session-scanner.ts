@@ -68,7 +68,7 @@ async function extractPreview(absolutePath: string): Promise<string | undefined>
         if (text.length > 500 && !/[.?!]/.test(text.slice(0, 200))) continue
 
         // We have a good candidate — trim to 80 chars.
-        return text.length > 80 ? text.slice(0, 80) + '…' : text
+        return text.length > 80 ? `${text.slice(0, 80)}…` : text
       }
 
       return undefined
@@ -97,13 +97,9 @@ export function cleanProjectName(dirName: string): string {
   const last = parts[parts.length - 1] ?? ''
   const prev = parts[parts.length - 2] ?? ''
 
-  // If the last segment is a known suffix, include the segment before it.
-  if (SUFFIX_WORDS.has(last)) {
-    return `${prev}-${last}`
-  }
-
+  // If the last segment is a known suffix, drop it and return just prev.
   // Otherwise show the last two path segments for context (e.g., "my-project").
-  return `${prev}-${last}`
+  return SUFFIX_WORDS.has(last) ? prev : `${prev}-${last}`
 }
 
 function sessionId(absolutePath: string): string {
@@ -145,12 +141,14 @@ export async function scanSessions(limit = 20): Promise<SessionFile[]> {
 
   for (const projectName of projectNames) {
     const projectPath = path.join(root, projectName)
+    if (!projectPath.startsWith(root + path.sep)) continue
     if (!(await isDirEntry(projectPath))) continue
 
     const fileNames = await readDirEntries(projectPath)
     for (const fileName of fileNames) {
       if (!fileName.endsWith('.jsonl')) continue
       const absolutePath = path.join(projectPath, fileName)
+      if (!absolutePath.startsWith(root + path.sep)) continue
       try {
         const stat = await fs.stat(absolutePath)
         if (!stat.isFile()) continue

@@ -86,9 +86,9 @@
   --highlight: oklch(0.8 0.18 160);
   --axon-bg: #030712;
   --axon-bg-elevated: #091225;
-  --axon-surface-1: rgba(10, 18, 35, 0.5);
-  --axon-surface-2: rgba(10, 18, 35, 0.35);
-  --axon-surface-3: rgba(15, 23, 42, 0.12);
+  --axon-surface-1: rgba(10, 18, 35, 0.62);
+  --axon-surface-2: rgba(10, 18, 35, 0.48);
+  --axon-surface-3: rgba(15, 23, 42, 0.28);
   --axon-border: rgba(255, 135, 175, 0.12);
   --axon-border-strong: rgba(255, 135, 175, 0.22);
   --axon-accent-blue: #ff87af;

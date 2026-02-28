@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import type { Agent } from '@/app/api/agents/route'
+import { ErrorBoundary } from '@/components/ui/error-boundary'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -136,7 +137,7 @@ function GroupSection({ source, agents }: { source: string; agents: Agent[] }) {
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
-export default function AgentsPage() {
+function AgentsPageInner() {
   const router = useRouter()
   const [agents, setAgents] = useState<Agent[]>([])
   const [groups, setGroups] = useState<string[]>([])
@@ -144,11 +145,11 @@ export default function AgentsPage() {
   const [error, setError] = useState<string | null>(null)
   const [spinning, setSpinning] = useState(false)
 
-  const fetchAgents = useCallback(async () => {
+  const fetchAgents = useCallback(async (signal?: AbortSignal) => {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/agents')
+      const res = await fetch('/api/agents', { signal })
       const data = (await res.json()) as AgentsResponse
       if (data.error) {
         setError(data.error)
@@ -159,6 +160,7 @@ export default function AgentsPage() {
         setGroups(data.groups)
       }
     } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return
       setError(err instanceof Error ? err.message : 'Failed to fetch agents')
       setAgents([])
       setGroups([])
@@ -169,12 +171,14 @@ export default function AgentsPage() {
   }, [])
 
   useEffect(() => {
-    fetchAgents()
+    const controller = new AbortController()
+    void fetchAgents(controller.signal)
+    return () => controller.abort()
   }, [fetchAgents])
 
   function handleRefresh() {
     setSpinning(true)
-    fetchAgents()
+    void fetchAgents()
   }
 
   return (
@@ -299,5 +303,13 @@ export default function AgentsPage() {
         </div>
       </main>
     </div>
+  )
+}
+
+export default function AgentsPage() {
+  return (
+    <ErrorBoundary>
+      <AgentsPageInner />
+    </ErrorBoundary>
   )
 }

@@ -73,6 +73,19 @@ export interface ClaudeBuildExtra {
   toolsRestrict?: string
 }
 
+// `/home/node` is the container user's home; process.env.HOME is NOT included because it
+// resolves to the developer's host home dir in test/dev environments, making path-traversal
+// attacks (e.g. ../../etc/passwd from a cwd deep inside HOME) pass the allowlist check.
+const ALLOWED_DIR_ROOTS = ['/home/node', '/tmp', '/workspace']
+
+function validateAddDir(dir: string): string | null {
+  const resolved = path.resolve(dir)
+  if (ALLOWED_DIR_ROOTS.some((root) => resolved.startsWith(root + path.sep) || resolved === root)) {
+    return resolved
+  }
+  return null
+}
+
 export function buildClaudeArgs(
   prompt: string,
   systemPrompt: string,
@@ -93,8 +106,9 @@ export function buildClaudeArgs(
     '--mcp-config',
     '/home/node/.claude/mcp.json',
     '--strict-mcp-config',
-    // No TTY in the container — skip all interactive permission prompts.
-    '--dangerously-skip-permissions',
+    // Allow operators to disable via PULSE_SKIP_PERMISSIONS=false.
+    // Default true because the container has no TTY.
+    ...(process.env.PULSE_SKIP_PERMISSIONS !== 'false' ? ['--dangerously-skip-permissions'] : []),
     // Stream partial tool inputs and thinking blocks as they arrive.
     // Requires -p + stream-json (both already set above).
     '--include-partial-messages',
@@ -127,17 +141,34 @@ export function buildClaudeArgs(
   if (extra?.fallbackModel) {
     args.push('--fallback-model', extra.fallbackModel)
   }
+  // Allow valid tool identifiers: letters, digits, underscore, wildcards, parens (e.g. Bash(*))
+  const TOOL_ENTRY_RE = /^[a-zA-Z][a-zA-Z0-9_*(),:]*$/
   if (extra?.allowedTools) {
-    args.push('--allowedTools', extra.allowedTools)
+    const filtered = extra.allowedTools
+      .split(',')
+      .map((t) => t.trim())
+      .filter((t) => TOOL_ENTRY_RE.test(t))
+      .join(',')
+    if (filtered) {
+      args.push('--allowedTools', filtered)
+    }
   }
   if (extra?.disallowedTools) {
-    args.push('--disallowedTools', extra.disallowedTools)
+    const filtered = extra.disallowedTools
+      .split(',')
+      .map((t) => t.trim())
+      .filter((t) => TOOL_ENTRY_RE.test(t))
+      .join(',')
+    if (filtered) {
+      args.push('--disallowedTools', filtered)
+    }
   }
   if (extra?.addDir) {
     for (const dir of extra.addDir.split(',')) {
       const trimmed = dir.trim()
-      if (trimmed) {
-        args.push('--add-dir', trimmed)
+      const validated = trimmed ? validateAddDir(trimmed) : null
+      if (validated) {
+        args.push('--add-dir', validated)
       }
     }
   }

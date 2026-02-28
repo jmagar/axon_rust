@@ -248,7 +248,7 @@ export async function POST(request: Request) {
         })
 
         child.stderr.on('data', (chunk: Buffer) => {
-          stderr += chunk.toString()
+          if (stderr.length < 16_384) stderr += chunk.toString()
         })
 
         child.on('error', (error: Error) => {

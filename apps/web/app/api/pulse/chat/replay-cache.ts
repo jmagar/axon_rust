@@ -21,6 +21,11 @@ export function pruneReplayCache(now: number): void {
   }
 }
 
+// Periodic TTL eviction — runs once per module load on the server side only.
+if (typeof window === 'undefined') {
+  setInterval(() => pruneReplayCache(Date.now()), 60_000)
+}
+
 export function computeReplayKey(data: {
   prompt: string
   documentMarkdown: string

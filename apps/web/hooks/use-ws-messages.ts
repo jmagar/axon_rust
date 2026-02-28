@@ -291,14 +291,7 @@ export function useWsMessagesProvider() {
   const currentJobIdRef = useRef<string | null>(null)
   const [lifecycleEntries, setLifecycleEntries] = useState<WsLifecycleEntry[]>([])
   const [cancelResponse, setCancelResponse] = useState<CancelResponseState | null>(null)
-  const [workspaceMode, setWorkspaceMode] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return 'pulse'
-    try {
-      return window.localStorage.getItem('axon.web.workspace-mode') ?? 'pulse'
-    } catch {
-      return 'pulse'
-    }
-  })
+  const [workspaceMode, setWorkspaceMode] = useState<string | null>('pulse')
   const [workspacePrompt, setWorkspacePrompt] = useState<string | null>(null)
   const [workspacePromptVersion, setWorkspacePromptVersion] = useState(0)
   const [workspaceContext, setWorkspaceContext] = useState<WorkspaceContextState | null>(null)
@@ -343,6 +336,43 @@ export function useWsMessagesProvider() {
       // Ignore storage errors.
     }
   }, [workspaceMode])
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem('axon.web.workspace-mode')
+      if (stored) setWorkspaceMode(stored)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      const m = localStorage.getItem('axon.web.pulse-model') as PulseWorkspaceModel
+      if (m && ['sonnet', 'opus', 'haiku'].includes(m)) setPulseModel(m)
+      const p = localStorage.getItem('axon.web.pulse-permission') as PulseWorkspacePermission
+      if (p && ['plan', 'accept-edits', 'bypass-permissions'].includes(p))
+        setPulsePermissionLevel(p)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('axon.web.pulse-model', pulseModel)
+    } catch {
+      /* ignore */
+    }
+  }, [pulseModel])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('axon.web.pulse-permission', pulsePermissionLevel)
+    } catch {
+      /* ignore */
+    }
+  }, [pulsePermissionLevel])
 
   const setCurrentJobIdTracked = useCallback((jobId: string | null) => {
     currentJobIdRef.current = jobId

@@ -68,7 +68,7 @@ function SessionCard({
             {session.project}
           </span>
         )}
-        <span className="block truncate text-[11px]" style={{ color: 'var(--axon-text-muted)' }}>
+        <span className="block truncate text-[11px]" style={{ color: 'white' }}>
           {session.preview ??
             (session.filename.length > 20 ? `${session.filename.slice(0, 20)}…` : session.filename)}
         </span>
@@ -105,7 +105,7 @@ export function RecentSessions() {
     <div className="mt-3">
       <div
         className="mb-2 px-1 text-[10px] font-semibold uppercase tracking-wider"
-        style={{ color: 'var(--axon-text-dim)' }}
+        style={{ color: '#ff87af' }}
       >
         Recent Sessions
       </div>

@@ -423,7 +423,7 @@ impl AxonMcpServer {
 
     async fn handle_crawl(&self, req: CrawlRequest) -> Result<AxonToolResponse, ErrorData> {
         let cfg = apply_crawl_overrides(self.cfg.as_ref(), &req);
-        let response_mode = parse_response_mode(req.response_mode);
+        let _response_mode = parse_response_mode(req.response_mode);
         match req.subaction {
             CrawlSubaction::Start => {
                 let urls = req
@@ -462,13 +462,11 @@ impl AxonMcpServer {
                 let job = get_job(&cfg, id)
                     .await
                     .map_err(|e| internal_error(e.to_string()))?;
-                respond_with_mode(
+                Ok(AxonToolResponse::ok(
                     "crawl",
                     "status",
-                    response_mode,
-                    &format!("crawl-status-{id}"),
                     serde_json::json!({ "job": job }),
-                )
+                ))
             }
             CrawlSubaction::Cancel => {
                 let id = parse_job_id(req.job_id.as_ref())?;
@@ -493,13 +491,11 @@ impl AxonMcpServer {
                     .skip(offset)
                     .take(limit as usize)
                     .collect::<Vec<_>>();
-                respond_with_mode(
+                Ok(AxonToolResponse::ok(
                     "crawl",
                     "list",
-                    response_mode,
-                    "crawl-list",
                     serde_json::json!({ "jobs": jobs, "limit": limit, "offset": offset }),
-                )
+                ))
             }
             CrawlSubaction::Cleanup => {
                 let deleted = cleanup_jobs(&cfg)
@@ -1459,13 +1455,7 @@ impl AxonMcpServer {
         let payload = domains_payload(self.cfg.as_ref(), limit, offset)
             .await
             .map_err(|e| internal_error(e.to_string()))?;
-        respond_with_mode(
-            "domains",
-            "domains",
-            parse_response_mode(req.response_mode),
-            "domains",
-            payload,
-        )
+        Ok(AxonToolResponse::ok("domains", "domains", payload))
     }
 
     async fn handle_sources(&self, req: SourcesRequest) -> Result<AxonToolResponse, ErrorData> {
@@ -1474,13 +1464,7 @@ impl AxonMcpServer {
         let payload = sources_payload(self.cfg.as_ref(), limit, offset)
             .await
             .map_err(|e| internal_error(e.to_string()))?;
-        respond_with_mode(
-            "sources",
-            "sources",
-            parse_response_mode(req.response_mode),
-            "sources",
-            payload,
-        )
+        Ok(AxonToolResponse::ok("sources", "sources", payload))
     }
 
     async fn handle_stats(&self, _req: StatsRequest) -> Result<AxonToolResponse, ErrorData> {

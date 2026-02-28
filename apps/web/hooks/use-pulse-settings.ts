@@ -37,9 +37,6 @@ export const DEFAULT_PULSE_SETTINGS: PulseSettings = {
   toolsRestrict: '',
 }
 
-// TODO: wire new settings fields (disableSlashCommands, noSessionPersistence, fallbackModel,
-// allowedTools, disallowedTools) from usePulseSettings in pulse-workspace.tsx
-
 export function usePulseSettings() {
   const [settings, setSettings] = useState<PulseSettings>(DEFAULT_PULSE_SETTINGS)
 

@@ -293,7 +293,7 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
               ref={contentScrollRef}
               onScroll={() => rememberScroll('content', contentScrollRef.current?.scrollTop ?? 0)}
               className="flex max-h-[76vh] overflow-hidden rounded-[10px] border border-[rgba(255,135,175,0.1)]"
-              style={{ background: 'rgba(3, 7, 18, 0.25)' }}
+              style={{ background: 'rgba(3, 7, 18, 0.42)' }}
             >
               {isScreenshotMode ? (
                 <div className="flex-1 overflow-y-auto p-2 text-sm leading-[1.65] text-[var(--axon-text-secondary)] sm:p-3 md:p-4">
@@ -349,7 +349,7 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
           ref={statsScrollRef}
           onScroll={() => rememberScroll('stats', statsScrollRef.current?.scrollTop ?? 0)}
           className="max-h-[72vh] space-y-4 overflow-y-auto rounded-[10px] border border-[rgba(255,135,175,0.1)] p-4"
-          style={{ background: 'rgba(3, 7, 18, 0.25)' }}
+          style={{ background: 'rgba(3, 7, 18, 0.42)' }}
         >
           {logLines.length > 0 && <LogViewer lines={logLines} />}
           <div className="font-mono text-xs">

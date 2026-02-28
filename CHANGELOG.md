@@ -9,6 +9,7 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
+| `ebca63c` | fix(web) | add Settings2 icon import to omnibox + changelog update |
 | `d3f8047` | fix(ci) | resolve sccache and cargo audit failures |
 | `03b1ef3` | fix(web) | remove dangling useRouter() call from omnibox |
 | `9d98e86` | fix(web) | replace !important with :root specificity for slate placeholder CSS |
@@ -60,6 +61,16 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 | `1dd74f2` | feat(web) | crawl download routes — pack, zip, and per-file downloads |
 
 ### Highlights
+
+#### Security Hardening + Worker Resilience (ebca63c..HEAD)
+- **SSRF guards (web):** `validateAddDir()` in `buildClaudeArgs` checks `--add-dir` paths against `ALLOWED_DIR_ROOTS` (`/home/node`, `/tmp`, `/workspace`); `validateStatusUrl()` in `/api/mcp/status` blocks `localhost`, `127.x`, `10.x`, `192.168.x`, `172.16-31.x`, and IPv6 loopback/ULA ranges before probing MCP HTTP servers.
+- **Input sanitisation (web):** `--allowedTools` / `--disallowedTools` values now filtered through `TOOL_ENTRY_RE` (`/^[a-zA-Z][a-zA-Z0-9_*(),:]*$/`) — malformed entries silently dropped. `PULSE_SKIP_PERMISSIONS` env var makes `--dangerously-skip-permissions` opt-out instead of hardcoded.
+- **AMQP reconnect backoff (Rust):** `worker_lane.rs` adds exponential backoff (2 s → 60 s) on consecutive AMQP failures; resets on successful reconnect. Prevents thundering-herd against RabbitMQ on restart.
+- **Dynamic multi-lane workers (Rust):** `loops.rs` replaces hardcoded `tokio::join!(lane1, lane2)` with `join_all(1..=WORKER_CONCURRENCY)` — lane count is now driven by config, not compile-time constants.
+- **`claim_delivery()` helper (Rust):** extracts semaphore-acquire + DB claim + ack/nack into a single unit; prevents job leaks on ack failure.
+- **MCP response cleanup (Rust):** `respond_with_mode` removed from crawl `status`/`list` and `domains` handlers — always inline; `#[allow(dead_code)]` + comment on `response_mode` struct fields clarify intent.
+- **New test coverage:** sessions scanner/parser tests (`__tests__/sessions/`), expanded `build-claude-args.test.ts`, `mcp/route.test.ts`, `agents/parser.test.ts`.
+- **New helpers:** `error-boundary.tsx`, `lib/agents/parser.ts`, `scripts/axon-mcp` launcher.
 
 #### PR Review Batch (93dd150..c246b22)
 - **Rust (5 fixes):** `env_bool()` now falls back to `default` for unknown/typo env values (not `false`); `authoritative_ratio` returns 0.0 when domain list is empty; `touch_running_extract_job` / `touch_running_ingest_job` removed — replaced with shared `common::job_ops::touch_running_job`; `handle_cancel` emits exit code 130 (SIGINT convention) instead of 0 so UI doesn't log canceled jobs as successful.

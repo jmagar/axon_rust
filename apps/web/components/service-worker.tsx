@@ -29,6 +29,16 @@ export function ServiceWorkerRegistration() {
       .register('/sw.js', { scope: '/' })
       .then((registration) => {
         console.info('[PWA] Service worker registered.', { scope: registration.scope })
+        registration.onupdatefound = () => {
+          const installingWorker = registration.installing
+          if (!installingWorker) return
+          installingWorker.onstatechange = () => {
+            if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              console.info('[PWA] New service worker available. Reloading...')
+              window.location.reload()
+            }
+          }
+        }
       })
       .catch((error) => {
         console.error('[PWA] Service worker registration failed.', error)

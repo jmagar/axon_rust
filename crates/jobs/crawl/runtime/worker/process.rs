@@ -324,7 +324,7 @@ async fn run_primary_with_optional_chrome_fallback(
         &ctx.url,
         initial_mode,
         &ctx.job_cfg.output_dir,
-        Some(progress_tx),
+        Some(progress_tx.clone()),
         false, // HTTP probe: sitemap runs in the final pass only
         ctx.previous_manifest.clone(),
     )
@@ -345,7 +345,7 @@ async fn run_primary_with_optional_chrome_fallback(
         &ctx.url,
         RenderMode::Chrome,
         &ctx.job_cfg.output_dir,
-        None,
+        Some(progress_tx),
         ctx.job_cfg.discover_sitemaps, // Chrome final pass: run sitemap if enabled
         ctx.previous_manifest.clone(),
     )

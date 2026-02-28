@@ -269,7 +269,7 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
     queueScenario((child) => {
       queueMicrotask(() => {
         child.stdout.write(
-          `${JSON.stringify({ type: 'result', result: '{"text":"Answer","operations":[]}', session_id: 'sess-abc123' })}\n`,
+          `${JSON.stringify({ type: 'result', result: '{"text":"Answer","operations":[]}', session_id: 'abcdef01-abcd-1234-5678-abcdef012345' })}\n`,
         )
         child.emit('close', 0, null)
       })
@@ -283,7 +283,7 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
       type: 'done',
       response: {
         text: 'Answer',
-        sessionId: 'sess-abc123',
+        sessionId: 'abcdef01-abcd-1234-5678-abcdef012345',
       },
     })
   })
@@ -292,18 +292,18 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
     queueScenario((child) => {
       queueMicrotask(() => {
         child.stdout.write(
-          `${JSON.stringify({ type: 'result', result: '{"text":"Resumed","operations":[]}', session_id: 'sess-resume-xyz' })}\n`,
+          `${JSON.stringify({ type: 'result', result: '{"text":"Resumed","operations":[]}', session_id: 'deadbeef-cafe-1234-5678-abcdef012345' })}\n`,
         )
         child.emit('close', 0, null)
       })
     })
 
-    await post(makeRequest({ prompt: 'hello', sessionId: 'sess-resume-xyz' }))
+    await post(makeRequest({ prompt: 'hello', sessionId: 'deadbeef-cafe-1234-5678-abcdef012345' }))
 
     const spawnArgs: string[] = spawnSpy.mock.calls[0]?.[1] ?? []
     const resumeIdx = spawnArgs.indexOf('--resume')
     expect(resumeIdx).toBeGreaterThanOrEqual(0)
-    expect(spawnArgs[resumeIdx + 1]).toBe('sess-resume-xyz')
+    expect(spawnArgs[resumeIdx + 1]).toBe('deadbeef-cafe-1234-5678-abcdef012345')
   })
 
   it('omits --resume from claude spawn args when sessionId is absent', async () => {

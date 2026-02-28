@@ -2,18 +2,27 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 
-type McpServerConfig = {
-  command?: string
-  args?: string[]
-  env?: Record<string, string>
-  url?: string
-  headers?: Record<string, string>
-}
+const McpServerConfigSchema = z.object({
+  command: z
+    .string()
+    // Allow only safe path characters and reject path-traversal sequences (..)
+    .regex(/^(?!.*\.\.)([/a-zA-Z0-9._-]+)$/)
+    .optional(),
+  args: z.array(z.string().max(500)).max(20).optional(),
+  env: z.record(z.string().regex(/^[A-Z_][A-Z0-9_]*/), z.string().max(1000)).optional(),
+  url: z.string().url().optional(),
+  headers: z.record(z.string().max(200), z.string().max(1000)).optional(),
+})
 
-type McpConfig = {
-  mcpServers: Record<string, McpServerConfig>
-}
+const McpConfigSchema = z.object({
+  mcpServers: z
+    .record(z.string().max(100), McpServerConfigSchema)
+    .refine((obj) => Object.keys(obj).length <= 50, { message: 'Too many servers (max 50)' }),
+})
+
+type McpConfig = z.infer<typeof McpConfigSchema>
 
 const MCP_JSON_PATH = path.join(os.homedir(), '.claude', 'mcp.json')
 
@@ -50,21 +59,23 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
+  // Requires X-Pulse-Request: 1 header — added by mcp/page.tsx fetch calls
+  if (request.headers.get('X-Pulse-Request') !== '1') {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
   try {
     const body = (await request.json()) as unknown
-    if (
-      !body ||
-      typeof body !== 'object' ||
-      !('mcpServers' in body) ||
-      typeof (body as McpConfig).mcpServers !== 'object'
-    ) {
+    const result = McpConfigSchema.safeParse(body)
+    if (!result.success) {
       return NextResponse.json(
-        { error: 'Body must have mcpServers: Record<string, McpServerConfig>' },
+        {
+          error: 'Body must have mcpServers: Record<string, McpServerConfig>',
+          details: result.error.flatten(),
+        },
         { status: 400 },
       )
     }
-    const config = body as McpConfig
-    await writeMcpConfig(config)
+    await writeMcpConfig(result.data)
     return NextResponse.json({ ok: true })
   } catch (err) {
     console.error('[MCP] PUT failed:', err)
@@ -73,6 +84,10 @@ export async function PUT(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  // Requires X-Pulse-Request: 1 header — added by mcp/page.tsx fetch calls
+  if (request.headers.get('X-Pulse-Request') !== '1') {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
   try {
     const body = (await request.json()) as unknown
     if (

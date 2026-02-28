@@ -247,6 +247,7 @@ pub struct DoctorRequest {}
 pub struct DomainsRequest {
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+    #[allow(dead_code)] // accepted for API compat but response is always inline
     pub response_mode: Option<ResponseMode>,
 }
 
@@ -255,6 +256,7 @@ pub struct DomainsRequest {
 pub struct SourcesRequest {
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+    #[allow(dead_code)] // accepted for API compat but response is always inline
     pub response_mode: Option<ResponseMode>,
 }
 

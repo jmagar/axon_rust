@@ -33,7 +33,10 @@ export type PulseModel = z.infer<typeof PulseModel>
 
 export const PulseChatRequestSchema = z.object({
   prompt: z.string().min(1).max(8000),
-  sessionId: z.string().min(1).max(256).optional(),
+  sessionId: z
+    .string()
+    .regex(/^[0-9a-f-]{8,64}$/i)
+    .optional(),
   documentMarkdown: z.string().max(100_000).default(''),
   selectedCollections: z.array(z.string().min(1).max(100)).max(10).default(['cortex']),
   threadSources: z.array(z.string().url()).max(25).default([]),
