@@ -88,6 +88,8 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
     hasResults,
     currentMode,
     crawlFiles,
+    selectedFile,
+    selectFile,
     crawlProgress,
     stdoutLines,
     stdoutJson,
@@ -309,6 +311,30 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
                 </div>
               ) : isMarkdownMode ? (
                 <>
+                  {/* Inline file list for crawl results */}
+                  {hasCrawlFiles && (
+                    <aside
+                      className="hidden w-52 shrink-0 flex-col border-r border-[var(--border-subtle)] md:flex"
+                      style={{ background: 'var(--surface-base)' }}
+                    >
+                      <div className="border-b border-[var(--border-subtle)] px-3 py-2 text-[9px] font-semibold uppercase tracking-widest text-[var(--text-dim)]">
+                        Files ({crawlFiles.length})
+                      </div>
+                      <ul className="flex-1 overflow-y-auto">
+                        {crawlFiles.map((f) => (
+                          <li key={f.relative_path}>
+                            <button
+                              type="button"
+                              onClick={() => selectFile(f.relative_path)}
+                              className={`w-full truncate px-3 py-1.5 text-left text-[10px] transition-colors ${selectedFile === f.relative_path ? 'bg-[rgba(135,175,255,0.12)] text-[var(--axon-primary)]' : 'text-[var(--text-dim)] hover:bg-[var(--surface-float)] hover:text-[var(--text-secondary)]'}`}
+                            >
+                              {f.relative_path.split('/').pop() ?? f.relative_path}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </aside>
+                  )}
                   {/* Main content area */}
                   <div className="flex-1 overflow-y-auto p-3 text-sm leading-[1.75] text-[var(--text-secondary)] sm:p-4 md:p-6">
                     {/* Crawl progress bar */}
