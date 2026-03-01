@@ -1,7 +1,7 @@
 'use client'
 
 import { AlertCircle, Ban, CheckCircle2, Clock, Loader2, RefreshCw, Zap } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Job, JobStatus, JobType } from '@/app/api/jobs/route'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -214,34 +214,40 @@ export function JobsDashboard() {
   const [error, setError] = useState<string | null>(null)
   const [spinning, setSpinning] = useState(false)
   const [cancelMsg, setCancelMsg] = useState<string | null>(null)
+  // Tick increments whenever we want the main fetch effect to re-run
+  const [tick, setTick] = useState(0)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const hasActiveJobs = jobs.some((j) => j.status === 'pending' || j.status === 'running')
 
-  const fetchJobs = useCallback(
-    async (opts: { append?: boolean; sig?: AbortSignal } = {}) => {
-      const currentOffset = opts.append ? offset : 0
-      if (!opts.append) setLoading(true)
+  // Ref so handlers below can always access latest filter values without re-subscribing effects
+  const filterRef = useRef({ typeFilter, statusFilter, offset })
+  filterRef.current = { typeFilter, statusFilter, offset }
+
+  // Core fetch — runs whenever tick changes (filter change, manual refresh, poll)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: tick is an imperative trigger; filterRef provides latest values without re-subscribing
+  useEffect(() => {
+    const controller = new AbortController()
+    const { typeFilter: type, statusFilter: status } = filterRef.current
+
+    async function run() {
+      setLoading(true)
       setError(null)
       try {
         const params = new URLSearchParams({
-          type: typeFilter,
-          status: statusFilter,
+          type,
+          status,
           limit: String(PAGE_SIZE),
-          offset: String(currentOffset),
+          offset: '0',
         })
-        const res = await fetch(`/api/jobs?${params}`, { signal: opts.sig })
+        const res = await fetch(`/api/jobs?${params}`, { signal: controller.signal })
         const data = (await res.json()) as JobsApiResponse
         if (data.error) {
           setError(data.error)
           return
         }
-        if (opts.append) {
-          setJobs((prev) => [...prev, ...data.jobs])
-        } else {
-          setJobs(data.jobs)
-          setOffset(0)
-        }
+        setJobs(data.jobs)
+        setOffset(0)
         setTotal(data.total)
         setHasMore(data.hasMore)
       } catch (err) {
@@ -249,44 +255,58 @@ export function JobsDashboard() {
         setError(err instanceof Error ? err.message : 'Failed to fetch jobs')
       } finally {
         setLoading(false)
-        setLoadingMore(false)
         setSpinning(false)
       }
-    },
-    [typeFilter, statusFilter, offset],
-  )
+    }
 
-  // Initial load + filter change
-  useEffect(() => {
-    const controller = new AbortController()
-    setOffset(0)
-    void fetchJobs({ sig: controller.signal })
+    void run()
     return () => controller.abort()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [typeFilter, statusFilter])
+  }, [tick])
 
-  // Auto-poll while active jobs exist
+  // Auto-poll while active jobs exist — increments tick to trigger re-fetch
+  // biome-ignore lint/correctness/useExhaustiveDependencies: tick is included to reset poll timer after each fetch cycle; hasActiveJobs controls whether polling is active
   useEffect(() => {
     if (!hasActiveJobs) return
     pollRef.current = setTimeout(() => {
-      void fetchJobs()
+      setTick((t) => t + 1)
     }, POLL_INTERVAL_MS)
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current)
     }
-  }, [hasActiveJobs, fetchJobs])
+  }, [hasActiveJobs, tick])
 
   function handleRefresh() {
     setSpinning(true)
     setOffset(0)
-    void fetchJobs()
+    setTick((t) => t + 1)
   }
 
   function handleLoadMore() {
     const next = offset + PAGE_SIZE
     setOffset(next)
     setLoadingMore(true)
-    void fetchJobs({ append: true })
+    const { typeFilter: type, statusFilter: status } = filterRef.current
+    const params = new URLSearchParams({
+      type,
+      status,
+      limit: String(PAGE_SIZE),
+      offset: String(next),
+    })
+    fetch(`/api/jobs?${params}`)
+      .then((r) => r.json())
+      .then((data: JobsApiResponse) => {
+        if (data.error) {
+          setError(data.error)
+          return
+        }
+        setJobs((prev) => [...prev, ...data.jobs])
+        setTotal(data.total)
+        setHasMore(data.hasMore)
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : 'Failed to fetch jobs')
+      })
+      .finally(() => setLoadingMore(false))
   }
 
   function handleCancel(_id: string, _type: JobType) {
@@ -347,6 +367,7 @@ export function JobsDashboard() {
               onClick={() => {
                 setTypeFilter(t.value)
                 setOffset(0)
+                setTick((n) => n + 1)
               }}
             >
               {t.label}
@@ -365,6 +386,7 @@ export function JobsDashboard() {
               onClick={() => {
                 setStatusFilter(t.value)
                 setOffset(0)
+                setTick((n) => n + 1)
               }}
             >
               {t.label}
