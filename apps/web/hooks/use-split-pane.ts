@@ -53,10 +53,6 @@ export function useSplitPane() {
       }
       const pane = window.localStorage.getItem(MOBILE_PANE_STORAGE_KEY)
       if (pane === 'chat' || pane === 'editor') setMobilePane(pane)
-      const storedShowChat = window.localStorage.getItem(SHOW_CHAT_STORAGE_KEY)
-      const storedShowEditor = window.localStorage.getItem(SHOW_EDITOR_STORAGE_KEY)
-      if (storedShowChat === 'false') setShowChat(false)
-      if (storedShowEditor === 'false') setShowEditor(false)
     } catch {
       // Ignore storage errors.
     }

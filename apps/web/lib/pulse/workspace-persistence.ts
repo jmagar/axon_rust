@@ -83,7 +83,7 @@ export function parsePersistedWorkspaceState(
         : 'accept-edits'
     // Migration: if old desktopViewMode is present, derive showChat/showEditor from it.
     // New fields take priority.
-    const showChat =
+    let showChat =
       typeof parsed.showChat === 'boolean'
         ? parsed.showChat
         : (parsed as Record<string, unknown>).desktopViewMode !== 'editor' // old: 'chat' or 'both' → showChat true
@@ -91,6 +91,8 @@ export function parsePersistedWorkspaceState(
       typeof parsed.showEditor === 'boolean'
         ? parsed.showEditor
         : (parsed as Record<string, unknown>).desktopViewMode !== 'chat' // old: 'editor' or 'both' → showEditor true
+    // Safety: never allow both panels to be collapsed on restore (stale blob guard)
+    if (!showChat && !showEditor) showChat = true
     return {
       permissionLevel,
       model,
