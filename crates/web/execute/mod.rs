@@ -212,11 +212,14 @@ fn strip_ansi(s: &str) -> String {
 /// then falls back to `axon` on PATH.
 fn resolve_exe() -> Result<PathBuf, String> {
     if let Ok(p) = std::env::var("AXON_BIN") {
-        let path = PathBuf::from(&p);
-        if path.exists() {
-            return Ok(path);
+        if !p.is_empty() {
+            let path = PathBuf::from(&p);
+            if path.exists() {
+                return Ok(path);
+            }
+            // AXON_BIN is set but the path doesn't exist — fall through to
+            // auto-discovery so container images with the binary on PATH still work.
         }
-        return Err(format!("AXON_BIN={p} does not exist"));
     }
 
     let mut candidates: Vec<PathBuf> = Vec::new();
