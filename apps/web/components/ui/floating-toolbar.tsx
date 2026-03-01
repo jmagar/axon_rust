@@ -56,10 +56,24 @@ export function FloatingToolbar() {
 
   if (hidden) return null
 
+  // Clamp position to stay within the visible viewport (important on mobile
+  // where the virtual keyboard reduces the visible area).
+  const style = floatingProps.style as React.CSSProperties | undefined
+  const clampedStyle: React.CSSProperties = style
+    ? {
+        ...style,
+        top:
+          typeof style.top === 'number'
+            ? Math.min(style.top, (window.visualViewport?.height ?? window.innerHeight) - 60)
+            : style.top,
+      }
+    : {}
+
   return (
     <div
       ref={floatingRef}
       {...floatingProps}
+      style={clampedStyle}
       className={cn(
         // Layout — position is set via floatingProps.style (absolute + top/left)
         'flex items-center',

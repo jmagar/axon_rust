@@ -63,3 +63,12 @@ apps/web/components/results/table-renderer.tsx
 
 # 670 lines — pre-existing jobs dashboard with table + filters; split planned (2026-03-01)
 apps/web/components/jobs/jobs-dashboard.tsx
+
+# shadcn/platejs generated UI components — large by design, not split candidates (2026-03-01)
+apps/web/components/editor/use-chat.ts
+apps/web/components/ui/ai-menu.tsx
+apps/web/components/ui/comment.tsx
+apps/web/components/ui/emoji-toolbar-button.tsx
+apps/web/components/ui/font-color-toolbar-button.tsx
+apps/web/components/ui/table-icons.tsx
+apps/web/components/ui/table-node.tsx

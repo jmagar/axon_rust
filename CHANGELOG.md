@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-03-01 (session: Cortex dashboard review fixes — AbortController, binary path, disabled state, accessibility)
+Last Modified: 2026-03-01 (session: Plate.js editor enhancements — slash commands, DnD, callouts, toggles, TOC, block selection, AI menu, comments, export, build fixes)
 
 ## [Unreleased] — feat/sidebar
 
@@ -7,6 +7,7 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 ### Highlights
 
+- **Plate.js editor enhancements** — slash commands (`/`), block drag-and-drop, callout blocks, collapsible toggles, table of contents, multi-block selection, block context menu, AI menu, inline comments, suggestion mode, export (HTML/PDF/image/markdown); 15 new plugin kit files wired into `copilot-kit.tsx`; mobile-responsive compact toolbar; `@ai-sdk/gateway@1.0.15` pinned for `ai@5` compatibility; `@platejs/ai` command route rewired with `generateText` for `ai@5` breaking changes (`Output.choice`, `partialOutputStream` removed); `useSearchParams` Suspense guard on `/cortex/sources`
 - **Plate.js editor expansion** — 15 additional `@platejs/*` plugins (callout, caption, combobox, comment, date, emoji, indent, layout, math, mention, resizable, selection, suggestion, toc, basic-styles), supporting packages (`@ai-sdk/react`, `ai`, `@ariakit/react`, `date-fns`, `cmdk`, `lowlight`, etc.), `tailwind-scrollbar-hide` plugin, and new shadcn/ui components (dialog, popover, cursor-overlay)
 - **Cortex dashboard review fixes** — AbortController on all polling dashboards (status/doctor/stats) cancels in-flight fetches on unmount and before each new poll; `disabled={loading || spinning}` on all 5 Refresh buttons; `Object.keys(data).length` badge fix in sources-dashboard; `useSearchParams` seeds filter from `?q=` param so domain drill-down links work; `local_ingest_jobs ?? []` guard in SummaryBar; `AXON_BIN` env var wires the pre-built binary path for Docker (routes were silently broken without it); missing `--sidebar-w` CSS update in `handleNavClick`; `aria-label` + `aria-current="page"` on Cortex sub-links; `target?: string` added to `JobEntry` interface
 - **Cortex virtual folder in sidebar** — collapsible "Cortex" folder appended after PAGE_LINKS with Brain icon; 5 sub-links (Status, Doctor, Sources, Domains, Stats); open/closed state persists to `localStorage`; clicking Brain icon while collapsed auto-expands sidebar; active route highlighting on `/cortex/*` paths; 5 API routes (`/api/cortex/*`) spawn the axon binary with `--json`; 5 server component pages under `/app/cortex/`; 5 client dashboard components with loading skeletons, error banners, and refresh buttons; Status polls every 5s with collapsible job cards, Doctor polls every 15s with service health grid + pipeline chips, Sources uses `@tanstack/react-virtual` for virtualized URL table with search filter, Domains renders relative CSS bar chart with clickable domain→sources links, Stats polls every 30s with 6 large metric cards + payload fields + command count table
@@ -24,7 +25,8 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 | Commit | Type | Message |
 |---|---|---|
-| *(this commit)* | chore(deps) | Plate.js editor plugin expansion + dialog/popover/cursor-overlay UI components |
+| *(this commit)* | feat(web) | Plate.js editor enhancements — slash, DnD, callouts, toggles, TOC, block selection, AI menu, comments, export; ai@5 compat fixes |
+| `f27cc810` | chore(deps) | Plate.js editor plugin expansion + dialog/popover/cursor-overlay UI components |
 | `756a081e` | chore | wire AXON_BIN env var for Cortex routes in Docker — routes now fall back to pre-built release binary via /workspace mount |
 | `f5d14901` | fix(web) | address Cortex dashboard review findings — AbortController, disabled state, binary path, accessibility |
 | `51a2c9c8` | merge | feat/crawl-download-pack → main |

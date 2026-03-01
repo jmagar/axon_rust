@@ -10,8 +10,8 @@
  */
 
 import { createServer } from 'node:http'
-import { WebSocketServer } from 'ws'
 import pty from 'node-pty'
+import { WebSocketServer } from 'ws'
 
 const PORT = Number(process.env.SHELL_SERVER_PORT ?? 49011)
 const SHELL = process.env.SHELL ?? '/bin/bash'

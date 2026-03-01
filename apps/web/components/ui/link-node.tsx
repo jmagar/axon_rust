@@ -1,19 +1,36 @@
 'use client'
 
-import { PlateElement, type PlateElementProps } from 'platejs/react'
+import { getLinkAttributes } from '@platejs/link'
+import { SuggestionPlugin } from '@platejs/suggestion/react'
+import type { TInlineSuggestionData, TLinkElement } from 'platejs'
+import type { PlateElementProps } from 'platejs/react'
+import { PlateElement } from 'platejs/react'
 
-export function LinkElement(props: PlateElementProps) {
-  const url = (props.element as unknown as { url?: string }).url
+import { cn } from '@/lib/utils'
+
+export function LinkElement(props: PlateElementProps<TLinkElement>) {
+  const suggestionData = props.editor
+    .getApi(SuggestionPlugin)
+    .suggestion.suggestionData(props.element) as TInlineSuggestionData | undefined
+
   return (
-    <PlateElement {...props} as="span">
-      <a
-        href={url}
-        target="_blank"
-        rel="noreferrer"
-        className="text-[var(--axon-secondary)] underline underline-offset-2 hover:text-[var(--axon-secondary-strong)]"
-      >
-        {props.children}
-      </a>
+    <PlateElement
+      {...props}
+      as="a"
+      className={cn(
+        'font-medium text-primary underline decoration-primary underline-offset-4',
+        suggestionData?.type === 'remove' && 'bg-red-100 text-red-700',
+        suggestionData?.type === 'insert' && 'bg-emerald-100 text-emerald-700',
+      )}
+      attributes={{
+        ...props.attributes,
+        ...getLinkAttributes(props.editor, props.element),
+        onMouseOver: (e) => {
+          e.stopPropagation()
+        },
+      }}
+    >
+      {props.children}
     </PlateElement>
   )
 }

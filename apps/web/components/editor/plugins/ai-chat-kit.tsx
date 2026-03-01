@@ -107,7 +107,8 @@ export function useAIChatSetup(editor: ReturnType<typeof usePlateEditor>) {
 
   useEffect(() => {
     if (!editor) return
-    editor.setOption(AIChatPlugin, 'chat', chat as unknown)
+    // biome-ignore lint/suspicious/noExplicitAny: custom chat adapter, types differ from platejs expected shape
+    editor.setOption(AIChatPlugin, 'chat', chat as any)
   }, [editor, chat])
 }
 

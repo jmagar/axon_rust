@@ -12,8 +12,10 @@
       "recommended": true,
       "a11y": {
         "noSvgWithoutTitle": "off",
+        "noStaticElementInteractions": "warn",
         "useFocusableInteractive": "off",
         "useKeyWithClickEvents": "off",
+        "useMediaCaption": "warn",
         "useSemanticElements": "off"
       },
       "security": {
@@ -21,7 +23,14 @@
       },
       "suspicious": {
         "noArrayIndexKey": "off",
+        "noExplicitAny": "warn",
         "useIterableCallbackReturn": "off"
+      },
+      "complexity": {
+        "noBannedTypes": "warn"
+      },
+      "correctness": {
+        "useExhaustiveDependencies": "warn"
       },
       "style": {
         "noNonNullAssertion": "off"

@@ -13,7 +13,10 @@ export interface TerminalHandle {
   writeln: (data: string) => void
   clear: () => void
   focus: () => void
-  search: (query: string) => boolean
+  search: (
+    query: string,
+    opts?: { caseSensitive?: boolean; regex?: boolean; wholeWord?: boolean },
+  ) => boolean
   getSelectedText: () => string
   resize: () => void
 }
@@ -61,6 +64,8 @@ const TERMINAL_OPTIONS: ITerminalOptions = {
   smoothScrollDuration: 100,
   allowTransparency: true,
   convertEol: true,
+  rightClickSelectsWord: true,
+  overviewRulerWidth: 8,
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +124,7 @@ export const TerminalEmulator = forwardRef<TerminalHandle, TerminalEmulatorProps
     const termRef = useRef<import('@xterm/xterm').Terminal | null>(null)
     const fitAddonRef = useRef<import('@xterm/addon-fit').FitAddon | null>(null)
     const searchAddonRef = useRef<import('@xterm/addon-search').SearchAddon | null>(null)
+    const webglAddonRef = useRef<import('@xterm/addon-webgl').WebglAddon | null>(null)
 
     // Expose imperative handle to parent
     useImperativeHandle(ref, () => ({
@@ -134,9 +140,21 @@ export const TerminalEmulator = forwardRef<TerminalHandle, TerminalEmulatorProps
       focus() {
         termRef.current?.focus()
       },
-      search(query: string): boolean {
+      search(query, opts): boolean {
         if (!searchAddonRef.current) return false
-        return searchAddonRef.current.findNext(query)
+        return searchAddonRef.current.findNext(query, {
+          caseSensitive: opts?.caseSensitive ?? false,
+          regex: opts?.regex ?? false,
+          wholeWord: opts?.wholeWord ?? false,
+          decorations: {
+            matchBackground: 'rgba(255,192,134,0.3)',
+            matchBorder: 'rgba(255,192,134,0.8)',
+            matchOverviewRuler: '#ffc086',
+            activeMatchBackground: 'rgba(135,175,255,0.5)',
+            activeMatchBorder: 'rgba(135,175,255,1)',
+            activeMatchColorOverviewRuler: '#87afff',
+          },
+        })
       },
       getSelectedText(): string {
         return termRef.current?.getSelection() ?? ''
@@ -179,6 +197,19 @@ export const TerminalEmulator = forwardRef<TerminalHandle, TerminalEmulatorProps
         terminal.open(containerRef.current)
         fitAddon.fit()
 
+        // WebGL renderer — GPU-accelerated; fall back silently if unavailable
+        const { WebglAddon } = await import('@xterm/addon-webgl')
+        const webglAddon = new WebglAddon()
+        webglAddon.onContextLoss(() => {
+          webglAddon.dispose()
+        })
+        try {
+          terminal.loadAddon(webglAddon)
+          webglAddonRef.current = webglAddon
+        } catch {
+          webglAddon.dispose()
+        }
+
         // Expose instances via refs for imperative handle
         termRef.current = terminal
         fitAddonRef.current = fitAddon
@@ -187,6 +218,43 @@ export const TerminalEmulator = forwardRef<TerminalHandle, TerminalEmulatorProps
         // Forward keyboard input through a stable wrapper so the latest
         // onData prop is always called (avoids stale closure on re-renders).
         terminal.onData((data) => onDataRef.current(data))
+
+        // Copy-on-select: auto-copy whenever the selection changes and is non-empty
+        terminal.onSelectionChange(() => {
+          const sel = terminal!.getSelection()
+          if (sel) navigator.clipboard.writeText(sel).catch(() => {})
+        })
+
+        // Visual bell via a brief opacity flash on the container
+        terminal.onBell(() => {
+          const el = containerRef.current
+          if (!el) return
+          el.style.transition = 'opacity 50ms'
+          el.style.opacity = '0.5'
+          setTimeout(() => {
+            el.style.opacity = '1'
+            setTimeout(() => (el.style.transition = ''), 100)
+          }, 100)
+        })
+
+        // Ctrl+Shift+C → copy selection; Ctrl+Shift+V → paste from clipboard
+        terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+          if (e.ctrlKey && e.shiftKey && e.code === 'KeyC') {
+            const sel = terminal!.getSelection()
+            if (sel) navigator.clipboard.writeText(sel).catch(() => {})
+            return false
+          }
+          if (e.ctrlKey && e.shiftKey && e.code === 'KeyV' && e.type === 'keydown') {
+            navigator.clipboard
+              .readText()
+              .then((text) => {
+                if (text) onDataRef.current(text)
+              })
+              .catch(() => {})
+            return false
+          }
+          return true
+        })
 
         // Notify parent of resize events (fired by xterm after fit)
         if (onResize) {
@@ -217,6 +285,7 @@ export const TerminalEmulator = forwardRef<TerminalHandle, TerminalEmulatorProps
         termRef.current = null
         fitAddonRef.current = null
         searchAddonRef.current = null
+        webglAddonRef.current = null
       }
       // onData and onResize are intentionally excluded — they are called
       // through the live closure without needing to re-mount the terminal.

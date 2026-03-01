@@ -9,8 +9,17 @@ import { GhostText } from '@/components/ui/ghost-text'
 import { AIChatKit } from './ai-chat-kit'
 import { BasicBlocksKit } from './basic-blocks-kit'
 import { BasicMarksKit } from './basic-marks-kit'
+import { CalloutKit } from './callout-kit'
+import { CommentKit } from './comment-kit'
+import { DiscussionKit } from './discussion-kit'
+import { DndKit } from './dnd-kit'
 import { ExtendedNodesKit } from './extended-nodes-kit'
 import { MarkdownKit } from './markdown-kit'
+import { SelectionKit } from './selection-kit'
+import { SlashKit } from './slash-kit'
+import { SuggestionKit } from './suggestion-kit'
+import { TocKit } from './toc-kit'
+import { ToggleKit } from './toggle-kit'
 
 type CopilotNdjsonEvent =
   | { type: 'start' }
@@ -116,6 +125,15 @@ export const CopilotKit = [
   ...MarkdownKit,
   ...ExtendedNodesKit,
   ...AIChatKit,
+  ...SlashKit,
+  ...DndKit,
+  ...CalloutKit,
+  ...ToggleKit,
+  ...TocKit,
+  ...SelectionKit,
+  ...DiscussionKit,
+  ...CommentKit,
+  ...SuggestionKit,
   CopilotPlugin.configure(({ api }) => ({
     options: {
       completeOptions: {
