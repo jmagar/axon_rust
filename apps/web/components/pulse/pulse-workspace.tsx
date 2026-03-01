@@ -1,6 +1,6 @@
 'use client'
 
-import { BookOpen, ChevronDown } from 'lucide-react'
+import { BookOpen, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAxonWs } from '@/hooks/use-axon-ws'
 import { usePulseAutosave } from '@/hooks/use-pulse-autosave'
@@ -53,13 +53,16 @@ export function PulseWorkspace() {
     isDesktop,
     mobilePane,
     setMobilePane,
-    desktopViewMode,
-    setDesktopViewMode,
-    desktopPaneOrder,
-    setDesktopPaneOrder,
+    showChat,
+    setShowChat,
+    toggleChat,
+    showEditor,
+    setShowEditor,
+    toggleEditor,
     splitContainerRef,
     splitHandleRef,
     dragStartRef,
+    verticalDragStartRef,
   } = useSplitPane()
 
   const applyOperations = useCallback((ops: DocOperation[]) => {
@@ -171,8 +174,8 @@ export function PulseWorkspace() {
     mobileSplitPercent,
     lastResponseLatencyMs,
     lastResponseModel,
-    desktopViewMode,
-    desktopPaneOrder,
+    showChat,
+    showEditor,
     setPulsePermissionLevel,
     setPulseModel,
     setDocumentMarkdown,
@@ -186,8 +189,8 @@ export function PulseWorkspace() {
     setMobileSplitPercent,
     setLastResponseLatencyMs,
     setLastResponseModel,
-    setDesktopViewMode,
-    setDesktopPaneOrder,
+    setShowChat,
+    setShowEditor,
     messageIdRef,
   })
 
@@ -319,111 +322,163 @@ export function PulseWorkspace() {
           title={documentTitle}
           onTitleChange={setDocumentTitle}
           isDesktop={isDesktop}
-          desktopViewMode={desktopViewMode}
-          onDesktopViewModeChange={setDesktopViewMode}
-          desktopPaneOrder={desktopPaneOrder}
-          onSwapPanes={() =>
-            setDesktopPaneOrder((prev) => (prev === 'editor-first' ? 'chat-first' : 'editor-first'))
-          }
           onNewSession={handleNewSession}
         />
       )}
       <div className="flex h-[calc(100dvh-9rem)] overflow-hidden rounded-xl bg-[rgba(10,18,35,0.42)] shadow-[var(--shadow-md)] lg:h-[calc(100vh-12rem)]">
         <div
           ref={splitContainerRef}
-          className="flex h-full min-w-0 flex-1 flex-col gap-1.5 p-1.5 lg:flex-row lg:gap-1.5"
+          className="flex h-full min-w-0 flex-1 flex-col gap-1.5 p-1.5 lg:flex-row lg:gap-0"
         >
+          {/* ── Chat panel ── */}
           <div
-            className={`${
+            className={`group/chat relative flex h-full flex-col overflow-hidden rounded-xl bg-[rgba(10,18,35,0.52)] transition-all duration-200 ${
               isDesktop
-                ? desktopViewMode === 'editor' || desktopViewMode === 'both'
-                  ? 'flex'
-                  : 'hidden'
-                : mobilePane === 'editor'
-                  ? 'flex'
-                  : 'hidden'
-            } min-w-0 overflow-hidden rounded-xl bg-[rgba(10,18,35,0.5)] lg:flex-none`}
-            style={{
-              flexBasis: isDesktop ? `${desktopSplitPercent}%` : '100%',
-              order: isDesktop ? (desktopPaneOrder === 'editor-first' ? 1 : 3) : 2,
-            }}
-          >
-            <PulseEditorPane
-              markdown={documentMarkdown}
-              onMarkdownChange={setDocumentMarkdown}
-              scrollStorageKey="axon.web.pulse.editor-scroll"
-            />
-          </div>
-          <div
-            ref={splitHandleRef}
-            role="separator"
-            aria-label="Resize pane — drag left/right"
-            aria-orientation="vertical"
-            aria-valuenow={Math.round(desktopSplitPercent)}
-            aria-valuemin={20}
-            aria-valuemax={80}
-            className={`group flex w-3 cursor-col-resize items-center justify-center rounded-sm transition-colors hover:bg-[var(--border-subtle)] ${desktopViewMode === 'both' ? 'hidden lg:flex' : 'hidden'}`}
-            style={{ order: isDesktop ? 2 : 2 }}
-            onPointerDown={(event) => {
-              dragStartRef.current = {
-                pointerX: event.clientX,
-                startPercent: desktopSplitPercent,
-              }
-              splitHandleRef.current?.classList.add('bg-[var(--border-standard)]')
-            }}
-          >
-            <div className="flex flex-col gap-0.5 opacity-30 group-hover:opacity-70 transition-opacity">
-              {[0, 1, 2, 3, 4].map((i) => (
-                <div key={i} className="size-0.5 rounded-full bg-[var(--text-muted)]" />
-              ))}
-            </div>
-          </div>
-          <div
-            className={`${
-              isDesktop
-                ? desktopViewMode === 'chat' || desktopViewMode === 'both'
-                  ? 'flex'
-                  : 'hidden'
+                ? showChat
+                  ? 'lg:flex-1'
+                  : 'lg:w-7 lg:flex-none'
                 : mobilePane === 'chat'
                   ? 'flex'
                   : 'hidden'
-            } min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-[rgba(10,18,35,0.52)] lg:flex lg:flex-1`}
-            style={{
-              order: isDesktop ? (desktopPaneOrder === 'editor-first' ? 3 : 1) : 1,
-            }}
+            }`}
           >
-            <PulseChatPane
-              messages={chatHistory}
-              isLoading={isChatLoading}
-              streamingPhase={streamPhase}
-              liveToolUses={liveToolUses}
-              onCancelRequest={handleCancelPrompt}
-              indexedSources={indexedSources}
-              activeThreadSources={activeThreadSources}
-              onRemoveSource={(url) =>
-                setActiveThreadSources((prev) => prev.filter((existingUrl) => existingUrl !== url))
-              }
-              onRetry={(prompt) => void handlePrompt(prompt)}
-              sourcesExpanded={sourcesExpanded}
-              onSourcesExpandedChange={setSourcesExpanded}
-              requestNotice={requestNotice}
-            />
-            {pendingOps && pendingValidation && (
-              <div className="p-3">
-                <PulseOpConfirmation
-                  operations={pendingOps}
-                  validation={pendingValidation}
-                  onConfirm={() => {
-                    applyOperations(pendingOps)
-                    setPendingOps(null)
-                    setPendingValidation(null)
-                  }}
-                  onReject={() => {
-                    setPendingOps(null)
-                    setPendingValidation(null)
-                  }}
+            {isDesktop && !showChat ? (
+              /* Collapsed chat strip */
+              <button
+                type="button"
+                onClick={() => toggleChat(true)}
+                aria-label="Expand chat"
+                title="Expand chat"
+                className="flex h-full w-7 flex-col items-center justify-center text-[var(--text-dim)] transition-colors hover:text-[var(--axon-primary)]"
+              >
+                <ChevronRight className="size-4" />
+              </button>
+            ) : (
+              <>
+                <PulseChatPane
+                  messages={chatHistory}
+                  isLoading={isChatLoading}
+                  streamingPhase={streamPhase}
+                  liveToolUses={liveToolUses}
+                  onCancelRequest={handleCancelPrompt}
+                  indexedSources={indexedSources}
+                  activeThreadSources={activeThreadSources}
+                  onRemoveSource={(url) =>
+                    setActiveThreadSources((prev) => prev.filter((u) => u !== url))
+                  }
+                  onRetry={(prompt) => void handlePrompt(prompt)}
+                  sourcesExpanded={sourcesExpanded}
+                  onSourcesExpandedChange={setSourcesExpanded}
+                  requestNotice={requestNotice}
                 />
+                {pendingOps && pendingValidation && (
+                  <div className="p-3">
+                    <PulseOpConfirmation
+                      operations={pendingOps}
+                      validation={pendingValidation}
+                      onConfirm={() => {
+                        applyOperations(pendingOps)
+                        setPendingOps(null)
+                        setPendingValidation(null)
+                      }}
+                      onReject={() => {
+                        setPendingOps(null)
+                        setPendingValidation(null)
+                      }}
+                    />
+                  </div>
+                )}
+                {/* Collapse chat button — right inner edge, desktop only */}
+                {isDesktop && (
+                  <button
+                    type="button"
+                    onClick={() => toggleChat(false)}
+                    aria-label="Collapse chat"
+                    title="Collapse chat"
+                    className="absolute right-0 top-1/2 z-10 flex h-10 w-4 -translate-y-1/2 items-center justify-center rounded-l border border-r-0 border-[var(--border-subtle)] bg-[rgba(10,18,35,0.72)] text-[var(--text-dim)] opacity-0 transition-opacity hover:text-[var(--axon-primary)] group-hover/chat:opacity-100"
+                  >
+                    <ChevronLeft className="size-3" />
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* ── Drag handle (desktop, both panels open) ── */}
+          {isDesktop && (
+            <div
+              ref={splitHandleRef}
+              role="separator"
+              aria-label="Resize chat/editor — drag or click to toggle editor"
+              aria-orientation="vertical"
+              aria-valuenow={Math.round(desktopSplitPercent)}
+              aria-valuemin={20}
+              aria-valuemax={80}
+              className={`group mx-0.5 hidden w-2 cursor-col-resize items-center justify-center rounded-sm transition-colors hover:bg-[var(--border-subtle)] ${
+                showChat && showEditor ? 'lg:flex' : 'lg:hidden'
+              }`}
+              onPointerDown={(event) => {
+                dragStartRef.current = {
+                  pointerX: event.clientX,
+                  startPercent: desktopSplitPercent,
+                }
+                splitHandleRef.current?.classList.add('bg-[rgba(175,215,255,0.15)]')
+              }}
+            >
+              <div className="flex flex-col gap-0.5 opacity-30 transition-opacity group-hover:opacity-70">
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <div key={i} className="size-0.5 rounded-full bg-[var(--text-muted)]" />
+                ))}
               </div>
+            </div>
+          )}
+
+          {/* ── Editor panel ── */}
+          <div
+            className={`group/editor relative flex h-full flex-col overflow-hidden rounded-xl bg-[rgba(10,18,35,0.5)] transition-all duration-200 ${
+              isDesktop
+                ? showEditor
+                  ? 'lg:flex-none'
+                  : 'lg:w-7 lg:flex-none'
+                : mobilePane === 'editor'
+                  ? 'flex'
+                  : 'hidden'
+            }`}
+            style={
+              isDesktop && showEditor ? { flexBasis: `${100 - desktopSplitPercent}%` } : undefined
+            }
+          >
+            {isDesktop && !showEditor ? (
+              /* Collapsed editor strip */
+              <button
+                type="button"
+                onClick={() => toggleEditor(true)}
+                aria-label="Expand editor"
+                title="Expand editor"
+                className="flex h-full w-7 flex-col items-center justify-center text-[var(--text-dim)] transition-colors hover:text-[var(--axon-primary)]"
+              >
+                <ChevronLeft className="size-4" />
+              </button>
+            ) : (
+              <>
+                {/* Collapse editor button — left inner edge, desktop only */}
+                {isDesktop && (
+                  <button
+                    type="button"
+                    onClick={() => toggleEditor(false)}
+                    aria-label="Collapse editor"
+                    title="Collapse editor"
+                    className="absolute left-0 top-1/2 z-10 flex h-10 w-4 -translate-y-1/2 items-center justify-center rounded-r border border-l-0 border-[var(--border-subtle)] bg-[rgba(10,18,35,0.72)] text-[var(--text-dim)] opacity-0 transition-opacity hover:text-[var(--axon-primary)] group-hover/editor:opacity-100"
+                  >
+                    <ChevronRight className="size-3" />
+                  </button>
+                )}
+                <PulseEditorPane
+                  markdown={documentMarkdown}
+                  onMarkdownChange={setDocumentMarkdown}
+                  scrollStorageKey="axon.web.pulse.editor-scroll"
+                />
+              </>
             )}
           </div>
         </div>
