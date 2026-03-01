@@ -7,8 +7,7 @@
       "description": "Plate editors, plugins and components",
       "type": "stdio",
       "command": "npx",
-      "args": ["shadcn@latest", "mcp"],
-      "cwd": "../apps/web"
+      "args": ["shadcn@latest", "mcp"]
     }
   },
   "imports": []

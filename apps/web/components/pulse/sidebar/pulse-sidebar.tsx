@@ -1,20 +1,28 @@
 'use client'
 
 import {
+  Activity,
+  BarChart2,
+  Brain,
   CheckSquare,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
   FileText,
   FolderOpen,
+  Globe,
   Layers,
   LayoutTemplate,
+  Library,
   Paintbrush,
   ScrollText,
   Star,
+  Stethoscope,
   TerminalSquare,
 } from 'lucide-react'
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import type { CrawlFile } from '@/lib/ws-protocol'
 import { ExtractedSection } from './extracted-section'
@@ -25,6 +33,15 @@ import type { SidebarSectionId } from './types'
 import { WorkspaceSection } from './workspace-section'
 
 const COLLAPSED_KEY = 'axon.sidebar.collapsed'
+const CORTEX_KEY = 'axon.sidebar.cortex.open'
+
+const CORTEX_LINKS = [
+  { href: '/cortex/status', label: 'Status', icon: <Activity className="size-3.5" /> },
+  { href: '/cortex/doctor', label: 'Doctor', icon: <Stethoscope className="size-3.5" /> },
+  { href: '/cortex/sources', label: 'Sources', icon: <Library className="size-3.5" /> },
+  { href: '/cortex/domains', label: 'Domains', icon: <Globe className="size-3.5" /> },
+  { href: '/cortex/stats', label: 'Stats', icon: <BarChart2 className="size-3.5" /> },
+]
 
 interface PulseSidebarProps {
   crawlFiles: CrawlFile[]
@@ -94,6 +111,9 @@ function SectionContent({
 export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: PulseSidebarProps) {
   const [collapsed, setCollapsed] = useState(false)
   const [activeSection, setActiveSection] = useState<SidebarSectionId>('extracted')
+  const pathname = usePathname()
+  const [cortexOpen, setCortexOpen] = useState(false)
+  const cortexActive = pathname?.startsWith('/cortex') ?? false
 
   useEffect(() => {
     try {
@@ -101,6 +121,7 @@ export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: 
       const next = stored === 'true'
       setCollapsed(next)
       document.documentElement.style.setProperty('--sidebar-w', next ? '48px' : '260px')
+      setCortexOpen(localStorage.getItem(CORTEX_KEY) === 'true')
     } catch {
       /* ignore */
     }
@@ -213,6 +234,70 @@ export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: 
             )}
           </Link>
         ))}
+
+        {/* Cortex folder */}
+        <button
+          type="button"
+          onClick={() => {
+            if (collapsed) {
+              setCollapsed(false)
+              try {
+                document.documentElement.style.setProperty('--sidebar-w', '260px')
+                localStorage.setItem(COLLAPSED_KEY, 'false')
+              } catch {
+                /* ignore */
+              }
+            }
+            const next = !cortexOpen
+            setCortexOpen(next)
+            try {
+              localStorage.setItem(CORTEX_KEY, String(next))
+            } catch {
+              /* ignore */
+            }
+          }}
+          title="Cortex"
+          aria-label="Cortex"
+          aria-expanded={!collapsed && cortexOpen}
+          className={`flex items-center gap-2 rounded py-1.5 transition-colors ${
+            collapsed ? 'w-9 justify-center px-2' : 'w-full px-3'
+          } ${
+            cortexActive
+              ? 'bg-[rgba(135,175,255,0.12)] text-[var(--axon-primary)]'
+              : 'text-[var(--text-muted)] hover:bg-[var(--surface-float)] hover:text-[var(--text-secondary)]'
+          }`}
+        >
+          <Brain className="size-4 flex-shrink-0" />
+          {!collapsed && (
+            <>
+              <span className="flex-1 truncate text-[length:var(--text-md)]">Cortex</span>
+              <ChevronDown
+                className={`size-3 transition-transform duration-200 ${cortexOpen ? 'rotate-0' : '-rotate-90'}`}
+              />
+            </>
+          )}
+        </button>
+
+        {!collapsed &&
+          cortexOpen &&
+          CORTEX_LINKS.map((link) => {
+            const isActive = pathname === link.href
+            return (
+              <Link
+                key={link.href}
+                href={link.href}
+                title={link.label}
+                className={`flex items-center gap-2 rounded py-1 pl-7 pr-3 text-xs transition-colors ${
+                  isActive
+                    ? 'bg-[rgba(135,175,255,0.10)] text-[var(--axon-primary)]'
+                    : 'text-[var(--text-muted)] hover:bg-[var(--surface-float)] hover:text-[var(--text-secondary)]'
+                }`}
+              >
+                {link.icon}
+                <span className="truncate">{link.label}</span>
+              </Link>
+            )
+          })}
       </nav>
 
       {/* Section content (only when expanded) */}
