@@ -1,4 +1,5 @@
 # axon_cli — Axon CLI (Rust + Spider.rs)
+Last Modified: 2026-02-27
 
 Web crawl, scrape, extract, embed, and query — all in one binary backed by a self-hosted RAG stack.
 
@@ -12,6 +13,9 @@ docker compose up -d
 ./scripts/axon doctor
 ./scripts/axon scrape https://example.com --wait true
 
+# MCP server wrapper (auto-sources .env)
+./scripts/axon-mcp
+
 # Or build and run the binary directly
 cargo build --release --bin axon
 ./target/release/axon --help
@@ -21,6 +25,19 @@ cargo run --bin axon -- scrape https://example.com --wait true
 ```
 
 > **Note:** The binary is named `axon`. Build with `cargo build --bin axon`.
+
+## MCP Server (`axon-mcp`)
+
+Axon ships an MCP server binary that exposes a single tool (`axon`) with `action`/`subaction` routing for crawl/extract/embed/ingest/RAG/discovery/ops workflows.
+
+```bash
+cargo build --release --bin axon-mcp
+./target/release/axon-mcp
+```
+
+MCP docs:
+- `docs/MCP.md` (runtime/design guide)
+- `docs/MCP-TOOL-SCHEMA.md` (wire contract schema source of truth)
 
 ## Commands
 
@@ -87,6 +104,7 @@ All flags are `--global` (usable with any subcommand).
 | `--respect-robots <bool>` | bool | `false` | Respect `robots.txt` directives. **Note:** defaults `false` — legal/ethical implications. |
 | `--discover-sitemaps <bool>` | bool | `true` | Discover and backfill URLs from sitemap.xml after crawl. |
 | `--max-sitemaps <n>` | usize | `512` | Maximum sitemap URLs to backfill per crawl. |
+| `--sitemap-since-days <n>` | u32 | `0` | Only backfill sitemap URLs with `<lastmod>` within the last N days (0 = no filter). URLs without `<lastmod>` are always included. |
 | `--min-markdown-chars <n>` | usize | `200` | Minimum markdown character count; pages below this are flagged as "thin". |
 | `--drop-thin-markdown <bool>` | bool | `true` | Skip thin pages — do not save or embed them. |
 | `--delay-ms <ms>` | u64 | `0` | Delay between requests in milliseconds. Useful for polite crawling. |
@@ -146,58 +164,29 @@ All flags are `--global` (usable with any subcommand).
 
 ## Architecture
 
-```
-axon_rust/
-├── mod.rs                  # Library root — run() dispatch (parse_args() is in crates/core/config.rs)
-├── crates/
-│   ├── mod.rs              # pub mod cli, core, crawl, ingest, jobs, vector, web
-│   ├── cli/
-│   │   ├── mod.rs
-│   │   └── commands/       # One file per command (scrape, crawl, map, extract, …)
-│   │       ├── common.rs   # URL parsing utilities: parse_urls, expand_url_glob_seed
-│   │       └── probe.rs    # HTTP probe helpers used by doctor
-│   ├── core/
-│   │   ├── config.rs       # CLI parsing (clap), Config struct, performance profiles
-│   │   ├── content.rs      # HTML→markdown, URL→filename, transform pipeline
-│   │   ├── health.rs       # redis_healthy() connectivity check
-│   │   ├── http.rs         # build_client(), fetch_html(), validate_url() (SSRF guard — blocks private IPs/ports)
-│   │   ├── logging.rs      # log_info(), log_warn(), log_done() structured output
-│   │   └── ui.rs           # ANSI color helpers (primary, accent, muted, status_text)
-│   ├── crawl/
-│   │   ├── mod.rs
-│   │   └── engine.rs       # crawl_and_collect_map(), run_crawl_once(),
-│   │                       # crawl_sitemap_urls(), append_sitemap_backfill(),
-│   │                       # try_auto_switch(), should_fallback_to_chrome()
-│   ├── ingest/             # Source ingestion handlers
-│   │   ├── mod.rs
-│   │   ├── github.rs       # GitHub repo ingestion (code, issues, PRs, wiki)
-│   │   ├── reddit.rs       # Subreddit post/comment ingestion
-│   │   ├── youtube.rs      # YouTube transcript ingestion via yt-dlp
-│   │   └── sessions/       # AI session export parsers (Claude/Codex/Gemini)
-│   ├── jobs/               # AMQP-backed async job workers
-│   │   ├── common/         # Shared infra: make_pool, open_amqp_channel, claim_next_pending
-│   │   ├── crawl/          # Crawl pipeline (manifest, processor, repo, sitemap, watchdog, worker, runtime)
-│   │   ├── extract/        # Extract worker
-│   │   ├── embed/          # Embed worker
-│   │   ├── ingest.rs       # Ingest job schema + worker (github/reddit/youtube)
-│   │   ├── status.rs       # JobStatus enum (pending/running/completed/failed/canceled)
-│   │   └── worker_lane.rs  # Multi-lane worker coordination for ingest
-│   ├── web.rs              # Axum server: routes, WS handler, static asset serving
-│   ├── web/
-│   │   ├── execute.rs      # Subprocess execution + stdout/stderr streaming over WS
-│   │   ├── docker_stats.rs # Bollard Docker stats poller + broadcast
-│   │   └── static/         # Frontend assets (index.html, style.css, neural.js, app.js)
-│   └── vector/
-│       ├── mod.rs, ops/    # Vector ops: commands, input, qdrant, ranking, stats, tei
-├── docker/
-│   ├── Dockerfile          # Multi-stage build; s6-overlay for service supervision
-│   └── s6/
-│       ├── cont-init.d/    # 10-load-axon-env: loads .env on container startup
-│       └── s6-rc.d/        # crawl-worker, extract-worker, embed-worker, ingest-worker (+ user bundle)
-├── docker-compose.yaml     # Full stack: postgres, redis, rabbitmq, qdrant, axon-workers
-├── .env                    # Secrets (gitignored)
-└── .env.example            # Template — copy to .env and fill in
-```
+Canonical architecture and data-flow diagrams live in `docs/ARCHITECTURE.md`.
+
+High-level subsystem map:
+
+- Entrypoint and dispatch:
+  - `main.rs` loads environment and calls `axon::run()`
+  - `lib.rs` owns `run`/`run_once` and command dispatch
+- Command + config:
+  - `crates/cli/*` command handlers
+  - `crates/core/config/{cli,parse,types}.rs` flag/env parsing and runtime config resolution
+- Crawl + content:
+  - `crates/crawl/engine.rs`
+  - `crates/core/http.rs` and `crates/core/content.rs`
+- Async jobs:
+  - `crates/jobs/crawl/` (manifest, processor, repo, sitemap, watchdog, worker, runtime)
+  - `crates/jobs/{extract,embed}/` modules, `crates/jobs/ingest.rs`
+  - `crates/jobs/common/*` and `crates/jobs/worker_lane.rs`
+  - job states in `crates/jobs/status.rs`
+- Vector + RAG:
+  - `crates/vector/ops/*` (TEI embedding, Qdrant upsert/search, ask/evaluate/query)
+- Web runtimes:
+  - WebSocket execution bridge: `crates/web.rs`
+  - Active UI: `apps/web/` (Next.js — omnibox, Pulse workspace, port 49010)
 
 ## Infrastructure
 
@@ -209,8 +198,9 @@ axon_rust/
 | `axon-redis` | redis:8.2-alpine | `53379` | Queue state / caching |
 | `axon-rabbitmq` | rabbitmq:4.0-management | `45535` | AMQP job queue |
 | `axon-qdrant` | qdrant/qdrant:v1.13.1 | `53333`, `53334` (gRPC) | Vector store |
-| `axon-chrome` | built from Dockerfile.chrome | `6000` (management), `9222` (CDP proxy) | headless_browser + chrome-headless-shell |
-| `axon-workers` | built from Dockerfile | — | 4 workers (crawl/extract/embed/ingest) |
+| `axon-chrome` | built from docker/chrome/Dockerfile | `6000` (management), `9222` (CDP proxy) | headless_browser + chrome-headless-shell |
+| `axon-workers` | built from Dockerfile | — | 4 workers (crawl/extract/embed/ingest) (also serves HTTP/WS on port 49000) |
+| `axon-web` | docker/web/Dockerfile | `49010` | Next.js dev UI with hot reload. `pnpm-watcher` s6 service auto-installs new packages within 3s of `pnpm add` on host — no rebuild needed. |
 
 All services live on the `axon` bridge network. Data volumes use `${AXON_DATA_DIR:-./data}/axon/...` (override with `AXON_DATA_DIR` in `.env`).
 
@@ -333,7 +323,7 @@ Pages with fewer than `--min-markdown-chars` (default: 200) are flagged as thin.
 `ensure_collection()` does a GET first; only issues PUT on 404 (collection not found). This means it's safe on existing collections — no 409 Conflict. Safe to call on every embed.
 
 ### Sitemap backfill
-After a crawl, `append_sitemap_backfill()` discovers URLs via sitemap.xml that the crawler missed and fetches them individually. Respects `--max-sitemaps` (default: 512) and `--include-subdomains`.
+After a crawl, `append_sitemap_backfill()` discovers URLs via sitemap.xml that the crawler missed and fetches them individually. Respects `--max-sitemaps` (default: 512) and `--include-subdomains`. Use `--sitemap-since-days N` to restrict backfill to URLs whose `<lastmod>` falls within the last N days; URLs without `<lastmod>` are always included.
 
 ### Docker build context
 The `Dockerfile` builds from `docker/Dockerfile`. The build command inside the container is:
@@ -352,11 +342,13 @@ cargo build --release --bin axon
 spider_agent = { version = "2.45", default-features = false, features = ["search_tavily", "openai"] }
 ```
 
-### `serve` hot reload (debug builds)
-In debug builds (`#[cfg(debug_assertions)]`), static assets are read from disk at `crates/web/static/` on every request — edit and refresh, no rebuild. Release builds use `include_str!()` compiled into the binary.
-
 ### Subprocess stdout vs stderr
 CLI commands output JSON data to stdout and progress/logs to stderr (Spinner via indicatif, tracing via `log_info`/`log_done`). The web UI streams both: stdout as `"type": "output"`, stderr as `"type": "log"`. ANSI codes stripped via `console::strip_ansi_codes()`.
+
+### AMQP reconnect backoff
+When a worker's AMQP channel dies (broker restart, consumer_timeout, network blip), the lane reconnects automatically with exponential backoff: starts at 2s, doubles each attempt, capped at 60s. On successful reconnect, the backoff resets to 2s **only if the connection was alive for >=60 seconds** (`ran_for_secs >= AMQP_RECONNECT_MAX_SECS` in `worker_lane.rs`). Short-lived connections that reconnect quickly retain their current backoff value. This prevents rapid reconnect loops from hammering the broker after a transient failure. The current job is not lost — it holds no AMQP reference and completes normally before the reconnect loop fires.
+
+**Note:** The crawl worker's reconnect loop in `crawl/runtime/worker/loops.rs` has different semantics: it resets backoff to `RECONNECT_BACKOFF_INITIAL_SECS` (2s) on **every** successful reconnect (i.e., when `run_amqp_worker_lane` returns `Ok(())`), regardless of how long the connection was alive.
 
 ### Adding fields to `Config` struct
 When adding a new non-`Option` field to `Config` in `crates/core/config.rs`, you **must** also update the inline `Config { .. }` struct literals used in test helpers:

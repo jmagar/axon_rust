@@ -1,4 +1,5 @@
 [advisories]
+# Keep this ignore list aligned with deny.toml; deny.toml is canonical.
 ignore = [
   "RUSTSEC-2023-0071",
 ]

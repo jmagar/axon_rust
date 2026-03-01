@@ -32,12 +32,10 @@ async fn fetch_job_row(
 }
 
 async fn maybe_cancel_job_before_start(
-    cfg: &Config,
+    redis_conn: &mut redis::aio::MultiplexedConnection,
     pool: &PgPool,
     id: Uuid,
 ) -> Result<bool, Box<dyn Error>> {
-    let redis_client = redis::Client::open(cfg.redis_url.clone())?;
-    let mut redis_conn = redis_client.get_multiplexed_async_connection().await?;
     let cancel_key = format!("axon:crawl:cancel:{id}");
     let cancel_before: Option<String> = redis_conn
         .get(&cancel_key)
@@ -73,6 +71,7 @@ fn build_job_config(cfg: &Config, parsed: &CrawlJobConfig, id: Uuid, url: &str) 
     job_cfg.min_markdown_chars = parsed.min_markdown_chars;
     job_cfg.drop_thin_markdown = parsed.drop_thin_markdown;
     job_cfg.discover_sitemaps = parsed.discover_sitemaps;
+    job_cfg.sitemap_since_days = parsed.sitemap_since_days;
     job_cfg.embed = parsed.embed;
     job_cfg.render_mode = parsed.render_mode;
     job_cfg.collection = parsed.collection.clone();
@@ -87,8 +86,13 @@ fn build_job_config(cfg: &Config, parsed: &CrawlJobConfig, id: Uuid, url: &str) 
     job_cfg.cache = parsed.cache;
     job_cfg.cache_skip_browser = parsed.cache_skip_browser;
 
+    // Always use the worker's own base output dir (cfg.output_dir), not the
+    // stored job path.  The job config was serialized by the submitter (e.g.
+    // the MCP server on the host), which may have a different filesystem root
+    // than the worker (e.g. running inside Docker at /app).
     let domain = url_to_domain(url);
-    job_cfg.output_dir = PathBuf::from(parsed.output_dir.clone())
+    job_cfg.output_dir = cfg
+        .output_dir
         .join("domains")
         .join(domain)
         .join(id.to_string());
@@ -163,7 +167,16 @@ pub(super) async fn load_job_execution_context(
         return Ok(None);
     };
 
-    if maybe_cancel_job_before_start(cfg, pool, id).await? {
+    let redis_client = redis::Client::open(cfg.redis_url.clone())?;
+    let mut redis_conn = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        redis_client.get_multiplexed_async_connection(),
+    )
+    .await
+    .map_err(|_| "redis connect timeout (3s) in job context")?
+    .map_err(|e| format!("redis connect failed in job context: {e}"))?;
+
+    if maybe_cancel_job_before_start(&mut redis_conn, pool, id).await? {
         return Ok(None);
     }
 

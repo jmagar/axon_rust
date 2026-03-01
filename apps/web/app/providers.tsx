@@ -1,6 +1,7 @@
 'use client'
 
 import type { ReactNode } from 'react'
+import { AppShell } from '@/components/app-shell'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { AxonWsContext, useAxonWsProvider } from '@/hooks/use-axon-ws'
 import { useWsMessagesProvider, WsMessagesContext } from '@/hooks/use-ws-messages'
@@ -18,7 +19,9 @@ function WsMessagesProvider({ children }: { children: ReactNode }) {
   const messages = useWsMessagesProvider()
   return (
     <WsMessagesContext value={messages}>
-      <TooltipProvider>{children}</TooltipProvider>
+      <TooltipProvider>
+        <AppShell>{children}</AppShell>
+      </TooltipProvider>
     </WsMessagesContext>
   )
 }

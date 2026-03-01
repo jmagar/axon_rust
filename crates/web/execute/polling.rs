@@ -1,12 +1,16 @@
 use crate::crates::core::content::url_to_domain;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+use super::events::{
+    CommandContext, JobProgressPayload, JobStatusPayload, WsEventV2, serialize_v2_event,
+};
 use super::files::{output_dir, send_crawl_manifest};
-use super::resolve_exe;
+use super::{resolve_exe, send_done_dual, send_error_dual};
 
 /// Default poll timeout in seconds (10 minutes). Override with
 /// `AXON_WEB_POLL_TIMEOUT_SECS` env var.
@@ -44,28 +48,121 @@ fn resolve_job_output_dir(metrics_dir: Option<&str>, input_url: &str, job_id: &s
 }
 
 /// Send a `crawl_progress` WS message with live page counts from job metrics.
-async fn send_crawl_progress(
+fn legacy_crawl_progress_message(
     job_id: &str,
     status: &str,
     status_json: &serde_json::Value,
-    tx: &mpsc::Sender<String>,
-) {
+) -> String {
     let m = status_json.get("metrics").cloned().unwrap_or(json!({}));
-    let _ = tx
-        .send(
-            json!({
-                "type": "crawl_progress",
-                "job_id": job_id,
-                "status": status,
-                "pages_crawled": m.get("pages_crawled").and_then(|v| v.as_u64()).unwrap_or(0),
-                "pages_discovered": m.get("pages_discovered").and_then(|v| v.as_u64()).unwrap_or(0),
-                "md_created": m.get("md_created").and_then(|v| v.as_u64()).unwrap_or(0),
-                "thin_md": m.get("thin_md").and_then(|v| v.as_u64()).unwrap_or(0),
-                "phase": m.get("phase").and_then(|v| v.as_str()).unwrap_or("pending"),
-            })
-            .to_string(),
-        )
-        .await;
+    json!({
+        "type": "crawl_progress",
+        "job_id": job_id,
+        "status": status,
+        "pages_crawled": m.get("pages_crawled").and_then(|v| v.as_u64()).unwrap_or(0),
+        "pages_discovered": m.get("pages_discovered").and_then(|v| v.as_u64()).unwrap_or(0),
+        "md_created": m.get("md_created").and_then(|v| v.as_u64()).unwrap_or(0),
+        "thin_md": m.get("thin_md").and_then(|v| v.as_u64()).unwrap_or(0),
+        "phase": m.get("phase").and_then(|v| v.as_str()).unwrap_or("pending"),
+    })
+    .to_string()
+}
+
+fn metrics_map(status_json: &serde_json::Value) -> Option<BTreeMap<String, serde_json::Value>> {
+    status_json
+        .get("metrics")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
+}
+
+fn derive_progress_payload(
+    status: &str,
+    status_json: &serde_json::Value,
+) -> Option<JobProgressPayload> {
+    let metrics = status_json.get("metrics").and_then(|v| v.as_object());
+    let phase_from_metrics = metrics
+        .and_then(|m| m.get("phase"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let phase = phase_from_metrics
+        .clone()
+        .unwrap_or_else(|| status.to_string());
+
+    let processed = metrics
+        .and_then(|m| m.get("pages_crawled").and_then(|v| v.as_u64()))
+        .or_else(|| metrics.and_then(|m| m.get("processed").and_then(|v| v.as_u64())))
+        .or_else(|| metrics.and_then(|m| m.get("completed").and_then(|v| v.as_u64())))
+        .or_else(|| metrics.and_then(|m| m.get("current").and_then(|v| v.as_u64())));
+
+    let total = metrics
+        .and_then(|m| m.get("pages_discovered").and_then(|v| v.as_u64()))
+        .or_else(|| metrics.and_then(|m| m.get("total").and_then(|v| v.as_u64())))
+        .or_else(|| metrics.and_then(|m| m.get("target").and_then(|v| v.as_u64())));
+
+    let percent = metrics
+        .and_then(|m| m.get("percent").and_then(|v| v.as_f64()))
+        .or_else(|| metrics.and_then(|m| m.get("progress_percent").and_then(|v| v.as_f64())))
+        .or_else(|| match (processed, total) {
+            (Some(done), Some(all)) if all > 0 => Some((done as f64 / all as f64) * 100.0),
+            _ => None,
+        });
+
+    let has_progress_data = percent.is_some()
+        || processed.is_some()
+        || total.is_some()
+        || phase_from_metrics.is_some()
+        || !phase.is_empty();
+    if !has_progress_data {
+        return None;
+    }
+
+    Some(JobProgressPayload {
+        phase,
+        percent,
+        processed,
+        total,
+    })
+}
+
+pub(super) fn poll_messages_for_status(
+    mode: &str,
+    job_id: &str,
+    status: &str,
+    status_json: &serde_json::Value,
+    ctx: &CommandContext,
+) -> Vec<String> {
+    let mut messages = Vec::new();
+    if mode == "crawl" {
+        messages.push(legacy_crawl_progress_message(job_id, status, status_json));
+    }
+
+    if let Some(v2) = serialize_v2_event(WsEventV2::JobStatus {
+        ctx: ctx.clone(),
+        payload: JobStatusPayload {
+            status: status.to_string(),
+            error: status_json
+                .get("error")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            metrics: metrics_map(status_json),
+        },
+    }) {
+        messages.push(v2);
+    }
+
+    if let Some(payload) = derive_progress_payload(status, status_json) {
+        if let Some(v2) = serialize_v2_event(WsEventV2::JobProgress {
+            ctx: ctx.clone(),
+            payload,
+        }) {
+            messages.push(v2);
+        }
+    }
+
+    messages
 }
 
 /// Poll an async job for completion. For crawl jobs, also sends `crawl_progress`
@@ -77,43 +174,49 @@ pub(super) async fn poll_async_job(
     job_id: &str,
     mode: &str,
     input_url: &str,
+    ctx: &CommandContext,
     tx: &mpsc::Sender<String>,
     start: Instant,
 ) {
     // Status subcommand: `axon <mode> status <job_id> --json`
-    let status_cmd = mode.to_string();
+    let status_mode = mode.to_string();
+    let exe = match resolve_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            send_error_dual(
+                tx,
+                ctx,
+                format!("poll aborted: cannot find axon binary: {e}"),
+                Some(start.elapsed().as_millis() as u64),
+            )
+            .await;
+            return;
+        }
+    };
     let timeout = poll_timeout();
     let poll_start = Instant::now();
 
     loop {
+        if tx.is_closed() {
+            break;
+        }
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         // Check timeout before issuing the next status query
         if poll_start.elapsed() >= timeout {
             let elapsed = start.elapsed().as_millis() as u64;
-            let _ = tx
-                .send(
-                    json!({
-                        "type": "error",
-                        "message": format!(
-                            "Job poll timed out after {}s",
-                            timeout.as_secs()
-                        ),
-                        "elapsed_ms": elapsed
-                    })
-                    .to_string(),
-                )
-                .await;
+            send_error_dual(
+                tx,
+                ctx,
+                format!("Job poll timed out after {}s", timeout.as_secs()),
+                Some(elapsed),
+            )
+            .await;
             break;
         }
 
-        let exe = match resolve_exe() {
-            Ok(e) => e,
-            Err(_) => break,
-        };
-
         let out = Command::new(&exe)
-            .args([&status_cmd, "status", job_id, "--json"])
+            .args([&status_mode, "status", job_id, "--json"])
             .output()
             .await;
 
@@ -130,9 +233,8 @@ pub(super) async fn poll_async_job(
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        // For crawl mode, send progress updates with page counts
-        if mode == "crawl" {
-            send_crawl_progress(job_id, status, &status_json, tx).await;
+        for msg in poll_messages_for_status(mode, job_id, status, &status_json, ctx) {
+            let _ = tx.send(msg).await;
         }
 
         match status {
@@ -145,14 +247,10 @@ pub(super) async fn poll_async_job(
                         input_url,
                         job_id,
                     );
-                    send_crawl_manifest(&job_dir, tx).await;
+                    send_crawl_manifest(&job_dir, tx, Some(job_id), ctx).await;
                 }
                 let elapsed = start.elapsed().as_millis() as u64;
-                let _ = tx
-                    .send(
-                        json!({"type": "done", "exit_code": 0, "elapsed_ms": elapsed}).to_string(),
-                    )
-                    .await;
+                send_done_dual(tx, ctx, 0, Some(elapsed)).await;
                 break;
             }
             "failed" => {
@@ -161,20 +259,12 @@ pub(super) async fn poll_async_job(
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown error");
                 let elapsed = start.elapsed().as_millis() as u64;
-                let _ = tx
-                    .send(
-                        json!({"type": "error", "message": err, "elapsed_ms": elapsed}).to_string(),
-                    )
-                    .await;
+                send_error_dual(tx, ctx, err.to_string(), Some(elapsed)).await;
                 break;
             }
             "canceled" => {
                 let elapsed = start.elapsed().as_millis() as u64;
-                let _ = tx
-                    .send(
-                        json!({"type": "done", "exit_code": 1, "elapsed_ms": elapsed}).to_string(),
-                    )
-                    .await;
+                send_done_dual(tx, ctx, 1, Some(elapsed)).await;
                 break;
             }
             _ => {} // pending, running — continue polling

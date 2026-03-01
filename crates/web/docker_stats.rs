@@ -10,6 +10,9 @@ const CONTAINER_PREFIX: &str = "axon-";
 const POLL_INTERVAL_MS: u64 = 500;
 
 /// Previous absolute counters for rate calculations.
+///
+/// Per-container absolute I/O counters from the previous poll cycle, used to
+/// compute byte-per-second rates via `(current - prev) / dt`.
 struct PreviousSnapshot {
     timestamp: std::time::Instant,
     net_rx: HashMap<String, u64>,
@@ -18,6 +21,7 @@ struct PreviousSnapshot {
     block_write: HashMap<String, u64>,
 }
 
+/// Computed per-container metrics for a single poll cycle.
 struct ContainerMetrics {
     name: String,
     cpu_percent: f64,
@@ -193,11 +197,6 @@ async fn poll_once(docker: &Docker, prev: &mut PreviousSnapshot) -> Vec<Containe
         let blk_read_rate = (blk_read.saturating_sub(prev_br) as f64 / dt).max(0.0);
         let blk_write_rate = (blk_write.saturating_sub(prev_bw) as f64 / dt).max(0.0);
 
-        prev.net_rx.insert(name.clone(), net_rx);
-        prev.net_tx.insert(name.clone(), net_tx);
-        prev.block_read.insert(name.clone(), blk_read);
-        prev.block_write.insert(name.clone(), blk_write);
-
         results.push(ContainerMetrics {
             name,
             cpu_percent: round2(cpu_percent),
@@ -210,6 +209,13 @@ async fn poll_once(docker: &Docker, prev: &mut PreviousSnapshot) -> Vec<Containe
             block_write_rate: round1(blk_write_rate),
             status: "running".to_string(),
         });
+        if let Some(m) = results.last() {
+            let key = m.name.clone();
+            prev.net_rx.insert(key.clone(), net_rx);
+            prev.net_tx.insert(key.clone(), net_tx);
+            prev.block_read.insert(key.clone(), blk_read);
+            prev.block_write.insert(key, blk_write);
+        }
     }
 
     results

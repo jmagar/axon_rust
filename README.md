@@ -1,6 +1,14 @@
 # ⚡ **Axon**
+Last Modified: 2026-02-25
 
 Self-hosted web crawling and RAG pipeline powered by Spider.rs. Single binary (`axon`) backed by a local Docker stack.
+
+## CI Status
+
+[![CI](https://github.com/jmagar/axon_rust/actions/workflows/ci.yml/badge.svg)](https://github.com/jmagar/axon_rust/actions/workflows/ci.yml)
+
+- `mcp-smoke`: runs as a dedicated job in the `CI` workflow and executes `./scripts/test-mcp-tools-mcporter.sh`.
+- `test-infra`: manual lane (`workflow_dispatch`) for ignored infra-backed tests; use Actions -> CI -> Run workflow -> `run_infra_tests=true`.
 
 ## Overview
 
@@ -15,124 +23,57 @@ Axon is a single CLI for crawl/scrape/extract plus local vector retrieval and Q&
 - OpenAI-compatible extraction and answer generation
 - Chrome CDP rendering for dynamic sites
 - Automation-friendly JSON mode via `--json`
-- Built-in web UI via `axon serve` — neural canvas, command execution, Docker stats over WebSocket
+- Legacy static web UI via `axon serve` (deprecated) — see `docs/serve.md`
+- Next.js web app (`apps/web`) with keyboard-first omnibox (`/` focus, `@mode` switching, `@file` context mentions)
+- MCP server binary `axon-mcp` exposing a single `axon` tool (`action`/`subaction`) for crawler/RAG integration
 
 ## Architecture
 
-### Crate Layout (`crates/*`)
+- Canonical architecture and end-to-end data flow: `docs/ARCHITECTURE.md`
+- Runtime entrypoint: `main.rs` -> `lib.rs` (`run`/`run_once`)
+- Core subsystems:
+  - `crates/cli`: command handlers and routing
+  - `crates/core`: config parsing, HTTP/content pipeline, logging
+  - `crates/crawl`: crawl engine and sitemap backfill
+  - `crates/jobs`: queue-backed workers and job lifecycle
+  - `crates/vector`: TEI embedding + Qdrant RAG operations
+  - `crates/web.rs` + `crates/web/*`: axum `/ws` runtime + legacy static UI
+  - `apps/web`: active Next.js UI (omnibox, pulse workspace, API routes)
 
-- `crates/cli` — command routing and UX
-- `crates/core` — config, HTTP, health checks, logging, content transforms
-- `crates/crawl` — crawling engine and sitemap backfill
-- `crates/extract` — placeholder module (extraction logic lives in `vector/ops`)
-- `crates/jobs` — queue workers for crawl/extract/embed
-- `crates/vector` — embeddings + Qdrant operations (`query/retrieve/ask/evaluate/suggest/sources/domains/stats/dedupe`)
-- `crates/web` — axum web UI server (static assets, WebSocket handler, Docker stats poller, subprocess execution)
+For infra topology (Docker services, ports, persistence), see the Infrastructure and Environment sections below.
 
-```
-axon_rust/
-├── mod.rs                  # Library root — run() dispatch
-├── main.rs                 # Binary entry point (single binary: axon)
-├── crates/
-│   ├── mod.rs
-│   ├── cli/
-│   │   ├── mod.rs
-│   │   └── commands/       # One file (or subdir) per command
-│   │       ├── common.rs   # URL parsing utilities (parse_urls, expand_url_glob_seed, etc.)
-│   │       ├── probe.rs    # HTTP probe helpers used by doctor
-│   │       ├── crawl.rs    # Crawl command entry point
-│   │       ├── crawl/      # Crawl subcommand modules
-│   │       │   ├── audit.rs
-│   │       │   └── audit/audit_diff.rs
-│   │       ├── doctor/     # Doctor command subdir
-│   │       └── scrape.rs, map.rs, embed.rs, extract.rs,
-│   │           search.rs, status.rs, debug.rs, doctor/,
-│   │           github.rs, reddit.rs, youtube.rs
-│   ├── core/
-│   │   ├── config/         # CLI parsing (clap), Config struct, performance profiles
-│   │   │   ├── cli.rs      # clap arg definitions (GlobalArgs, subcommand args)
-│   │   │   ├── types.rs    # Config struct and enum types
-│   │   │   ├── parse.rs    # Post-parse normalization and profile application
-│   │   │   └── help.rs     # Long-form help strings
-│   │   ├── content/        # HTML→markdown, URL→filename, transform pipeline
-│   │   │   ├── deterministic.rs  # DeterministicExtractionEngine, parsers
-│   │   │   └── tests.rs
-│   │   ├── health.rs       # redis_healthy() connectivity check
-│   │   ├── http.rs         # build_client(), fetch_html(), validate_url() (SSRF guard)
-│   │   ├── logging.rs      # log_info(), log_warn(), log_done() structured output
-│   │   └── ui.rs           # ANSI color helpers (primary, accent, muted, status_text)
-│   ├── crawl/
-│   │   ├── mod.rs
-│   │   ├── engine.rs       # crawl_and_collect_map(), run_crawl_once(),
-│   │   │                   # try_auto_switch(), should_fallback_to_chrome()
-│   │   ├── manifest.rs     # Unified manifest: content hashing, relative pathing, change detection
-│   │   └── engine/
-│   │       ├── sitemap.rs  # crawl_sitemap_urls(), append_sitemap_backfill()
-│   │       └── tests.rs
-│   ├── extract/
-│   │   └── mod.rs          # (placeholder; LLM extraction is in vector/ops)
-│   ├── jobs/               # AMQP-backed async job workers
-│   │   ├── mod.rs
-│   │   ├── common.rs       # Shared infrastructure: make_pool, open_amqp_channel,
-│   │   │                   # claim_next_pending, mark_job_failed, enqueue_job
-│   │   ├── common/
-│   │   │   └── tests.rs
-│   │   ├── embed_jobs/     # Embed worker
-│   │   │   └── tests.rs
-│   │   ├── extract_jobs/   # Extract worker
-│   │   │   ├── worker.rs, tests.rs
-│   │   └── crawl_jobs/     # Crawl pipeline (modular)
-│   │       ├── mod.rs, processor.rs, repo.rs,
-│   │       │   sitemap.rs, watchdog.rs, worker.rs
-│   │       └── runtime/
-│   │           ├── mod.rs, robots.rs, tests.rs, worker.rs
-│   │           └── worker/
-│   │               ├── worker_loops.rs
-│   │               └── worker_process/
-│   ├── web.rs              # Axum server — routes, WS handler, shared state
-│   ├── web/
-│   │   ├── execute.rs      # Subprocess spawn + stdout/stderr streaming over WS
-│   │   ├── docker_stats.rs # Bollard Docker stats poller + broadcast
-│   │   └── static/         # HTML/CSS/JS (compiled into binary via include_str!)
-│   │       ├── index.html, style.css, neural.js, app.js
-│   └── vector/
-│       ├── mod.rs
-│       └── ops/            # Vector ops (modular)
-│           ├── input.rs, ranking.rs, tei.rs
-│           ├── commands/    # Per-command handlers
-│           │   ├── ask/, evaluate.rs, query.rs, streaming.rs, suggest.rs
-│           ├── qdrant/      # Qdrant client and operations
-│           │   ├── client.rs, commands.rs, types.rs, utils.rs
-│           └── stats/
-├── docker/
-│   ├── Dockerfile          # Multi-stage build; s6-overlay for service supervision
-│   ├── rabbitmq/
-│   │   └── 20-axon.conf    # RabbitMQ tuning config
-│   ├── scripts/
-│   │   └── healthcheck-workers.sh
-│   └── s6/
-│       ├── cont-init.d/
-│       │   └── 10-load-axon-env  # Loads .env on container startup
-│       └── s6-rc.d/        # s6-rc service definitions
-│           ├── crawl-worker/  (run, type)
-│           ├── extract-worker/  (run, type)
-│           ├── embed-worker/  (run, type)
-│           └── user/contents.d/
-├── docker-compose.yaml
-├── .env                    # Secrets (gitignored)
-└── .env.example            # Template — copy to .env and fill in
+## Module READMEs
+
+- [crates index](crates/README.md)
+- [crates/cli](crates/cli/README.md)
+- [crates/core](crates/core/README.md)
+- [crates/crawl](crates/crawl/README.md)
+- [crates/ingest](crates/ingest/README.md)
+- [crates/jobs](crates/jobs/README.md)
+- [crates/mcp](crates/mcp/README.md)
+- [crates/vector](crates/vector/README.md)
+- [crates/web](crates/web/README.md)
+- [docker](docker/README.md)
+- [docs index](docs/README.md)
+- [testing guide](docs/TESTING.md)
+
+## MCP Server
+
+Axon includes an MCP server binary:
+
+```bash
+cargo build --release --bin axon-mcp
+./target/release/axon-mcp
 ```
 
-### Docker Services (`docker-compose.yaml`)
+Documentation:
+- Design/runtime guide: `docs/MCP.md`
+- Wire contract/schema source of truth: `docs/MCP-TOOL-SCHEMA.md`
 
-- `axon-postgres` -> `localhost:53432`
-- `axon-redis` -> `localhost:53379`
-- `axon-rabbitmq` -> `localhost:45535`
-- `axon-qdrant` -> `localhost:53333` (HTTP), `53334` (gRPC)
-- `axon-chrome` -> `localhost:6000` (management API), `localhost:9222` (CDP proxy)
-- `axon-workers` (s6-supervised worker container; depends on all infra being healthy)
-
-Services run on the `axon` bridge network. Persistent volumes are rooted at `AXON_DATA_DIR` (defaults to `./data` if unset).
+MCP defaults are context-safe:
+- Artifact-first responses (`response_mode=path`) written to `.cache/axon-mcp/`
+- Inline responses are optional (`response_mode=inline|both`) and capped
+- Resource: `axon://schema/mcp-tool`
 
 ## Quick Start
 
@@ -252,11 +193,20 @@ The `ask` command retrieves chunks from Qdrant, reranks them, and builds a conte
 | `AXON_ASK_DOC_FETCH_CONCURRENCY` | `4` | `1`–`16` | Concurrent Qdrant fetches during full-doc backfill. |
 | `AXON_ASK_DOC_CHUNK_LIMIT` | `192` | `8`–`2000` | Maximum chunks fetched per document during backfill. |
 | `AXON_ASK_MAX_CONTEXT_CHARS` | `120000` | `20000`–`400000` | Total characters of context passed to the LLM. Raise for large-context models; lower to reduce token cost. |
+| `AXON_ASK_AUTHORITATIVE_DOMAINS` | `` | — | Optional comma-separated domain list to boost during reranking (exact host or suffix match). Example: `docs.claude.com,developers.openai.com`. |
+| `AXON_ASK_AUTHORITATIVE_BOOST` | `0.0` | `0.0`–`0.5` | Extra rerank score added when a candidate matches `AXON_ASK_AUTHORITATIVE_DOMAINS`. |
+| `AXON_ASK_AUTHORITATIVE_ALLOWLIST` | `` | — | Optional comma-separated strict domain allowlist. When set, ask retrieval excludes candidates outside these domains. |
+| `AXON_ASK_MIN_CITATIONS_NONTRIVIAL` | `2` | `1`–`5` | Minimum unique citations required for non-trivial answers; if not met, `ask` returns structured insufficient-evidence output. |
 
 Notes:
 - Container runtime uses service DNS names (`axon-postgres`, `axon-redis`, etc.).
 - Local runtime rewrites those to mapped localhost ports automatically.
 - `./scripts/axon` sources `.env`; running `cargo run --bin axon -- ...` directly does not.
+- `ask` now enforces citation-quality gates:
+  - Non-trivial responses require multiple unique citations.
+  - Procedural queries require at least one official-docs citation.
+  - Config/schema queries require at least one exact-page citation.
+  - If gates fail, output is forced to structured insufficient-evidence format.
 
 ## Worker Model (s6 Supervised)
 
@@ -289,6 +239,7 @@ Axon implements a multi-layered incremental crawl mechanism to minimize network 
 |---------|---------|--------|
 | `scrape <url>...` | Scrape one or more URLs to markdown | No |
 | `crawl <url>...` | Full site crawl for one or more start URLs | Yes (default) |
+| `refresh <url>...` | Revalidate known URLs and update stored content/embeddings | Yes (default) |
 | `map <url>` | Discover all URLs without scraping | No |
 | `extract <urls...>` | LLM-powered structured data extraction | Yes (default) |
 | `search <query>` | Web search via Tavily, auto-queues crawl jobs for results | No |
@@ -312,6 +263,24 @@ Axon implements a multi-layered incremental crawl mechanism to minimize network 
 | `debug` | Run doctor + LLM-assisted troubleshooting | No |
 | `dedupe` | Remove duplicate vectors from Qdrant collection | No |
 | `serve` | Start web UI server (axum + WebSocket + Docker stats) | No |
+
+### Freshness Strategy (Tiered Refresh + Discovery Crawl)
+
+Use `refresh` for ongoing freshness of known URLs, and reserve `crawl` for discovery of newly added URLs.
+
+Recommended tiered refresh cadence:
+
+| Tier | Interval (seconds) | Typical content |
+|------|--------------------|-----------------|
+| `high` | `1800` | Fast-changing docs, changelogs, release pages |
+| `medium` | `21600` | Standard documentation and guides |
+| `low` | `86400` | Stable reference pages and archives |
+
+Recommended production pattern:
+- Add refresh schedules by content volatility (`high`/`medium`/`low`) and run the scheduler continuously.
+- Run `refresh schedule worker` as the scheduler loop that enqueues due refresh jobs.
+- Run `refresh worker` as the refresh job consumer that executes queued refresh jobs.
+- Run `crawl` on an infrequent cadence (daily or weekly) for discovery only, then let refresh maintain known URLs.
 
 ### Job Subcommands (for crawl / extract / embed)
 
@@ -364,6 +333,7 @@ All flags are global (usable with any subcommand).
 | `--wait <bool>` | bool | `false` | Run synchronously and block until completion. Without this, async commands enqueue and return immediately. |
 | `--yes` | flag | `false` | Skip confirmation prompts (non-interactive mode). |
 | `--json` | flag | `false` | Machine-readable JSON output on stdout. |
+| `--reclaimed` | flag | `false` | `status` mode: show only watchdog-reclaimed jobs. Default `status` hides reclaimed jobs. |
 
 #### Crawl & Scrape
 
@@ -377,6 +347,7 @@ All flags are global (usable with any subcommand).
 | `--respect-robots <bool>` | bool | `false` | Respect `robots.txt` directives. **Note:** defaults `false` — consider legal/ethical implications. |
 | `--discover-sitemaps <bool>` | bool | `true` | Discover and backfill URLs from sitemap.xml after crawl. |
 | `--max-sitemaps <n>` | usize | `512` | Maximum sitemap URLs to backfill per crawl. |
+| `--sitemap-since-days <n>` | u32 | `0` | Only backfill sitemap URLs with `<lastmod>` within the last N days (0 = no filter). URLs without `<lastmod>` are always included. |
 | `--min-markdown-chars <n>` | usize | `200` | Minimum markdown character count; pages below this are flagged as "thin". |
 | `--drop-thin-markdown <bool>` | bool | `true` | Skip thin pages — do not save or embed them. |
 | `--delay-ms <ms>` | u64 | `0` | Delay between requests in milliseconds. |
@@ -643,7 +614,7 @@ Pages with fewer than `--min-markdown-chars` (default: 200) are flagged as thin.
 The default Qdrant collection is `cortex` (set via `AXON_COLLECTION` or `--collection`). If you previously used an older build that defaulted to `spider_rust`, pass `--collection spider_rust` explicitly.
 
 ### Sitemap backfill
-After a crawl, `append_sitemap_backfill()` discovers URLs via sitemap.xml that the crawler missed and fetches them individually. Respects `--max-sitemaps` (default: 512) and `--include-subdomains`.
+After a crawl, `append_sitemap_backfill()` discovers URLs via sitemap.xml that the crawler missed and fetches them individually. Respects `--max-sitemaps` (default: 512) and `--include-subdomains`. Use `--sitemap-since-days N` to restrict backfill to URLs whose `<lastmod>` falls within the last N days; URLs without `<lastmod>` are always included.
 
 ### Docker build context
 The `Dockerfile` is at `docker/Dockerfile`. Run `docker compose build` from this directory (not a parent workspace). The binary built inside the container is `axon`.
@@ -673,6 +644,46 @@ cargo build --bin axon                        # debug
 cargo build --release --bin axon              # release
 cargo check                                   # fast type check
 ```
+
+### Local Dev Workflow (Optimized)
+
+Use `just` targets for a faster Rust loop:
+
+```bash
+# install optional local tools
+just nextest-install
+just llvm-cov-install
+
+# local default test lane (nextest when available, skips worker_e2e)
+just test
+
+# fastest inner loop (unit/lib focused)
+just test-fast
+
+# explicit infra-dependent tests (worker_e2e)
+just test-infra
+
+# watch mode: check + test type-check + fast lib tests
+just watch-check
+
+# branch-level coverage report (lcov)
+just coverage-branch
+```
+
+Notes:
+- `just` auto-enables `sccache` and `mold` if installed (`RUSTC_WRAPPER=sccache`, `-fuse-ld=mold`).
+- Worker E2E tests are marked `#[ignore]` and intended to run explicitly via `just test-infra`.
+- Build/test/check/clippy commands in local and CI paths are lockfile-strict (`--locked`).
+
+### Manual CI Infra Lane
+
+Use the optional GitHub Actions lane when you want CI to run ignored infra-backed worker tests:
+
+1. Open `Actions` -> `CI` -> `Run workflow`.
+2. Set `run_infra_tests` to `true`.
+3. Start the run; the `test-infra` job will execute `just test-infra` with Postgres/Redis/RabbitMQ services.
+
+This lane is manual-only (`workflow_dispatch`) so normal PR/push CI stays fast.
 
 ### Lint
 

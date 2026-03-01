@@ -1,19 +1,32 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
+rust_dev_env := "if command -v sccache >/dev/null 2>&1; then export RUSTC_WRAPPER=sccache; fi; if command -v mold >/dev/null 2>&1; then export RUSTFLAGS=\"${RUSTFLAGS:-} -C link-arg=-fuse-ld=mold\"; fi"
 
 default:
     @just --list
 
 check:
-    cargo check -q
+    {{rust_dev_env}}; cargo check -q --locked
+
+check-tests:
+    {{rust_dev_env}}; cargo check -q --tests --locked
 
 test:
-    cargo test -q
+    if cargo nextest --version >/dev/null 2>&1; then {{rust_dev_env}}; cargo nextest run --locked --workspace -E 'not test(/worker_e2e/)'; else echo "cargo-nextest not installed; falling back to cargo test"; {{rust_dev_env}}; cargo test -q --locked -- --skip worker_e2e; fi
 
 test-fast:
-    cargo test -q --lib
+    if cargo nextest --version >/dev/null 2>&1; then {{rust_dev_env}}; cargo nextest run --locked --lib -E 'not test(/worker_e2e/)'; else {{rust_dev_env}}; cargo test -q --lib --locked -- --skip worker_e2e; fi
+
+test-infra:
+    {{rust_dev_env}}; cargo test --locked worker_e2e -- --ignored --nocapture
+
+mcp-smoke:
+    ./scripts/test-mcp-tools-mcporter.sh
 
 test-all:
-    cargo test --all-targets --all-features
+    {{rust_dev_env}}; cargo test --all-targets --all-features --locked
+
+nextest-install:
+    {{rust_dev_env}}; cargo install cargo-nextest --locked
 
 fmt:
     cargo fmt --all
@@ -22,13 +35,13 @@ fmt-check:
     cargo fmt --all -- --check
 
 clippy:
-    cargo clippy --all-targets -- -D warnings
+    {{rust_dev_env}}; cargo clippy --all-targets --locked -- -D warnings
 
 build:
-    cargo build --release
+    {{rust_dev_env}}; cargo build --release --locked
 
 install:
-    cargo build --release
+    {{rust_dev_env}}; cargo build --release --locked
     mkdir -p ~/.local/bin
     ln -sf "$(pwd)/target/release/axon" ~/.local/bin/axon
 
@@ -56,11 +69,17 @@ precommit:
 
 fix:
     cargo fmt --all
-    cargo clippy --fix --all-targets --allow-dirty --allow-staged
+    {{rust_dev_env}}; cargo clippy --fix --all-targets --locked --allow-dirty --allow-staged
 
 fix-all:
     just fix
     cd apps/web && pnpm format
+
+llvm-cov-install:
+    {{rust_dev_env}}; cargo install cargo-llvm-cov --locked
+
+coverage-branch:
+    if cargo llvm-cov --version >/dev/null 2>&1; then {{rust_dev_env}}; cargo llvm-cov --locked --workspace --all-features --lcov --output-path .cache/coverage/lcov.info; else echo "cargo-llvm-cov not installed. Run: just llvm-cov-install"; exit 1; fi
 
 clean:
     cargo clean
@@ -81,7 +100,7 @@ docker-down:
     docker compose down
 
 watch-check:
-    cargo watch -x 'check -q' -x 'test -q --lib'
+    cargo watch -x 'check -q --locked' -x 'check -q --tests --locked' -x 'test -q --lib --locked -- --skip worker_e2e'
 
 rebuild:
     just check
@@ -91,10 +110,10 @@ rebuild:
 # ── Web UI (axum built-in server) ─────────────────────────────────
 
 serve port="3939":
-    cargo run --bin axon -- serve --port {{port}}
+    {{rust_dev_env}}; cargo run --locked --bin axon -- serve --port {{port}}
 
 serve-release port="3939":
-    cargo run --release --bin axon -- serve --port {{port}}
+    {{rust_dev_env}}; cargo run --release --locked --bin axon -- serve --port {{port}}
 
 # ── Web UI (Next.js dashboard) ────────────────────────────────────
 
@@ -121,7 +140,7 @@ stop:
 # Start infra, axum server, and Next.js dev server (all foreground)
 dev:
     just stop
-    docker compose up -d --build
-    cargo run --bin axon -- serve --port 3939 &
+    docker compose up -d
+    {{rust_dev_env}}; cargo run --locked --bin axon -- serve --port 3939 &
     cd apps/web && pnpm dev &
     wait

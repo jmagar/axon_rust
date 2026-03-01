@@ -1,4 +1,8 @@
 # axon github
+Last Modified: 2026-02-25
+
+Version: 1.0.0
+Last Updated: 01:26:53 | 02/25/2026 EST
 
 Ingest a GitHub repository into Qdrant. Fetches repository metadata, code files, issues, pull requests, and wiki pages via the GitHub REST API, chunks the content, and embeds it into the configured Qdrant collection.
 

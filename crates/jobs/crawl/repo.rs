@@ -1,4 +1,3 @@
-#[allow(dead_code)]
 use crate::crates::core::config::Config;
 use crate::crates::jobs::crawl::runtime;
 use std::error::Error;

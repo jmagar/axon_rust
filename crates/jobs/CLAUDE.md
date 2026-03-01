@@ -1,4 +1,5 @@
 # crates/jobs — AMQP Job Workers
+Last Modified: 2026-02-27
 
 Async job workers backed by RabbitMQ (lapin) + PostgreSQL (sqlx).
 
@@ -10,9 +11,11 @@ jobs/
 ├── crawl/           # manifest, processor, repo, sitemap, watchdog, worker, runtime
 ├── extract/         # Extract worker
 ├── embed/           # Embed worker
-├── ingest.rs        # Ingest job schema + worker (github/reddit/youtube)
+├── refresh/         # Refresh job scheduler, processor, schedule, state, worker
+├── ingest.rs        # Ingest job schema + worker (github/reddit/youtube/sessions)
 ├── status.rs        # JobStatus enum
-└── worker_lane.rs   # Multi-lane coordination for ingest
+└── worker_lane.rs   # Generic AMQP/polling lane runtime — used by embed, extract, and refresh workers
+                     # (Crawl uses its own loop in crawl/runtime/worker/loops.rs due to !Send spider futures)
 ```
 
 ## Critical Patterns
@@ -37,6 +40,13 @@ PgPool is expensive. Each worker creates one pool at startup and passes `&PgPool
 
 `open_amqp_channel()` has a **5-second connection timeout**. On failure it returns an error — callers should backoff and retry at the worker loop level, not in the channel helper itself.
 
+### AMQP Reconnect Backoff (crawl worker)
+
+`run_amqp_lane_with_reconnect()` in `crawl/runtime/worker/loops.rs` wraps the consumer loop in an infinite reconnect cycle. When the channel dies (broker restart, consumer_timeout, network blip):
+- Backoff starts at **2s**, doubles on each attempt, capped at **60s**
+- On successful reconnect the backoff resets to 2s
+- In-flight jobs are not lost — they hold no AMQP reference and complete normally before reconnect fires
+
 ### Bounded Channels
 
 All internal async channels use `tokio::sync::mpsc::channel(256)` — **never** `unbounded_channel()`. Unbounded channels hide backpressure bugs and cause OOM under load.
@@ -46,9 +56,11 @@ All internal async channels use `tokio::sync::mpsc::channel(256)` — **never** 
 - `watchdog.rs` (crawl_jobs): marks jobs stuck in `running` state as `failed` after `AXON_JOB_STALE_TIMEOUT_SECS` (default 300s) + `AXON_JOB_STALE_CONFIRM_SECS` (60s) grace period
 - `axon crawl recover` subcommand: reclaims all stale jobs (re-queues them as `pending`)
 
-### worker_lane.rs (Ingest)
+### worker_lane.rs (Embed / Extract / Refresh)
 
-`AXON_INGEST_LANES` (default 2) controls how many ingest jobs run in parallel. Each lane holds one AMQP consumer. Lane count is separate from per-job concurrency.
+`worker_lane.rs` is the **generic** AMQP/polling lane runtime shared by embed, extract, and refresh workers. The crawl worker does **not** use it — crawl has its own loop in `crawl/runtime/worker/loops.rs` because spider.rs futures are `!Send` and require single-threaded pinning.
+
+`AXON_INGEST_LANES` (default 2) controls how many ingest jobs run in parallel via `worker_lane.rs`. Each lane holds one AMQP consumer. Lane count is separate from per-job concurrency.
 
 ## ingest_jobs Schema Difference
 `axon_ingest_jobs` uses `source_type` + `target` columns instead of `url`/`urls_json` used by all other job tables. When querying or listing ingest jobs, join/filter on `source_type` (`github`/`reddit`/`youtube`) not on `url`.

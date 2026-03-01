@@ -1,18 +1,16 @@
 use crate::crates::core::config::{Config, RenderMode};
 pub(crate) use crate::crates::crawl::manifest::{read_manifest_urls, write_audit_diff};
-use crate::crates::jobs::common::JobTable;
+use crate::crates::jobs::common::{JobTable, begin_schema_migration_tx};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use std::error::Error;
-use std::sync::OnceLock;
 use uuid::Uuid;
 
-static SCHEMA_INIT: OnceLock<()> = OnceLock::new();
-
 const TABLE: JobTable = JobTable::Crawl;
-const WORKER_CONCURRENCY: usize = 2;
+const WORKER_CONCURRENCY: usize = 5;
 const STALE_SWEEP_INTERVAL_SECS: u64 = 30;
+const CRAWL_SCHEMA_LOCK_KEY: i64 = 0xA804_0003;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CrawlJobConfig {
@@ -25,6 +23,8 @@ struct CrawlJobConfig {
     min_markdown_chars: usize,
     drop_thin_markdown: bool,
     discover_sitemaps: bool,
+    #[serde(default)]
+    sitemap_since_days: u32,
     embed: bool,
     render_mode: RenderMode,
     collection: String,
@@ -60,13 +60,6 @@ pub struct CrawlJob {
     pub result_json: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct CrawlWatchdogSweepStats {
-    stale_candidates: u64,
-    marked_candidates: u64,
-    reclaimed_jobs: u64,
-}
-
 fn to_job_config(cfg: &Config) -> CrawlJobConfig {
     CrawlJobConfig {
         max_pages: cfg.max_pages,
@@ -77,6 +70,7 @@ fn to_job_config(cfg: &Config) -> CrawlJobConfig {
         min_markdown_chars: cfg.min_markdown_chars,
         drop_thin_markdown: cfg.drop_thin_markdown,
         discover_sitemaps: cfg.discover_sitemaps,
+        sitemap_since_days: cfg.sitemap_since_days,
         embed: cfg.embed,
         render_mode: cfg.render_mode,
         collection: cfg.collection.clone(),
@@ -134,60 +128,54 @@ async fn latest_completed_result_for_url(
 }
 
 async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
-    if SCHEMA_INIT.get().is_some() {
-        return Ok(());
-    }
+    let mut tx = begin_schema_migration_tx(pool, CRAWL_SCHEMA_LOCK_KEY).await?;
 
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS axon_crawl_jobs (
-            id UUID PRIMARY KEY,
-            url TEXT NOT NULL,
-            status TEXT NOT NULL CHECK (status IN ('pending','running','completed','failed','canceled')),
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            started_at TIMESTAMPTZ,
-            finished_at TIMESTAMPTZ,
-            error_text TEXT,
-            result_json JSONB,
-            config_json JSONB NOT NULL
+    {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS axon_crawl_jobs (
+                id UUID PRIMARY KEY,
+                url TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('pending','running','completed','failed','canceled')),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                started_at TIMESTAMPTZ,
+                finished_at TIMESTAMPTZ,
+                error_text TEXT,
+                result_json JSONB,
+                config_json JSONB NOT NULL
+            )
+            "#,
         )
-        "#,
-    )
-    .execute(pool)
-    .await?;
-
-    sqlx::query("CREATE INDEX IF NOT EXISTS idx_axon_crawl_jobs_status ON axon_crawl_jobs(status)")
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
-    // Composite partial index for claim_next_pending: WHERE status='pending' ORDER BY created_at
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_axon_crawl_jobs_pending ON axon_crawl_jobs(created_at ASC) WHERE status = 'pending'"
-    )
-    .execute(pool)
-    .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_axon_crawl_jobs_status ON axon_crawl_jobs(status)",
+        )
+        .execute(&mut *tx)
+        .await?;
 
-    // Add CHECK constraint to existing tables that were created before this constraint was added.
-    // This is a no-op if the constraint already exists (catches the 42710 duplicate_object error).
-    let add_check = sqlx::query(
-        r#"
-        ALTER TABLE axon_crawl_jobs
-        ADD CONSTRAINT axon_crawl_jobs_status_check
-        CHECK (status IN ('pending','running','completed','failed','canceled'))
-        "#,
-    )
-    .execute(pool)
-    .await;
-    match add_check {
-        Ok(_) => {}
-        Err(sqlx::Error::Database(ref db_err)) if db_err.code().as_deref() == Some("42710") => {
-            // Constraint already exists — expected for tables created with inline CHECK.
-        }
-        Err(err) => return Err(err),
+        // Composite partial index for claim_next_pending: WHERE status='pending' ORDER BY created_at
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_axon_crawl_jobs_pending ON axon_crawl_jobs(created_at ASC) WHERE status = 'pending'"
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        // Add CHECK constraint to existing tables (idempotent via IF NOT EXISTS pattern).
+        sqlx::query(
+            r#"DO $$ BEGIN
+                ALTER TABLE axon_crawl_jobs ADD CONSTRAINT axon_crawl_jobs_status_check
+                    CHECK (status IN ('pending','running','completed','failed','canceled'));
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END $$"#,
+        )
+        .execute(&mut *tx)
+        .await?;
     }
 
-    let _ = SCHEMA_INIT.set(());
+    tx.commit().await?;
     Ok(())
 }
 

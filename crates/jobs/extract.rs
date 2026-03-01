@@ -1,10 +1,13 @@
+//! Extract job schema uses advisory-lock DDL via `common::schema::begin_schema_migration_tx`.
+//! See `common/schema.rs` for the canonical pattern.
+
 use crate::crates::core::config::Config;
 use crate::crates::core::content::{DeterministicExtractionEngine, run_extract_with_engine};
 use crate::crates::core::health::redis_healthy;
 use crate::crates::core::logging::{log_done, log_info, log_warn};
 use crate::crates::jobs::common::{
-    JobTable, enqueue_job, make_pool, mark_job_failed, open_amqp_channel, purge_queue_safe,
-    reclaim_stale_running_jobs,
+    JobTable, begin_schema_migration_tx, enqueue_job, make_pool, mark_job_failed,
+    open_amqp_channel, purge_queue_safe, reclaim_stale_running_jobs,
 };
 use crate::crates::jobs::status::JobStatus;
 use chrono::{DateTime, Utc};
@@ -15,8 +18,6 @@ use sqlx::{FromRow, PgPool};
 use std::error::Error;
 use std::sync::Arc;
 use uuid::Uuid;
-
-static SCHEMA_INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 const TABLE: JobTable = JobTable::Extract;
 const WORKER_CONCURRENCY: usize = 2;
@@ -40,7 +41,12 @@ pub struct ExtractJob {
     pub result_json: Option<serde_json::Value>,
 }
 
+/// Advisory lock key for extract job schema migrations (unique per table).
+const EXTRACT_SCHEMA_LOCK_KEY: i64 = 0x6578_7472_6163_7400_i64;
+
 async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let mut tx = begin_schema_migration_tx(pool, EXTRACT_SCHEMA_LOCK_KEY).await?;
+
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS axon_extract_jobs (
@@ -57,17 +63,15 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         )
         "#,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
-    // Composite partial index for claim_next_pending: WHERE status='pending' ORDER BY created_at
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_axon_extract_jobs_pending ON axon_extract_jobs(created_at ASC) WHERE status = 'pending'"
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
-    // Add CHECK constraint to existing tables (idempotent via IF NOT EXISTS pattern).
     sqlx::query(
         r#"DO $$ BEGIN
             ALTER TABLE axon_extract_jobs ADD CONSTRAINT axon_extract_jobs_status_check
@@ -75,9 +79,10 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         EXCEPTION WHEN duplicate_object THEN NULL;
         END $$"#,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
+    tx.commit().await?;
     Ok(())
 }
 
@@ -99,10 +104,7 @@ pub(crate) async fn start_extract_job_with_pool(
     urls: &[String],
     prompt: Option<String>,
 ) -> Result<Uuid, Box<dyn Error>> {
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(pool).await?;
 
     let urls_json = serde_json::to_value(urls)?;
     let cfg_json = serde_json::to_value(ExtractJobConfig {
@@ -157,10 +159,7 @@ pub(crate) async fn start_extract_job_with_pool(
 
 pub async fn get_extract_job(cfg: &Config, id: Uuid) -> Result<Option<ExtractJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
     Ok(sqlx::query_as::<_, ExtractJob>(
         r#"SELECT id,status,created_at,updated_at,started_at,finished_at,error_text,urls_json,result_json FROM axon_extract_jobs WHERE id=$1"#,
     )
@@ -174,10 +173,7 @@ pub async fn list_extract_jobs(
     limit: i64,
 ) -> Result<Vec<ExtractJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
     Ok(sqlx::query_as::<_, ExtractJob>(
         r#"SELECT id,status,created_at,updated_at,started_at,finished_at,error_text,urls_json,result_json FROM axon_extract_jobs ORDER BY created_at DESC LIMIT $1"#,
     )
@@ -188,10 +184,7 @@ pub async fn list_extract_jobs(
 
 pub async fn cancel_extract_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
     let rows = sqlx::query(&format!(
         "UPDATE axon_extract_jobs SET status='{canceled}',updated_at=NOW(),finished_at=NOW() WHERE id=$1 AND status IN ('{pending}','{running}')",
         canceled = JobStatus::Canceled.as_str(),
@@ -203,19 +196,50 @@ pub async fn cancel_extract_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn 
     .await?
     .rows_affected();
 
-    let redis_client = redis::Client::open(cfg.redis_url.clone())?;
-    let mut conn = redis_client.get_multiplexed_async_connection().await?;
-    let key = format!("axon:extract:cancel:{id}");
-    let _: () = conn.set_ex(key, "1", 86400).await?;
+    if rows > 0 {
+        // Redis cancel signal is best-effort: DB update already succeeded,
+        // so we log a warning but do NOT propagate Redis errors.
+        match redis::Client::open(cfg.redis_url.clone()) {
+            Ok(redis_client) => {
+                match tokio::time::timeout(
+                    tokio::time::Duration::from_secs(3),
+                    redis_client.get_multiplexed_async_connection(),
+                )
+                .await
+                {
+                    Ok(Ok(mut conn)) => {
+                        let key = format!("axon:extract:cancel:{id}");
+                        if let Err(e) = conn.set_ex::<_, _, ()>(key, "1", 86400).await {
+                            log_warn(&format!(
+                                "extract cancel: Redis SET failed for job {id} (DB already updated): {e}"
+                            ));
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        log_warn(&format!(
+                            "extract cancel: Redis connect failed for job {id} (DB already updated): {e}"
+                        ));
+                    }
+                    Err(_) => {
+                        log_warn(&format!(
+                            "extract cancel: Redis connect timeout for job {id} after 3s (DB already updated)"
+                        ));
+                    }
+                }
+            }
+            Err(e) => {
+                log_warn(&format!(
+                    "extract cancel: Redis client open failed for job {id} (DB already updated): {e}"
+                ));
+            }
+        }
+    }
     Ok(rows > 0)
 }
 
 pub async fn cleanup_extract_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
     let mut total = 0u64;
     loop {
         let deleted = sqlx::query(&format!(
@@ -240,10 +264,7 @@ pub async fn cleanup_extract_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
 
 pub async fn clear_extract_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
     let rows = sqlx::query("DELETE FROM axon_extract_jobs")
         .execute(&pool)
         .await?
@@ -260,10 +281,7 @@ pub async fn run_extract_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
 pub async fn recover_stale_extract_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
     let stats = reclaim_stale_running_jobs(
         &pool,
         TABLE,

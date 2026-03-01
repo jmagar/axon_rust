@@ -88,13 +88,14 @@ pub fn status_label(status: &str) -> String {
     }
 }
 
-/// Pink number + subtle label: "42 docs"
+/// Blue number + blue label: "42 docs"
 pub fn metric(value: impl std::fmt::Display, label: &str) -> String {
-    format!(
-        "{} {}",
-        Style::new().color256(211).apply_to(value),
-        subtle(label)
-    )
+    format!("{} {}", accent(&value.to_string()), accent(label))
+}
+
+/// Red text for errors.
+pub fn error(text: &str) -> String {
+    Style::new().red().apply_to(text).to_string()
 }
 
 pub fn print_phase(symbol: &str, action: &str, subject: &str) {

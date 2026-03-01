@@ -1,76 +1,67 @@
-# crates/web — Axon Web UI Server
+# crates/web — WebSocket Execution Bridge
+Last Modified: 2026-02-27
 
-Axum-based web server that provides a browser UI for executing CLI commands and monitoring Docker container stats in real time.
+## Role
 
-## Architecture
+`crates/web` is the axum WebSocket bridge consumed by `apps/web` (Next.js). It has no static UI of its own.
 
+- The active frontend is `apps/web` — all UI decisions live there.
+- `crates/web` handles: WebSocket connection lifecycle, CLI subprocess execution, Docker stats broadcasting, output file serving, and crawl artifact download endpoints.
+
+## Source of Truth
+
+For branding, theme, layout, and frontend UX decisions: `apps/web`.
+
+## Directory Intent
+
+- `crates/web.rs`: Axum server wiring and routes
+- `crates/web/execute/mod.rs`: subprocess launch + WS output pump entry point
+- `crates/web/execute/events.rs`: WS event type definitions
+- `crates/web/execute/files.rs`: output file serving for completed jobs
+- `crates/web/execute/polling.rs`: job-completion polling loop
+- `crates/web/execute/tests/`: execute integration tests
+- `crates/web/docker_stats.rs`: container stats streaming
+- `crates/web/download.rs`: HTTP endpoints for crawl artifact downloads (individual files + zip archives)
+- `crates/web/pack.rs`: output packaging helpers — assembles crawl results into downloadable bundles
+- `crates/web/logs/`: log streaming support
+- `crates/web/snapshots/`: insta snapshot files for integration tests (committed; update with `cargo insta review`)
+
+## WebSocket Protocol
+
+Single multiplexed WS connection. Messages keyed by `"type"`:
+
+| Direction | type | Payload |
+|-----------|------|---------|
+| Client → Server | `execute` | `{ "mode": "...", "input": "..." }` |
+| Client → Server | `cancel` | `{ "job_id": "..." }` |
+| Server → Client | `output` | stdout JSON data |
+| Server → Client | `log` | stderr progress/spinner text |
+| Server → Client | `done` | job completed |
+| Server → Client | `error` | job failed with message |
+| Server → Client | `stats` | Docker container stats (polled every 500ms via bollard) |
+
+ANSI codes are stripped from log output via `console::strip_ansi_codes()`.
+
+## Security Model
+
+`execute/mod.rs` enforces strict whitelists before spawning any subprocess:
+- **`ALLOWED_MODES`**: list of valid CLI subcommands (e.g. `scrape`, `crawl`, `ask`) — rejects anything not in this list
+- **`ALLOWED_FLAGS`**: set of permitted CLI flags — rejects unknown flags
+
+Unknown modes or flags return an error WS event without spawning a process. Do not bypass these whitelists when adding new execute routes.
+
+## Docker Stats Caveat
+
+`docker_stats.rs` polls bollard for container stats every 500ms and broadcasts to all WS clients. This requires `/var/run/docker.sock` to be mounted. When running inside `axon-workers`, the socket is **not** mounted — stats will be silently unavailable. HTTP/WS endpoints remain functional.
+
+## Agent Guidance
+
+When asked to review or polish the frontend visual system, audit and update `apps/web` first.
+
+## Testing
+
+```bash
+cargo test web            # WS bridge + execute pipeline tests
+cargo test download       # artifact download endpoint tests
+cargo test -- --nocapture # show subprocess output during tests
 ```
-crates/
-├── web.rs              # Axum router, WS handler, static asset serving
-└── web/
-    ├── execute.rs      # Subprocess execution + stdout/stderr streaming
-    ├── docker_stats.rs # Bollard Docker stats poller + broadcast
-    └── static/         # Frontend assets
-        ├── index.html  # HTML shell
-        ├── style.css   # All styles
-        ├── neural.js   # Neural canvas animation (bioluminescent blue)
-        └── app.js      # UI logic: omnibox, WS, command execution, rendering
-```
-
-## Key Design Decisions
-
-### Single port, single binary
-All static assets are compiled into the binary via `include_str!()` in release builds. No runtime file dependencies. In debug builds, assets are read from disk on every request for hot reload.
-
-### Subprocess execution (not in-process)
-Commands run as `tokio::process::Command(self_exe, mode, "--json", "--wait", "true", input)`. This isolates crashes — a failing command doesn't take down the server. Both stdout (JSON data) and stderr (progress/logs) are streamed concurrently over WebSocket.
-
-### Single WebSocket, multiplexed by `type`
-No separate connections for commands vs Docker stats. Message types:
-- `execute` / `cancel` — client → server
-- `output` — server → client (stdout lines from subprocess)
-- `log` — server → client (stderr lines: spinner progress, tracing)
-- `done` / `error` — server → client (command completion)
-- `stats` — server → client (Docker container metrics broadcast)
-
-### ANSI stripping
-All subprocess output is stripped of ANSI escape codes via `console::strip_ansi_codes()` before sending to the browser.
-
-### Security: whitelist-only flag mapping
-Only known command modes and flag names are passed to the subprocess. Raw user input is never interpolated into args. See `ALLOWED_MODES` and `ALLOWED_FLAGS` in `execute.rs`.
-
-## Static Assets
-
-### Hot Reload (debug builds)
-`#[cfg(debug_assertions)]` handlers read files from disk at `CARGO_MANIFEST_DIR/crates/web/static/`. Edit any file and refresh — no rebuild needed.
-
-### Release builds
-`#[cfg(not(debug_assertions))]` handlers serve `include_str!()` constants. All assets baked into the binary.
-
-### neural.js
-Canvas animation with depth-based rendering, volumetric glow, and bokeh particle field. Color scheme: bioluminescent blue (`core/bright/mid/dim/faint`). Exports `window.neurons`, `window.signals`, `window.setNeuralIntensity`, `window.isProcessing` for app.js integration.
-
-### app.js
-- `NO_INPUT_MODES` — commands that auto-execute on dropdown selection (stats, status, doctor, etc.)
-- `parseMarkdown()` — lightweight markdown→HTML parser (headings, code blocks, tables, lists, inline formatting)
-- `renderJsonOutput()` — dispatches by JSON shape: `markdown` field → scrape, `answer` → ask, `rank+snippet` → query
-- `renderObjectAsHtml()` — recursive key-value renderer for generic JSON (no raw JSON ever displayed)
-- `handleLog()` — renders stderr progress lines as subtle status updates
-
-## Docker Stats (bollard)
-
-`docker_stats.rs` polls Docker via `bollard::Docker::connect_with_local_defaults()` every 500ms. Computes CPU%, memory, net I/O rates per container. Broadcasts to all WS clients. Gracefully degrades if Docker socket is unavailable.
-
-## Adding a New Command Mode
-
-1. Add the mode string to `ALLOWED_MODES` in `execute.rs`
-2. If it needs new flags, add entries to `ALLOWED_FLAGS`
-3. No JS changes needed unless the JSON output shape needs special rendering (add a case in `renderJsonOutput()`)
-
-## Gotchas
-
-- `Spinner` (indicatif) writes to stderr, not stdout — that's why we stream both
-- `log_info`/`log_done` go through tracing which writes to stderr
-- The `--json` flag only affects stdout format, not stderr
-- Docker stats use container name prefix matching (`axon-*`) — rename containers and stats break
-- `include_str!()` paths are relative to the `.rs` file, not the crate root

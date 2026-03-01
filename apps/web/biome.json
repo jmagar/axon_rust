@@ -42,16 +42,17 @@
   },
   "css": {
     "parser": {
-      "cssModules": true
+      "cssModules": true,
+      "tailwindDirectives": true
     },
     "linter": {
-      "enabled": false
+      "enabled": true
     },
     "formatter": {
-      "enabled": false
+      "enabled": true
     }
   },
   "files": {
-    "includes": ["**", "!**/*.css"]
+    "includes": ["**"]
   }
 }

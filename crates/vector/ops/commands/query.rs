@@ -6,21 +6,21 @@ use std::error::Error;
 
 use super::resolve_query_text;
 
-pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let query = resolve_query_text(cfg).ok_or("query requires text")?;
-
-    let mut query_vectors = tei::tei_embed(cfg, std::slice::from_ref(&query)).await?;
+pub async fn query_results(
+    cfg: &Config,
+    query: &str,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<serde_json::Value>, Box<dyn Error>> {
+    let mut query_vectors = tei::tei_embed(cfg, std::slice::from_ref(&query.to_string())).await?;
     if query_vectors.is_empty() {
         return Err("TEI returned no vector for query".into());
     }
     let vector = query_vectors.remove(0);
 
-    // Over-fetch so reranking has headroom; then trim to the requested limit.
-    // 8x matches the TS reference impl's strategy for dedup quality.
-    let fetch_limit = (cfg.search_limit.max(1) * 8).max(cfg.search_limit).min(500);
+    let fetch_limit = ((limit + offset).max(1) * 8).max(limit + offset).min(500);
     let hits = qdrant::qdrant_search(cfg, &vector, fetch_limit).await?;
-
-    let query_tokens = ranking::tokenize_query(&query);
+    let query_tokens = ranking::tokenize_query(query);
     let candidates: Vec<ranking::AskCandidate> = hits
         .into_iter()
         .filter_map(|h| {
@@ -41,8 +41,48 @@ pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
             })
         })
         .collect();
-
     if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let reranked = ranking::rerank_ask_candidates(
+        &candidates,
+        &query_tokens,
+        &cfg.ask_authoritative_domains,
+        cfg.ask_authoritative_boost,
+    );
+    let selected_indices =
+        ranking::select_diverse_candidates(&reranked, (limit + offset).max(1), 2);
+
+    Ok(selected_indices
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .enumerate()
+        .map(|(i, hit_idx)| {
+            let h = &reranked[hit_idx];
+            let url = &h.url;
+            let source = display_source(url);
+            let preview_idx =
+                ranking::select_best_preview_chunk(&reranked, url, &query_tokens, hit_idx);
+            let snippet =
+                ranking::get_meaningful_snippet(&reranked[preview_idx].chunk_text, &query_tokens);
+            serde_json::json!({
+                "rank": i + 1,
+                "score": h.score,
+                "rerank_score": h.rerank_score,
+                "url": url,
+                "source": source,
+                "snippet": snippet,
+                "chunk_index": serde_json::Value::Null
+            })
+        })
+        .collect::<Vec<_>>())
+}
+
+pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
+    let query = resolve_query_text(cfg).ok_or("query requires text")?;
+    let results = query_results(cfg, &query, cfg.search_limit.max(1), 0).await?;
+    if results.is_empty() {
         if !cfg.json_output {
             println!("{}", primary(&format!("Query Results for \"{query}\"")));
             println!("  {}", muted("No results found."));
@@ -50,47 +90,33 @@ pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let reranked = ranking::rerank_ask_candidates(&candidates, &query_tokens);
-    let selected_indices =
-        ranking::select_diverse_candidates(&reranked, cfg.search_limit.max(1), 2);
-
     if !cfg.json_output {
         println!("{}", primary(&format!("Query Results for \"{query}\"")));
-        println!("{} {}\n", muted("Showing"), selected_indices.len());
+        println!("{} {}\n", muted("Showing"), results.len());
     }
 
-    for (i, &hit_idx) in selected_indices.iter().enumerate() {
-        let h = &reranked[hit_idx];
-        let url = &h.url;
-        let source = display_source(url);
-        // Pick the chunk with the best preview score for this URL (may differ from
-        // the top-ranked chunk). Keeps score/URL from the vector-ranked hit while
-        // showing the most readable prose chunk as the snippet.
-        let preview_idx =
-            ranking::select_best_preview_chunk(&reranked, url, &query_tokens, hit_idx);
-        let snippet =
-            ranking::get_meaningful_snippet(&reranked[preview_idx].chunk_text, &query_tokens);
+    for result in &results {
+        let rank = result["rank"].as_u64().unwrap_or(0);
+        let score = result["score"].as_f64().unwrap_or(0.0);
+        let rerank_score = result["rerank_score"].as_f64().unwrap_or(0.0);
+        let url = result["url"].as_str().unwrap_or("");
+        let source = result["source"].as_str().unwrap_or("");
+        let snippet = result["snippet"].as_str().unwrap_or("");
         if cfg.json_output {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "rank": i + 1,
-                    "score": h.score,
-                    "rerank_score": h.rerank_score,
-                    "url": url,
-                    "source": source,
-                    "snippet": snippet,
-                })
-            );
+            println!("{}", result);
         } else {
             println!(
                 "  • {}. {} [{:.3}] {}",
-                i + 1,
+                rank,
                 crate::crates::core::ui::status_text("completed"),
-                h.rerank_score,
-                crate::crates::core::ui::accent(&source)
+                rerank_score,
+                crate::crates::core::ui::accent(source)
             );
             println!("    {}", snippet);
+            if cfg.ask_diagnostics {
+                println!("    {} vector_score={:.3}", muted("diag"), score);
+                println!("    {} {}", muted("url"), url);
+            }
         }
     }
 

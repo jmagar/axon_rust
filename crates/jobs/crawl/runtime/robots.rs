@@ -97,6 +97,7 @@ async fn discover_sitemap_urls_with_robots(
 
     let mut seen_sitemaps = HashSet::new();
     let mut out = HashSet::new();
+    // TODO: use cfg.max_sitemaps once the field is added to Config
     let max_sitemaps = 512usize;
     while let Some(candidate) = queue.pop_front() {
         if seen_sitemaps.len() >= max_sitemaps {

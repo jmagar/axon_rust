@@ -1,23 +1,129 @@
 'use client'
 
-import { faker } from '@faker-js/faker'
 import { CopilotPlugin } from '@platejs/ai/react'
 import { serializeMd, stripMarkdown } from '@platejs/markdown'
 import type { TElement } from 'platejs'
 
 import { GhostText } from '@/components/ui/ghost-text'
 
+import { AIChatKit } from './ai-chat-kit'
+import { BasicBlocksKit } from './basic-blocks-kit'
+import { BasicMarksKit } from './basic-marks-kit'
+import { ExtendedNodesKit } from './extended-nodes-kit'
 import { MarkdownKit } from './markdown-kit'
 
+type CopilotNdjsonEvent =
+  | { type: 'start' }
+  | { type: 'delta'; delta?: string }
+  | { type: 'done'; completion?: string }
+  | { type: 'error'; error?: string }
+
+const NDJSON_CONTENT_TYPE = 'application/x-ndjson'
+
+const copilotStreamingFetch: typeof fetch = async (input, init) => {
+  const headers = new Headers(init?.headers)
+  headers.set('accept', NDJSON_CONTENT_TYPE)
+  headers.set('x-copilot-stream', '1')
+
+  const response = await fetch(input, { ...init, headers })
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+
+  if (!contentType.includes(NDJSON_CONTENT_TYPE) || !response.body) {
+    return response
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+
+  const transformed = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let remainder = ''
+      let emitted = false
+      let finalCompletion = ''
+
+      try {
+        while (true) {
+          const { value, done } = await reader.read()
+          if (done) break
+
+          const chunk = decoder.decode(value, { stream: true })
+          const parsed = parseCopilotNdjsonChunk(chunk, remainder)
+          remainder = parsed.remainder
+
+          for (const event of parsed.events) {
+            if (
+              event.type === 'delta' &&
+              typeof event.delta === 'string' &&
+              event.delta.length > 0
+            ) {
+              emitted = true
+              controller.enqueue(encoder.encode(event.delta))
+            }
+            if (event.type === 'done' && typeof event.completion === 'string') {
+              finalCompletion = event.completion
+            }
+          }
+        }
+
+        if (!emitted && finalCompletion) {
+          controller.enqueue(encoder.encode(finalCompletion))
+        }
+      } finally {
+        controller.close()
+      }
+    },
+  })
+
+  return new Response(transformed, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  })
+}
+
+function parseCopilotNdjsonChunk(
+  chunk: string,
+  remainder: string,
+): { events: CopilotNdjsonEvent[]; remainder: string } {
+  const combined = remainder + chunk
+  const lines = combined.split('\n')
+  const nextRemainder = lines.pop() ?? ''
+  const events: CopilotNdjsonEvent[] = []
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    if (!line) continue
+    try {
+      const parsed = JSON.parse(line) as CopilotNdjsonEvent
+      if (parsed && typeof parsed === 'object' && typeof parsed.type === 'string') {
+        events.push(parsed)
+      }
+    } catch {
+      // Ignore malformed NDJSON lines from interrupted chunks.
+    }
+  }
+
+  return { events, remainder: nextRemainder }
+}
+
 export const CopilotKit = [
+  ...BasicBlocksKit,
+  ...BasicMarksKit,
   ...MarkdownKit,
+  ...ExtendedNodesKit,
+  ...AIChatKit,
   CopilotPlugin.configure(({ api }) => ({
     options: {
       completeOptions: {
         api: '/api/ai/copilot',
+        fetch: copilotStreamingFetch,
         body: {
           system: `You are an advanced AI writing assistant, similar to VSCode Copilot but for general text. Your task is to predict and generate the next part of the text based on the given context.
-  
+
   Rules:
   - Continue the text naturally up to the next punctuation mark (., ,, ;, :, ?, or !).
   - Maintain style and tone. Don't repeat given text.
@@ -28,11 +134,9 @@ export const CopilotKit = [
   - CRITICAL: Avoid starting a new block. Do not use block formatting like >, #, 1., 2., -, etc. The suggestion should continue in the same block as the context.
   - If no context is provided or you can't generate a continuation, return "0" without explanation.`,
         },
-        onError: () => {
-          // Mock the API response. Remove it when you implement the route /api/ai/copilot
-          api.copilot.setBlockSuggestion({
-            text: stripMarkdown(faker.lorem.sentence()),
-          })
+        onError: (error) => {
+          console.error('[Copilot] API error:', error)
+          api.copilot.setBlockSuggestion({ text: '' })
         },
         onFinish: (_, completion) => {
           if (completion === '0') return

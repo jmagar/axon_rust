@@ -1,4 +1,37 @@
 //! Stale job watchdog: two-pass confirmation model for reclaiming stuck jobs.
+//!
+//! # State Machine
+//!
+//! ```text
+//! running + updated_at old → [Pass 1] → running + result_json._watchdog (stale candidate)
+//!                                                         ↓ (after confirm_secs)
+//!                                                  [Pass 2] → failed + error_text='watchdog: reclaimed'
+//! ```
+//!
+//! # Two-Pass Stale Detection
+//!
+//! The watchdog uses two sweeps to avoid false-positive reclaims:
+//!
+//! **Pass 1** (mark phase): Finds jobs with `updated_at` older than `idle_timeout_secs`
+//! and writes `result_json._watchdog = { first_seen_stale_at, observed_updated_at }`.
+//! Does NOT change status yet.
+//!
+//! **Pass 2** (confirm phase): On the *next* sweep, finds jobs still marked as stale
+//! candidates. If `first_seen_stale_at` is older than `confirm_secs` AND `observed_updated_at`
+//! still matches (no heartbeat arrived), promotes them to `status='failed'`.
+//!
+//! This prevents false positives when a heartbeat arrives between the two sweeps:
+//! if the job's `updated_at` is refreshed between Pass 1 and Pass 2, the observed
+//! timestamp won't match and Pass 2 skips it.
+//!
+//! **Gap analysis**: A job that fails to heartbeat for `idle_timeout_secs + confirm_secs`
+//! will be reclaimed. With defaults (300s + 60s = 360s), this is 6 minutes.
+//!
+//! # RFC3339 Timestamp Format
+//!
+//! All timestamps use `Utc::now().to_rfc3339()` and are compared via
+//! `DateTime::parse_from_rfc3339()` to handle format variations (Z vs +00:00,
+//! variable microsecond precision) across Postgres TIMESTAMPTZ roundtrips.
 
 use crate::crates::jobs::status::JobStatus;
 use anyhow::Result;
@@ -9,11 +42,12 @@ use uuid::Uuid;
 
 use super::JobTable;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct WatchdogSweepStats {
     pub stale_candidates: u64,
     pub marked_candidates: u64,
     pub reclaimed_jobs: u64,
+    pub reclaimed_ids: Vec<Uuid>,
 }
 
 pub(crate) fn stale_watchdog_payload(
@@ -29,9 +63,12 @@ pub(crate) fn stale_watchdog_payload(
         let existing_first_seen = obj
             .get("_watchdog")
             .and_then(|w| {
-                let same_observed = w.get("observed_updated_at").and_then(|v| v.as_str())
-                    == Some(observed_updated_at.to_rfc3339().as_str());
-                if same_observed {
+                // Parse stored timestamp and compare as DateTime<Utc> to avoid
+                // RFC3339 format drift (Z vs +00:00, microsecond precision) across
+                // Postgres TIMESTAMPTZ roundtrips silently breaking the timer.
+                let stored_str = w.get("observed_updated_at").and_then(|v| v.as_str())?;
+                let stored_dt = DateTime::parse_from_rfc3339(stored_str).ok()?;
+                if stored_dt.with_timezone(&Utc) == observed_updated_at {
                     w.get("first_seen_stale_at")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
@@ -65,7 +102,12 @@ pub(crate) fn stale_watchdog_confirmed(
     else {
         return false;
     };
-    if observed != observed_updated_at.to_rfc3339() {
+    // Parse stored timestamp and compare as DateTime<Utc> — avoids RFC3339 format
+    // drift (Z vs +00:00, variable microsecond precision) across Postgres roundtrips.
+    let Ok(stored_dt) = DateTime::parse_from_rfc3339(observed) else {
+        return false;
+    };
+    if stored_dt.with_timezone(&Utc) != observed_updated_at {
         return false;
     }
     let Some(first_seen) = watchdog
@@ -116,35 +158,50 @@ pub async fn reclaim_stale_running_jobs(
         stale_candidates: rows.len() as u64,
         ..Default::default()
     };
-    for row in rows {
+
+    // Partition into confirmed (ready to reclaim) vs candidates (need marking).
+    let mut reclaim_ids: Vec<Uuid> = Vec::new();
+    let mut mark_batch: Vec<(Uuid, Value)> = Vec::new();
+
+    for row in &rows {
         let id: Uuid = row.try_get("id")?;
         let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
         let result_json: Option<Value> = row.try_get("result_json")?;
         let current_json = result_json.unwrap_or_else(|| serde_json::json!({}));
-        let idle_seconds = Utc::now().signed_duration_since(updated_at).num_seconds();
 
         if stale_watchdog_confirmed(&current_json, updated_at, confirm_secs) {
-            let msg = format!(
-                "watchdog reclaimed stale running {} job (idle={}s marker={})",
-                job_kind, idle_seconds, marker
-            );
-            let fail_query = format!(
-                "UPDATE {} SET status='{failed}', updated_at=NOW(), finished_at=NOW(), error_text=$2 WHERE id=$1 AND status='{running}'",
-                table.as_str(),
-                failed = JobStatus::Failed.as_str(),
-                running = JobStatus::Running.as_str(),
-            );
-            let affected = sqlx::query(&fail_query)
-                .bind(id)
-                .bind(msg)
-                .execute(pool)
-                .await?
-                .rows_affected();
-            stats.reclaimed_jobs += affected;
-            continue;
+            reclaim_ids.push(id);
+        } else {
+            let marked = stale_watchdog_payload(current_json, updated_at);
+            mark_batch.push((id, marked));
         }
+    }
 
-        let marked = stale_watchdog_payload(current_json, updated_at);
+    // Batch reclaim: single UPDATE for all confirmed-stale jobs (O(1) queries).
+    if !reclaim_ids.is_empty() {
+        let msg = format!(
+            "watchdog reclaimed stale running {} job (marker={})",
+            job_kind, marker
+        );
+        let fail_query = format!(
+            "UPDATE {} SET status='{failed}', updated_at=NOW(), finished_at=NOW(), error_text=$2 \
+             WHERE id = ANY($1) AND status='{running}' \
+             RETURNING id",
+            table.as_str(),
+            failed = JobStatus::Failed.as_str(),
+            running = JobStatus::Running.as_str(),
+        );
+        let reclaimed: Vec<(Uuid,)> = sqlx::query_as(&fail_query)
+            .bind(&reclaim_ids)
+            .bind(&msg)
+            .fetch_all(pool)
+            .await?;
+        stats.reclaimed_jobs = reclaimed.len() as u64;
+        stats.reclaimed_ids = reclaimed.into_iter().map(|(id,)| id).collect();
+    }
+
+    // Mark candidates individually (each gets a unique payload with timestamps).
+    for (id, marked) in mark_batch {
         let mark_query = format!(
             "UPDATE {} SET result_json=$2 WHERE id=$1 AND status='{running}'",
             table.as_str(),

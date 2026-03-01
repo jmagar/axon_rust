@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "axon": {
+      "command": "./target/debug/axon-mcp"
+    },
+    "plate": {
+      "description": "Plate editors, plugins and components",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["shadcn@latest", "mcp"]
+    }
+  },
+  "imports": []
+}

@@ -14,6 +14,16 @@ use render::render_doctor_report_human;
 use serde_json::Value;
 use std::env;
 use std::error::Error;
+use std::time::Instant;
+
+fn elapsed_ms(start: Instant) -> u64 {
+    let ms = start.elapsed().as_millis();
+    if ms > u128::from(u64::MAX) {
+        u64::MAX
+    } else {
+        ms as u64
+    }
+}
 
 async fn probe_tei_info(url: &str) -> (Option<Value>, Option<String>) {
     if url.trim().is_empty() {
@@ -144,15 +154,25 @@ async fn probe_chrome(chrome_url: Option<&str>) -> (bool, Option<String>) {
 
 struct DoctorProbes {
     crawl_report: Value,
+    crawl_report_ms: u64,
     extract_report: Value,
+    extract_report_ms: u64,
     embed_report: Value,
+    embed_report_ms: u64,
     ingest_report: Value,
+    ingest_report_ms: u64,
     tei_probe: (bool, Option<String>),
+    tei_probe_ms: u64,
     tei_info_probe: (Option<Value>, Option<String>),
+    tei_info_probe_ms: u64,
     qdrant_probe: (bool, Option<String>),
+    qdrant_probe_ms: u64,
     chrome_probe: (bool, Option<String>),
+    chrome_probe_ms: u64,
     openai_probe: (bool, String),
+    openai_probe_ms: u64,
     stale_jobs: Option<(i64, i64)>,
+    stale_jobs_ms: u64,
 }
 
 async fn gather_doctor_probes(
@@ -160,40 +180,92 @@ async fn gather_doctor_probes(
     openai_model: &str,
 ) -> Result<DoctorProbes, Box<dyn Error>> {
     let (
-        crawl_report,
-        extract_report,
-        embed_report,
-        ingest_report,
-        tei_probe,
-        tei_info_probe,
-        qdrant_probe,
-        chrome_probe,
-        openai_probe,
-        stale_jobs,
+        (crawl_report, crawl_report_ms),
+        (extract_report, extract_report_ms),
+        (embed_report, embed_report_ms),
+        (ingest_report, ingest_report_ms),
+        (tei_probe, tei_probe_ms),
+        (tei_info_probe, tei_info_probe_ms),
+        (qdrant_probe, qdrant_probe_ms),
+        (chrome_probe, chrome_probe_ms),
+        (openai_probe, openai_probe_ms),
+        (stale_jobs, stale_jobs_ms),
     ) = spider::tokio::join!(
-        crawl_doctor(cfg),
-        extract_doctor(cfg),
-        embed_doctor(cfg),
-        ingest_doctor(cfg),
-        probe_http(&cfg.tei_url, &["/health", "/"]),
-        probe_tei_info(&cfg.tei_url),
-        probe_http(&cfg.qdrant_url, &["/healthz", "/"]),
-        probe_chrome(cfg.chrome_remote_url.as_deref()),
-        probe_openai(cfg, openai_model),
-        count_stale_and_pending_jobs(cfg, 15),
+        async {
+            let start = Instant::now();
+            (crawl_doctor(cfg).await, elapsed_ms(start))
+        },
+        async {
+            let start = Instant::now();
+            (extract_doctor(cfg).await, elapsed_ms(start))
+        },
+        async {
+            let start = Instant::now();
+            (embed_doctor(cfg).await, elapsed_ms(start))
+        },
+        async {
+            let start = Instant::now();
+            (ingest_doctor(cfg).await, elapsed_ms(start))
+        },
+        async {
+            let start = Instant::now();
+            (
+                probe_http(&cfg.tei_url, &["/health", "/"]).await,
+                elapsed_ms(start),
+            )
+        },
+        async {
+            let start = Instant::now();
+            (probe_tei_info(&cfg.tei_url).await, elapsed_ms(start))
+        },
+        async {
+            let start = Instant::now();
+            (
+                probe_http(&cfg.qdrant_url, &["/healthz", "/"]).await,
+                elapsed_ms(start),
+            )
+        },
+        async {
+            let start = Instant::now();
+            (
+                probe_chrome(cfg.chrome_remote_url.as_deref()).await,
+                elapsed_ms(start),
+            )
+        },
+        async {
+            let start = Instant::now();
+            (probe_openai(cfg, openai_model).await, elapsed_ms(start))
+        },
+        async {
+            let start = Instant::now();
+            (
+                count_stale_and_pending_jobs(cfg, 15).await,
+                elapsed_ms(start),
+            )
+        },
     );
 
     Ok(DoctorProbes {
         crawl_report: crawl_report?,
+        crawl_report_ms,
         extract_report: extract_report?,
+        extract_report_ms,
         embed_report: embed_report?,
+        embed_report_ms,
         ingest_report: ingest_report?,
+        ingest_report_ms,
         tei_probe,
+        tei_probe_ms,
         tei_info_probe,
+        tei_info_probe_ms,
         qdrant_probe,
+        qdrant_probe_ms,
         chrome_probe,
+        chrome_probe_ms,
         openai_probe,
+        openai_probe_ms,
         stale_jobs,
+        stale_jobs_ms,
     })
 }
 
@@ -253,17 +325,21 @@ fn build_services_status(cfg: &Config, probes: &DoctorProbes, openai_model: &str
             "model": tei_model,
             "summary": tei_summary,
             "info": tei_info,
+            "latency_ms": probes.tei_probe_ms,
+            "info_latency_ms": probes.tei_info_probe_ms,
         },
         "qdrant": {
             "ok": probes.qdrant_probe.0,
             "url": cfg.qdrant_url,
             "detail": probes.qdrant_probe.1.clone(),
+            "latency_ms": probes.qdrant_probe_ms,
         },
         "chrome": {
             "ok": chrome_ok,
             "configured": cfg.chrome_remote_url.is_some(),
             "url": cfg.chrome_remote_url,
             "detail": chrome_detail,
+            "latency_ms": probes.chrome_probe_ms,
         },
         "openai": {
             "ok": openai_live_ok,
@@ -271,6 +347,7 @@ fn build_services_status(cfg: &Config, probes: &DoctorProbes, openai_model: &str
             "detail": openai_live_detail,
             "base_url": cfg.openai_base_url,
             "model": openai_model,
+            "latency_ms": probes.openai_probe_ms,
         },
     })
 }
@@ -309,12 +386,20 @@ pub async fn build_doctor_report(cfg: &Config) -> Result<Value, Box<dyn Error>> 
     let (stale_count, pending_count) = probes.stale_jobs.unwrap_or((0, 0));
 
     Ok(serde_json::json!({
+        "observed_at_utc": chrono::Utc::now().to_rfc3339(),
         "services": services,
         "pipelines": pipelines,
         "queue_names": queue_names,
         "browser_runtime": browser_runtime,
         "stale_jobs": stale_count,
         "pending_jobs": pending_count,
+        "timing_ms": {
+            "crawl_report": probes.crawl_report_ms,
+            "extract_report": probes.extract_report_ms,
+            "embed_report": probes.embed_report_ms,
+            "ingest_report": probes.ingest_report_ms,
+            "stale_pending": probes.stale_jobs_ms
+        },
         "all_ok": all_ok
     }))
 }

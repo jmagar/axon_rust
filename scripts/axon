@@ -13,4 +13,4 @@ if [[ -f "$CLI_ENV" ]]; then
   set +a
 fi
 
-exec cargo run -q --manifest-path "$REPO/Cargo.toml" --bin axon -- "$@"
+exec cargo run -q --locked --manifest-path "$REPO/Cargo.toml" --bin axon -- "$@"

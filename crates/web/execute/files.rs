@@ -1,12 +1,42 @@
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use tokio::sync::mpsc;
+use uuid::Uuid;
+
+use super::events::{ArtifactEntry, CommandContext, WsEventV2, serialize_v2_event};
+
+async fn send_artifact_content_dual(
+    tx: &mpsc::Sender<String>,
+    ctx: &CommandContext,
+    path: String,
+    content: String,
+) {
+    if let Some(v2) = serialize_v2_event(WsEventV2::ArtifactContent {
+        ctx: ctx.clone(),
+        path,
+        content,
+    }) {
+        let _ = tx.send(v2).await;
+    }
+}
+
+async fn send_artifact_list_v2(
+    tx: &mpsc::Sender<String>,
+    ctx: &CommandContext,
+    artifacts: Vec<ArtifactEntry>,
+) {
+    if let Some(v2) = serialize_v2_event(WsEventV2::ArtifactList {
+        ctx: ctx.clone(),
+        artifacts,
+    }) {
+        let _ = tx.send(v2).await;
+    }
+}
 
 /// Resolve the output directory for reading crawl results.
 /// Checks `AXON_WORKER_OUTPUT_DIR` first (host path to Docker bind mount),
 /// then `AXON_OUTPUT_DIR`, then the default relative path.
-pub(crate) fn output_dir() -> PathBuf {
+pub fn output_dir() -> PathBuf {
     std::env::var("AXON_WORKER_OUTPUT_DIR")
         .or_else(|_| std::env::var("AXON_OUTPUT_DIR"))
         .map(PathBuf::from)
@@ -33,20 +63,12 @@ async fn newest_md_file(dir: &Path) -> Option<PathBuf> {
 }
 
 /// Send a single scraped markdown file to the frontend.
-pub(super) async fn send_scrape_file(tx: &mpsc::Sender<String>) {
+pub(super) async fn send_scrape_file(tx: &mpsc::Sender<String>, ctx: &CommandContext) {
     let md_dir = output_dir().join("scrape-markdown");
     match newest_md_file(&md_dir).await {
         Some(path) => match tokio::fs::read_to_string(&path).await {
             Ok(content) => {
-                let _ = tx
-                    .send(
-                        json!({
-                            "type": "file_content",
-                            "path": path.to_string_lossy(),
-                            "content": content,
-                        })
-                        .to_string(),
-                    )
+                send_artifact_content_dual(tx, ctx, path.to_string_lossy().into_owned(), content)
                     .await;
             }
             Err(e) => {
@@ -69,54 +91,50 @@ pub(super) async fn send_scrape_file(tx: &mpsc::Sender<String>) {
     }
 }
 
-/// Send recently modified screenshot files to the frontend after a screenshot command.
-/// Globs `output_dir/screenshots/*.png` and sends paths for any files modified in
-/// the last 60 seconds (conservative window to catch the just-completed run).
-pub(super) async fn send_screenshot_files(tx: &mpsc::Sender<String>) {
-    let screenshots_dir = output_dir().join("screenshots");
-    let Ok(mut entries) = tokio::fs::read_dir(&screenshots_dir).await else {
-        let _ = tx
-            .send(
-                json!({"type": "log", "line": format!("[web] no screenshots dir at {}", screenshots_dir.display())})
-                    .to_string(),
-            )
-            .await;
-        return;
-    };
-
-    let cutoff = std::time::SystemTime::now() - Duration::from_secs(60);
-    let mut files = Vec::new();
-
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
-        if path.extension().is_some_and(|e| e == "png") {
-            if let Ok(meta) = entry.metadata().await {
-                if let Ok(modified) = meta.modified() {
-                    if modified >= cutoff {
-                        let name = path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned();
-                        files.push(json!({
-                            "path": path.to_string_lossy(),
-                            "name": name,
-                        }));
-                    }
-                }
-            }
+/// Build a `screenshot_files` message from captured stdout JSON objects.
+///
+/// Each screenshot JSON has shape `{url, path, size_bytes}`. We extract the
+/// filename from `path` and construct a serve URL so the frontend can display
+/// the image inline. This is deterministic — no filesystem timestamp scan.
+pub(super) async fn send_screenshot_files_from_json(
+    jsons: &[serde_json::Value],
+    tx: &mpsc::Sender<String>,
+    ctx: &CommandContext,
+) {
+    let mut artifacts = Vec::new();
+    for obj in jsons {
+        let path_str = obj.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let size_bytes = obj.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0);
+        if path_str.is_empty() {
+            continue;
         }
+        let name = Path::new(path_str)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let serve_url = format!("/output/screenshots/{name}");
+        artifacts.push(ArtifactEntry {
+            kind: Some("screenshot".to_string()),
+            path: Some(path_str.to_string()),
+            download_url: Some(serve_url),
+            mime: Some("image/png".to_string()),
+            size_bytes: Some(size_bytes),
+        });
     }
-
-    if !files.is_empty() {
-        let _ = tx
-            .send(json!({"type": "screenshot_files", "files": files}).to_string())
-            .await;
+    if !artifacts.is_empty() {
+        send_artifact_list_v2(tx, ctx, artifacts).await;
     }
 }
 
 /// Send the crawl manifest file list to the frontend from a job output directory.
-pub(super) async fn send_crawl_manifest(job_dir: &Path, tx: &mpsc::Sender<String>) {
+/// When `job_id` is provided, it is included in the `crawl_files` message for download routes.
+pub(super) async fn send_crawl_manifest(
+    job_dir: &Path,
+    tx: &mpsc::Sender<String>,
+    job_id: Option<&str>,
+    ctx: &CommandContext,
+) {
     let manifest = job_dir.join("manifest.jsonl");
 
     // If the job-specific dir doesn't have a manifest yet, try `latest/`
@@ -151,6 +169,7 @@ pub(super) async fn send_crawl_manifest(job_dir: &Path, tx: &mpsc::Sender<String
     match tokio::fs::read_to_string(&manifest).await {
         Ok(raw) => {
             let mut files = Vec::new();
+            let mut artifacts = Vec::new();
             for line in raw.lines() {
                 let line = line.trim();
                 if line.is_empty() {
@@ -169,40 +188,45 @@ pub(super) async fn send_crawl_manifest(job_dir: &Path, tx: &mpsc::Sender<String
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
                 if !rel.is_empty() {
+                    let path = base_dir.join(rel).to_string_lossy().into_owned();
                     files.push(json!({
                         "url": url,
                         "relative_path": rel,
                         "markdown_chars": chars,
                     }));
+                    artifacts.push(ArtifactEntry {
+                        kind: Some("markdown".to_string()),
+                        path: Some(path),
+                        download_url: job_id.map(|id| format!("/download/{id}/{rel}")),
+                        mime: Some("text/markdown".to_string()),
+                        size_bytes: None,
+                    });
                 }
             }
 
-            let _ = tx
-                .send(
-                    json!({
-                        "type": "crawl_files",
-                        "files": files,
-                        "output_dir": base_dir.to_string_lossy(),
-                    })
-                    .to_string(),
-                )
-                .await;
+            let mut msg = json!({
+                "type": "crawl_files",
+                "files": files,
+                "output_dir": base_dir.to_string_lossy(),
+            });
+            if let Some(id) = job_id {
+                msg["job_id"] = serde_json::Value::String(id.to_string());
+            }
+            let _ = tx.send(msg.to_string()).await;
+            send_artifact_list_v2(tx, ctx, artifacts).await;
 
             // Auto-load the first file
             if let Some(first) = files.first() {
                 if let Some(rel) = first.get("relative_path").and_then(|v| v.as_str()) {
                     let full = base_dir.join(rel);
                     if let Ok(content) = tokio::fs::read_to_string(&full).await {
-                        let _ = tx
-                            .send(
-                                json!({
-                                    "type": "file_content",
-                                    "path": full.to_string_lossy(),
-                                    "content": content,
-                                })
-                                .to_string(),
-                            )
-                            .await;
+                        send_artifact_content_dual(
+                            tx,
+                            ctx,
+                            full.to_string_lossy().into_owned(),
+                            content,
+                        )
+                        .await;
                     }
                 }
             }
@@ -225,6 +249,11 @@ pub(crate) async fn handle_read_file(
     base_dir: &Path,
     tx: mpsc::Sender<String>,
 ) {
+    let ctx = CommandContext {
+        exec_id: format!("exec-{}", Uuid::new_v4()),
+        mode: "read_file".to_string(),
+        input: relative_path.to_string(),
+    };
     let full_path = base_dir.join(relative_path);
     let Ok(canonical_base) = tokio::fs::canonicalize(base_dir).await else {
         let _ = tx
@@ -248,16 +277,13 @@ pub(crate) async fn handle_read_file(
 
     match tokio::fs::read_to_string(&canonical_path).await {
         Ok(content) => {
-            let _ = tx
-                .send(
-                    json!({
-                        "type": "file_content",
-                        "path": canonical_path.to_string_lossy(),
-                        "content": content,
-                    })
-                    .to_string(),
-                )
-                .await;
+            send_artifact_content_dual(
+                &tx,
+                &ctx,
+                canonical_path.to_string_lossy().into_owned(),
+                content,
+            )
+            .await;
         }
         Err(e) => {
             let _ = tx

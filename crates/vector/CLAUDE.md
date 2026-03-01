@@ -1,4 +1,5 @@
 # crates/vector — Embeddings & Vector Search
+Last Modified: 2026-02-27
 
 TEI embedding + Qdrant vector store ops.
 
@@ -11,7 +12,8 @@ vector/ops/
 ├── qdrant/          # client.rs, commands.rs, types.rs, utils.rs
 ├── ranking/         # mod.rs, snippet.rs, ranking_test.rs (BM25-style reranking)
 ├── stats/           # display.rs, pg.rs, qdrant_fetch.rs
-├── tei/             # tei.rs (embed), tei_manifest.rs
+├── tei.rs           # tei_embed(), tei_embed_batch(), embed_text_with_metadata()
+├── tei/             # tei_manifest.rs
 └── source_display.rs
 ```
 

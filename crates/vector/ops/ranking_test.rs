@@ -83,7 +83,7 @@ fn tokenize_query_empty_input() {
 
 #[test]
 fn rerank_ask_candidates_returns_empty_for_empty_input() {
-    let result = rerank_ask_candidates(&[], &["rust".to_string()]);
+    let result = rerank_ask_candidates(&[], &["rust".to_string()], &[], 0.0);
     assert!(result.is_empty());
 }
 
@@ -93,7 +93,7 @@ fn rerank_ask_candidates_passes_through_when_no_query_tokens() {
         make_candidate(0.9, "https://example.com/a", "/a", "some text"),
         make_candidate(0.5, "https://example.com/b", "/b", "other text"),
     ];
-    let result = rerank_ask_candidates(&candidates, &[]);
+    let result = rerank_ask_candidates(&candidates, &[], &[], 0.0);
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].url, "https://example.com/a");
     assert_eq!(result[1].url, "https://example.com/b");
@@ -117,7 +117,7 @@ fn rerank_ask_candidates_boosts_url_token_matches() {
         ),
     ];
     let query_tokens = tokenize_query("async programming");
-    let result = rerank_ask_candidates(&candidates, &query_tokens);
+    let result = rerank_ask_candidates(&candidates, &query_tokens, &[], 0.0);
     assert_eq!(
         result[0].url, "https://docs.rs/async-std/",
         "URL-matching candidate should rank first"
@@ -145,7 +145,7 @@ fn rerank_ask_candidates_applies_docs_path_boost() {
         ),
     ];
     let query_tokens = tokenize_query("zyx"); // no token matches on purpose
-    let result = rerank_ask_candidates(&candidates, &query_tokens);
+    let result = rerank_ask_candidates(&candidates, &query_tokens, &[], 0.0);
     let docs_candidate = result.iter().find(|c| c.path.contains("/docs/")).unwrap();
     let blog_candidate = result.iter().find(|c| c.path.contains("/blog/")).unwrap();
     assert!(
@@ -171,7 +171,7 @@ fn rerank_ask_candidates_chunk_token_boost() {
         ),
     ];
     let query_tokens = tokenize_query("embedding similarity");
-    let result = rerank_ask_candidates(&candidates, &query_tokens);
+    let result = rerank_ask_candidates(&candidates, &query_tokens, &[], 0.0);
     assert_eq!(
         result[0].url, "https://example.com/a",
         "chunk-text matching candidate should rank first"
@@ -197,11 +197,44 @@ fn rerank_ask_candidates_deduplication_by_url_order() {
         ),
     ];
     let query_tokens = tokenize_query("alpha");
-    let result = rerank_ask_candidates(&candidates, &query_tokens);
+    let result = rerank_ask_candidates(&candidates, &query_tokens, &[], 0.0);
     assert_eq!(
         result.len(),
         2,
         "rerank should not drop duplicate-URL candidates"
+    );
+}
+
+#[test]
+fn rerank_ask_candidates_applies_authoritative_domain_boost() {
+    let candidates = vec![
+        make_candidate(
+            0.62,
+            "https://example.org/docs/commands",
+            "/docs/commands",
+            "custom slash commands guide",
+        ),
+        make_candidate(
+            0.62,
+            "https://docs.claude.com/en/docs/claude-code/slash-commands",
+            "/en/docs/claude-code/slash-commands",
+            "custom slash commands guide",
+        ),
+    ];
+    let query_tokens = tokenize_query("claude code slash commands");
+    let result = rerank_ask_candidates(
+        &candidates,
+        &query_tokens,
+        &["docs.claude.com".to_string()],
+        0.12,
+    );
+    assert_eq!(
+        result[0].url,
+        "https://docs.claude.com/en/docs/claude-code/slash-commands"
+    );
+    assert!(
+        result[0].rerank_score > result[1].rerank_score,
+        "authoritative-domain candidate should rank above non-authoritative candidate"
     );
 }
 

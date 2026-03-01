@@ -184,6 +184,58 @@ pub fn extract_loc_values(xml: &str) -> Vec<String> {
     out
 }
 
+/// Find the value between `open` and `close` tags (case-insensitive) within `xml`.
+/// Returns `None` if either tag is absent or the content is empty after trimming.
+fn extract_between_tags(xml: &str, open: &[u8], close: &[u8]) -> Option<String> {
+    let bytes = xml.as_bytes();
+    let start = bytes
+        .windows(open.len())
+        .position(|w| w.eq_ignore_ascii_case(open))?
+        + open.len();
+    let end = bytes[start..]
+        .windows(close.len())
+        .position(|w| w.eq_ignore_ascii_case(close))?
+        + start;
+    let val = xml[start..end].trim();
+    if val.is_empty() {
+        None
+    } else {
+        Some(val.replace("&amp;", "&"))
+    }
+}
+
+/// Extract `(loc, optional lastmod)` pairs from sitemap XML `<url>` blocks.
+/// `lastmod` is `None` when the tag is absent — callers should treat absent dates as "recent"
+/// (i.e. do not filter out URLs whose age is unknown).
+pub fn extract_loc_with_lastmod(xml: &str) -> Vec<(String, Option<String>)> {
+    const URL_OPEN: &[u8] = b"<url>";
+    const URL_CLOSE: &[u8] = b"</url>";
+    let bytes = xml.as_bytes();
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+    while cursor + URL_OPEN.len() <= bytes.len() {
+        let Some(rel) = bytes[cursor..]
+            .windows(URL_OPEN.len())
+            .position(|w| w.eq_ignore_ascii_case(URL_OPEN))
+        else {
+            break;
+        };
+        let block_start = cursor + rel + URL_OPEN.len();
+        let block_end = bytes[block_start..]
+            .windows(URL_CLOSE.len())
+            .position(|w| w.eq_ignore_ascii_case(URL_CLOSE))
+            .map(|r| block_start + r)
+            .unwrap_or(bytes.len());
+        let block = &xml[block_start..block_end];
+        if let Some(loc) = extract_between_tags(block, b"<loc>", b"</loc>") {
+            let lastmod = extract_between_tags(block, b"<lastmod>", b"</lastmod>");
+            out.push((loc, lastmod));
+        }
+        cursor = block_end + URL_CLOSE.len();
+    }
+    out
+}
+
 pub fn normalize_prefix(prefix: &str) -> Option<String> {
     let trimmed = prefix.trim();
     if trimmed.is_empty() || trimmed == "/" {

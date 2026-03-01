@@ -5,8 +5,12 @@ mod sync_crawl;
 pub(crate) use audit::discover_sitemap_urls_with_robots;
 
 use super::common::parse_urls;
+use super::job_contracts::{
+    JobCancelResponse, JobErrorsResponse, JobStatusResponse, JobSummaryEntry,
+};
 use crate::crates::core::config::Config;
 use crate::crates::core::http::validate_url;
+use crate::crates::core::logging::log_warn;
 use crate::crates::core::ui::{
     accent, confirm_destructive, muted, primary, print_kv, print_option, print_phase, status_text,
     symbol_for_status,
@@ -15,7 +19,9 @@ use crate::crates::jobs::crawl::{
     CrawlJob, cancel_job, cleanup_jobs, clear_jobs, get_job, list_jobs, recover_stale_crawl_jobs,
     run_worker, start_crawl_jobs_batch,
 };
+use spider::url::Url;
 use std::error::Error;
+use std::path::Path;
 use uuid::Uuid;
 
 pub async fn run_crawl(cfg: &Config) -> Result<(), Box<dyn Error>> {
@@ -28,6 +34,7 @@ pub async fn run_crawl(cfg: &Config) -> Result<(), Box<dyn Error>> {
     }
     for url in &urls {
         validate_url(url)?;
+        warn_if_url_looks_like_local_file(url);
     }
     if cfg.wait {
         for url in &urls {
@@ -37,6 +44,54 @@ pub async fn run_crawl(cfg: &Config) -> Result<(), Box<dyn Error>> {
     } else {
         run_async_enqueue_multi(cfg, &urls).await
     }
+}
+
+fn local_filename_exists_case_insensitive(file_name: &str) -> bool {
+    if Path::new(file_name).exists() {
+        return true;
+    }
+    let Ok(entries) = std::fs::read_dir(".") else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry
+            .file_name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(file_name)
+    })
+}
+
+fn warn_if_url_looks_like_local_file(target: &str) {
+    let Ok(parsed) = Url::parse(target) else {
+        return;
+    };
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return;
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return;
+    }
+    if parsed.path() != "/" && !parsed.path().is_empty() {
+        return;
+    }
+    let Some(host) = parsed.host_str() else {
+        return;
+    };
+    let lower_host = host.to_ascii_lowercase();
+    let looks_like_docish_tld = [
+        "md", "txt", "rst", "adoc", "json", "yaml", "yml", "toml", "csv", "log", "ini",
+    ]
+    .iter()
+    .any(|suffix| lower_host.ends_with(&format!(".{suffix}")));
+    if !looks_like_docish_tld {
+        return;
+    }
+    if !local_filename_exists_case_insensitive(host) {
+        return;
+    }
+    log_warn(&format!(
+        "crawl target {target} looks like a domain that matches local file '{host}'; continuing as web URL"
+    ));
 }
 
 async fn maybe_handle_subcommand(cfg: &Config) -> Result<bool, Box<dyn Error>> {
@@ -133,20 +188,8 @@ async fn handle_status_subcommand(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let id = parse_required_job_id(cfg, "status")?;
     match get_job(cfg, id).await? {
         Some(job) if cfg.json_output => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "id": job.id,
-                    "url": job.url,
-                    "status": job.status,
-                    "created_at": job.created_at,
-                    "updated_at": job.updated_at,
-                    "started_at": job.started_at,
-                    "finished_at": job.finished_at,
-                    "error": job.error_text,
-                    "metrics": job.result_json,
-                }))?
-            );
+            let response = JobStatusResponse::from_crawl(&job);
+            println!("{}", serde_json::to_string_pretty(&response)?);
         }
         Some(job) => {
             print_kv("Crawl Status for", &job.id.to_string());
@@ -178,7 +221,7 @@ async fn handle_cancel_subcommand(cfg: &Config) -> Result<(), Box<dyn Error>> {
     if cfg.json_output {
         println!(
             "{}",
-            serde_json::json!({"id": id, "canceled": canceled, "source": "rust"})
+            serde_json::json!(JobCancelResponse::new(id, canceled))
         );
     } else if canceled {
         println!(
@@ -204,7 +247,11 @@ async fn handle_errors_subcommand(cfg: &Config) -> Result<(), Box<dyn Error>> {
         Some(job) if cfg.json_output => {
             println!(
                 "{}",
-                serde_json::json!({"id": id, "status": job.status, "error": job.error_text})
+                serde_json::json!(JobErrorsResponse::from_job(
+                    id,
+                    job.status.clone(),
+                    job.error_text.clone()
+                ))
             );
         }
         Some(job) => {
@@ -289,7 +336,8 @@ fn job_progress_summary(job: &CrawlJob) -> Option<String> {
 async fn handle_list_subcommand(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let jobs = list_jobs(cfg, 50).await?;
     if cfg.json_output {
-        println!("{}", serde_json::to_string_pretty(&jobs)?);
+        let entries: Vec<JobSummaryEntry> = jobs.iter().map(JobSummaryEntry::from_crawl).collect();
+        println!("{}", serde_json::to_string_pretty(&entries)?);
     } else {
         println!("{}", primary("Crawl Jobs"));
         if jobs.is_empty() {

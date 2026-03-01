@@ -6,6 +6,7 @@ use crate::crates::jobs::common::{
 };
 use redis::AsyncCommands;
 use std::error::Error;
+use tokio::time::Duration;
 use uuid::Uuid;
 
 use super::{CrawlJob, ensure_schema, reclaim_stale_running_jobs, to_job_config};
@@ -36,19 +37,19 @@ pub async fn start_crawl_job(cfg: &Config, start_url: &str) -> Result<Uuid, Box<
     ensure_schema(&pool).await?;
 
     let cfg_json = serde_json::to_value(to_job_config(cfg))?;
+    // Dedup by URL only — config differences are immaterial for an active crawl.
+    // Avoids JSONB blob equality which prevents prepared-statement plan caching.
     if let Some(existing_id) = sqlx::query_scalar::<_, Uuid>(
         r#"
         SELECT id
         FROM axon_crawl_jobs
         WHERE status IN ('pending','running')
           AND url = $1
-          AND config_json = $2
         ORDER BY created_at DESC
         LIMIT 1
         "#,
     )
     .bind(start_url)
-    .bind(cfg_json.clone())
     .fetch_optional(&pool)
     .await?
     {
@@ -100,18 +101,17 @@ pub async fn start_crawl_jobs_batch(
     let url_strings: Vec<String> = start_urls.iter().map(|u| u.to_string()).collect();
 
     // 1. Find existing active jobs for all URLs in a single query.
+    // Dedup by URL only — config differences are immaterial for an active crawl.
     let existing_rows = sqlx::query_as::<_, (String, Uuid)>(
         r#"
         SELECT DISTINCT ON (url) url, id
         FROM axon_crawl_jobs
         WHERE status IN ('pending','running')
           AND url = ANY($1)
-          AND config_json = $2
         ORDER BY url, created_at DESC
         "#,
     )
     .bind(&url_strings)
-    .bind(cfg_json.clone())
     .fetch_all(&pool)
     .await?;
 
@@ -153,11 +153,12 @@ pub async fn start_crawl_jobs_batch(
         }
     }
 
-    // Log dedupe hits.
-    for (url, id) in &existing_map {
+    // Aggregate log to avoid per-URL String allocation on large batches.
+    if !existing_map.is_empty() {
         log_info(&format!(
-            "crawl dedupe hit: reusing active job {} for {}",
-            id, url
+            "crawl dedupe: reusing {} active job(s) for {} url(s)",
+            existing_map.len(),
+            existing_map.len()
         ));
     }
 
@@ -235,16 +236,26 @@ pub async fn cancel_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Error>> 
     .rows_affected();
 
     let redis_client = redis::Client::open(cfg.redis_url.clone())?;
-    match redis_client.get_multiplexed_async_connection().await {
-        Ok(mut conn) => {
+    match tokio::time::timeout(
+        Duration::from_secs(3),
+        redis_client.get_multiplexed_async_connection(),
+    )
+    .await
+    {
+        Ok(Ok(mut conn)) => {
             let key = format!("axon:crawl:cancel:{id}");
             if let Err(err) = conn.set_ex::<_, _, ()>(key, "1", 24 * 60 * 60).await {
                 log_warn(&format!("crawl cancel signal failed for job {id}: {err}"));
             }
         }
-        Err(err) => {
+        Ok(Err(err)) => {
             log_warn(&format!(
                 "crawl cancel signal skipped for job {id}: redis connect failed: {err}"
+            ));
+        }
+        Err(_) => {
+            log_warn(&format!(
+                "crawl cancel signal skipped for job {id}: redis connect timeout after 3s"
             ));
         }
     }
@@ -255,24 +266,15 @@ pub async fn cancel_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Error>> 
 pub async fn cleanup_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
     ensure_schema(&pool).await?;
-    let mut total = 0u64;
-    loop {
-        let deleted = sqlx::query(
-            "DELETE FROM axon_crawl_jobs WHERE id IN (
-                SELECT id FROM axon_crawl_jobs
-                WHERE status IN ('failed','canceled')
-                   OR (status='pending' AND created_at < NOW() - INTERVAL '1 day')
-                LIMIT 1000
-            )",
-        )
-        .execute(&pool)
-        .await?
-        .rows_affected();
-        total += deleted;
-        if deleted == 0 {
-            break;
-        }
-    }
+
+    let deleted = sqlx::query(
+        "DELETE FROM axon_crawl_jobs
+            WHERE status IN ('failed','canceled')
+               OR (status='pending' AND created_at < NOW() - INTERVAL '1 day')",
+    )
+    .execute(&pool)
+    .await?
+    .rows_affected();
 
     // Also prune completed jobs older than 30 days to prevent unbounded table growth.
     let completed_rows = sqlx::query(
@@ -281,9 +283,8 @@ pub async fn cleanup_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     .execute(&pool)
     .await?
     .rows_affected();
-    total += completed_rows;
 
-    Ok(total)
+    Ok(deleted + completed_rows)
 }
 
 pub async fn clear_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {

@@ -4,6 +4,40 @@ use crate::crates::core::ui::{muted, primary, print_phase};
 use spider_agent::{Agent, SearchOptions, TimeRange};
 use std::error::Error;
 
+pub async fn search_results(
+    cfg: &Config,
+    query: &str,
+    limit: usize,
+    offset: usize,
+    time_range: Option<TimeRange>,
+) -> Result<Vec<serde_json::Value>, Box<dyn Error>> {
+    if cfg.tavily_api_key.is_empty() {
+        return Err("search requires TAVILY_API_KEY — set it in .env".into());
+    }
+    let mut search_opts = SearchOptions::new().with_limit((limit + offset).clamp(1, 100));
+    if let Some(tr) = time_range {
+        search_opts = search_opts.with_time_range(tr);
+    }
+    let agent = Agent::builder()
+        .with_search_tavily(&cfg.tavily_api_key)
+        .build()?;
+    let results = agent.search_with_options(query, search_opts).await?;
+    Ok(results
+        .results
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|r| {
+            serde_json::json!({
+                "position": r.position,
+                "title": r.title,
+                "url": r.url,
+                "snippet": r.snippet,
+            })
+        })
+        .collect::<Vec<_>>())
+}
+
 pub async fn run_search(cfg: &Config) -> Result<(), Box<dyn Error>> {
     if cfg.tavily_api_key.is_empty() {
         return Err("search requires TAVILY_API_KEY — set it in .env".into());
@@ -19,13 +53,8 @@ pub async fn run_search(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
     print_phase("◐", "Searching", &query);
 
-    let agent = Agent::builder()
-        .with_search_tavily(&cfg.tavily_api_key)
-        .build()?;
-
-    let mut search_opts = SearchOptions::new().with_limit(cfg.search_limit);
-    if let Some(ref range) = cfg.search_time_range {
-        let tr = match range.as_str() {
+    let time_range = if let Some(ref range) = cfg.search_time_range {
+        match range.as_str() {
             "day" => Some(TimeRange::Day),
             "week" => Some(TimeRange::Week),
             "month" => Some(TimeRange::Month),
@@ -34,22 +63,24 @@ pub async fn run_search(cfg: &Config) -> Result<(), Box<dyn Error>> {
                 log_warn(&format!("Unknown search_time_range '{other}'; ignoring"));
                 None
             }
-        };
-        if let Some(tr) = tr {
-            search_opts = search_opts.with_time_range(tr);
         }
-    }
-
-    let results = agent.search_with_options(&query, search_opts).await?;
+    } else {
+        None
+    };
+    let results = search_results(cfg, &query, cfg.search_limit, 0, time_range).await?;
 
     println!("{}", primary(&format!("Search Results for \"{}\"", query)));
-    println!("{} {}", muted("Found"), results.results.len());
+    println!("{} {}", muted("Found"), results.len());
     println!();
 
-    for result in &results.results {
-        println!("{}. {}", result.position, primary(&result.title));
-        println!("   {}", muted(&result.url));
-        if let Some(ref snippet) = result.snippet {
+    for result in &results {
+        let position = result["position"].as_i64().unwrap_or(0);
+        let title = result["title"].as_str().unwrap_or("");
+        let url = result["url"].as_str().unwrap_or("");
+        let snippet = result["snippet"].as_str();
+        println!("{}. {}", position, primary(title));
+        println!("   {}", muted(url));
+        if let Some(snippet) = snippet {
             println!("   {snippet}");
         }
         println!();

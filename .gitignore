@@ -56,3 +56,8 @@ container/*.local.yaml
 /data/
 /http-cacache/
 /storage/
+
+# Node artifacts (root-level, not part of the Rust workspace)
+/node_modules/
+/package.json
+/pnpm-lock.yaml

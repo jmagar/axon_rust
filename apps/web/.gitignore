@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.pnpm-store
+
+# Negate root-level logs/ ignore for Next.js source directories
+!/app/logs/
+!/app/logs/**
+!/app/api/logs/
+!/app/api/logs/**
+!/components/logs/
+!/components/logs/**

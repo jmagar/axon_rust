@@ -14,42 +14,51 @@ path = "lib.rs"
 name = "axon"
 path = "main.rs"
 
+[[bin]]
+name = "axon-mcp"
+path = "mcp_main.rs"
+
 [dependencies]
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 bollard = "0.18"
 chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6"
 clap = { version = "4", features = ["derive", "env"] }
 console = "0.16"
 dialoguer = "0.12"
 indicatif = "0.18"
 lapin = "3"
 octocrab = "0.49"
+portable-pty = "0"
 redis = { version = "1.0", features = ["tokio-comp"] }
 futures-util = "0.3"
 reqwest = { version = "0.13", features = ["json", "rustls", "stream", "form"] }
+rustls = { version = "0.23", features = ["aws-lc-rs"], default-features = false }
 rand = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
 # NOTE: In spider v2.45.x these are valid optional features and are required
 # for our crawl/render pipeline.
-spider = { version = "2", default-features = false, features = ["basic", "chrome", "regex", "sitemap", "adblock", "chrome_stealth", "chrome_screenshot", "simd", "cache"] }
+spider = { version = "2", default-features = false, features = ["basic", "chrome", "regex", "sitemap", "adblock", "chrome_stealth", "chrome_screenshot", "simd", "cache_mem"] }
 spider_agent = { version = "2.45", default-features = false, features = ["search_tavily", "openai"] }
 spider_transformations = "2"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util", "net", "process", "signal", "sync", "time"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 tokio-executor-trait = "3"
 tokio-reactor-trait = "4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 hex = "0.4"
 reflink-copy = "0.1"
 dotenvy = "0.15"
+rmcp = { version = "0.16.0", features = ["server", "macros", "transport-io", "schemars"] }
 
 [profile.release]
 opt-level = 3
@@ -61,13 +70,15 @@ strip = true
 opt-level = 2
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full", "test-util"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util", "net", "process", "signal", "sync", "time"] }
 criterion = "0.8"
 regex = "1"
 # httpmock enables mock HTTP servers in unit tests, unlocking coverage for
 # tei_embed 413-retry logic, ensure_collection idempotency, and API clients
 # without requiring live services.
 httpmock = "0.8"
+insta = "1"
+serial_test = "3"
 
 [lints.rust]
 unsafe_code = "deny"

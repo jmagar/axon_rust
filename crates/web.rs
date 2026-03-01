@@ -1,12 +1,16 @@
 mod docker_stats;
+mod download;
 mod execute;
+mod pack;
+mod shell;
 
 use crate::crates::core::logging::log_info;
 use axum::Router;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::error::Error;
@@ -15,68 +19,49 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast};
 
-// Release: static assets compiled into the binary
-#[cfg(not(debug_assertions))]
-const INDEX_HTML: &str = include_str!("web/static/index.html");
-#[cfg(not(debug_assertions))]
-const STYLE_CSS: &str = include_str!("web/static/style.css");
-#[cfg(not(debug_assertions))]
-const NEURAL_JS: &str = include_str!("web/static/neural.js");
-#[cfg(not(debug_assertions))]
-const APP_JS: &str = include_str!("web/static/app.js");
-
-/// In debug builds, resolve the static assets directory relative to the source.
-#[cfg(debug_assertions)]
-fn static_dir() -> PathBuf {
-    // Cargo sets CARGO_MANIFEST_DIR at compile time
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("crates")
-        .join("web")
-        .join("static")
-}
-
-/// Read a static file from disk (debug) or panic with a clear message.
-#[cfg(debug_assertions)]
-fn read_static(name: &str) -> String {
-    let path = static_dir().join(name);
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| format!("<!-- ERROR: could not read {}: {} -->", path.display(), e))
-}
-
 /// Shared state across all WS connections.
 pub(crate) struct AppState {
     /// Docker stats broadcast — poller sends, every WS client subscribes.
     stats_tx: broadcast::Sender<String>,
+    /// Registry of completed job IDs → output directories for download routes.
+    job_dirs: Arc<DashMap<String, PathBuf>>,
 }
 
 /// Start the axum server on the given port, running until interrupted.
 pub async fn start_server(port: u16) -> Result<(), Box<dyn Error>> {
     let (stats_tx, _) = broadcast::channel::<String>(64);
+    let job_dirs: Arc<DashMap<String, PathBuf>> = Arc::new(DashMap::new());
 
     let state = Arc::new(AppState {
         stats_tx: stats_tx.clone(),
+        job_dirs: job_dirs.clone(),
     });
 
     // Spawn Docker stats poller in background
     tokio::spawn(docker_stats::run_stats_loop(stats_tx));
 
+    // Download routes use a separate state (just the DashMap) to avoid
+    // coupling the download handlers to the full AppState.
+    let download_routes = Router::new()
+        .route("/download/{job_id}/pack.md", get(download::serve_pack_md))
+        .route("/download/{job_id}/pack.xml", get(download::serve_pack_xml))
+        .route("/download/{job_id}/archive.zip", get(download::serve_zip))
+        .route("/download/{job_id}/file/{*path}", get(download::serve_file))
+        .with_state(job_dirs);
+
     let app = Router::new()
-        .route("/", get(serve_index))
-        .route("/style.css", get(serve_css))
-        .route("/neural.js", get(serve_neural_js))
-        .route("/app.js", get(serve_app_js))
         .route("/ws", get(ws_upgrade))
-        .with_state(state);
+        .route("/ws/shell", get(shell_ws_upgrade))
+        .route("/output/{*path}", get(serve_output_file))
+        .with_state(state)
+        .merge(download_routes);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let host = std::env::var("AXON_SERVE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let addr: SocketAddr = format!("{host}:{port}")
+        .parse()
+        .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], port)));
 
-    #[cfg(debug_assertions)]
-    log_info(&format!(
-        "Axon web UI listening on http://0.0.0.0:{port} (dev mode — hot reload from {})",
-        static_dir().display()
-    ));
-    #[cfg(not(debug_assertions))]
-    log_info(&format!("Axon web UI listening on http://0.0.0.0:{port}"));
+    log_info(&format!("Axon web UI listening on http://{addr}"));
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app)
@@ -92,65 +77,73 @@ async fn shutdown_signal() {
         .expect("failed to listen for ctrl+c");
 }
 
-// ── Static asset handlers ────────────────────────────────────────────────────
-// Debug: read from disk on every request (hot reload).
-// Release: serve compiled-in strings.
+// ── Output file serving ───────────────────────────────────────────────────────
 
-#[cfg(not(debug_assertions))]
-async fn serve_index() -> Html<&'static str> {
-    Html(INDEX_HTML)
-}
-#[cfg(debug_assertions)]
-async fn serve_index() -> Html<String> {
-    Html(read_static("index.html"))
-}
+/// `GET /output/{*path}` — serve files from the CLI output directory.
+///
+/// Used to display screenshots and other generated assets in the browser.
+/// Path traversal is prevented via canonicalization + prefix check.
+async fn serve_output_file(
+    axum::extract::Path(file_path): axum::extract::Path<String>,
+) -> Response {
+    use axum::http::{HeaderMap, StatusCode, header};
 
-#[cfg(not(debug_assertions))]
-async fn serve_css() -> impl IntoResponse {
-    ([("content-type", "text/css; charset=utf-8")], STYLE_CSS)
-}
-#[cfg(debug_assertions)]
-async fn serve_css() -> impl IntoResponse {
-    (
-        [("content-type", "text/css; charset=utf-8")],
-        read_static("style.css"),
-    )
-}
+    // Reject obvious traversal
+    if file_path.contains("..") || file_path.contains('\0') {
+        return (StatusCode::BAD_REQUEST, "invalid path").into_response();
+    }
 
-#[cfg(not(debug_assertions))]
-async fn serve_neural_js() -> impl IntoResponse {
-    (
-        [("content-type", "application/javascript; charset=utf-8")],
-        NEURAL_JS,
-    )
-}
-#[cfg(debug_assertions)]
-async fn serve_neural_js() -> impl IntoResponse {
-    (
-        [("content-type", "application/javascript; charset=utf-8")],
-        read_static("neural.js"),
-    )
-}
+    let base = execute::files::output_dir();
+    let full_path = base.join(&file_path);
 
-#[cfg(not(debug_assertions))]
-async fn serve_app_js() -> impl IntoResponse {
-    (
-        [("content-type", "application/javascript; charset=utf-8")],
-        APP_JS,
-    )
-}
-#[cfg(debug_assertions)]
-async fn serve_app_js() -> impl IntoResponse {
-    (
-        [("content-type", "application/javascript; charset=utf-8")],
-        read_static("app.js"),
-    )
+    // Canonicalize both and verify containment
+    let Ok(canonical_base) = tokio::fs::canonicalize(&base).await else {
+        return (StatusCode::NOT_FOUND, "output directory not found").into_response();
+    };
+    let Ok(canonical_file) = tokio::fs::canonicalize(&full_path).await else {
+        return (StatusCode::NOT_FOUND, "file not found").into_response();
+    };
+
+    if !canonical_file.starts_with(&canonical_base) {
+        return (StatusCode::FORBIDDEN, "path outside output directory").into_response();
+    }
+
+    let bytes = match tokio::fs::read(&canonical_file).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::NOT_FOUND, "file not found").into_response(),
+    };
+
+    // Sniff content type from extension
+    let content_type = match canonical_file.extension().and_then(|e| e.to_str()) {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        Some("md") => "text/markdown; charset=utf-8",
+        Some("html") => "text/html; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        _ => "application/octet-stream",
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
+    // Allow browser caching for 5 minutes (screenshots are immutable once written)
+    headers.insert(
+        header::CACHE_CONTROL,
+        "public, max-age=300".parse().unwrap(),
+    );
+
+    (headers, bytes).into_response()
 }
 
 // ── WebSocket handler ────────────────────────────────────────────────────────
 
 async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> Response {
     ws.on_upgrade(move |socket| handle_ws(socket, state))
+}
+
+async fn shell_ws_upgrade(ws: WebSocketUpgrade) -> Response {
+    ws.on_upgrade(shell::handle_shell_ws)
 }
 
 /// Incoming WS message from the browser.
@@ -182,24 +175,35 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
     // Per-connection state: current async job ID for cancel support
     let crawl_job_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
+    // Shared job_dirs registry for registering completed jobs
+    let job_dirs = state.job_dirs.clone();
+
     // Subscribe to Docker stats broadcast
     let mut stats_rx = state.stats_tx.subscribe();
 
     // Track crawl_files messages to capture the output_dir for read_file
     let base_dir_tracker = crawl_base_dir.clone();
+    let job_dirs_tracker = job_dirs.clone();
     let (tracking_tx, mut tracking_rx) = tokio::sync::mpsc::channel::<String>(256);
 
     // Forward task: sends exec output + stats to the WS client,
-    // and tracks crawl_files messages to capture base_dir
+    // and tracks crawl_files messages to capture base_dir + register job_dirs
     let forward = tokio::spawn(async move {
         loop {
             tokio::select! {
                 Some(msg) = exec_rx.recv() => {
-                    // Sniff crawl_files messages to extract output_dir
+                    // Sniff crawl_files messages to extract output_dir and job_id
                     if msg.contains("\"crawl_files\"") {
                         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg) {
                             if let Some(dir) = parsed.get("output_dir").and_then(|v| v.as_str()) {
                                 *base_dir_tracker.lock().await = Some(PathBuf::from(dir));
+                            }
+                            // Register in job_dirs for download routes
+                            if let (Some(job_id), Some(dir)) = (
+                                parsed.get("job_id").and_then(|v| v.as_str()),
+                                parsed.get("output_dir").and_then(|v| v.as_str()),
+                            ) {
+                                job_dirs_tracker.insert(job_id.to_string(), PathBuf::from(dir));
                             }
                         }
                     }

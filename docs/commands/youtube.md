@@ -1,4 +1,8 @@
 # axon youtube
+Last Modified: 2026-02-25
+
+Version: 1.0.0
+Last Updated: 01:26:53 | 02/25/2026 EST
 
 Ingest a YouTube video into Qdrant. Uses `yt-dlp` to download auto-generated or manual transcripts (VTT format), chunks the transcript text, and embeds it into the configured Qdrant collection.
 

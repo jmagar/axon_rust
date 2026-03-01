@@ -10,6 +10,7 @@
 mod amqp;
 mod job_ops;
 pub(crate) mod pool;
+mod schema;
 pub(crate) mod stats;
 pub(crate) mod watchdog;
 
@@ -17,19 +18,31 @@ pub(crate) mod watchdog;
 #[cfg(test)]
 use anyhow::Result;
 #[cfg(test)]
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 #[cfg(test)]
 use serde_json::Value;
 #[cfg(test)]
 use sqlx::postgres::PgPoolOptions;
+#[cfg(test)]
+use std::collections::HashMap;
+#[cfg(test)]
+use std::env;
+#[cfg(test)]
+use std::fs;
+#[cfg(test)]
+use std::sync::LazyLock;
 
 use lapin::options::QueueDeclareOptions;
 
 // Re-export all public items so existing `use crate::crates::jobs::common::*` continues to work.
 pub use amqp::{batch_enqueue_jobs, enqueue_job, open_amqp_channel};
 pub(crate) use amqp::{open_amqp_connection_and_channel, purge_queue_safe};
-pub use job_ops::{claim_next_pending, claim_pending_by_id, mark_job_failed};
+pub use job_ops::{
+    cancel_pending_or_running_job, claim_next_pending, claim_pending_by_id, mark_job_completed,
+    mark_job_failed, spawn_heartbeat_task, touch_running_job,
+};
 pub use pool::make_pool;
+pub(crate) use schema::begin_schema_migration_tx;
 pub use stats::{count_stale_and_pending_jobs, count_stale_and_pending_jobs_with_pool};
 #[cfg(test)]
 pub(crate) use watchdog::stale_watchdog_confirmed;
@@ -50,6 +63,7 @@ fn durable_queue_options() -> QueueDeclareOptions {
 #[derive(Debug, Clone, Copy)]
 pub enum JobTable {
     Crawl,
+    Refresh,
     Extract,
     Embed,
     Ingest,
@@ -59,6 +73,7 @@ impl JobTable {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Crawl => "axon_crawl_jobs",
+            Self::Refresh => "axon_refresh_jobs",
             Self::Extract => "axon_extract_jobs",
             Self::Embed => "axon_embed_jobs",
             Self::Ingest => "axon_ingest_jobs",
@@ -102,6 +117,86 @@ pub(crate) fn test_config(pg_url: &str) -> crate::crates::core::config::Config {
         ask_max_context_chars: 12_000,
         ..Config::default()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn parse_dotenv_content(content: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        let key = k.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let mut value = v.trim().to_string();
+        if ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
+            && value.len() >= 2
+        {
+            value = value[1..value.len() - 1].to_string();
+        }
+        map.insert(key.to_string(), value);
+    }
+    map
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_test_pg_url() -> Option<String> {
+    fn read_dotenv_map() -> HashMap<String, String> {
+        let Ok(content) = fs::read_to_string(".env") else {
+            return HashMap::new();
+        };
+        parse_dotenv_content(&content)
+    }
+
+    fn non_empty_env(name: &str) -> Option<String> {
+        env::var(name).ok().filter(|v| !v.trim().is_empty())
+    }
+
+    fn non_empty_map(map: &HashMap<String, String>, name: &str) -> Option<String> {
+        map.get(name).cloned().filter(|v| !v.trim().is_empty())
+    }
+
+    static RESOLVED_TEST_PG_URL: LazyLock<Option<String>> = LazyLock::new(|| {
+        let explicit = non_empty_env("AXON_TEST_PG_URL");
+        if let Some(url) = explicit {
+            return Some(crate::crates::core::config::parse::normalize_local_service_url(url));
+        }
+
+        let dotenv = read_dotenv_map();
+        let axon_test_pg_url = non_empty_map(&dotenv, "AXON_TEST_PG_URL");
+        if let Some(url) = axon_test_pg_url {
+            return Some(crate::crates::core::config::parse::normalize_local_service_url(url));
+        }
+
+        let axon_pg_url =
+            non_empty_map(&dotenv, "AXON_PG_URL").or_else(|| non_empty_env("AXON_PG_URL"));
+        if let Some(url) = axon_pg_url {
+            return Some(crate::crates::core::config::parse::normalize_local_service_url(url));
+        }
+
+        let pg_user = non_empty_map(&dotenv, "POSTGRES_USER")
+            .or_else(|| non_empty_env("POSTGRES_USER"))
+            .unwrap_or_else(|| "axon".to_string());
+        let pg_password = non_empty_map(&dotenv, "POSTGRES_PASSWORD")
+            .or_else(|| non_empty_env("POSTGRES_PASSWORD"))
+            .unwrap_or_else(|| "postgres".to_string());
+        let pg_db = non_empty_map(&dotenv, "POSTGRES_DB")
+            .or_else(|| non_empty_env("POSTGRES_DB"))
+            .unwrap_or_else(|| "axon".to_string());
+
+        Some(format!(
+            "postgresql://{pg_user}:{pg_password}@127.0.0.1:53432/{pg_db}"
+        ))
+    });
+
+    RESOLVED_TEST_PG_URL.clone()
 }
 
 #[cfg(test)]

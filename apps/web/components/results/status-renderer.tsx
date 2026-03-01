@@ -24,19 +24,15 @@ export function StatusRenderer({ result }: StatusRendererProps) {
 
 function KvRow({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
-    <div className="flex justify-between py-1 text-[12px]">
-      <span className="text-[#8787af]">{label}</span>
-      <span className={`tabular-nums ${accent ?? 'text-[#afd7ff]'}`}>{value}</span>
+    <div className="flex justify-between py-1 text-[length:var(--text-sm)]">
+      <span className="text-[var(--text-muted)]">{label}</span>
+      <span className={`tabular-nums ${accent ?? 'text-[var(--axon-secondary)]'}`}>{value}</span>
     </div>
   )
 }
 
 function SectionHeader({ children }: { children: React.ReactNode }) {
-  return (
-    <h3 className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wider text-[#5f87af] first:mt-0">
-      {children}
-    </h3>
-  )
+  return <h3 className="ui-label mb-1.5 mt-3 first:mt-0">{children}</h3>
 }
 
 // ---------------------------------------------------------------------------
@@ -68,7 +64,7 @@ function StatsPanel({ data }: { data: StatsResult }) {
 
   return (
     <div
-      className="rounded-lg border border-[rgba(175,215,255,0.08)] p-4"
+      className="rounded-lg border border-[var(--border-subtle)] p-4"
       style={{ background: 'rgba(10, 18, 35, 0.3)' }}
     >
       {/* Collection info */}
@@ -78,7 +74,9 @@ function StatsPanel({ data }: { data: StatsResult }) {
         <KvRow
           label="Status"
           value={data.status}
-          accent={data.status === 'green' ? 'text-[#87d787]' : 'text-[#ffaf87]'}
+          accent={
+            data.status === 'green' ? 'text-[var(--axon-success)]' : 'text-[var(--axon-warning)]'
+          }
         />
         <KvRow label="Distance" value={data.distance} />
         <KvRow label="Dimension" value={String(data.dimension)} />
@@ -100,10 +98,7 @@ function StatsPanel({ data }: { data: StatsResult }) {
           <SectionHeader>Payload Fields</SectionHeader>
           <div className="flex flex-wrap gap-1.5">
             {data.payload_fields.map((f) => (
-              <span
-                key={f}
-                className="rounded-md border border-[rgba(175,215,255,0.1)] px-1.5 py-0.5 font-mono text-[10px] text-[#8787af]"
-              >
+              <span key={f} className="ui-chip-status ui-mono rounded-md">
                 {f}
               </span>
             ))}
@@ -145,7 +140,7 @@ function StatsPanel({ data }: { data: StatsResult }) {
 function DedupePanel({ data }: { data: DedupeResult }) {
   return (
     <div
-      className="rounded-lg border border-[rgba(175,215,255,0.08)] p-4"
+      className="rounded-lg border border-[var(--border-subtle)] p-4"
       style={{ background: 'rgba(10, 18, 35, 0.3)' }}
     >
       <SectionHeader>Deduplication Results</SectionHeader>
@@ -155,7 +150,9 @@ function DedupePanel({ data }: { data: DedupeResult }) {
         <KvRow
           label="Points deleted"
           value={fmtNum(data.deleted)}
-          accent={data.deleted > 0 ? 'text-[#ff87af]' : 'text-[#87d787]'}
+          accent={
+            data.deleted > 0 ? 'text-[var(--axon-primary-strong)]' : 'text-[var(--axon-success)]'
+          }
         />
       </div>
     </div>

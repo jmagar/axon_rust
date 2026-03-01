@@ -1,4 +1,5 @@
 # crates/ingest — Source Ingestion Handlers
+Last Modified: 2026-02-25
 
 Ingests external sources (GitHub, Reddit, YouTube, AI sessions) into Qdrant.
 
@@ -6,7 +7,12 @@ Ingests external sources (GitHub, Reddit, YouTube, AI sessions) into Qdrant.
 
 ```
 ingest/
-├── github.rs    # GitHub repo ingestion via octocrab (code, issues, PRs, wiki)
+├── github/      # GitHub repo ingestion (code, issues, PRs, wiki)
+│   ├── mod.rs   # orchestration via tokio::join! + pure logic + tests
+│   ├── files.rs # file tree fetch + raw content via reqwest
+│   ├── issues.rs# octocrab paginated issues + PRs
+│   └── wiki.rs  # git clone --depth=1 subprocess; no wiki = Ok(0)
+├── github.rs    # re-export shim (if present) — canonical logic is in github/
 ├── reddit.rs    # Subreddit post/comment ingestion via Reddit OAuth2 API
 ├── youtube.rs   # YouTube transcript ingestion via yt-dlp subprocess
 └── sessions/    # AI session export parsers
@@ -17,11 +23,12 @@ ingest/
 
 ## Source-Specific Patterns
 
-### GitHub (`github.rs`)
-- Uses `octocrab` crate
+### GitHub (`github/`)
+- Uses raw `reqwest` for file content fetching; `octocrab` for issues/PRs pagination
 - `GITHUB_TOKEN` is **optional** but strongly recommended — unauthenticated rate limit is 60 req/hr; authenticated is 5000 req/hr
 - Ingests: repo code files, issues (open+closed), PRs, wiki pages
-- Large repos: code files are fetched tree-first, then content per file — can be slow without token
+- Files are fetched tree-first (one API call), then content per file concurrently via `buffer_unordered(16)` — can be slow without token on large repos
+- `wiki.rs` runs `git clone --depth=1` as a subprocess — requires `git` in PATH/container. Non-zero exit = no wiki = `Ok(0)` (not an error)
 
 ### Reddit (`reddit.rs`)
 - Reddit OAuth2 **client credentials** flow (app-only, no user login)

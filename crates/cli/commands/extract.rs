@@ -1,4 +1,7 @@
 use crate::crates::cli::commands::common::parse_urls;
+use crate::crates::cli::commands::job_contracts::{
+    JobCancelResponse, JobErrorsResponse, JobStatusResponse, JobSummaryEntry,
+};
 use crate::crates::core::config::Config;
 use crate::crates::core::content::{DeterministicExtractionEngine, run_extract_with_engine};
 use crate::crates::core::logging::log_done;
@@ -66,7 +69,8 @@ async fn handle_extract_status(cfg: &Config) -> Result<(), Box<dyn Error>> {
     match get_extract_job(cfg, id).await? {
         Some(job) => {
             if cfg.json_output {
-                println!("{}", serde_json::to_string_pretty(&job)?);
+                let response = JobStatusResponse::from_extract(&job);
+                println!("{}", serde_json::to_string_pretty(&response)?);
             } else {
                 println!(
                     "{} {}",
@@ -101,7 +105,7 @@ async fn handle_extract_cancel(cfg: &Config) -> Result<(), Box<dyn Error>> {
     if cfg.json_output {
         println!(
             "{}",
-            serde_json::json!({"id": id, "canceled": canceled, "source": "rust"})
+            serde_json::json!(JobCancelResponse::new(id, canceled))
         );
     } else if canceled {
         println!(
@@ -128,7 +132,11 @@ async fn handle_extract_errors(cfg: &Config) -> Result<(), Box<dyn Error>> {
             if cfg.json_output {
                 println!(
                     "{}",
-                    serde_json::json!({"id": id, "status": job.status, "error": job.error_text})
+                    serde_json::json!(JobErrorsResponse::from_job(
+                        id,
+                        job.status.clone(),
+                        job.error_text.clone()
+                    ))
                 );
             } else {
                 println!(
@@ -157,7 +165,9 @@ async fn handle_extract_errors(cfg: &Config) -> Result<(), Box<dyn Error>> {
 async fn handle_extract_list(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let jobs = list_extract_jobs(cfg, 50).await?;
     if cfg.json_output {
-        println!("{}", serde_json::to_string_pretty(&jobs)?);
+        let entries: Vec<JobSummaryEntry> =
+            jobs.iter().map(JobSummaryEntry::from_extract).collect();
+        println!("{}", serde_json::to_string_pretty(&entries)?);
         return Ok(());
     }
 

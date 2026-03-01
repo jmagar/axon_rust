@@ -1,4 +1,8 @@
 # axon ask
+Last Modified: 2026-02-25
+
+Version: 1.0.0
+Last Updated: 01:26:53 | 02/25/2026 EST
 
 RAG-powered Q&A. Retrieves relevant chunks from the local Qdrant knowledge base, reranks them by relevance, builds a context window, and calls the configured LLM to generate a grounded answer.
 
@@ -66,7 +70,8 @@ axon ask "what is the max crawl depth?" --json
 5. For top `AXON_ASK_FULL_DOCS` (default: 4) documents, backfill additional chunks from the same document
 6. Assemble context up to `AXON_ASK_MAX_CONTEXT_CHARS` (default: 120,000) characters
 7. Call the LLM with context + question
-8. Print the answer
+8. Apply response-quality gates (citations + policy checks)
+9. Print the normalized answer
 
 ## RAG Tuning
 
@@ -78,6 +83,10 @@ The retrieval pipeline is tunable via environment variables. See the [Environmen
 | `AXON_ASK_CANDIDATE_LIMIT` | `64` | More candidates = better recall, slower reranking |
 | `AXON_ASK_CHUNK_LIMIT` | `10` | Chunks in final LLM context |
 | `AXON_ASK_MAX_CONTEXT_CHARS` | `120000` | Total context characters; raise for large-context models |
+| `AXON_ASK_AUTHORITATIVE_DOMAINS` | `` | Optional comma-separated domains to boost in reranking |
+| `AXON_ASK_AUTHORITATIVE_BOOST` | `0.0` | Score boost for authoritative-domain matches |
+| `AXON_ASK_AUTHORITATIVE_ALLOWLIST` | `` | Optional strict domain allowlist for retrieval candidates |
+| `AXON_ASK_MIN_CITATIONS_NONTRIVIAL` | `2` | Minimum unique citations for non-trivial answers |
 
 ## Notes
 
@@ -85,3 +94,7 @@ The retrieval pipeline is tunable via environment variables. See the [Environmen
 - If you get "No candidates met relevance threshold", lower `AXON_ASK_MIN_RELEVANCE_SCORE` or run `axon crawl`/`axon embed` to add more content to the collection.
 - `ask` queries the local knowledge base only. To search the live web, use `axon research`.
 - For benchmarking RAG quality vs a baseline, use `axon evaluate`.
+- `ask` enforces citation-quality gates:
+  - Answers must include inline `[S#]` citations from retrieved context.
+  - Non-trivial responses must satisfy `AXON_ASK_MIN_CITATIONS_NONTRIVIAL`.
+  - Failed gates return structured insufficient-evidence output with next-index suggestions.

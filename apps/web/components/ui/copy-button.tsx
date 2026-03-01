@@ -22,7 +22,7 @@ export function CopyButton({ text, className }: CopyButtonProps) {
       onClick={handleCopy}
       className={
         className ??
-        'absolute right-3 top-3 z-10 flex items-center gap-1.5 rounded-md border border-[rgba(175,215,255,0.1)] px-2 py-1 text-[11px] font-medium text-[#8787af] transition-all duration-200 hover:border-[rgba(175,215,255,0.2)] hover:bg-[rgba(175,215,255,0.06)] hover:text-[#afd7ff]'
+        'absolute right-3 top-3 z-10 flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-2 py-1 text-[11px] font-medium text-[var(--text-muted)] transition-all duration-200 hover:border-[var(--border-standard)] hover:bg-[var(--surface-float)] hover:text-[var(--axon-secondary)]'
       }
       style={{ background: 'rgba(10, 18, 35, 0.8)', backdropFilter: 'blur(4px)' }}
     >

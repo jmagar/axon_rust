@@ -36,20 +36,22 @@ export function CrawlProgress({ progress, isProcessing }: CrawlProgressProps) {
   return (
     <div className="mb-3 space-y-1.5">
       {/* Progress bar */}
-      <div className="relative h-[3px] overflow-hidden rounded-full bg-[rgba(175,215,255,0.08)]">
+      <div className="relative h-[3px] overflow-hidden rounded-full bg-[var(--surface-elevated)]">
         {isProcessing && discovered > 0 && pct < 100 ? (
           <div
             className="h-full rounded-full transition-all duration-700"
             style={{
               width: `${pct}%`,
-              background: 'linear-gradient(90deg, #ff87af, #afd7ff)',
+              background:
+                'linear-gradient(90deg, var(--axon-primary-strong), var(--axon-secondary))',
             }}
           />
         ) : isProcessing ? (
           <div
             className="absolute inset-0 animate-shimmer rounded-full"
             style={{
-              background: 'linear-gradient(90deg, #ff87af, #afd7ff, #ff87af)',
+              background:
+                'linear-gradient(90deg, var(--axon-primary-strong), var(--axon-secondary), var(--axon-primary-strong))',
               backgroundSize: '200% 100%',
             }}
           />
@@ -58,16 +60,17 @@ export function CrawlProgress({ progress, isProcessing }: CrawlProgressProps) {
             className="h-full rounded-full transition-all duration-500"
             style={{
               width: '100%',
-              background: 'linear-gradient(90deg, #ff87af, #afd7ff)',
+              background:
+                'linear-gradient(90deg, var(--axon-primary-strong), var(--axon-secondary))',
             }}
           />
         )}
       </div>
 
       {/* Counts label */}
-      <div className="flex items-center gap-2 text-[11px] text-[#8787af]">
+      <div className="flex items-center gap-2 text-[11px] text-[var(--text-muted)]">
         {isProcessing && (
-          <span className="inline-block size-1.5 animate-pulse rounded-full bg-[#ff87af]" />
+          <span className="inline-block size-1.5 animate-pulse rounded-full bg-[var(--axon-primary-strong)]" />
         )}
         <span>
           {pages > 0 ? (

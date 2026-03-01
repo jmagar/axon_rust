@@ -9,13 +9,14 @@ import type * as React from 'react'
 import { cn } from '@/lib/utils'
 
 const editorContainerVariants = cva(
-  'relative w-full cursor-text select-text overflow-y-auto caret-primary selection:bg-brand/25 focus-visible:outline-none [&_.slate-selection-area]:z-50 [&_.slate-selection-area]:border [&_.slate-selection-area]:border-brand/25 [&_.slate-selection-area]:bg-brand/15',
+  'relative w-full cursor-text select-text overflow-y-auto caret-[var(--axon-primary)] selection:bg-[rgba(135,175,255,0.18)] focus-visible:outline-none [&_.slate-selection-area]:z-50 [&_.slate-selection-area]:border [&_.slate-selection-area]:border-[rgba(135,175,255,0.25)] [&_.slate-selection-area]:bg-[rgba(135,175,255,0.12)]',
   {
     defaultVariants: {
       variant: 'default',
     },
     variants: {
       variant: {
+        axon: 'h-full overflow-x-hidden bg-transparent',
         comment: cn(
           'flex flex-wrap justify-between gap-1 px-1 py-0.5 text-sm',
           'rounded-md border-[1.5px] border-transparent bg-transparent',
@@ -55,7 +56,7 @@ const editorVariants = cva(
     'group/editor',
     'relative w-full cursor-text select-text overflow-x-hidden whitespace-pre-wrap break-words',
     'rounded-md ring-offset-background focus-visible:outline-none',
-    '**:data-slate-placeholder:!top-1/2 **:data-slate-placeholder:-translate-y-1/2 placeholder:text-muted-foreground/80 **:data-slate-placeholder:text-muted-foreground/80 **:data-slate-placeholder:opacity-100!',
+    '**:data-slate-placeholder:!top-1/2 **:data-slate-placeholder:-translate-y-1/2 placeholder:text-[var(--text-dim)] **:data-slate-placeholder:text-[var(--text-dim)] **:data-slate-placeholder:opacity-100!',
     '[&_strong]:font-bold',
   ),
   {
@@ -72,6 +73,7 @@ const editorVariants = cva(
       variant: {
         ai: 'w-full px-0 text-base md:text-sm',
         aiChat: 'max-h-[min(70vh,320px)] w-full overflow-y-auto px-3 py-2 text-base md:text-sm',
+        axon: 'h-full min-h-full px-3 py-2.5 text-[length:var(--text-md)] leading-[var(--leading-copy)] text-[var(--text-secondary)] bg-transparent',
         comment: cn('rounded-none border-none bg-transparent text-sm'),
         default: 'size-full px-16 pt-4 pb-72 text-base sm:px-[max(64px,calc(50%-350px))]',
         demo: 'size-full px-16 pt-4 pb-72 text-base sm:px-[max(64px,calc(50%-350px))]',

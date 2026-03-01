@@ -98,8 +98,8 @@ services:
         ]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 12
+      start_period: 120s
 
   axon-chrome:
     # headless_browser manager + chrome-headless-shell
@@ -108,7 +108,7 @@ services:
     container_name: axon-chrome
     build:
       context: .
-      dockerfile: docker/Dockerfile.chrome
+      dockerfile: docker/chrome/Dockerfile
     env_file: []  # no app secrets needed in the browser container
     shm_size: "2gb"
     ports:
@@ -131,7 +131,7 @@ services:
         max-file: "3"
         compress: "true"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsSL http://127.0.0.1:6000/json/version > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsSL --max-time 4 http://127.0.0.1:6000/json/version > /dev/null"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -165,7 +165,9 @@ services:
       axon-qdrant:
         condition: service_healthy
       axon-chrome:
-        condition: service_healthy
+        condition: service_started  # Chrome unhealthy (GPU crash etc.) must not block workers
+    ports:
+      - "127.0.0.1:49000:49000"   # axon serve (HTTP + WebSocket)
     deploy:
       resources:
         limits:
@@ -178,7 +180,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "/command/s6-svstat -u /run/service/crawl-worker >/dev/null && /command/s6-svstat -u /run/service/extract-worker >/dev/null && /command/s6-svstat -u /run/service/embed-worker >/dev/null && /command/s6-svstat -u /run/service/ingest-worker >/dev/null",
+          "/command/s6-svstat -u /run/service/crawl-worker >/dev/null && /command/s6-svstat -u /run/service/extract-worker >/dev/null && /command/s6-svstat -u /run/service/embed-worker >/dev/null && /command/s6-svstat -u /run/service/ingest-worker >/dev/null && /command/s6-svstat -u /run/service/web-server >/dev/null",
         ]
       interval: 30s
       timeout: 10s
@@ -190,9 +192,46 @@ services:
       - ${AXON_DATA_DIR:-./data}/axon/chrome-diagnostics:/app/.cache/chrome-diagnostics
       # Session history mounts — required for `axon sessions` ingest worker.
       # Set HOST_HOME in .env to your home directory (e.g. /home/yourname).
-      - ${HOST_HOME:-${HOME}}/.claude/projects:/home/axon/.claude/projects:ro
-      - ${HOST_HOME:-${HOME}}/.codex/sessions:/home/axon/.codex/sessions:ro
-      - ${HOST_HOME:-${HOME}}/.gemini:/home/axon/.gemini:ro
+      - ${HOST_HOME:-${HOME}}/.claude/projects:/home/axon/.claude/projects
+      - ${HOST_HOME:-${HOME}}/.codex/sessions:/home/axon/.codex/sessions
+      - ${HOST_HOME:-${HOME}}/.gemini:/home/axon/.gemini
+
+  axon-web:
+    <<: *common-service
+    container_name: axon-web
+    build:
+      context: apps/web
+      dockerfile: ../../docker/web/Dockerfile
+      additional_contexts:
+        web-s6: docker/web/s6-rc.d
+        web-cont-init: docker/web/cont-init.d
+    ports:
+      - "49010:49010"
+    environment:
+      HOST: "0.0.0.0"
+      HOME: /home/node
+      PORT: "49010"
+      AXON_BACKEND_URL: "http://axon-workers:49000"
+      NEXT_PUBLIC_AXON_PORT: "49000"
+      AXON_WORKSPACE: /workspace
+      AXON_OUTPUT_DIR: /axon-output  # same host dir as axon-workers output, ro-mounted at /axon-output
+      # Set WATCHPACK_POLLING=true in .env if file-watch events don't propagate
+    volumes:
+      - ./apps/web:/app               # bind-mount source for hot reload
+      - /app/node_modules             # anonymous vol: preserves container's node_modules
+      - /app/.next                    # anonymous vol: preserves Next.js build cache
+      - ${AXON_DATA_DIR:-./data}/axon/worker:/axon-output:ro  # axon scrape/crawl output (read-only)
+      - ${AXON_DATA_DIR:-./data}/axon/claude:/home/node/.claude
+      - ${HOST_HOME:-${HOME}}/.claude.json:/home/node/.claude.json  # auth file — separate from config dir
+      # Uncomment to mount host SSH keys (opt-in — exposes keys to the container):
+      # - ${HOST_HOME:-${HOME}}/.ssh:/home/node/.ssh:ro
+      - ${AXON_WORKSPACE:-${HOME}/workspace}:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # required for /api/logs (dockerode)
+    group_add:
+      - "981"  # host docker group GID — grants node user socket access
+    depends_on:
+      axon-workers:
+        condition: service_healthy
 
 networks:
   axon:

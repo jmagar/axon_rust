@@ -1,9 +1,10 @@
 use super::*;
+use crate::crates::core::config::RenderMode;
 use crate::crates::jobs::common::{
-    make_pool, stale_watchdog_confirmed, stale_watchdog_payload, test_config,
+    make_pool, open_amqp_channel, resolve_test_pg_url, stale_watchdog_confirmed,
+    stale_watchdog_payload, test_config,
 };
 use chrono::Duration;
-use std::env;
 use tokio::time::{Duration as TokioDuration, sleep, timeout};
 
 fn watchdog_json(observed: DateTime<Utc>, first_seen: &str) -> serde_json::Value {
@@ -56,16 +57,51 @@ fn crawl_watchdog_confirmed_true_after_confirm_window() {
     assert!(stale_watchdog_confirmed(&payload, observed, 60));
 }
 
-fn pg_url() -> Option<String> {
-    env::var("AXON_TEST_PG_URL")
+#[test]
+fn resolve_initial_mode_cache_skip_forces_http() {
+    // cache_skip_browser=true always forces Http regardless of render_mode.
+    assert!(matches!(
+        resolve_initial_mode(RenderMode::Chrome, true),
+        RenderMode::Http
+    ));
+    assert!(matches!(
+        resolve_initial_mode(RenderMode::AutoSwitch, true),
+        RenderMode::Http
+    ));
+}
+
+#[test]
+fn resolve_initial_mode_auto_switch_maps_to_http() {
+    // AutoSwitch downgrades to Http so the first crawl pass uses HTTP.
+    assert!(matches!(
+        resolve_initial_mode(RenderMode::AutoSwitch, false),
+        RenderMode::Http
+    ));
+}
+
+#[test]
+fn resolve_initial_mode_passthrough_for_explicit_modes() {
+    // Explicit Http and Chrome pass through unchanged when cache_skip_browser is false.
+    assert!(matches!(
+        resolve_initial_mode(RenderMode::Http, false),
+        RenderMode::Http
+    ));
+    assert!(matches!(
+        resolve_initial_mode(RenderMode::Chrome, false),
+        RenderMode::Chrome
+    ));
+}
+
+fn amqp_url() -> Option<String> {
+    std::env::var("AXON_TEST_AMQP_URL")
         .ok()
-        .or_else(|| env::var("AXON_PG_URL").ok())
+        .or_else(|| std::env::var("AXON_AMQP_URL").ok())
         .filter(|v| !v.trim().is_empty())
 }
 
 #[tokio::test]
 async fn crawl_start_job_dedupes_active_pending_job() -> Result<(), Box<dyn Error>> {
-    let Some(pg_url) = pg_url() else {
+    let Some(pg_url) = resolve_test_pg_url() else {
         return Ok(());
     };
     let cfg = test_config(&pg_url);
@@ -85,7 +121,7 @@ async fn crawl_start_job_dedupes_active_pending_job() -> Result<(), Box<dyn Erro
 
 #[tokio::test]
 async fn crawl_recover_reclaims_confirmed_stale_running_job() -> Result<(), Box<dyn Error>> {
-    let Some(pg_url) = pg_url() else {
+    let Some(pg_url) = resolve_test_pg_url() else {
         return Ok(());
     };
     let cfg = test_config(&pg_url);
@@ -135,15 +171,41 @@ async fn crawl_recover_reclaims_confirmed_stale_running_job() -> Result<(), Box<
     Ok(())
 }
 
+#[tokio::test]
+async fn crawl_ensure_schema_is_concurrency_safe() -> Result<(), Box<dyn Error>> {
+    let Some(pg_url) = resolve_test_pg_url() else {
+        return Ok(());
+    };
+    let cfg = test_config(&pg_url);
+    let pool = make_pool(&cfg).await?;
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let pool = pool.clone();
+        tasks.push(tokio::spawn(async move { ensure_schema(&pool).await }));
+    }
+    for task in tasks {
+        let result = task.await?;
+        result?;
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
+#[ignore = "requires AMQP infra"]
 async fn crawl_worker_e2e_processes_pending_job_to_terminal_status() -> Result<(), Box<dyn Error>> {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
-            let Some(pg_url) = pg_url() else {
+            let Some(pg_url) = resolve_test_pg_url() else {
+                return Ok(());
+            };
+            let Some(_) = amqp_url() else {
                 return Ok(());
             };
             let cfg = test_config(&pg_url);
+            if open_amqp_channel(&cfg, &cfg.crawl_queue).await.is_err() {
+                return Ok(());
+            }
             let url = format!("https://example.com/crawl-worker/{}", Uuid::new_v4());
             let id = start_crawl_job(&cfg, &url).await?;
 
@@ -153,7 +215,7 @@ async fn crawl_worker_e2e_processes_pending_job_to_terminal_status() -> Result<(
             });
 
             let pool = make_pool(&cfg).await?;
-            let wait = timeout(TokioDuration::from_secs(8), async {
+            let wait = timeout(TokioDuration::from_secs(90), async {
                 loop {
                     let status: Option<String> =
                         sqlx::query_scalar("SELECT status FROM axon_crawl_jobs WHERE id=$1")

@@ -18,7 +18,7 @@ function GhostTextContent() {
 
   return (
     <span
-      className="pointer-events-none text-muted-foreground/70 max-sm:hidden"
+      className="pointer-events-none text-[var(--text-dim)] opacity-70 max-sm:hidden"
       contentEditable={false}
     >
       {suggestionText && suggestionText}

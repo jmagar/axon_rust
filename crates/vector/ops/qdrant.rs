@@ -5,7 +5,8 @@ mod utils;
 
 pub use client::{qdrant_delete_stale_domain_urls, qdrant_indexed_urls};
 pub use commands::{
-    run_dedupe_native, run_domains_native, run_retrieve_native, run_sources_native,
+    domains_payload, retrieve_result, run_dedupe_native, run_domains_native, run_retrieve_native,
+    run_sources_native, sources_payload,
 };
 pub use types::{QdrantPayload, QdrantPoint, QdrantSearchHit};
 pub use utils::{

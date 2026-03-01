@@ -1,7 +1,11 @@
+//! Ingest job schema uses advisory-lock DDL via `common::schema::begin_schema_migration_tx`.
+//! See `common/schema.rs` for the canonical pattern.
+
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::jobs::common::{
-    JobTable, enqueue_job, make_pool, mark_job_failed, purge_queue_safe, reclaim_stale_running_jobs,
+    JobTable, begin_schema_migration_tx, enqueue_job, make_pool, mark_job_failed, purge_queue_safe,
+    reclaim_stale_running_jobs, spawn_heartbeat_task,
 };
 use crate::crates::jobs::status::JobStatus;
 use crate::crates::jobs::worker_lane::{ProcessFn, WorkerConfig, run_job_worker};
@@ -12,9 +16,8 @@ use std::error::Error;
 use std::sync::Arc;
 use uuid::Uuid;
 
-static SCHEMA_INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-
 const TABLE: JobTable = JobTable::Ingest;
+const INGEST_HEARTBEAT_INTERVAL_SECS: u64 = 30;
 
 /// Discriminates which ingest source a job targets.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +50,8 @@ pub struct IngestJobConfig {
 #[derive(Debug, FromRow, Serialize, Deserialize)]
 pub struct IngestJob {
     pub id: Uuid,
+    /// Raw status string from the database. Use [`IngestJob::status()`] for
+    /// type-safe access when `JobStatus` gains `sqlx::Type` derive.
     pub status: String,
     pub source_type: String,
     pub target: String,
@@ -59,7 +64,29 @@ pub struct IngestJob {
     pub config_json: serde_json::Value,
 }
 
+impl IngestJob {
+    /// Parse the raw `status` string into a typed [`JobStatus`].
+    ///
+    /// Returns `None` if the string doesn't match any known variant (shouldn't
+    /// happen with the CHECK constraint, but defensive is correct).
+    pub fn status(&self) -> Option<JobStatus> {
+        match self.status.as_str() {
+            "pending" => Some(JobStatus::Pending),
+            "running" => Some(JobStatus::Running),
+            "completed" => Some(JobStatus::Completed),
+            "failed" => Some(JobStatus::Failed),
+            "canceled" => Some(JobStatus::Canceled),
+            _ => None,
+        }
+    }
+}
+
+/// Advisory lock key for ingest job schema migrations (unique per table).
+const INGEST_SCHEMA_LOCK_KEY: i64 = 0x696e_6765_7374_0000_i64;
+
 async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let mut tx = begin_schema_migration_tx(pool, INGEST_SCHEMA_LOCK_KEY).await?;
+
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS axon_ingest_jobs (
@@ -77,17 +104,16 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         )
         "#,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_axon_ingest_jobs_pending \
          ON axon_ingest_jobs(created_at ASC) WHERE status = 'pending'",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
-    // Add CHECK constraint to existing tables (idempotent via IF NOT EXISTS pattern).
     sqlx::query(
         r#"DO $$ BEGIN
             ALTER TABLE axon_ingest_jobs ADD CONSTRAINT axon_ingest_jobs_status_check
@@ -95,9 +121,10 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         EXCEPTION WHEN duplicate_object THEN NULL;
         END $$"#,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
+    tx.commit().await?;
     Ok(())
 }
 
@@ -147,10 +174,7 @@ fn target_label(source: &IngestSource) -> String {
 
 pub async fn start_ingest_job(cfg: &Config, source: IngestSource) -> Result<Uuid, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
 
     let job_config = IngestJobConfig {
         source: source.clone(),
@@ -187,10 +211,7 @@ pub async fn start_ingest_job(cfg: &Config, source: IngestSource) -> Result<Uuid
 
 pub async fn get_ingest_job(cfg: &Config, id: Uuid) -> Result<Option<IngestJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
     Ok(sqlx::query_as::<_, IngestJob>(
         "SELECT id,status,source_type,target,created_at,updated_at,started_at,finished_at,\
          error_text,result_json,config_json FROM axon_ingest_jobs WHERE id=$1",
@@ -202,10 +223,7 @@ pub async fn get_ingest_job(cfg: &Config, id: Uuid) -> Result<Option<IngestJob>,
 
 pub async fn list_ingest_jobs(cfg: &Config, limit: i64) -> Result<Vec<IngestJob>, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
     Ok(sqlx::query_as::<_, IngestJob>(
         "SELECT id,status,source_type,target,created_at,updated_at,started_at,finished_at,\
          error_text,result_json,config_json FROM axon_ingest_jobs ORDER BY created_at DESC LIMIT $1",
@@ -217,10 +235,7 @@ pub async fn list_ingest_jobs(cfg: &Config, limit: i64) -> Result<Vec<IngestJob>
 
 pub async fn cancel_ingest_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
     let rows = sqlx::query(&format!(
         "UPDATE axon_ingest_jobs SET status='{canceled}',updated_at=NOW(),finished_at=NOW() \
          WHERE id=$1 AND status IN ('{pending}','{running}')",
@@ -237,10 +252,7 @@ pub async fn cancel_ingest_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn E
 
 pub async fn cleanup_ingest_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
     Ok(sqlx::query(&format!(
         "DELETE FROM axon_ingest_jobs WHERE status IN ('{failed}','{canceled}') \
          OR (status = '{completed}' AND finished_at < NOW() - INTERVAL '30 days')",
@@ -255,10 +267,7 @@ pub async fn cleanup_ingest_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
 
 pub async fn clear_ingest_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
     let rows = sqlx::query("DELETE FROM axon_ingest_jobs")
         .execute(&pool)
         .await?
@@ -267,6 +276,9 @@ pub async fn clear_ingest_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     Ok(rows)
 }
 
+// SEC-M-6: `cfg` is captured by value but never serialized into error_text.
+// All error paths pass only `e.to_string()` or static messages to `mark_job_failed`,
+// so `openai_api_key` and other secrets in `cfg` cannot leak into the database.
 async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
     use crate::crates::ingest;
 
@@ -296,6 +308,9 @@ async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
         }
     };
 
+    let (heartbeat_stop_tx, heartbeat_task) =
+        spawn_heartbeat_task(pool.clone(), TABLE, id, INGEST_HEARTBEAT_INTERVAL_SECS);
+
     let result = match &job_cfg.source {
         IngestSource::Github {
             repo,
@@ -317,10 +332,16 @@ async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
             ingest::sessions::ingest_sessions(&sessions_cfg).await
         }
     };
+    let _ = heartbeat_stop_tx.send(true);
+    if let Err(err) = heartbeat_task.await {
+        log_warn(&format!(
+            "command=ingest_worker heartbeat_task_panicked job_id={id} err={err:?}"
+        ));
+    }
 
     match result {
         Ok(chunks) => {
-            if let Err(e) = sqlx::query(&format!(
+            match sqlx::query(&format!(
                 "UPDATE axon_ingest_jobs SET status='{completed}',updated_at=NOW(),\
                  finished_at=NOW(),result_json=$2 WHERE id=$1 AND status='{running}'",
                 completed = JobStatus::Completed.as_str(),
@@ -331,9 +352,18 @@ async fn process_ingest_job(cfg: Config, pool: PgPool, id: Uuid) {
             .execute(&pool)
             .await
             {
-                log_warn(&format!(
-                    "command=ingest_worker mark_completed_failed job_id={id} err={e}"
-                ));
+                Ok(done) => {
+                    if done.rows_affected() == 0 {
+                        log_warn(&format!(
+                            "command=ingest_worker completion_update_skipped job_id={id} reason=not_running_state"
+                        ));
+                    }
+                }
+                Err(e) => {
+                    log_warn(&format!(
+                        "command=ingest_worker mark_completed_failed job_id={id} err={e}"
+                    ));
+                }
             }
         }
         Err(e) => {
@@ -369,10 +399,7 @@ pub async fn ingest_doctor(cfg: &Config) -> Result<serde_json::Value, Box<dyn Er
 
 pub async fn run_ingest_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
 
     let wc = WorkerConfig {
         table: TABLE,
@@ -393,10 +420,7 @@ pub async fn run_ingest_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
 pub async fn recover_stale_ingest_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
-    if SCHEMA_INIT.get().is_none() {
-        ensure_schema(&pool).await?;
-        let _ = SCHEMA_INIT.set(());
-    }
+    ensure_schema(&pool).await?;
     let stats = reclaim_stale_running_jobs(
         &pool,
         TABLE,
@@ -407,4 +431,148 @@ pub async fn recover_stale_ingest_jobs(cfg: &Config) -> Result<u64, Box<dyn Erro
     )
     .await?;
     Ok(stats.reclaimed_jobs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- source_type_label tests --
+
+    #[test]
+    fn source_type_label_github() {
+        let source = IngestSource::Github {
+            repo: "owner/repo".into(),
+            include_source: true,
+        };
+        assert_eq!(source_type_label(&source), "github");
+    }
+
+    #[test]
+    fn source_type_label_reddit() {
+        let source = IngestSource::Reddit {
+            target: "r/rust".into(),
+        };
+        assert_eq!(source_type_label(&source), "reddit");
+    }
+
+    #[test]
+    fn source_type_label_youtube() {
+        let source = IngestSource::Youtube {
+            target: "https://youtube.com/watch?v=abc".into(),
+        };
+        assert_eq!(source_type_label(&source), "youtube");
+    }
+
+    #[test]
+    fn source_type_label_sessions() {
+        let source = IngestSource::Sessions {
+            sessions_claude: true,
+            sessions_codex: false,
+            sessions_gemini: false,
+            sessions_project: None,
+        };
+        assert_eq!(source_type_label(&source), "sessions");
+    }
+
+    // -- target_label tests --
+
+    #[test]
+    fn target_label_github_returns_repo() {
+        let source = IngestSource::Github {
+            repo: "anthropics/claude-code".into(),
+            include_source: false,
+        };
+        assert_eq!(target_label(&source), "anthropics/claude-code");
+    }
+
+    #[test]
+    fn target_label_sessions_all_when_no_flags() {
+        let source = IngestSource::Sessions {
+            sessions_claude: false,
+            sessions_codex: false,
+            sessions_gemini: false,
+            sessions_project: None,
+        };
+        assert_eq!(target_label(&source), "all");
+    }
+
+    #[test]
+    fn target_label_sessions_multiple_flags() {
+        let source = IngestSource::Sessions {
+            sessions_claude: true,
+            sessions_codex: false,
+            sessions_gemini: true,
+            sessions_project: None,
+        };
+        assert_eq!(target_label(&source), "claude,gemini");
+    }
+
+    #[test]
+    fn target_label_sessions_with_project() {
+        let source = IngestSource::Sessions {
+            sessions_claude: true,
+            sessions_codex: true,
+            sessions_gemini: false,
+            sessions_project: Some("axon-rust".into()),
+        };
+        assert_eq!(target_label(&source), "claude,codex:axon-rust");
+    }
+
+    #[test]
+    fn target_label_sessions_all_with_project() {
+        let source = IngestSource::Sessions {
+            sessions_claude: false,
+            sessions_codex: false,
+            sessions_gemini: false,
+            sessions_project: Some("my-project".into()),
+        };
+        assert_eq!(target_label(&source), "all:my-project");
+    }
+
+    // -- IngestJob::status() tests --
+
+    #[test]
+    fn ingest_job_status_parses_known_variants() {
+        for (raw, expected) in [
+            ("pending", JobStatus::Pending),
+            ("running", JobStatus::Running),
+            ("completed", JobStatus::Completed),
+            ("failed", JobStatus::Failed),
+            ("canceled", JobStatus::Canceled),
+        ] {
+            let job = IngestJob {
+                id: Uuid::nil(),
+                status: raw.to_string(),
+                source_type: "github".into(),
+                target: "test".into(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                started_at: None,
+                finished_at: None,
+                error_text: None,
+                result_json: None,
+                config_json: serde_json::json!({}),
+            };
+            assert_eq!(job.status(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn ingest_job_status_returns_none_for_unknown() {
+        let job = IngestJob {
+            id: Uuid::nil(),
+            status: "bogus".to_string(),
+            source_type: "github".into(),
+            target: "test".into(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            started_at: None,
+            finished_at: None,
+            error_text: None,
+            result_json: None,
+            config_json: serde_json::json!({}),
+        };
+        assert_eq!(job.status(), None);
+    }
 }

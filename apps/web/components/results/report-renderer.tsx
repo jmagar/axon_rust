@@ -1,15 +1,18 @@
 'use client'
 
+import { BrainCircuit, Clock3, Database, MessageSquareQuote, Search, Sparkles } from 'lucide-react'
 import { useState } from 'react'
+import { DoctorReport } from '@/components/results/doctor-report'
+import { MarkdownBlock } from '@/components/results/markdown-block'
+import { StructuredDataView } from '@/components/results/structured-data-view'
 import type {
   AskDiagnostics,
   AskResult,
   DebugResult,
-  DoctorResult,
-  DoctorServiceStatus,
   EvaluateResult,
   NormalizedResult,
 } from '@/lib/result-types'
+import { formatStructuredText } from '@/lib/structured-text'
 import { fmtMs, fmtNum } from './shared'
 
 interface ReportRendererProps {
@@ -41,10 +44,16 @@ export function ReportRenderer({ result, commandMode }: ReportRendererProps) {
 // ---------------------------------------------------------------------------
 
 function SectionHeader({ children }: { children: React.ReactNode }) {
+  return <h3 className="ui-label mb-1.5">{children}</h3>
+}
+
+function AskPill({ label, value, icon }: { label: string; value: string; icon?: React.ReactNode }) {
   return (
-    <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[#5f87af]">
-      {children}
-    </h3>
+    <span className="ui-chip-status rounded-md border border-[var(--border-standard)] bg-[rgba(14,25,48,0.62)] text-[var(--axon-secondary)]">
+      {icon && <span className="text-[var(--axon-secondary-strong)]">{icon}</span>}
+      <span className="uppercase tracking-wide text-[var(--text-dim)]">{label}</span>
+      <span className="text-[var(--text-secondary)]">{value}</span>
+    </span>
   )
 }
 
@@ -60,29 +69,27 @@ function Collapsible({
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div
-      className="rounded-lg border border-[rgba(175,215,255,0.08)]"
+      className="rounded-lg border border-[var(--border-subtle)]"
       style={{ background: 'rgba(10, 18, 35, 0.3)' }}
     >
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] font-medium text-[#8787af] transition-colors hover:text-[#afd7ff]"
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[length:var(--text-sm)] font-medium text-[var(--text-muted)] transition-colors hover:text-[var(--axon-secondary)]"
       >
-        <span className="text-[10px]">{open ? '\u25BC' : '\u25B6'}</span>
+        <span className="text-[length:var(--text-sm)]">{open ? '\u25BC' : '\u25B6'}</span>
         {title}
       </button>
-      {open && (
-        <div className="border-t border-[rgba(175,215,255,0.06)] px-3 py-2.5">{children}</div>
-      )}
+      {open && <div className="border-t border-[var(--border-subtle)] px-3 py-2">{children}</div>}
     </div>
   )
 }
 
 function TimingRow({ label, ms }: { label: string; ms: number }) {
   return (
-    <div className="flex justify-between text-[12px]">
-      <span className="text-[#8787af]">{label}</span>
-      <span className="tabular-nums text-[#afd7ff]">{fmtMs(ms)}</span>
+    <div className="flex justify-between text-[length:var(--text-sm)]">
+      <span className="text-[var(--text-muted)]">{label}</span>
+      <span className="tabular-nums text-[var(--axon-secondary)]">{fmtMs(ms)}</span>
     </div>
   )
 }
@@ -93,7 +100,7 @@ function TimingRow({ label, ms }: { label: string; ms: number }) {
 
 function DiagnosticsPanel({ diag }: { diag: AskDiagnostics }) {
   return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-1 font-mono text-[12px]">
+    <div className="grid grid-cols-2 gap-x-6 gap-y-1 ui-mono">
       <KV label="Candidate pool" value={fmtNum(diag.candidate_pool)} />
       <KV label="Reranked pool" value={fmtNum(diag.reranked_pool)} />
       <KV label="Chunks selected" value={fmtNum(diag.chunks_selected)} />
@@ -109,8 +116,8 @@ function DiagnosticsPanel({ diag }: { diag: AskDiagnostics }) {
 function KV({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between">
-      <span className="text-[#8787af]">{label}</span>
-      <span className="text-[#afd7ff]">{value}</span>
+      <span className="text-[var(--text-muted)]">{label}</span>
+      <span className="text-[var(--axon-secondary)]">{value}</span>
     </div>
   )
 }
@@ -120,42 +127,62 @@ function KV({ label, value }: { label: string; value: string }) {
 // ---------------------------------------------------------------------------
 
 function AskReport({ data }: { data: AskResult }) {
-  return (
-    <div className="space-y-4">
-      {/* Query */}
-      <div>
-        <SectionHeader>Query</SectionHeader>
-        <p className="text-[13px] font-medium text-[#dce6f0]">{data.query}</p>
-      </div>
+  const diag = data.diagnostics
 
-      {/* Answer */}
-      <div>
-        <SectionHeader>Answer</SectionHeader>
-        <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[#dce6f0]">
-          {data.answer}
+  return (
+    <div className="space-y-2 animate-in fade-in-0 slide-in-from-bottom-1 duration-300">
+      {/* Omnibox-style meta strip */}
+      <div
+        className="rounded-lg border border-[var(--border-subtle)] px-2 py-1"
+        style={{
+          background:
+            'linear-gradient(130deg, rgba(14,24,46,0.78) 0%, rgba(10,18,36,0.58) 55%, rgba(24,16,38,0.5) 100%)',
+        }}
+      >
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="inline-flex size-4 items-center justify-center rounded-[6px] border border-[rgba(175,215,255,0.3)] bg-[rgba(175,215,255,0.12)] text-[var(--axon-primary)]">
+            <Sparkles size={10} />
+          </span>
+          <span className="ui-label">Ask</span>
+          <p className="min-w-[180px] flex-1 break-words ui-long-copy">{data.query}</p>
+          <AskPill label="total" value={fmtMs(data.timing_ms.total)} icon={<Clock3 size={10} />} />
+          <AskPill
+            label="ret"
+            value={fmtMs(data.timing_ms.retrieval)}
+            icon={<Search size={10} />}
+          />
+          <AskPill
+            label="ctx"
+            value={fmtMs(data.timing_ms.context_build)}
+            icon={<Database size={10} />}
+          />
+          <AskPill
+            label="llm"
+            value={fmtMs(data.timing_ms.llm)}
+            icon={<BrainCircuit size={10} />}
+          />
+          {diag && <AskPill label="chunks" value={fmtNum(diag.chunks_selected)} />}
+          {diag && <AskPill label="docs" value={fmtNum(diag.full_docs_selected)} />}
+          {diag && <AskPill label="chars" value={fmtNum(diag.context_chars)} />}
         </div>
       </div>
 
-      {/* Timing */}
-      {data.timing_ms && (
-        <Collapsible title={`Timing (${fmtMs(data.timing_ms.total)})`} defaultOpen>
-          <div className="space-y-1">
-            <TimingRow label="Retrieval" ms={data.timing_ms.retrieval} />
-            <TimingRow label="Context build" ms={data.timing_ms.context_build} />
-            <TimingRow label="LLM" ms={data.timing_ms.llm} />
-            <div className="mt-1 border-t border-[rgba(175,215,255,0.08)] pt-1">
-              <TimingRow label="Total" ms={data.timing_ms.total} />
-            </div>
-          </div>
-        </Collapsible>
-      )}
-
-      {/* Diagnostics */}
-      {data.diagnostics && (
-        <Collapsible title="Diagnostics">
-          <DiagnosticsPanel diag={data.diagnostics} />
-        </Collapsible>
-      )}
+      {/* Answer */}
+      <div
+        className="rounded-lg border border-[var(--border-subtle)] px-2 py-1.5"
+        style={{
+          background:
+            'linear-gradient(145deg, rgba(11,20,40,0.72), rgba(8,15,31,0.52) 60%, rgba(20,14,36,0.42))',
+        }}
+      >
+        <div className="ui-label mb-1 flex items-center gap-1">
+          <MessageSquareQuote size={11} className="text-[var(--axon-secondary)]" />
+          <span>Answer</span>
+        </div>
+        <div className="animate-in fade-in-0 duration-500">
+          <MarkdownBlock markdown={data.answer} className="ui-long-copy" />
+        </div>
+      </div>
     </div>
   )
 }
@@ -170,10 +197,10 @@ function EvaluateReport({ data }: { data: EvaluateResult }) {
       {/* Query */}
       <div>
         <SectionHeader>Query</SectionHeader>
-        <p className="text-[13px] font-medium text-[#dce6f0]">{data.query}</p>
-        <span className="mt-1 text-[11px] text-[#8787af]">
-          {data.ref_chunk_count} reference chunks
-        </span>
+        <p className="text-[length:var(--text-base)] font-medium text-[var(--text-secondary)]">
+          {data.query}
+        </p>
+        <span className="ui-meta mt-1">{data.ref_chunk_count} reference chunks</span>
       </div>
 
       {/* Side-by-side RAG vs Baseline */}
@@ -181,19 +208,19 @@ function EvaluateReport({ data }: { data: EvaluateResult }) {
         <div>
           <SectionHeader>RAG Answer</SectionHeader>
           <div
-            className="whitespace-pre-wrap rounded-lg border border-[rgba(135,215,135,0.15)] p-3 text-[12px] leading-relaxed text-[#dce6f0]"
+            className="rounded-lg border border-[rgba(135,215,135,0.15)] p-2.5"
             style={{ background: 'rgba(135, 215, 135, 0.04)' }}
           >
-            {data.rag_answer}
+            <MarkdownBlock markdown={data.rag_answer} />
           </div>
         </div>
         <div>
           <SectionHeader>Baseline Answer</SectionHeader>
           <div
-            className="whitespace-pre-wrap rounded-lg border border-[rgba(255,175,135,0.15)] p-3 text-[12px] leading-relaxed text-[#dce6f0]"
+            className="rounded-lg border border-[rgba(255,175,135,0.15)] p-2.5"
             style={{ background: 'rgba(255, 175, 135, 0.04)' }}
           >
-            {data.baseline_answer}
+            <MarkdownBlock markdown={data.baseline_answer} />
           </div>
         </div>
       </div>
@@ -202,10 +229,10 @@ function EvaluateReport({ data }: { data: EvaluateResult }) {
       <div>
         <SectionHeader>Analysis</SectionHeader>
         <div
-          className="whitespace-pre-wrap rounded-lg border border-[rgba(135,175,255,0.15)] p-3 text-[12px] leading-relaxed text-[#dce6f0]"
+          className="rounded-lg border border-[rgba(135,175,255,0.15)] p-2.5"
           style={{ background: 'rgba(135, 175, 255, 0.04)' }}
         >
-          {data.analysis_answer}
+          <MarkdownBlock markdown={data.analysis_answer} />
         </div>
       </div>
 
@@ -219,7 +246,7 @@ function EvaluateReport({ data }: { data: EvaluateResult }) {
             <TimingRow label="Baseline LLM" ms={data.timing_ms.baseline_llm} />
             <TimingRow label="Research" ms={data.timing_ms.research_elapsed_ms} />
             <TimingRow label="Analysis LLM" ms={data.timing_ms.analysis_llm_ms} />
-            <div className="mt-1 border-t border-[rgba(175,215,255,0.08)] pt-1">
+            <div className="mt-1 border-t border-[var(--border-subtle)] pt-1">
               <TimingRow label="Total" ms={data.timing_ms.total} />
             </div>
           </div>
@@ -230,111 +257,6 @@ function EvaluateReport({ data }: { data: EvaluateResult }) {
       {data.diagnostics && (
         <Collapsible title="Diagnostics">
           <DiagnosticsPanel diag={data.diagnostics} />
-        </Collapsible>
-      )}
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Doctor report
-// ---------------------------------------------------------------------------
-
-function ServiceStatusIcon({ ok }: { ok: boolean }) {
-  return ok ? (
-    <span className="text-[#87d787]">{'\u2713'}</span>
-  ) : (
-    <span className="text-[#ff87af]">{'\u2717'}</span>
-  )
-}
-
-function ServiceCard({ name, svc }: { name: string; svc: DoctorServiceStatus }) {
-  return (
-    <div
-      className={`rounded-lg border p-2.5 ${svc.ok ? 'border-[rgba(135,215,135,0.15)]' : 'border-[rgba(255,135,175,0.2)]'}`}
-      style={{
-        background: svc.ok ? 'rgba(135, 215, 135, 0.04)' : 'rgba(255, 135, 175, 0.04)',
-      }}
-    >
-      <div className="flex items-center gap-2">
-        <ServiceStatusIcon ok={svc.ok} />
-        <span className="text-[12px] font-medium text-[#dce6f0]">{name}</span>
-      </div>
-      {svc.url && <div className="mt-1 truncate text-[10px] text-[#5f6b7a]">{svc.url}</div>}
-      {svc.model && <div className="mt-0.5 text-[10px] text-[#87afff]">{svc.model}</div>}
-      {svc.detail && <div className="mt-0.5 text-[10px] text-[#8787af]">{svc.detail}</div>}
-      {svc.summary && <div className="mt-0.5 text-[10px] text-[#8787af]">{svc.summary}</div>}
-    </div>
-  )
-}
-
-function DoctorReport({ data }: { data: DoctorResult }) {
-  const serviceEntries = Object.entries(data.services)
-  const pipelineEntries = Object.entries(data.pipelines ?? {})
-  const queueEntries = Object.entries(data.queue_names ?? {})
-
-  return (
-    <div className="space-y-4">
-      {/* Overall status */}
-      <div className="flex items-center gap-2">
-        <span
-          className={`inline-block size-2.5 rounded-full ${data.all_ok ? 'bg-[#87d787] shadow-[0_0_6px_rgba(135,215,135,0.4)]' : 'bg-[#ff87af] shadow-[0_0_6px_rgba(255,135,175,0.4)]'}`}
-        />
-        <span className="text-[13px] font-medium text-[#dce6f0]">
-          {data.all_ok ? 'All services healthy' : 'Some services need attention'}
-        </span>
-        {data.stale_jobs > 0 && (
-          <span className="text-[11px] text-[#ffaf87]">{data.stale_jobs} stale jobs</span>
-        )}
-        {data.pending_jobs > 0 && (
-          <span className="text-[11px] text-[#87afff]">{data.pending_jobs} pending</span>
-        )}
-      </div>
-
-      {/* Service grid */}
-      <div>
-        <SectionHeader>Services</SectionHeader>
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
-          {serviceEntries.map(([name, svc]) => (
-            <ServiceCard key={name} name={name} svc={svc} />
-          ))}
-        </div>
-      </div>
-
-      {/* Pipelines */}
-      {pipelineEntries.length > 0 && (
-        <Collapsible title="Pipelines" defaultOpen>
-          <div className="space-y-1">
-            {pipelineEntries.map(([name, ok]) => (
-              <div key={name} className="flex items-center gap-2 text-[12px]">
-                <ServiceStatusIcon ok={ok} />
-                <span className="text-[#dce6f0]">{name}</span>
-              </div>
-            ))}
-          </div>
-        </Collapsible>
-      )}
-
-      {/* Queue names */}
-      {queueEntries.length > 0 && (
-        <Collapsible title="Queue Names">
-          <div className="space-y-1 font-mono text-[12px]">
-            {queueEntries.map(([key, val]) => (
-              <div key={key} className="flex justify-between">
-                <span className="text-[#8787af]">{key}</span>
-                <span className="text-[#afd7ff]">{val}</span>
-              </div>
-            ))}
-          </div>
-        </Collapsible>
-      )}
-
-      {/* Browser runtime */}
-      {data.browser_runtime && (
-        <Collapsible title="Browser Runtime">
-          <div className="font-mono text-[12px]">
-            <KV label="Selection" value={data.browser_runtime.selection} />
-          </div>
         </Collapsible>
       )}
     </div>
@@ -352,16 +274,17 @@ function DebugReport({ data }: { data: DebugResult }) {
 
       <div>
         <SectionHeader>LLM Debug Analysis</SectionHeader>
-        <div className="mb-2 flex gap-4 text-[11px] text-[#8787af]">
+        <div className="ui-meta mb-2 flex gap-4">
           <span>
-            Model: <span className="text-[#afd7ff]">{data.llm_debug.model}</span>
+            Model: <span className="text-[var(--axon-secondary)]">{data.llm_debug.model}</span>
           </span>
           <span>
-            Base URL: <span className="text-[#87afff]">{data.llm_debug.base_url}</span>
+            Base URL:{' '}
+            <span className="text-[var(--axon-secondary-strong)]">{data.llm_debug.base_url}</span>
           </span>
         </div>
         <div
-          className="whitespace-pre-wrap rounded-lg border border-[rgba(175,215,255,0.08)] p-3 text-[12px] leading-relaxed text-[#dce6f0]"
+          className="whitespace-pre-wrap rounded-lg border border-[var(--border-subtle)] p-3 ui-long-copy"
           style={{ background: 'rgba(10, 18, 35, 0.4)' }}
         >
           {data.llm_debug.analysis}
@@ -376,15 +299,35 @@ function DebugReport({ data }: { data: DebugResult }) {
 // ---------------------------------------------------------------------------
 
 function RawTextReport({ data }: { data: unknown[] }) {
-  const text = data
-    .map((item) => {
-      if (typeof item === 'string') return item
-      if (typeof item === 'object' && item !== null) return JSON.stringify(item, null, 2)
-      return String(item)
-    })
-    .join('\n\n')
+  const objectItems = data.filter((item) => typeof item === 'object' && item !== null)
+  const stringItems = data.filter((item) => typeof item === 'string').map((item) => item as string)
+
+  if (objectItems.length > 0 && stringItems.length === 0) {
+    if (objectItems.length === 1) {
+      return <StructuredDataView data={objectItems[0]} />
+    }
+    return (
+      <div className="space-y-3">
+        {objectItems.map((item, idx) => (
+          <StructuredDataView key={idx} data={item} />
+        ))}
+      </div>
+    )
+  }
 
   return (
-    <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[#dce6f0]">{text}</div>
+    <div className="space-y-3">
+      {data.map((item, idx) => {
+        if (typeof item === 'object' && item !== null) {
+          return <StructuredDataView key={`object-${idx}`} data={item} />
+        }
+        const text = typeof item === 'string' ? item : formatStructuredText(item)
+        return (
+          <div key={`text-${idx}`} className="whitespace-pre-wrap ui-long-copy">
+            {text}
+          </div>
+        )
+      })}
+    </div>
   )
 }

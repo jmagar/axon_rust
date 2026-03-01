@@ -16,15 +16,15 @@ export function CardsRenderer({ result }: CardsRendererProps) {
 // ---------------------------------------------------------------------------
 
 function scoreColor(score: number): string {
-  if (score >= 0.7) return '#87d787'
-  if (score >= 0.4) return '#ffaf87'
-  return '#ff87af'
+  if (score >= 0.7) return 'var(--axon-success)'
+  if (score >= 0.4) return 'var(--axon-warning)'
+  return 'var(--axon-primary-strong)'
 }
 
 function scoreBg(score: number): string {
-  if (score >= 0.7) return 'rgba(135, 215, 135, 0.1)'
-  if (score >= 0.4) return 'rgba(255, 175, 135, 0.1)'
-  return 'rgba(255, 135, 175, 0.1)'
+  if (score >= 0.7) return 'var(--axon-success-bg)'
+  if (score >= 0.4) return 'var(--axon-warning-bg)'
+  return 'var(--axon-danger-bg)'
 }
 
 // ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ function scoreBg(score: number): string {
 
 function QueryCards({ results }: { results: QueryResult[] }) {
   if (results.length === 0) {
-    return <div className="text-sm text-[#8787af]">No results</div>
+    return <div className="text-sm text-[var(--text-muted)]">No results</div>
   }
 
   return (
@@ -41,17 +41,17 @@ function QueryCards({ results }: { results: QueryResult[] }) {
       {results.map((r) => (
         <div
           key={`${r.rank}-${r.url}`}
-          className="rounded-lg border border-[rgba(175,215,255,0.08)] p-3 transition-colors hover:border-[rgba(175,215,255,0.15)]"
+          className="rounded-lg border border-[var(--border-subtle)] p-3 transition-colors hover:border-[var(--border-standard)]"
           style={{ background: 'rgba(10, 18, 35, 0.4)' }}
         >
           {/* Header: rank badge + score + URL */}
           <div className="mb-2 flex items-start gap-2.5">
             {/* Rank badge */}
             <span
-              className="flex size-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
+              className="ui-chip flex size-6 shrink-0 items-center justify-center rounded-full"
               style={{
                 background: 'rgba(135, 175, 255, 0.15)',
-                color: '#87afff',
+                color: 'var(--axon-secondary-strong)',
               }}
             >
               {r.rank}
@@ -63,21 +63,21 @@ function QueryCards({ results }: { results: QueryResult[] }) {
                 href={r.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="block truncate text-[13px] font-medium text-[#87afff] transition-colors hover:text-[#afd7ff] hover:underline"
+                className="block truncate text-[length:var(--text-base)] font-medium text-[var(--axon-secondary-strong)] transition-colors hover:text-[var(--axon-secondary)] hover:underline"
               >
                 {r.url}
               </a>
 
               {/* Source tag if different from URL */}
               {r.source && r.source !== r.url && (
-                <span className="mt-0.5 block truncate text-[11px] text-[#5f6b7a]">{r.source}</span>
+                <span className="ui-meta mt-0.5 block truncate">{r.source}</span>
               )}
             </div>
 
             {/* Score badges */}
             <div className="flex shrink-0 gap-1.5">
               <span
-                className="rounded-md px-1.5 py-0.5 font-mono text-[10px] font-semibold"
+                className="rounded-md px-1.5 py-0.5 ui-meta ui-mono font-semibold"
                 style={{
                   color: scoreColor(r.score),
                   background: scoreBg(r.score),
@@ -87,7 +87,7 @@ function QueryCards({ results }: { results: QueryResult[] }) {
               </span>
               {r.rerank_score !== undefined && (
                 <span
-                  className="rounded-md px-1.5 py-0.5 font-mono text-[10px] font-semibold"
+                  className="rounded-md px-1.5 py-0.5 ui-meta ui-mono font-semibold"
                   style={{
                     color: scoreColor(r.rerank_score),
                     background: scoreBg(r.rerank_score),
@@ -101,7 +101,7 @@ function QueryCards({ results }: { results: QueryResult[] }) {
           </div>
 
           {/* Snippet */}
-          <p className="text-[12px] leading-relaxed text-[#94a3b8]">{r.snippet}</p>
+          <p className="ui-long-copy">{r.snippet}</p>
         </div>
       ))}
     </div>

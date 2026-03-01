@@ -1,0 +1,29 @@
+# crates/ingest
+Last Modified: 2026-02-25
+
+Source-specific ingestion pipelines for non-crawl content.
+
+## Purpose
+- Fetch and normalize external source content into a form suitable for embedding.
+- Support ingestion from GitHub, Reddit, YouTube, and AI session exports.
+
+## Responsibilities
+- GitHub ingest for repository files/issues/wiki.
+- Reddit ingest for subreddit posts/comments.
+- YouTube transcript ingest.
+- Session ingest parsers for Claude, Codex, and Gemini exports.
+
+## Key Files
+- `github.rs` + `github/files.rs` + `github/issues.rs` + `github/wiki.rs`: GitHub source ingest.
+- `reddit.rs`: Reddit source ingest.
+- `youtube.rs`: YouTube transcript ingest.
+- `sessions.rs` + `sessions/claude.rs` + `sessions/codex.rs` + `sessions/gemini.rs`: session export parsers.
+
+## Integration Points
+- Async ingest job orchestration lives in `crates/jobs/ingest.rs`.
+- Embedded output ultimately flows into `crates/vector/ops` and Qdrant.
+- CLI entrypoints are in `crates/cli/commands/github.rs`, `reddit.rs`, `youtube.rs`, and `sessions.rs`.
+
+## Notes
+- Keep source adapters isolated by provider to avoid cross-provider coupling.
+- Changes to extracted metadata shape should be coordinated with downstream vector payload consumers.

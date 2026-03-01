@@ -6,6 +6,7 @@ use std::path::PathBuf;
 pub enum CommandKind {
     Scrape,
     Crawl,
+    Refresh,
     Map,
     Extract,
     Search,
@@ -37,6 +38,7 @@ impl CommandKind {
         match self {
             Self::Scrape => "scrape",
             Self::Crawl => "crawl",
+            Self::Refresh => "refresh",
             Self::Map => "map",
             Self::Extract => "extract",
             Self::Search => "search",
@@ -244,6 +246,9 @@ pub struct Config {
     /// Discover and backfill URLs from `sitemap.xml` after the main crawl. Flag: `--discover-sitemaps`.
     pub discover_sitemaps: bool,
 
+    /// Only backfill sitemap URLs with `<lastmod>` within the last N days (0 = no filter). Flag: `--sitemap-since-days`.
+    pub sitemap_since_days: u32,
+
     /// Enable Spider's built-in crawl-result caching. Flag: `--cache`.
     pub cache: bool,
 
@@ -306,6 +311,9 @@ pub struct Config {
 
     /// AMQP queue name for crawl jobs. Env: `AXON_CRAWL_QUEUE`. Flag: `--crawl-queue`.
     pub crawl_queue: String,
+
+    /// AMQP queue name for refresh jobs. Env: `AXON_REFRESH_QUEUE`. Flag: `--refresh-queue`.
+    pub refresh_queue: String,
 
     /// AMQP queue name for extract jobs. Env: `AXON_EXTRACT_QUEUE`. Flag: `--extract-queue`.
     pub extract_queue: String,
@@ -411,6 +419,23 @@ pub struct Config {
     /// Env: `AXON_ASK_MIN_RELEVANCE_SCORE` (clamped -1.0–2.0). Default: 0.45.
     pub ask_min_relevance_score: f64,
 
+    /// Authoritative domains to boost during ask reranking (exact host or suffix match).
+    /// Env: `AXON_ASK_AUTHORITATIVE_DOMAINS` (comma-separated). Default: empty.
+    pub ask_authoritative_domains: Vec<String>,
+
+    /// Extra rerank score boost applied when candidate URL matches an authoritative domain.
+    /// Env: `AXON_ASK_AUTHORITATIVE_BOOST` (clamped 0.0–0.5). Default: 0.0.
+    pub ask_authoritative_boost: f64,
+
+    /// Optional strict allowlist for ask retrieval candidate domains.
+    /// When non-empty, candidates outside this list are excluded.
+    /// Env: `AXON_ASK_AUTHORITATIVE_ALLOWLIST` (comma-separated). Default: empty.
+    pub ask_authoritative_allowlist: Vec<String>,
+
+    /// Minimum unique citations required for non-trivial ask responses.
+    /// Env: `AXON_ASK_MIN_CITATIONS_NONTRIVIAL` (clamped 1–5). Default: 2.
+    pub ask_min_citations_nontrivial: usize,
+
     /// Run the command on a recurring schedule every N seconds (`None` = one-shot). Flag: `--cron-every-seconds`.
     pub cron_every_seconds: Option<u64>,
 
@@ -427,6 +452,9 @@ pub struct Config {
 
     /// Emit machine-readable JSON output on stdout instead of human-readable text. Flag: `--json`.
     pub json_output: bool,
+
+    /// Status mode: include only watchdog-reclaimed jobs. Flag: `--reclaimed`.
+    pub reclaimed_status_only: bool,
 
     /// Deduplicate trailing-slash URL variants (e.g. `/about` and `/about/` treated as one).
     /// Spider: `with_normalize(bool)`. Default false. Flag: `--normalize`.
@@ -542,6 +570,7 @@ impl Default for Config {
             min_markdown_chars: 200,
             drop_thin_markdown: true,
             discover_sitemaps: true,
+            sitemap_since_days: 0,
             cache: true,
             cache_skip_browser: false,
             format: ScrapeFormat::Markdown,
@@ -563,6 +592,7 @@ impl Default for Config {
             redis_url: String::new(),
             amqp_url: String::new(),
             crawl_queue: "axon.crawl.jobs".to_string(),
+            refresh_queue: "axon.refresh.jobs".to_string(),
             extract_queue: "axon.extract.jobs".to_string(),
             embed_queue: "axon.embed.jobs".to_string(),
             ingest_queue: "axon.ingest.jobs".to_string(),
@@ -595,11 +625,16 @@ impl Default for Config {
             ask_doc_fetch_concurrency: 4,
             ask_doc_chunk_limit: 192,
             ask_min_relevance_score: 0.45,
+            ask_authoritative_domains: vec![],
+            ask_authoritative_boost: 0.0,
+            ask_authoritative_allowlist: vec![],
+            ask_min_citations_nontrivial: 2,
             cron_every_seconds: None,
             cron_max_runs: None,
             watchdog_stale_timeout_secs: 300,
             watchdog_confirm_secs: 60,
             json_output: false,
+            reclaimed_status_only: false,
             normalize: false,
             chrome_network_idle_timeout_secs: 15,
             auto_switch_thin_ratio: 0.60,
@@ -658,6 +693,7 @@ impl fmt::Debug for Config {
             .field("min_markdown_chars", &self.min_markdown_chars)
             .field("drop_thin_markdown", &self.drop_thin_markdown)
             .field("discover_sitemaps", &self.discover_sitemaps)
+            .field("sitemap_since_days", &self.sitemap_since_days)
             .field("cache", &self.cache)
             .field("cache_skip_browser", &self.cache_skip_browser)
             .field("format", &self.format)
@@ -682,6 +718,7 @@ impl fmt::Debug for Config {
             .field("redis_url", &"[REDACTED]")
             .field("amqp_url", &"[REDACTED]")
             .field("crawl_queue", &self.crawl_queue)
+            .field("refresh_queue", &self.refresh_queue)
             .field("extract_queue", &self.extract_queue)
             .field("embed_queue", &self.embed_queue)
             .field("ingest_queue", &self.ingest_queue)
@@ -714,6 +751,16 @@ impl fmt::Debug for Config {
             .field("ask_doc_fetch_concurrency", &self.ask_doc_fetch_concurrency)
             .field("ask_doc_chunk_limit", &self.ask_doc_chunk_limit)
             .field("ask_min_relevance_score", &self.ask_min_relevance_score)
+            .field("ask_authoritative_domains", &self.ask_authoritative_domains)
+            .field("ask_authoritative_boost", &self.ask_authoritative_boost)
+            .field(
+                "ask_authoritative_allowlist",
+                &self.ask_authoritative_allowlist,
+            )
+            .field(
+                "ask_min_citations_nontrivial",
+                &self.ask_min_citations_nontrivial,
+            )
             .field("cron_every_seconds", &self.cron_every_seconds)
             .field("cron_max_runs", &self.cron_max_runs)
             .field(
@@ -722,6 +769,7 @@ impl fmt::Debug for Config {
             )
             .field("watchdog_confirm_secs", &self.watchdog_confirm_secs)
             .field("json_output", &self.json_output)
+            .field("reclaimed_status_only", &self.reclaimed_status_only)
             .field("normalize", &self.normalize)
             .field(
                 "chrome_network_idle_timeout_secs",
@@ -802,6 +850,10 @@ mod tests {
         assert_eq!(cfg.ask_max_context_chars, 120_000);
         assert_eq!(cfg.ask_candidate_limit, 64);
         assert!((cfg.ask_min_relevance_score - 0.45).abs() < f64::EPSILON);
+        assert!(cfg.ask_authoritative_domains.is_empty());
+        assert!((cfg.ask_authoritative_boost - 0.0).abs() < f64::EPSILON);
+        assert!(cfg.ask_authoritative_allowlist.is_empty());
+        assert_eq!(cfg.ask_min_citations_nontrivial, 2);
     }
 
     #[test]
@@ -825,6 +877,7 @@ mod tests {
         let cfg = Config::default();
         assert!(!cfg.wait);
         assert!(!cfg.json_output);
+        assert!(!cfg.reclaimed_status_only);
     }
 
     #[test]

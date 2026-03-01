@@ -29,3 +29,37 @@ crates/web/execute.rs
 crates/web/static/app.js
 # 743 lines — vanilla JS neural canvas animation, no bundler (2026-02-24)
 crates/web/static/neural.js
+# 630 lines — omnibox command/file suggestions + keyboard interaction state machine (2026-02-25)
+apps/web/components/omnibox.tsx
+# 1598 lines — unified MCP action router + artifact policy + resource handler; refactor planned (2026-02-25)
+crates/mcp/server.rs
+# 584 lines — websocket command execution module with protocol/state handling; refactor planned (2026-02-25)
+crates/web/execute/mod.rs
+
+# pre-existing >500 lines touched during review-fix batch (2026-02-26)
+apps/web/hooks/use-ws-messages.ts
+crates/cli/commands/crawl.rs
+crates/vector/ops/commands/ask/context.rs
+# 509 lines — citation-quality gates + test suite; test block accounts for overage (2026-02-26)
+crates/vector/ops/commands/ask.rs
+# refresh pipeline split into processor.rs + url_processor.rs (2026-02-28)
+
+# feat/crawl-download-pack additions (2026-02-26)
+# 660 lines — pulse chat pane with streaming tool-use blocks; split planned
+apps/web/components/pulse/pulse-chat-pane.tsx
+# 849 lines — pulse workspace orchestration + crawl file explorer; split planned
+apps/web/components/pulse/pulse-workspace.tsx
+# 711 lines — refresh schedule CRUD handlers; split into sub-handlers planned
+crates/cli/commands/refresh.rs
+# 539 lines — status command with extended job table output; split planned
+crates/cli/commands/status.rs
+# 802 lines — cyberpunk glass observatory redesign + 3 new CLI fields (addDir/betas/toolsRestrict) + NeuralCanvas bg; split planned (2026-02-27)
+apps/web/app/settings/page.tsx
+
+# 630 lines — pre-existing table renderer for results panel; split planned (2026-02-28)
+apps/web/components/results/table-renderer.tsx
+
+# worker_lane split into worker_lane/{mod,amqp,poll,delivery}.rs (2026-02-28)
+
+# 670 lines — pre-existing jobs dashboard with table + filters; split planned (2026-03-01)
+apps/web/components/jobs/jobs-dashboard.tsx

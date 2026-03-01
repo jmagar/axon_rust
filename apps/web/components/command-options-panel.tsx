@@ -43,21 +43,21 @@ function OptionControl({
   switch (spec.value) {
     case 'bool':
       return (
-        <label className="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 transition-colors hover:bg-[rgba(175,215,255,0.05)]">
+        <label className="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 transition-colors hover:bg-[var(--surface-float)]">
           <button
             type="button"
             role="checkbox"
             aria-checked={!!value}
             onClick={() => onUpdate(optionKey, !value)}
-            className={`flex size-4 shrink-0 items-center justify-center rounded border transition-all ${
+            className={`flex size-4 shrink-0 items-center justify-center rounded border transition-all focus-visible:outline-2 focus-visible:outline-[var(--focus-ring-color)] ${
               value
-                ? 'border-[#ff87af] bg-[rgba(255,135,175,0.2)]'
-                : 'border-[rgba(175,215,255,0.2)] bg-transparent'
+                ? 'border-[var(--axon-secondary)] bg-[rgba(255,135,175,0.18)]'
+                : 'border-[var(--border-accent)] bg-transparent hover:border-[var(--border-strong)]'
             }`}
           >
             {value && (
               <svg
-                className="size-3 text-[#ff87af]"
+                className="size-3 text-[var(--axon-primary-strong)]"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -67,14 +67,14 @@ function OptionControl({
               </svg>
             )}
           </button>
-          <span className="text-xs text-[#8787af]">{label}</span>
+          <span className="text-xs text-[var(--text-muted)]">{label}</span>
         </label>
       )
 
     case 'number':
       return (
         <label className="flex items-center gap-2.5 rounded-lg px-3 py-2">
-          <span className="shrink-0 text-xs text-[#8787af]">{label}</span>
+          <span className="shrink-0 text-xs text-[var(--text-muted)]">{label}</span>
           <input
             type="number"
             value={value !== undefined ? String(value) : ''}
@@ -83,7 +83,7 @@ function OptionControl({
               if (!Number.isNaN(n)) onUpdate(optionKey, n)
             }}
             placeholder="—"
-            className="w-20 rounded border border-[rgba(175,215,255,0.15)] bg-[rgba(10,18,35,0.5)] px-2 py-1 font-mono text-xs text-[#afd7ff] outline-none placeholder:text-[#475569] focus:border-[rgba(175,215,255,0.35)]"
+            className="w-20 rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.5)] px-2 py-1 font-mono text-xs text-[var(--axon-secondary)] outline-none placeholder:text-[var(--text-dim)] focus:border-[var(--focus-ring-color)]"
           />
         </label>
       )
@@ -92,11 +92,11 @@ function OptionControl({
       const options = parseEnumValues(spec.notes)
       return (
         <label className="flex items-center gap-2.5 rounded-lg px-3 py-2">
-          <span className="shrink-0 text-xs text-[#8787af]">{label}</span>
+          <span className="shrink-0 text-xs text-[var(--text-muted)]">{label}</span>
           <select
             value={value !== undefined ? String(value) : ''}
             onChange={(e) => onUpdate(optionKey, e.target.value)}
-            className="rounded border border-[rgba(175,215,255,0.15)] bg-[rgba(10,18,35,0.5)] px-2 py-1 font-mono text-xs text-[#afd7ff] outline-none focus:border-[rgba(175,215,255,0.35)]"
+            className="rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.5)] px-2 py-1 font-mono text-xs text-[var(--axon-secondary)] outline-none focus:border-[var(--focus-ring-color)]"
           >
             <option value="">default</option>
             {options.map((opt) => (
@@ -113,13 +113,13 @@ function OptionControl({
     case 'list':
       return (
         <label className="flex items-center gap-2.5 rounded-lg px-3 py-2">
-          <span className="shrink-0 text-xs text-[#8787af]">{label}</span>
+          <span className="shrink-0 text-xs text-[var(--text-muted)]">{label}</span>
           <input
             type="text"
             value={value !== undefined ? String(value) : ''}
             onChange={(e) => onUpdate(optionKey, e.target.value)}
             placeholder={spec.value === 'list' ? 'comma-separated' : '—'}
-            className="w-40 rounded border border-[rgba(175,215,255,0.15)] bg-[rgba(10,18,35,0.5)] px-2 py-1 font-mono text-xs text-[#afd7ff] outline-none placeholder:text-[#475569] focus:border-[rgba(175,215,255,0.35)]"
+            className="w-40 rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.5)] px-2 py-1 font-mono text-xs text-[var(--axon-secondary)] outline-none placeholder:text-[var(--text-dim)] focus:border-[var(--focus-ring-color)]"
           />
         </label>
       )
@@ -152,30 +152,30 @@ export function CommandOptionsPanel({ mode, values, onChange }: CommandOptionsPa
 
   return (
     <div
-      className="overflow-hidden rounded-lg border border-[rgba(175,215,255,0.1)] transition-all duration-200"
+      className="overflow-hidden rounded-lg border border-[var(--border-subtle)] transition-all duration-200"
       style={{ background: 'rgba(10, 18, 35, 0.45)' }}
     >
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[rgba(175,215,255,0.05)]"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--surface-float)]"
       >
         <svg
-          className={`size-3 shrink-0 text-[#5f87af] transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+          className={`size-3 shrink-0 text-[var(--text-dim)] transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
         >
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
         </svg>
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-[#5f87af]">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-dim)]">
           Options
         </span>
-        <span className="text-[10px] text-[#475569]">({resolvedOptions.length})</span>
+        <span className="text-[10px] text-[var(--text-dim)]">({resolvedOptions.length})</span>
       </button>
 
       {expanded && (
-        <div className="flex flex-wrap gap-x-2 gap-y-0.5 border-t border-[rgba(175,215,255,0.08)] px-1 pb-2 pt-1">
+        <div className="flex flex-wrap gap-x-2 gap-y-0.5 border-t border-[var(--border-subtle)] px-1 pb-2 pt-1">
           {resolvedOptions.map(({ key, spec: optSpec }) => (
             <OptionControl
               key={key}

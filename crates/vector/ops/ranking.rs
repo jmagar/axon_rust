@@ -66,6 +66,8 @@ pub fn tokenize_path_set(path_or_url: &str) -> HashSet<String> {
 pub fn rerank_ask_candidates(
     candidates: &[AskCandidate],
     query_tokens: &[String],
+    authoritative_domains: &[String],
+    authoritative_boost: f64,
 ) -> Vec<AskCandidate> {
     if query_tokens.is_empty() {
         return candidates.to_vec();
@@ -101,6 +103,13 @@ pub fn rerank_ask_candidates(
                 0.0
             };
 
+            let authority_boost =
+                if url_matches_authoritative_domain(&candidate.url, authoritative_domains) {
+                    authoritative_boost.max(0.0)
+                } else {
+                    0.0
+                };
+
             // Verbatim phrase boost: +0.06 when the joined query tokens appear
             // consecutively in the chunk text (ported from TS deduplication.ts).
             let phrase_boost = if phrase_threshold
@@ -114,7 +123,8 @@ pub fn rerank_ask_candidates(
                 0.0
             };
 
-            candidate.rerank_score = candidate.score + lexical_boost + docs_boost + phrase_boost;
+            candidate.rerank_score =
+                candidate.score + lexical_boost + docs_boost + phrase_boost + authority_boost;
             candidate
         })
         .collect::<Vec<_>>();
@@ -124,6 +134,22 @@ pub fn rerank_ask_candidates(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     reranked
+}
+
+fn url_matches_authoritative_domain(url: &str, authoritative_domains: &[String]) -> bool {
+    if authoritative_domains.is_empty() {
+        return false;
+    }
+    let host = Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(|h| h.to_ascii_lowercase()));
+    let Some(host) = host else {
+        return false;
+    };
+    authoritative_domains.iter().any(|domain| {
+        let normalized = domain.trim().to_ascii_lowercase();
+        !normalized.is_empty() && (host == normalized || host.ends_with(&format!(".{normalized}")))
+    })
 }
 
 pub fn select_diverse_candidates(

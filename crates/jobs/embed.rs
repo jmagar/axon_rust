@@ -3,8 +3,8 @@ use crate::crates::core::config::Config;
 use crate::crates::core::health::redis_healthy;
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::jobs::common::{
-    JobTable, enqueue_job, make_pool, mark_job_failed, open_amqp_connection_and_channel,
-    purge_queue_safe, reclaim_stale_running_jobs,
+    JobTable, begin_schema_migration_tx, enqueue_job, make_pool, mark_job_failed,
+    open_amqp_connection_and_channel, purge_queue_safe, reclaim_stale_running_jobs,
 };
 use crate::crates::jobs::status::JobStatus;
 use chrono::{DateTime, Utc};
@@ -20,6 +20,7 @@ const TABLE: JobTable = JobTable::Embed;
 const WORKER_CONCURRENCY: usize = 2;
 const EMBED_HEARTBEAT_INTERVAL_SECS: u64 = 15;
 const EMBED_CANCEL_REDIS_TIMEOUT_SECS: u64 = 3;
+const EMBED_SCHEMA_LOCK_KEY: i64 = 0xA804_0002;
 
 mod worker;
 pub use worker::run_embed_worker;
@@ -44,43 +45,48 @@ pub struct EmbedJob {
 }
 
 async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS axon_embed_jobs (
-            id UUID PRIMARY KEY,
-            status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled')),
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            started_at TIMESTAMPTZ,
-            finished_at TIMESTAMPTZ,
-            error_text TEXT,
-            input_text TEXT NOT NULL,
-            result_json JSONB,
-            config_json JSONB NOT NULL
+    let mut tx = begin_schema_migration_tx(pool, EMBED_SCHEMA_LOCK_KEY).await?;
+
+    {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS axon_embed_jobs (
+                id UUID PRIMARY KEY,
+                status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled')),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                started_at TIMESTAMPTZ,
+                finished_at TIMESTAMPTZ,
+                error_text TEXT,
+                input_text TEXT NOT NULL,
+                result_json JSONB,
+                config_json JSONB NOT NULL
+            )
+            "#,
         )
-        "#,
-    )
-    .execute(pool)
-    .await?;
+        .execute(&mut *tx)
+        .await?;
 
-    // Composite partial index for claim_next_pending: WHERE status='pending' ORDER BY created_at
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_axon_embed_jobs_pending ON axon_embed_jobs(created_at ASC) WHERE status = 'pending'"
-    )
-    .execute(pool)
-    .await?;
+        // Composite partial index for claim_next_pending: WHERE status='pending' ORDER BY created_at
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_axon_embed_jobs_pending ON axon_embed_jobs(created_at ASC) WHERE status = 'pending'"
+        )
+        .execute(&mut *tx)
+        .await?;
 
-    // Add CHECK constraint to existing tables (idempotent via IF NOT EXISTS pattern).
-    sqlx::query(
-        r#"DO $$ BEGIN
-            ALTER TABLE axon_embed_jobs ADD CONSTRAINT axon_embed_jobs_status_check
-                CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled'));
-        EXCEPTION WHEN duplicate_object THEN NULL;
-        END $$"#,
-    )
-    .execute(pool)
-    .await?;
+        // Add CHECK constraint to existing tables (idempotent via IF NOT EXISTS pattern).
+        sqlx::query(
+            r#"DO $$ BEGIN
+                ALTER TABLE axon_embed_jobs ADD CONSTRAINT axon_embed_jobs_status_check
+                    CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled'));
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END $$"#,
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
 
+    tx.commit().await?;
     Ok(())
 }
 
@@ -207,21 +213,33 @@ pub async fn cancel_embed_job(cfg: &Config, id: Uuid) -> Result<bool, Box<dyn Er
         // Redis cancel signal is best-effort: DB update already succeeded,
         // so we log a warning but do NOT propagate Redis errors.
         match redis::Client::open(cfg.redis_url.clone()) {
-            Ok(redis_client) => match redis_client.get_multiplexed_async_connection().await {
-                Ok(mut conn) => {
-                    let key = format!("axon:embed:cancel:{id}");
-                    if let Err(e) = conn.set_ex::<_, _, ()>(key, "1", 86400).await {
+            Ok(redis_client) => {
+                match tokio::time::timeout(
+                    tokio::time::Duration::from_secs(3),
+                    redis_client.get_multiplexed_async_connection(),
+                )
+                .await
+                {
+                    Ok(Ok(mut conn)) => {
+                        let key = format!("axon:embed:cancel:{id}");
+                        if let Err(e) = conn.set_ex::<_, _, ()>(key, "1", 86400).await {
+                            log_warn(&format!(
+                                "embed cancel: Redis SET failed for job {id} (DB already updated): {e}"
+                            ));
+                        }
+                    }
+                    Ok(Err(e)) => {
                         log_warn(&format!(
-                            "embed cancel: Redis SET failed for job {id} (DB already updated): {e}"
+                            "embed cancel: Redis connect failed for job {id} (DB already updated): {e}"
+                        ));
+                    }
+                    Err(_) => {
+                        log_warn(&format!(
+                            "embed cancel: Redis connect timeout for job {id} after 3s (DB already updated)"
                         ));
                     }
                 }
-                Err(e) => {
-                    log_warn(&format!(
-                        "embed cancel: Redis connect failed for job {id} (DB already updated): {e}"
-                    ));
-                }
-            },
+            }
             Err(e) => {
                 log_warn(&format!(
                     "embed cancel: Redis client open failed for job {id} (DB already updated): {e}"
@@ -238,26 +256,13 @@ pub async fn cleanup_embed_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {
         ensure_schema(&pool).await?;
         let _ = SCHEMA_INIT.set(());
     }
-    let mut total = 0u64;
-    loop {
-        let deleted = sqlx::query(
-            "DELETE FROM axon_embed_jobs WHERE id IN (
-                SELECT id FROM axon_embed_jobs
-                WHERE status IN ($1,$2)
-                LIMIT 1000
-            )",
-        )
+    let deleted = sqlx::query("DELETE FROM axon_embed_jobs WHERE status IN ($1,$2)")
         .bind(JobStatus::Failed.as_str())
         .bind(JobStatus::Canceled.as_str())
         .execute(&pool)
         .await?
         .rows_affected();
-        total += deleted;
-        if deleted == 0 {
-            break;
-        }
-    }
-    Ok(total)
+    Ok(deleted)
 }
 
 pub async fn clear_embed_jobs(cfg: &Config) -> Result<u64, Box<dyn Error>> {

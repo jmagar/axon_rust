@@ -20,7 +20,7 @@ fn next_cdp_id() -> u64 {
 ///
 /// Strips the scheme, replaces non-alphanumeric chars with hyphens,
 /// collapses runs of hyphens, trims edges, and truncates to 120 chars.
-fn url_to_screenshot_filename(url: &str, idx: usize) -> String {
+pub(crate) fn url_to_screenshot_filename(url: &str, idx: usize) -> String {
     let stripped = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
@@ -83,7 +83,7 @@ fn format_screenshot_json(url: &str, path: &str, size_bytes: u64) -> String {
 ///
 /// Tries the engine's `resolve_cdp_ws_url` first (with timeout), then falls
 /// back to a direct `/json/version` query with Docker hostname rewriting.
-async fn resolve_browser_ws_url(remote_url: &str) -> Result<String, Box<dyn Error>> {
+pub(crate) async fn resolve_browser_ws_url(remote_url: &str) -> Result<String, Box<dyn Error>> {
     // Try the engine's resolve function first (5s timeout — reqwest can hang).
     if let Ok(Some(ws_url)) = tokio::time::timeout(
         tokio::time::Duration::from_secs(5),
@@ -241,7 +241,7 @@ async fn cdp_send(
 /// 6. If full_page, measure layout and resize viewport
 /// 7. Capture screenshot as PNG base64
 /// 8. Close target
-async fn cdp_screenshot(
+pub(crate) async fn cdp_screenshot(
     browser_ws: &str,
     url: &str,
     width: u32,

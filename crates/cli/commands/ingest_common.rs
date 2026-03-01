@@ -1,3 +1,6 @@
+use crate::crates::cli::commands::job_contracts::{
+    JobCancelResponse, JobErrorsResponse, JobStatusResponse, JobSummaryEntry,
+};
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::log_done;
 use crate::crates::core::ui::confirm_destructive;
@@ -58,7 +61,8 @@ async fn handle_ingest_status(cfg: &Config, cmd_name: &str) -> Result<(), Box<dy
     match get_ingest_job(cfg, id).await? {
         Some(job) => {
             if cfg.json_output {
-                println!("{}", serde_json::to_string_pretty(&job)?);
+                let response = JobStatusResponse::from_ingest(&job);
+                println!("{}", serde_json::to_string_pretty(&response)?);
             } else {
                 println!(
                     "{} {}",
@@ -88,7 +92,11 @@ async fn handle_ingest_status(cfg: &Config, cmd_name: &str) -> Result<(), Box<dy
             if cfg.json_output {
                 println!(
                     "{}",
-                    serde_json::json!({"error": "not_found", "id": id.to_string()})
+                    serde_json::json!(JobErrorsResponse::from_job(
+                        id,
+                        "not_found".to_string(),
+                        Some("not_found".to_string())
+                    ))
                 );
             } else {
                 println!(
@@ -106,7 +114,10 @@ async fn handle_ingest_cancel(cfg: &Config, cmd_name: &str) -> Result<(), Box<dy
     let id = parse_ingest_job_id(cfg, cmd_name, "cancel")?;
     let canceled = cancel_ingest_job(cfg, id).await?;
     if cfg.json_output {
-        println!("{}", serde_json::json!({"id": id, "canceled": canceled}));
+        println!(
+            "{}",
+            serde_json::json!(JobCancelResponse::new(id, canceled))
+        );
     } else if canceled {
         println!(
             "{} canceled ingest job {}",
@@ -131,7 +142,11 @@ async fn handle_ingest_errors(cfg: &Config, cmd_name: &str) -> Result<(), Box<dy
             if cfg.json_output {
                 println!(
                     "{}",
-                    serde_json::json!({"id": id, "status": job.status, "error": job.error_text})
+                    serde_json::json!(JobErrorsResponse::from_job(
+                        id,
+                        job.status.clone(),
+                        job.error_text.clone()
+                    ))
                 );
             } else {
                 println!(
@@ -152,7 +167,11 @@ async fn handle_ingest_errors(cfg: &Config, cmd_name: &str) -> Result<(), Box<dy
             if cfg.json_output {
                 println!(
                     "{}",
-                    serde_json::json!({"error": "not_found", "id": id.to_string()})
+                    serde_json::json!(JobErrorsResponse::from_job(
+                        id,
+                        "not_found".to_string(),
+                        Some("not_found".to_string())
+                    ))
                 );
             } else {
                 println!(
@@ -169,7 +188,8 @@ async fn handle_ingest_errors(cfg: &Config, cmd_name: &str) -> Result<(), Box<dy
 async fn handle_ingest_list(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let jobs = list_ingest_jobs(cfg, 50).await?;
     if cfg.json_output {
-        println!("{}", serde_json::to_string_pretty(&jobs)?);
+        let entries: Vec<JobSummaryEntry> = jobs.iter().map(JobSummaryEntry::from_ingest).collect();
+        println!("{}", serde_json::to_string_pretty(&entries)?);
         return Ok(());
     }
 

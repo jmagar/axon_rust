@@ -1,5 +1,6 @@
 use super::*;
 use crate::crates::core::logging::log_done;
+use crate::crates::jobs::common::spawn_heartbeat_task;
 use crate::crates::jobs::worker_lane::{
     ProcessFn, WorkerConfig, run_job_worker, validate_worker_env_vars,
 };
@@ -131,7 +132,6 @@ async fn run_embed_core(
     }))
 }
 
-// TODO(monolith): 96 lines — consider splitting claim/cancel/progress phases into helpers.
 async fn process_embed_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), Box<dyn Error>> {
     // Open a single Redis connection for cancel checks (reused across the job lifecycle).
     let mut redis_conn = open_embed_redis(cfg).await;
@@ -150,31 +150,8 @@ async fn process_embed_job(cfg: &Config, pool: &PgPool, id: Uuid) -> Result<(), 
         log_info(&format!(
             "embed worker started job {id} input={input_preview}"
         ));
-        let heartbeat_pool = pool.clone();
-        let (heartbeat_stop_tx, mut heartbeat_stop_rx) = tokio::sync::watch::channel(false);
-        let heartbeat_task = tokio::spawn(async move {
-            let mut ticker =
-                tokio::time::interval(Duration::from_secs(EMBED_HEARTBEAT_INTERVAL_SECS));
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
-                tokio::select! {
-                    _ = ticker.tick() => {
-                        let _ = sqlx::query(
-                            "UPDATE axon_embed_jobs SET updated_at=NOW() WHERE id=$1 AND status=$2",
-                        )
-                        .bind(id)
-                        .bind(JobStatus::Running.as_str())
-                        .execute(&heartbeat_pool)
-                        .await;
-                    }
-                    changed = heartbeat_stop_rx.changed() => {
-                        if changed.is_err() || *heartbeat_stop_rx.borrow() {
-                            break;
-                        }
-                    }
-                }
-            }
-        });
+        let (heartbeat_stop_tx, heartbeat_task) =
+            spawn_heartbeat_task(pool.clone(), TABLE, id, EMBED_HEARTBEAT_INTERVAL_SECS);
 
         if check_embed_canceled(&mut redis_conn, pool, id).await? {
             let _ = heartbeat_stop_tx.send(true);
@@ -233,10 +210,10 @@ async fn process_claimed_embed_job(cfg: Config, pool: PgPool, id: Uuid) {
     }
 }
 
-pub async fn run_embed_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
+pub async fn run_embed_worker(cfg: &Config) -> anyhow::Result<()> {
     // Validate required environment variables before attempting any connections.
     if let Err(msg) = validate_worker_env_vars() {
-        return Err(msg.into());
+        return Err(anyhow::anyhow!("{msg}"));
     }
 
     let pool = make_pool(cfg).await?;
@@ -256,5 +233,7 @@ pub async fn run_embed_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let process_fn: ProcessFn =
         std::sync::Arc::new(|cfg, pool, id| Box::pin(process_claimed_embed_job(cfg, pool, id)));
 
-    run_job_worker(cfg, pool, &wc, process_fn).await
+    run_job_worker(cfg, pool, &wc, process_fn)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }

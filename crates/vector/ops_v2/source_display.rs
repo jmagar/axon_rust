@@ -158,7 +158,9 @@ fn find_manifest_for_path(path: &Path) -> Option<PathBuf> {
 
 fn build_manifest_lookup(manifest_path: &Path) -> HashMap<String, String> {
     let mut out = HashMap::new();
-    let Ok(content) = std::fs::read_to_string(manifest_path) else {
+    // block_in_place yields the Tokio thread to other tasks while reading the
+    // manifest file, preventing this sync IO from stalling the async runtime.
+    let Ok(content) = tokio::task::block_in_place(|| std::fs::read_to_string(manifest_path)) else {
         return out;
     };
     let base_dir = manifest_path.parent();
@@ -173,12 +175,27 @@ fn build_manifest_lookup(manifest_path: &Path) -> HashMap<String, String> {
         let Some(url) = json.get("url").and_then(|v| v.as_str()) else {
             continue;
         };
-        let Some(file_path) = json.get("file_path").and_then(|v| v.as_str()) else {
+        // Handle both "relative_path" (modern crawl format) and "file_path" (absolute path format).
+        let file_path_obj = if let Some(rel) = json
+            .get("relative_path")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            // Preserve the raw relative path key for payloads that send `relative_path` directly.
+            out.insert(rel.to_string(), url.to_string());
+            let base = base_dir.unwrap_or(Path::new("."));
+            base.join(rel)
+        } else if let Some(abs) = json
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            let p = PathBuf::from(abs);
+            out.insert(abs.to_string(), url.to_string());
+            p
+        } else {
             continue;
         };
-        out.insert(file_path.to_string(), url.to_string());
-
-        let file_path_obj = PathBuf::from(file_path);
         for key in path_lookup_keys(&file_path_obj) {
             out.insert(key, url.to_string());
         }

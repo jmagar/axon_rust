@@ -1,36 +1,106 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Axon Web (Next.js)
+Last Modified: 2026-02-25
 
-## Getting Started
+`apps/web` is the Next.js interface for Axon. It provides a command omnibox, workspace flows, and live command execution over WebSocket.
 
-First, run the development server:
+## Run
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm --dir apps/web dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Omnibox Behavior
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The omnibox supports keyboard-first operation with explicit visual state feedback.
 
-## Learn More
+### Focus Shortcut
 
-To learn more about Next.js, take a look at the following resources:
+- Press `/` to focus the omnibox when focus is not already inside an editable field.
+- Shortcut is ignored for `input`, `textarea`, `select`, and content-editable elements.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Mode Mentions
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- Start input with `@` to enter mode mention selection.
+- Example: `@c` suggests up to 3 matching modes (`crawl`, etc.).
+- `Tab` or `Enter` applies the selected mode.
+- After mode selection, the mention is removed and the omnibox is cleared for the next input.
+- The UI shows:
+  - active mention suggestions
+  - selected/hovered mention state
+  - transient `Mode selected: <label>` confirmation
 
-## Deploy on Vercel
+### File Mentions
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- Use `@` mentions in normal text to attach local context files.
+- Suggestions are fuzzy-ranked (exact/prefix/contains/subsequence) and include recency bias from recent picks.
+- Suggestion list is capped at 3 entries.
+- Sources:
+  - `docs/**` (`.md`, `.mdx`, `.txt`, `.rst`)
+  - `.cache/pulse/**` entries from Pulse docs storage
+- Selected files are shown as removable context chips under the omnibox.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Keyboard Controls
+
+- `ArrowUp`/`ArrowDown`: move mention selection.
+- `Tab`/`Enter`: apply selected mention.
+- `Escape`: close dropdown/options and clear active mention suggestions.
+- `Enter` (without mention selection): execute current command.
+
+## File Context Injection
+
+Before command execution, mentioned files are resolved and appended to the input as a context section.
+
+- Up to 3 files are loaded.
+- Each file contributes a capped excerpt (up to 2400 chars).
+- Execution flags include:
+  - `context_files=<comma-separated labels>`
+
+## Omnibox Local File API
+
+### `GET /api/omnibox/files`
+
+Returns mention candidates:
+
+```json
+{
+  "files": [
+    {
+      "id": "docs:guide/setup.md",
+      "label": "setup",
+      "path": "docs/guide/setup.md",
+      "source": "docs"
+    }
+  ]
+}
+```
+
+### `GET /api/omnibox/files?id=<id>`
+
+Returns file payload for context injection:
+
+```json
+{
+  "file": {
+    "id": "docs:guide/setup.md",
+    "label": "setup",
+    "path": "docs/guide/setup.md",
+    "source": "docs",
+    "content": "..."
+  }
+}
+```
+
+Route safety:
+
+- `id` must be prefixed by `docs:` or `pulse:`.
+- path traversal (`..`) is rejected.
+- resolved paths must stay under source roots.
+
+## Key Files
+
+- `components/omnibox.tsx`: omnibox interaction/state UI
+- `lib/omnibox.ts`: mention parsing, ranking, phase derivation helpers
+- `app/api/omnibox/files/route.ts`: local docs listing + content fetch for mentions
+- `__tests__/omnibox.test.ts`: omnibox helper unit tests

@@ -1,11 +1,33 @@
 pre-commit:
   parallel: true
   commands:
+    env-guard:
+      run: ./scripts/check_env_staged.sh
+    claude-symlinks:
+      run: ./scripts/check_claude_symlinks.sh
+    pg-advisory-lock-ban:
+      glob: "**/*.rs"
+      run: ./scripts/check_pg_advisory_lock.sh
+    biome:
+      glob: "apps/web/**/*.{ts,tsx,js,jsx,css}"
+      run: ./scripts/check_biome_staged.sh
+    unwrap-warn:
+      glob: "**/*.rs"
+      run: ./scripts/warn_new_unwraps.sh
+    skills-ref:
+      glob: "skills/**"
+      run: ./scripts/validate_skills_ref.sh
     monolith:
       run: if [ -f "$HOME/.claude/hooks/enforce_monoliths.py" ]; then python3 "$HOME/.claude/hooks/enforce_monoliths.py" --staged; else echo "[skip] global monolith enforcer not found at ~/.claude/hooks/enforce_monoliths.py"; fi
     rustfmt:
-      glob: "*.rs"
+      glob: "**/*.rs"
       run: cargo fmt -- --check
     clippy:
-      glob: "*.{rs,toml}"
-      run: cargo clippy --all-targets -- -D warnings
+      glob: "**/*.{rs,toml}"
+      run: cargo clippy --all-targets --locked -- -D warnings
+    check:
+      glob: "**/*.{rs,toml}"
+      run: cargo check --all-targets --locked
+    test:
+      glob: "**/*.{rs,toml}"
+      run: cargo test --all --locked

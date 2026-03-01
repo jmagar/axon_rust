@@ -92,6 +92,47 @@ pub(crate) fn select_output(
     }
 }
 
+pub async fn scrape_payload(cfg: &Config, url: &str) -> Result<serde_json::Value, Box<dyn Error>> {
+    let normalized = normalize_url(url);
+    validate_url(&normalized)?;
+
+    let mut website = build_scrape_website(cfg, &normalized)?;
+    let mut rx = website
+        .subscribe(16)
+        .ok_or("failed to subscribe to spider broadcast")?;
+    let collect: tokio::task::JoinHandle<Option<Page>> =
+        tokio::spawn(async move { rx.recv().await.ok() });
+    match cfg.render_mode {
+        RenderMode::Http | RenderMode::AutoSwitch => website.crawl_raw().await,
+        RenderMode::Chrome => website.crawl().await,
+    }
+    website.unsubscribe();
+    let page = collect
+        .await
+        .map_err(|e| format!("page collector panicked: {e}"))?
+        .ok_or("spider returned no page for this URL")?;
+
+    let html = page.get_html();
+    let status_code = page.status_code.as_u16();
+    if !page.status_code.is_success() {
+        return Err(format!("scrape failed: HTTP {} for {}", status_code, normalized).into());
+    }
+
+    let markdown = to_markdown(&html);
+    let title = find_between(&html, "<title>", "</title>")
+        .unwrap_or("")
+        .to_string();
+    let description = extract_meta_description(&html).unwrap_or_default();
+
+    Ok(serde_json::json!({
+        "url": normalized,
+        "status_code": status_code,
+        "title": title,
+        "description": description,
+        "markdown": markdown,
+    }))
+}
+
 pub async fn run_scrape(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let urls = parse_urls(cfg);
     if urls.is_empty() {
@@ -170,7 +211,25 @@ async fn scrape_one(cfg: &Config, url: &str) -> Result<(), Box<dyn Error>> {
     let markdown = to_markdown(&html);
     let output = select_output(cfg.format, &normalized, &html, status_code)?;
 
-    if let Some(path) = &cfg.output_path {
+    if cfg.json_output {
+        // Structured JSON output for web UI / machine consumers.
+        // The markdown field lets the frontend display content directly
+        // without going through the file-based embed pipeline.
+        let title = find_between(&html, "<title>", "</title>")
+            .unwrap_or("")
+            .to_string();
+        let description = extract_meta_description(&html).unwrap_or_default();
+        println!(
+            "{}",
+            serde_json::json!({
+                "url": normalized,
+                "status_code": status_code,
+                "title": title,
+                "description": description,
+                "markdown": markdown,
+            })
+        );
+    } else if let Some(path) = &cfg.output_path {
         tokio::fs::write(path, &output).await?;
         log_done(&format!("wrote output: {}", path.to_string_lossy()));
     } else {

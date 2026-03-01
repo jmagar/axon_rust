@@ -16,6 +16,7 @@ pub(super) struct Cli {
 pub(super) enum CliCommand {
     Scrape(ScrapeArgs),
     Crawl(CrawlArgs),
+    Refresh(RefreshArgs),
     Map(UrlArg),
     Extract(ExtractArgs),
     Search(TextArg),
@@ -90,6 +91,66 @@ pub(super) struct CrawlArgs {
     pub(super) job: Option<JobSubcommand>,
     #[arg(value_name = "URL")]
     pub(super) positional_urls: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub(super) struct RefreshArgs {
+    #[command(subcommand)]
+    pub(super) action: Option<RefreshSubcommand>,
+    #[arg(value_name = "URL")]
+    pub(super) positional_urls: Vec<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub(super) enum RefreshSubcommand {
+    Status {
+        job_id: String,
+    },
+    Cancel {
+        job_id: String,
+    },
+    Errors {
+        job_id: String,
+    },
+    List,
+    Cleanup,
+    Clear,
+    Worker,
+    Recover,
+    Schedule {
+        #[command(subcommand)]
+        action: RefreshScheduleSubcommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(super) enum RefreshScheduleSubcommand {
+    Add {
+        name: String,
+        seed_url: Option<String>,
+        #[arg(long = "every-seconds")]
+        every_seconds: Option<i64>,
+        #[arg(long, value_parser = ["high", "medium", "low"])]
+        tier: Option<String>,
+        #[arg(long)]
+        urls: Option<String>,
+    },
+    List,
+    Enable {
+        name: String,
+    },
+    Disable {
+        name: String,
+    },
+    Delete {
+        name: String,
+    },
+    #[command(name = "run-due")]
+    RunDue {
+        #[arg(long, default_value_t = 25)]
+        batch: usize,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -274,6 +335,11 @@ pub(super) struct GlobalArgs {
     #[arg(global = true, long, action = ArgAction::Set, default_value_t = true)]
     pub(super) discover_sitemaps: bool,
 
+    /// Only backfill sitemap URLs with a `<lastmod>` date within the last N days (0 = no filter).
+    /// URLs without a `<lastmod>` tag are always included.
+    #[arg(global = true, long, default_value_t = 0)]
+    pub(super) sitemap_since_days: u32,
+
     /// Enable crawl cache reuse. Disable with `--cache false`.
     #[arg(global = true, long, action = ArgAction::Set, default_value_t = true)]
     pub(super) cache: bool,
@@ -314,6 +380,10 @@ pub(super) struct GlobalArgs {
 
     #[arg(global = true, long, action = ArgAction::SetTrue)]
     pub(super) json: bool,
+
+    /// Status mode: show only watchdog-reclaimed jobs.
+    #[arg(global = true, long, action = ArgAction::SetTrue)]
+    pub(super) reclaimed: bool,
 
     #[arg(global = true, long, value_enum, default_value_t = PerformanceProfile::HighStable)]
     pub(super) performance_profile: PerformanceProfile,
@@ -357,6 +427,9 @@ pub(super) struct GlobalArgs {
 
     #[arg(global = true, long)]
     pub(super) crawl_queue: Option<String>,
+
+    #[arg(global = true, long)]
+    pub(super) refresh_queue: Option<String>,
 
     #[arg(global = true, long)]
     pub(super) extract_queue: Option<String>,

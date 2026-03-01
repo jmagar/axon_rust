@@ -1,22 +1,33 @@
-import type { Metadata } from 'next'
-import { DM_Mono, DM_Sans } from 'next/font/google'
+import type { Metadata, Viewport } from 'next'
+import { Noto_Sans, Noto_Sans_Mono } from 'next/font/google'
+import { ServiceWorkerRegistration } from '@/components/service-worker'
 import { Providers } from './providers'
 import './globals.css'
 
-const dmSans = DM_Sans({
-  variable: '--font-sans',
+const notoSans = Noto_Sans({
+  variable: '--font-noto-sans',
   subsets: ['latin'],
+  weight: ['300', '400', '500', '600', '700'],
 })
 
-const dmMono = DM_Mono({
-  variable: '--font-mono',
-  weight: ['400', '500'],
+const notoSansMono = Noto_Sans_Mono({
+  variable: '--font-noto-sans-mono',
   subsets: ['latin'],
+  weight: ['400', '500', '600'],
 })
 
 export const metadata: Metadata = {
   title: 'Axon',
   description: 'Neural RAG Pipeline',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'Axon',
+  },
+}
+
+export const viewport: Viewport = {
+  themeColor: '#0a0f1e',
 }
 
 export default function RootLayout({
@@ -26,8 +37,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className={`${dmSans.variable} ${dmMono.variable} antialiased`}>
+      <body className={`${notoSans.variable} ${notoSansMono.variable} antialiased`}>
         <Providers>{children}</Providers>
+        <ServiceWorkerRegistration />
       </body>
     </html>
   )

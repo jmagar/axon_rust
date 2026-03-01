@@ -1,0 +1,4 @@
+interface:
+  display_name: "Axon MCP"
+  short_description: "Route Axon MCP action/subaction requests safely"
+  default_prompt: "Use the axon MCP tool with canonical action/subaction routing and context-safe response modes."

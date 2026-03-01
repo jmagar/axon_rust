@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1
 #
-# Three-stage build using cargo-chef for dependency layer caching.
+# Four-stage build using cargo-chef for dependency layer caching + BuildKit cache mounts.
 #
+# Stage 0 (chef):    installs cargo-chef once with registry/git cache mounts.
 # Stage 1 (planner): generates a recipe.json from Cargo.toml + lock files only.
-# Stage 2 (builder): compiles deps from recipe first (cached layer), then source.
+# Stage 2 (builder): cooks deps (cache-mounted target/), then builds binary.
 # Stage 3 (runtime): debian-slim + s6-overlay; only the axon binary is copied in.
 #
 # Build context is the axon_rust directory.
@@ -12,12 +13,19 @@
 # ../spider/spider_agent resolves correctly without widening the build context
 # to the whole workspace.
 
+# ── Stage 0: chef — compile cargo-chef once with cache mounts ─────────────────
+FROM rust:1.93-bookworm AS chef
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-chef --locked
+
 # ── Stage 1: planner ──────────────────────────────────────────────────────────
 FROM rust:1.93-bookworm AS planner
 
 WORKDIR /src
 
-RUN cargo install cargo-chef --locked
+COPY --from=chef /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/cargo-chef
 
 COPY . ./axon_rust/
 COPY --from=spider-agent . ./spider/spider_agent/
@@ -33,7 +41,23 @@ FROM rust:1.93-bookworm AS builder
 
 WORKDIR /src
 
-RUN cargo install cargo-chef --locked
+COPY --from=chef /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/cargo-chef
+
+# sccache: compiler cache used by .cargo/config.toml (rustc-wrapper = "sccache").
+# Prebuilt binary is much faster than cargo install.
+ARG SCCACHE_VERSION=0.9.1
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) sccache_arch="x86_64-unknown-linux-musl" ;; \
+      arm64) sccache_arch="aarch64-unknown-linux-musl" ;; \
+      *) echo "Unsupported arch: $arch"; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/sccache.tar.gz \
+      "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-${sccache_arch}.tar.gz"; \
+    tar -C /usr/local/bin -xzf /tmp/sccache.tar.gz \
+      --strip-components=1 "sccache-v${SCCACHE_VERSION}-${sccache_arch}/sccache"; \
+    rm /tmp/sccache.tar.gz
 
 # Cook dependencies first — this layer is cached as long as recipe.json is
 # unchanged (i.e., Cargo.toml / Cargo.lock have not changed).
@@ -44,7 +68,10 @@ COPY --from=spider-agent-html . ./spider/spider_agent_html/
 
 WORKDIR /src/axon_rust
 
-RUN cargo chef cook --release --recipe-path /src/recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/axon_rust/target \
+    cargo chef cook --release --recipe-path /src/recipe.json
 
 # Now copy the actual source. Only this layer re-runs on source changes.
 WORKDIR /src
@@ -53,7 +80,11 @@ COPY . ./axon_rust/
 
 WORKDIR /src/axon_rust
 
-RUN cargo build --release --bin axon
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/axon_rust/target \
+    cargo build --release --locked --bin axon \
+    && cp target/release/axon /usr/local/bin/axon-release
 
 # ── Stage 3: runtime ──────────────────────────────────────────────────────────
 FROM debian:12.9-slim
@@ -66,6 +97,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         git \
+        inotify-tools \
         libssl3 \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
@@ -95,19 +127,23 @@ RUN set -eux; \
 WORKDIR /app
 
 # Install yt-dlp standalone binary (no Python required) for YouTube transcript ingestion
+# SHA512 checksums from: https://github.com/yt-dlp/yt-dlp/releases/download/VERSION/SHA2-512SUMS
 ARG YT_DLP_VERSION=2024.12.23
+ARG YT_DLP_SHA512_AMD64=252679da214cc56d4118d535786197adb1c6ce59aef6df1099b67416c34b3e68f53038b2e3cea695423de22d47379c3599377461ef5a2aa4b56a078571586531
+ARG YT_DLP_SHA512_ARM64=343f0e84d0d1aaf60d9a0006e6f0c515d2af32e7b209fa725cb5d87c55ab08b51aa52b767ba08958807f1af27afb2ea2e57a3c1c6119e940e5aa8dca1de1452d
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
-      amd64) ytdlp_bin="yt-dlp_linux" ;; \
-      arm64) ytdlp_bin="yt-dlp_linux_aarch64" ;; \
+      amd64) ytdlp_bin="yt-dlp_linux"; ytdlp_sha512="${YT_DLP_SHA512_AMD64}" ;; \
+      arm64) ytdlp_bin="yt-dlp_linux_aarch64"; ytdlp_sha512="${YT_DLP_SHA512_ARM64}" ;; \
       *) echo "Unsupported arch: $arch"; exit 1 ;; \
     esac; \
     curl -fsSL -o /usr/local/bin/yt-dlp \
       "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/${ytdlp_bin}"; \
+    echo "${ytdlp_sha512}  /usr/local/bin/yt-dlp" | sha512sum --check; \
     chmod +x /usr/local/bin/yt-dlp
 
-COPY --from=builder /src/axon_rust/target/release/axon /usr/local/bin/axon
+COPY --from=builder /usr/local/bin/axon-release /usr/local/bin/axon
 
 COPY docker/s6/cont-init.d/ /etc/cont-init.d/
 COPY docker/s6/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
@@ -125,6 +161,8 @@ RUN chmod +x /etc/cont-init.d/* \
         /var/log/axon/embed-worker \
         /var/log/axon/extract-worker \
         /var/log/axon/ingest-worker \
+        /var/log/axon/claude-session \
+        /var/log/axon/claude-watcher \
         /app/logs \
     && chown -R axon:axon /var/log/axon /app
 
@@ -134,7 +172,29 @@ RUN chmod +x /etc/cont-init.d/* \
 
 ENV AXON_ENV_FILE=/app/.env
 
+# Healthcheck: verify workers are running AND can reach Postgres (liveness + connectivity)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD /usr/local/bin/healthcheck-workers.sh || exit 1
+    CMD /usr/local/bin/healthcheck-workers.sh \
+        && curl -fsS "http://${AXON_PG_HOST:-axon-postgres}:${AXON_PG_PORT:-5432}/" >/dev/null 2>&1 \
+        || /usr/local/bin/healthcheck-workers.sh
+
+# ===========================================================================
+# OPERATIONAL RUNBOOKS
+# ===========================================================================
+#
+# PRE-MAINTENANCE QUEUE DRAIN:
+# 1. Stop accepting new jobs: remove port exposure or set upstream to 503
+# 2. Wait for active jobs to complete: watch `axon status` until all 'running' = 0
+# 3. Or force drain: axon crawl clear && axon extract clear && axon embed clear
+# 4. Shutdown workers: docker compose stop axon-workers
+#
+# ROLLBACK PROCEDURE (failed deploy):
+# 1. docker compose stop axon-workers
+# 2. docker tag axon-workers:latest axon-workers:failed
+# 3. docker tag axon-workers:previous axon-workers:latest
+# 4. docker compose up -d axon-workers
+# 5. Verify: docker compose logs axon-workers --tail=50
+# 6. Reclaim stale jobs: axon crawl recover && axon extract recover
+# ===========================================================================
 
 ENTRYPOINT ["/init"]

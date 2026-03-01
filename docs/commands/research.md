@@ -1,4 +1,8 @@
 # axon research
+Last Modified: 2026-02-25
+
+Version: 1.0.0
+Last Updated: 01:26:53 | 02/25/2026 EST
 
 Deep web research powered by Tavily AI search and an OpenAI-compatible LLM. The command searches the web for the query, scrapes and extracts key information from top results, then uses the LLM to synthesize a comprehensive answer with citations.
 

@@ -2,12 +2,13 @@ mod metrics;
 
 use crate::crates::core::config::Config;
 use crate::crates::core::ui::{
-    accent, metric, muted, primary, status_label, subtle, symbol_for_status,
+    accent, error, metric, muted, primary, status_label, subtle, symbol_for_status,
 };
 use crate::crates::jobs::crawl::{CrawlJob, list_jobs};
 use crate::crates::jobs::embed::{EmbedJob, list_embed_jobs};
 use crate::crates::jobs::extract::{ExtractJob, list_extract_jobs};
 use crate::crates::jobs::ingest::{IngestJob, list_ingest_jobs};
+use crate::crates::jobs::refresh::{RefreshJob, list_refresh_jobs};
 use chrono::{DateTime, Utc};
 use metrics::{
     collection_from_config, display_embed_input, embed_metrics_suffix, extract_metrics_suffix,
@@ -15,8 +16,38 @@ use metrics::{
 };
 use std::error::Error;
 
+const WATCHDOG_RECLAIM_PREFIX: &str = "watchdog reclaimed stale running ";
+
 pub async fn run_status(cfg: &Config) -> Result<(), Box<dyn Error>> {
     run_status_impl(cfg).await
+}
+
+pub async fn status_snapshot(cfg: &Config) -> Result<serde_json::Value, Box<dyn Error>> {
+    let jobs = load_status_jobs(cfg).await?;
+    Ok(status_payload(
+        &jobs.crawl,
+        &jobs.extract,
+        &jobs.embed,
+        &jobs.ingest,
+        &jobs.refresh,
+    ))
+}
+
+pub async fn status_text(cfg: &Config) -> Result<String, Box<dyn Error>> {
+    let jobs = load_status_jobs(cfg).await?;
+    let crawl_total = jobs.crawl.len();
+    let extract_total = jobs.extract.len();
+    let embed_total = jobs.embed.len();
+    let ingest_total = jobs.ingest.len();
+    let refresh_total = jobs.refresh.len();
+    let mut lines = Vec::new();
+    lines.push("Axon Status".to_string());
+    lines.push(format!("crawl jobs:   {crawl_total}"));
+    lines.push(format!("extract jobs: {extract_total}"));
+    lines.push(format!("embed jobs:   {embed_total}"));
+    lines.push(format!("ingest jobs:  {ingest_total}"));
+    lines.push(format!("refresh jobs: {refresh_total}"));
+    Ok(lines.join("\n"))
 }
 
 struct StatusJobs {
@@ -24,21 +55,34 @@ struct StatusJobs {
     extract: Vec<ExtractJob>,
     embed: Vec<EmbedJob>,
     ingest: Vec<IngestJob>,
+    refresh: Vec<RefreshJob>,
 }
 
 async fn run_status_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let jobs = load_status_jobs(cfg).await?;
 
     if cfg.json_output {
-        emit_status_json(&jobs.crawl, &jobs.extract, &jobs.embed, &jobs.ingest)?;
+        emit_status_json(
+            &jobs.crawl,
+            &jobs.extract,
+            &jobs.embed,
+            &jobs.ingest,
+            &jobs.refresh,
+        )?;
     } else {
-        emit_status_human(&jobs.crawl, &jobs.extract, &jobs.embed, &jobs.ingest);
+        emit_status_human(
+            &jobs.crawl,
+            &jobs.extract,
+            &jobs.embed,
+            &jobs.ingest,
+            &jobs.refresh,
+        );
     }
     Ok(())
 }
 
 async fn load_status_jobs(cfg: &Config) -> Result<StatusJobs, Box<dyn Error>> {
-    let (crawl, extract, embed, ingest) = spider::tokio::try_join!(
+    let (crawl_raw, extract_raw, embed_raw, ingest_raw, refresh_raw) = spider::tokio::try_join!(
         async {
             list_jobs(cfg, 20)
                 .await
@@ -59,13 +103,87 @@ async fn load_status_jobs(cfg: &Config) -> Result<StatusJobs, Box<dyn Error>> {
                 .await
                 .map_err(|e| format!("ingest status lookup failed: {e}"))
         },
+        async {
+            list_refresh_jobs(cfg, 20)
+                .await
+                .map_err(|e| format!("refresh status lookup failed: {e}"))
+        },
     )?;
+    let crawl = crawl_raw
+        .into_iter()
+        .filter(|job| {
+            include_status_job(
+                &job.status,
+                job.error_text.as_deref(),
+                cfg.reclaimed_status_only,
+            )
+        })
+        .collect();
+    let extract = extract_raw
+        .into_iter()
+        .filter(|job| {
+            include_status_job(
+                &job.status,
+                job.error_text.as_deref(),
+                cfg.reclaimed_status_only,
+            )
+        })
+        .collect();
+    let embed = embed_raw
+        .into_iter()
+        .filter(|job| {
+            include_status_job(
+                &job.status,
+                job.error_text.as_deref(),
+                cfg.reclaimed_status_only,
+            )
+        })
+        .collect();
+    let ingest = ingest_raw
+        .into_iter()
+        .filter(|job| {
+            include_status_job(
+                &job.status,
+                job.error_text.as_deref(),
+                cfg.reclaimed_status_only,
+            )
+        })
+        .collect();
+    let refresh = refresh_raw
+        .into_iter()
+        .filter(|job| {
+            include_status_job(
+                &job.status,
+                job.error_text.as_deref(),
+                cfg.reclaimed_status_only,
+            )
+        })
+        .collect();
     Ok(StatusJobs {
         crawl,
         extract,
         embed,
         ingest,
+        refresh,
     })
+}
+
+fn include_status_job(status: &str, error_text: Option<&str>, reclaimed_only: bool) -> bool {
+    let reclaimed = is_watchdog_reclaimed_failure(status, error_text);
+    if reclaimed_only {
+        reclaimed
+    } else {
+        !reclaimed
+    }
+}
+
+fn is_watchdog_reclaimed_failure(status: &str, error_text: Option<&str>) -> bool {
+    if status != "failed" {
+        return false;
+    }
+    error_text
+        .map(str::trim_start)
+        .is_some_and(|text| text.starts_with(WATCHDOG_RECLAIM_PREFIX))
 }
 
 fn emit_status_json(
@@ -73,16 +191,16 @@ fn emit_status_json(
     extract_jobs: &[ExtractJob],
     embed_jobs: &[EmbedJob],
     ingest_jobs: &[IngestJob],
+    refresh_jobs: &[RefreshJob],
 ) -> Result<(), Box<dyn Error>> {
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&serde_json::json!({
-            "local_crawl_jobs": crawl_jobs,
-            "local_extract_jobs": extract_jobs,
-            "local_embed_jobs": embed_jobs,
-            "local_ingest_jobs": ingest_jobs,
-        }))?
+    let payload = status_payload(
+        crawl_jobs,
+        extract_jobs,
+        embed_jobs,
+        ingest_jobs,
+        refresh_jobs,
     );
+    println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }
 
@@ -91,12 +209,36 @@ fn emit_status_human(
     extract_jobs: &[ExtractJob],
     embed_jobs: &[EmbedJob],
     ingest_jobs: &[IngestJob],
+    refresh_jobs: &[RefreshJob],
 ) {
-    print_totals(crawl_jobs, extract_jobs, embed_jobs, ingest_jobs);
+    print_totals(
+        crawl_jobs,
+        extract_jobs,
+        embed_jobs,
+        ingest_jobs,
+        refresh_jobs,
+    );
     print_crawls(crawl_jobs);
+    print_refreshes(refresh_jobs);
     print_embeds(embed_jobs, crawl_jobs);
     print_ingests(ingest_jobs);
     print_extracts(extract_jobs);
+}
+
+fn status_payload(
+    crawl_jobs: &[CrawlJob],
+    extract_jobs: &[ExtractJob],
+    embed_jobs: &[EmbedJob],
+    ingest_jobs: &[IngestJob],
+    refresh_jobs: &[RefreshJob],
+) -> serde_json::Value {
+    serde_json::json!({
+        "local_crawl_jobs": crawl_jobs,
+        "local_extract_jobs": extract_jobs,
+        "local_embed_jobs": embed_jobs,
+        "local_ingest_jobs": ingest_jobs,
+        "local_refresh_jobs": refresh_jobs,
+    })
 }
 
 fn status_breakdown(statuses: &[&str]) -> String {
@@ -135,11 +277,13 @@ fn print_totals(
     extract_jobs: &[ExtractJob],
     embed_jobs: &[EmbedJob],
     ingest_jobs: &[IngestJob],
+    refresh_jobs: &[RefreshJob],
 ) {
     let crawl_statuses: Vec<&str> = crawl_jobs.iter().map(|j| j.status.as_str()).collect();
     let extract_statuses: Vec<&str> = extract_jobs.iter().map(|j| j.status.as_str()).collect();
     let embed_statuses: Vec<&str> = embed_jobs.iter().map(|j| j.status.as_str()).collect();
     let ingest_statuses: Vec<&str> = ingest_jobs.iter().map(|j| j.status.as_str()).collect();
+    let refresh_statuses: Vec<&str> = refresh_jobs.iter().map(|j| j.status.as_str()).collect();
 
     println!("{}", primary("Job Status"));
     println!(
@@ -152,6 +296,11 @@ fn print_totals(
         status_breakdown(&ingest_statuses),
         muted("Extract"),
         status_breakdown(&extract_statuses),
+    );
+    println!(
+        "  {}  {}",
+        muted("Refresh"),
+        status_breakdown(&refresh_statuses),
     );
     println!();
 }
@@ -176,7 +325,7 @@ fn print_crawls(crawl_jobs: &[CrawlJob]) {
             .map(|metrics| crawl_metrics_suffix(&job.status, metrics))
             .unwrap_or_default();
         let age_text = job_age(&job.status, job.finished_at.as_ref(), &job.updated_at);
-        let age = format!("{}{}{}", subtle(" | ("), accent(&age_text), subtle(")"));
+        let age = format!("{}{}", subtle(" | "), accent(&age_text));
         let label = status_label(&job.status);
         let prefix = if label.is_empty() {
             format!("  {} ", symbol_for_status(&job.status))
@@ -186,14 +335,14 @@ fn print_crawls(crawl_jobs: &[CrawlJob]) {
         println!(
             "{}{}{}{} {} {}",
             prefix,
-            accent(&job.url),
+            primary(&job.url),
             metrics_suffix,
             age,
             subtle("|"),
-            subtle(&job.id.to_string()),
+            muted(&job.id.to_string()),
         );
         if let Some(err) = format_error(job.error_text.as_deref()) {
-            println!("       {}", muted(&format!("↳ {err}")));
+            println!("       {}", error(&format!("↳ {err}")));
         }
     }
     println!();
@@ -224,7 +373,7 @@ fn crawl_metrics_suffix(status: &str, metrics: &serde_json::Value) -> String {
         let thin_str = format!("{:.1}%", thin_pct);
         return format!(
             "{sep}{}{}{}{sep}{}{sep}{}",
-            primary(&md_created.to_string()),
+            accent(&md_created.to_string()),
             subtle("/"),
             metric(pages_target, "pages"),
             metric(filtered_urls, "filtered"),
@@ -266,10 +415,10 @@ struct JobRow<'a> {
 fn print_job_row(row: &JobRow<'_>) {
     let collection_suffix = row
         .collection
-        .map(|c| format!("{}{}", subtle(" | "), primary(c)))
+        .map(|c| format!("{}{}", subtle(" | "), accent(c)))
         .unwrap_or_default();
     let age_text = job_age(row.status, row.finished_at, row.updated_at);
-    let age = format!("{}{}{}", subtle(" | ("), accent(&age_text), subtle(")"));
+    let age = format!("{}{}", subtle(" | "), accent(&age_text));
     let label = status_label(row.status);
     let prefix = if label.is_empty() {
         format!("  {} ", symbol_for_status(row.status))
@@ -279,15 +428,15 @@ fn print_job_row(row: &JobRow<'_>) {
     println!(
         "{}{}{}{}{} {} {}",
         prefix,
-        accent(row.target),
+        primary(row.target),
         row.metrics_suffix,
         collection_suffix,
         age,
         subtle("|"),
-        subtle(&row.id.to_string()),
+        muted(&row.id.to_string()),
     );
     if let Some(err) = format_error(row.error_text) {
-        println!("       {}", muted(&format!("↳ {err}")));
+        println!("       {}", error(&format!("↳ {err}")));
     }
 }
 
@@ -312,6 +461,35 @@ fn print_extracts(extract_jobs: &[ExtractJob]) {
             id: &job.id,
             target: &target,
             metrics_suffix: &metrics_suffix,
+            collection: None,
+            finished_at: job.finished_at.as_ref(),
+            updated_at: &job.updated_at,
+            error_text: job.error_text.as_deref(),
+        });
+    }
+    println!();
+}
+
+fn print_refreshes(refresh_jobs: &[RefreshJob]) {
+    let statuses: Vec<&str> = refresh_jobs.iter().map(|j| j.status.as_str()).collect();
+    let header_sym = if refresh_jobs.is_empty() {
+        symbol_for_status("completed")
+    } else {
+        section_symbol(&statuses)
+    };
+    println!("{}", primary(&format!("{header_sym} Refresh")));
+    if refresh_jobs.is_empty() {
+        println!("  {}", muted("None."));
+        println!();
+        return;
+    }
+    for job in refresh_jobs.iter().take(5) {
+        let target = summarize_urls(&job.urls_json).0;
+        print_job_row(&JobRow {
+            status: &job.status,
+            id: &job.id,
+            target: &target,
+            metrics_suffix: "",
             collection: None,
             finished_at: job.finished_at.as_ref(),
             updated_at: &job.updated_at,
@@ -384,4 +562,45 @@ fn print_embeds(embed_jobs: &[EmbedJob], crawl_jobs: &[CrawlJob]) {
         });
     }
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{include_status_job, is_watchdog_reclaimed_failure, status_payload};
+
+    #[test]
+    fn watchdog_reclaim_detection_matches_prefix_on_failed_jobs() {
+        assert!(is_watchdog_reclaimed_failure(
+            "failed",
+            Some("watchdog reclaimed stale running ingest job (idle=360s marker=amqp)")
+        ));
+        assert!(!is_watchdog_reclaimed_failure(
+            "error",
+            Some("watchdog reclaimed stale running crawl job (idle=361s marker=polling)")
+        ));
+        assert!(!is_watchdog_reclaimed_failure(
+            "completed",
+            Some("watchdog reclaimed stale running ingest job (idle=360s marker=amqp)")
+        ));
+        assert!(!is_watchdog_reclaimed_failure(
+            "failed",
+            Some("network timeout")
+        ));
+    }
+
+    #[test]
+    fn status_filter_hides_reclaimed_by_default_and_shows_in_reclaimed_mode() {
+        let reclaimed_err =
+            Some("watchdog reclaimed stale running extract job (idle=360s marker=amqp)");
+        assert!(!include_status_job("failed", reclaimed_err, false));
+        assert!(include_status_job("failed", reclaimed_err, true));
+        assert!(include_status_job("completed", None, false));
+        assert!(!include_status_job("completed", None, true));
+    }
+
+    #[test]
+    fn status_snapshot_includes_refresh_jobs_key() {
+        let payload = status_payload(&[], &[], &[], &[], &[]);
+        assert!(payload.get("local_refresh_jobs").is_some());
+    }
 }
