@@ -1,29 +1,13 @@
 'use client'
 
-import {
-  ArrowLeftRight,
-  Bot,
-  Columns2,
-  FileText,
-  MessageSquare,
-  Network,
-  Plus,
-  Settings2,
-} from 'lucide-react'
+import { Bot, Network, Plus, Settings2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
-
-type DesktopViewMode = 'chat' | 'editor' | 'both'
-type DesktopPaneOrder = 'editor-first' | 'chat-first'
 
 interface PulseToolbarProps {
   title: string
   onTitleChange: (title: string) => void
   isDesktop?: boolean
-  desktopViewMode?: DesktopViewMode
-  onDesktopViewModeChange?: (mode: DesktopViewMode) => void
-  desktopPaneOrder?: DesktopPaneOrder
-  onSwapPanes?: () => void
   onNewSession?: () => void
 }
 
@@ -31,10 +15,6 @@ export function PulseToolbar({
   title,
   onTitleChange,
   isDesktop = false,
-  desktopViewMode = 'both',
-  onDesktopViewModeChange = () => {},
-  desktopPaneOrder = 'editor-first',
-  onSwapPanes = () => {},
   onNewSession,
 }: PulseToolbarProps) {
   const router = useRouter()
@@ -63,70 +43,6 @@ export function PulseToolbar({
 
       {isDesktop && (
         <div className="ml-auto flex items-center gap-1">
-          {/* View mode: chat only */}
-          <button
-            type="button"
-            onClick={() => onDesktopViewModeChange('chat')}
-            aria-pressed={desktopViewMode === 'chat'}
-            title="Chat only"
-            className={`inline-flex size-6 items-center justify-center rounded border transition-colors ${
-              desktopViewMode === 'chat'
-                ? 'border-[rgba(175,215,255,0.35)] bg-[rgba(175,215,255,0.18)] text-[var(--axon-primary)]'
-                : 'border-[var(--border-subtle)] bg-[rgba(10,18,35,0.42)] text-[var(--text-dim)] hover:border-[rgba(175,215,255,0.25)] hover:text-[var(--text-secondary)]'
-            }`}
-          >
-            <MessageSquare className="size-3" />
-          </button>
-
-          {/* View mode: both */}
-          <button
-            type="button"
-            onClick={() => onDesktopViewModeChange('both')}
-            aria-pressed={desktopViewMode === 'both'}
-            title="Both panes"
-            className={`inline-flex size-6 items-center justify-center rounded border transition-colors ${
-              desktopViewMode === 'both'
-                ? 'border-[rgba(175,215,255,0.35)] bg-[rgba(175,215,255,0.18)] text-[var(--axon-primary)]'
-                : 'border-[var(--border-subtle)] bg-[rgba(10,18,35,0.42)] text-[var(--text-dim)] hover:border-[rgba(175,215,255,0.25)] hover:text-[var(--text-secondary)]'
-            }`}
-          >
-            <Columns2 className="size-3" />
-          </button>
-
-          {/* View mode: editor only */}
-          <button
-            type="button"
-            onClick={() => onDesktopViewModeChange('editor')}
-            aria-pressed={desktopViewMode === 'editor'}
-            title="Editor only"
-            className={`inline-flex size-6 items-center justify-center rounded border transition-colors ${
-              desktopViewMode === 'editor'
-                ? 'border-[rgba(175,215,255,0.35)] bg-[rgba(175,215,255,0.18)] text-[var(--axon-primary)]'
-                : 'border-[var(--border-subtle)] bg-[rgba(10,18,35,0.42)] text-[var(--text-dim)] hover:border-[rgba(175,215,255,0.25)] hover:text-[var(--text-secondary)]'
-            }`}
-          >
-            <FileText className="size-3" />
-          </button>
-
-          {/* Swap panes — only relevant in both mode */}
-          {desktopViewMode === 'both' && (
-            <>
-              <span className="mx-0.5 h-4 w-px bg-[var(--border-subtle)]" />
-              <button
-                type="button"
-                onClick={onSwapPanes}
-                title={
-                  desktopPaneOrder === 'editor-first'
-                    ? 'Chat left, editor right'
-                    : 'Editor left, chat right'
-                }
-                className="inline-flex size-6 items-center justify-center rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.42)] text-[var(--text-dim)] transition-colors hover:border-[rgba(175,215,255,0.25)] hover:text-[var(--text-secondary)]"
-              >
-                <ArrowLeftRight className="size-3" />
-              </button>
-            </>
-          )}
-
           {/* New session — separator + button */}
           {onNewSession && (
             <>
