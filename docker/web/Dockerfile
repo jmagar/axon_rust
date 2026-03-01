@@ -59,14 +59,15 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /app
 
-# Pre-create dirs that anonymous volumes will mount over, owned by node
-# so the node user can write into them at runtime
-RUN mkdir -p /app/.next /app/node_modules && chown -R node:node /app
+# Pre-create dirs that anonymous volumes will mount over.
+RUN mkdir -p /app/.next /app/node_modules
 
 # Copy dep manifests only — source is bind-mounted at runtime for hot reload.
 # Build context is apps/web so paths are relative to that directory.
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile
+# Run pnpm install as node so the anonymous volume inherits node-owned files.
+# pnpm-dev and Next.js auto-install both run as node; ownership must match.
+RUN chown -R node:node /app && su node -s /bin/sh -c "pnpm install --frozen-lockfile"
 
 # s6 service definitions injected via additional_contexts (web-s6: docker/web/s6-rc.d)
 COPY --from=web-s6 . /etc/s6-overlay/s6-rc.d/

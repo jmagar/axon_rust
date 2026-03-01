@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-02-28 (session: pulse UI — border removal, glow separators, word wrap fix)
+Last Modified: 2026-03-01 (session: docker inotify fix, pnpm ownership, EADDRINUSE port race)
 
 ## [Unreleased] — feat/crawl-download-pack
 
@@ -9,6 +9,15 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
+| `4e45fb38` | fix(web) | use ExtractedSection in results-panel instead of inline file list |
+| `6b0619ed` | fix(web) | restore selectedFile/selectFile in results-panel with inline file list |
+| `22a96263` | fix(web) | remove unused selectedFile/selectFile from results-panel destructure |
+| `9235a534` | fix(web) | remove CrawlFileExplorer from results-panel, delete stub |
+| `f3ca9641` | feat(web) | Logs page - Docker compose log viewer with SSE streaming |
+| `7847680d` | fix(web) | jobs-dashboard Biome lint compliance - hook deps and unused imports |
+| `7f7a49fa` | feat(web) | Tasks page - task scheduler dashboard with CRUD and manual run |
+| `d91167a2` | fix(security) | resolve symlink traversal and path canonicalize bypasses |
+| `d36e18d7` | chore | update changelog sha 8386d55 |
 | `8386d55` | feat(pulse) | remove hard borders, glow shadow separators, word wrap fix in editor |
 | `b7dd29e` | fix(jobs) | spawn_heartbeat_task helper, Redis cancel timeouts, async I/O fixes, 7 new unit tests |
 | `1ec5513` | feat(web) | workspace virtual dirs, Claude folder, landing editor, header normalization |

@@ -17,7 +17,7 @@ fi
 # Install if sentinel is missing or lockfile is newer
 if [ ! -f "$SENTINEL" ] || [ "$LOCKFILE" -nt "$SENTINEL" ]; then
     echo "[20-pnpm-install] pnpm-lock.yaml changed — running pnpm install" >&2
-    if cd /app && CI=true pnpm install --frozen-lockfile >&2; then
+    if cd /app && CI=true s6-setuidgid node pnpm install --frozen-lockfile >&2; then
         touch "$SENTINEL"
         echo "[20-pnpm-install] done" >&2
     else
