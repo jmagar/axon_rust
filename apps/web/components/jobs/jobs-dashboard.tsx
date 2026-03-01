@@ -48,12 +48,12 @@ function StatusBadge({ status }: { status: JobStatus }) {
       label: 'Pending',
     },
     running: {
-      cls: `${base} text-blue-400 border-blue-400/50 animate-pulse`,
+      cls: `${base} text-[var(--axon-primary)] border-[rgba(135,175,255,0.5)] animate-pulse`,
       icon: <Loader2 className="size-2.5 animate-spin" />,
       label: 'Running',
     },
     completed: {
-      cls: `${base} text-green-400 border-green-400/40`,
+      cls: `${base} text-[var(--axon-success)] border-[rgba(130,217,160,0.4)]`,
       icon: <CheckCircle2 className="size-2.5" />,
       label: 'Done',
     },
@@ -112,6 +112,8 @@ function FilterPill({
       onClick={onClick}
       className={[
         'rounded-md px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest transition-all duration-150',
+        'min-h-[44px] sm:min-h-0',
+        'focus-visible:outline-2 focus-visible:outline-[var(--focus-ring-color)] focus-visible:outline-offset-1',
         active
           ? 'bg-[rgba(135,175,255,0.18)] text-[var(--axon-primary)] shadow-[0_0_8px_rgba(135,175,255,0.15)]'
           : 'text-[var(--text-dim)] hover:bg-[var(--surface-float)] hover:text-[var(--text-secondary)]',
@@ -134,6 +136,9 @@ function SkeletonRow() {
       </td>
       <td className="px-3 py-2.5">
         <div className={`${shimmer} h-3 w-full max-w-[280px]`} />
+      </td>
+      <td className="px-3 py-2.5">
+        <div className={`${shimmer} h-3 w-16`} />
       </td>
       <td className="px-3 py-2.5">
         <div className={`${shimmer} h-4 w-16 rounded-full`} />
@@ -178,6 +183,18 @@ function JobRow({ job, onCancel }: { job: Job; onCancel: (id: string, type: JobT
         </span>
       </td>
       <td className="px-3 py-2.5">
+        {job.collection ? (
+          <span
+            className="font-mono text-[10px] text-[var(--text-dim)] bg-[rgba(135,175,255,0.07)] rounded px-1.5 py-0.5 whitespace-nowrap"
+            title={job.collection}
+          >
+            {job.collection}
+          </span>
+        ) : (
+          <span className="text-[10px] text-[var(--text-dim)]">—</span>
+        )}
+      </td>
+      <td className="px-3 py-2.5">
         <StatusBadge status={job.status} />
       </td>
       <td className="px-3 py-2.5 whitespace-nowrap font-mono text-[10px] text-[var(--text-dim)]">
@@ -188,7 +205,7 @@ function JobRow({ job, onCancel }: { job: Job; onCancel: (id: string, type: JobT
           <button
             type="button"
             onClick={() => onCancel(job.id, job.type)}
-            className="rounded p-1 text-[var(--text-dim)] transition-colors hover:bg-[rgba(255,135,175,0.1)] hover:text-[var(--axon-secondary)]"
+            className="rounded p-1 text-[var(--text-dim)] transition-colors hover:bg-[rgba(255,135,175,0.1)] hover:text-[var(--axon-secondary)] min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 focus-visible:outline-2 focus-visible:outline-[var(--focus-ring-color)] focus-visible:outline-offset-1"
             title="Cancel job (not yet supported)"
             aria-label="Cancel job"
           >
@@ -329,8 +346,8 @@ export function JobsDashboard() {
         )}
         <div className="flex-1" />
         {hasActiveJobs && (
-          <span className="flex items-center gap-1.5 text-[10px] text-blue-400 animate-pulse">
-            <span className="size-1.5 rounded-full bg-blue-400" />
+          <span className="flex items-center gap-1.5 text-[10px] text-[var(--axon-primary)] animate-pulse">
+            <span className="size-1.5 rounded-full bg-[var(--axon-primary)]" />
             Live
           </span>
         )}
@@ -338,7 +355,7 @@ export function JobsDashboard() {
           type="button"
           onClick={handleRefresh}
           disabled={loading}
-          className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-float)] hover:text-[var(--axon-primary)] disabled:opacity-40"
+          className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-float)] hover:text-[var(--axon-primary)] disabled:opacity-40 min-h-[44px] sm:min-h-0 focus-visible:outline-2 focus-visible:outline-[var(--focus-ring-color)] focus-visible:outline-offset-1"
           title="Refresh"
         >
           <RefreshCw className={`size-3.5 ${spinning ? 'animate-spin' : ''}`} />
@@ -416,6 +433,7 @@ export function JobsDashboard() {
             <tr>
               <th className="ui-table-head px-3 py-2.5 w-20">Type</th>
               <th className="ui-table-head px-3 py-2.5">Target</th>
+              <th className="ui-table-head px-3 py-2.5 w-24">Collection</th>
               <th className="ui-table-head px-3 py-2.5 w-28">Status</th>
               <th className="ui-table-head px-3 py-2.5 w-36">Started</th>
               <th className="ui-table-head px-3 py-2.5 w-10" />
@@ -426,7 +444,7 @@ export function JobsDashboard() {
 
             {!loading && error && (
               <tr>
-                <td colSpan={5} className="px-4 py-10 text-center">
+                <td colSpan={6} className="px-4 py-10 text-center">
                   <AlertCircle className="mx-auto mb-2 size-6 text-[var(--text-dim)]" />
                   <p className="text-[12px] text-[var(--text-secondary)]">Failed to load jobs</p>
                   <p className="mt-1 text-[10px] text-[var(--text-dim)]">{error}</p>
@@ -436,7 +454,7 @@ export function JobsDashboard() {
 
             {!loading && !error && jobs.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-12 text-center">
+                <td colSpan={6} className="px-4 py-12 text-center">
                   <Zap className="mx-auto mb-2 size-6 text-[var(--text-dim)]" />
                   <p className="text-[12px] text-[var(--text-secondary)]">No jobs found</p>
                   <p className="mt-1 text-[10px] text-[var(--text-dim)]">
@@ -465,7 +483,7 @@ export function JobsDashboard() {
             type="button"
             onClick={handleLoadMore}
             disabled={loadingMore}
-            className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-float)] px-5 py-2 text-[11px] font-medium text-[var(--text-secondary)] transition-all hover:border-[var(--border-standard)] hover:text-[var(--axon-primary)] disabled:opacity-40"
+            className="flex items-center gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-float)] px-5 py-2 text-[11px] font-medium text-[var(--text-secondary)] transition-all hover:border-[var(--border-standard)] hover:text-[var(--axon-primary)] disabled:opacity-40 min-h-[44px] sm:min-h-0 focus-visible:outline-2 focus-visible:outline-[var(--focus-ring-color)] focus-visible:outline-offset-1"
           >
             {loadingMore ? <Loader2 className="size-3 animate-spin" /> : null}
             Load More

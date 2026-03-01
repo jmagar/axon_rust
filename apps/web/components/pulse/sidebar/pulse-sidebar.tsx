@@ -13,90 +13,33 @@ import {
   ScrollText,
   Star,
   Tag,
+  TerminalSquare,
 } from 'lucide-react'
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
-import type { CrawlFile } from '@/lib/ws-protocol'
-import { ExtractedSection } from './extracted-section'
-import { RecentsSection } from './recents-section'
-import { StarredSection } from './starred-section'
-import { TagsSection } from './tags-section'
-import { TemplatesSection } from './templates-section'
-import type { SidebarSectionId } from './types'
-import { WorkspaceSection } from './workspace-section'
+import { useCallback, useEffect, useState } from 'react'
+import { type FileEntry, FileTree } from '@/components/workspace/file-tree'
 
 const COLLAPSED_KEY = 'axon.sidebar.collapsed'
 
-interface PulseSidebarProps {
-  crawlFiles: CrawlFile[]
-  selectedFile: string | null
-  onSelectFile: (path: string) => void
-  jobId?: string | null
-}
-
-interface NavItem {
-  id: SidebarSectionId
-  label: string
-  icon: React.ReactNode
-}
-
-const NAV_ITEMS: NavItem[] = [
-  { id: 'extracted', label: 'Files', icon: <FileText className="size-4" /> },
-  { id: 'starred', label: 'Starred', icon: <Star className="size-4" /> },
-  { id: 'recents', label: 'Recents', icon: <Clock className="size-4" /> },
-  { id: 'tags', label: 'Tags', icon: <Tag className="size-4" /> },
-  { id: 'templates', label: 'Skills', icon: <LayoutTemplate className="size-4" /> },
-  { id: 'workspace', label: 'Workspace', icon: <FolderOpen className="size-4" /> },
-]
-
-const BOTTOM_LINKS = [
+const NAV_LINKS = [
+  { href: '/', label: 'Files', icon: <FileText className="size-4" /> },
+  { href: '/workspace', label: 'Starred', icon: <Star className="size-4" /> },
+  { href: '/workspace', label: 'Recents', icon: <Clock className="size-4" /> },
+  { href: '/workspace', label: 'Tags', icon: <Tag className="size-4" /> },
+  { href: '/creator', label: 'Skills', icon: <LayoutTemplate className="size-4" /> },
   { href: '/creator', label: 'Creator', icon: <Paintbrush className="size-4" /> },
   { href: '/tasks', label: 'Tasks', icon: <CheckSquare className="size-4" /> },
   { href: '/jobs', label: 'Jobs', icon: <Layers className="size-4" /> },
   { href: '/logs', label: 'Logs', icon: <ScrollText className="size-4" /> },
+  { href: '/terminal', label: 'Terminal', icon: <TerminalSquare className="size-4" /> },
 ]
 
-function SectionContent({
-  activeSection,
-  crawlFiles,
-  selectedFile,
-  onSelectFile,
-  jobId,
-}: {
-  activeSection: SidebarSectionId
-  crawlFiles: CrawlFile[]
-  selectedFile: string | null
-  onSelectFile: (path: string) => void
-  jobId?: string | null
-}) {
-  switch (activeSection) {
-    case 'extracted':
-      return (
-        <ExtractedSection
-          files={crawlFiles}
-          selectedFile={selectedFile}
-          onSelectFile={onSelectFile}
-          jobId={jobId}
-        />
-      )
-    case 'starred':
-      return <StarredSection />
-    case 'recents':
-      return <RecentsSection />
-    case 'tags':
-      return <TagsSection />
-    case 'templates':
-      return <TemplatesSection />
-    case 'workspace':
-      return <WorkspaceSection />
-    default:
-      return null
-  }
-}
-
-export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: PulseSidebarProps) {
+export function PulseSidebar() {
   const [collapsed, setCollapsed] = useState(false)
-  const [activeSection, setActiveSection] = useState<SidebarSectionId>('extracted')
+  const [workspaceOpen, setWorkspaceOpen] = useState(false)
+  const [workspaceEntries, setWorkspaceEntries] = useState<FileEntry[]>([])
+  const [workspaceLoading, setWorkspaceLoading] = useState(false)
+  const [selectedPath, setSelectedPath] = useState<string | null>(null)
 
   useEffect(() => {
     try {
@@ -122,23 +65,44 @@ export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: 
     })
   }
 
-  const handleNavClick = (id: SidebarSectionId) => {
+  const toggleWorkspace = useCallback(async () => {
     if (collapsed) {
       setCollapsed(false)
       try {
         localStorage.setItem(COLLAPSED_KEY, 'false')
+        document.documentElement.style.setProperty('--sidebar-w', '260px')
       } catch {
         /* ignore */
       }
     }
-    setActiveSection(id)
-  }
 
-  const activeItem = NAV_ITEMS.find((n) => n.id === activeSection)
+    const next = !workspaceOpen
+    setWorkspaceOpen(next)
+
+    if (next && workspaceEntries.length === 0) {
+      setWorkspaceLoading(true)
+      try {
+        const res = await fetch('/api/workspace?action=list&path=')
+        const data: { items?: FileEntry[] } = await res.json()
+        setWorkspaceEntries(data.items ?? [])
+      } catch {
+        /* ignore */
+      } finally {
+        setWorkspaceLoading(false)
+      }
+    }
+  }, [collapsed, workspaceOpen, workspaceEntries.length])
+
+  const handleSelectFile = useCallback((entry: FileEntry) => {
+    setSelectedPath(entry.path)
+  }, [])
+
+  const btnCls = `flex items-center gap-2 rounded py-1.5 transition-colors text-[var(--text-muted)] hover:bg-[var(--surface-float)] hover:text-[var(--text-secondary)]`
+  const btnW = collapsed ? 'w-9 justify-center px-2' : 'w-full px-3'
 
   return (
     <div
-      className={`flex flex-shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[rgba(10,18,35,0.85)] backdrop-blur-sm transition-all duration-200 ${
+      className={`relative z-[1] flex flex-shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[rgba(10,18,35,0.85)] backdrop-blur-sm transition-all duration-200 ${
         collapsed ? 'w-12' : 'w-[260px]'
       }`}
     >
@@ -172,77 +136,53 @@ export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: 
         </button>
       </div>
 
-      {/* Icon rail (always visible) */}
-      <nav className="flex flex-col items-center gap-0.5 py-2" aria-label="Sidebar sections">
-        {NAV_ITEMS.map((item) => {
-          const isActive = item.id === activeSection
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => handleNavClick(item.id)}
-              title={item.label}
-              aria-label={item.label}
-              aria-pressed={isActive}
-              className={`flex items-center gap-2 rounded px-2 py-1.5 transition-colors ${
-                collapsed ? 'w-9 justify-center' : 'w-full px-3'
-              } ${
-                isActive
-                  ? 'bg-[rgba(135,175,255,0.12)] text-[var(--axon-primary)]'
-                  : 'text-[var(--text-muted)] hover:bg-[var(--surface-float)] hover:text-[var(--text-secondary)]'
-              }`}
-            >
-              {item.icon}
-              {!collapsed && (
-                <span className="truncate text-[length:var(--text-md)]">{item.label}</span>
-              )}
-            </button>
-          )
-        })}
-      </nav>
-
-      {/* Section content (only when expanded) */}
-      {!collapsed && (
-        <div className="flex flex-1 flex-col overflow-hidden border-t border-[var(--border-subtle)]">
-          <div className="flex items-center gap-1.5 px-3 py-1.5">
-            <span className="text-[var(--text-dim)]">{activeItem?.icon}</span>
-            <span className="text-[length:var(--text-xs)] font-semibold uppercase tracking-wider text-[var(--text-dim)]">
-              {activeItem?.label}
-            </span>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <SectionContent
-              activeSection={activeSection}
-              crawlFiles={crawlFiles}
-              selectedFile={selectedFile}
-              onSelectFile={onSelectFile}
-              jobId={jobId}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Bottom nav links */}
-      <div
-        className={`flex flex-col items-center gap-0.5 border-t border-[var(--border-subtle)] py-2 ${collapsed ? '' : 'items-stretch px-1'}`}
+      {/* Nav — page links + workspace inline expander */}
+      <nav
+        className="flex flex-1 flex-col items-stretch gap-0.5 overflow-y-auto py-2"
+        aria-label="Navigation"
       >
-        {BOTTOM_LINKS.map((link) => (
+        {NAV_LINKS.map((item) => (
           <Link
-            key={link.href}
-            href={link.href}
-            title={link.label}
-            aria-label={link.label}
-            className={`flex items-center gap-2 rounded px-2 py-1.5 text-[var(--text-muted)] transition-colors hover:bg-[var(--surface-float)] hover:text-[var(--text-secondary)] ${
-              collapsed ? 'w-9 justify-center' : 'w-full px-3'
-            }`}
+            key={item.label}
+            href={item.href}
+            title={item.label}
+            aria-label={item.label}
+            className={`${btnCls} ${btnW}`}
           >
-            {link.icon}
+            {item.icon}
             {!collapsed && (
-              <span className="truncate text-[length:var(--text-md)]">{link.label}</span>
+              <span className="truncate text-[length:var(--text-md)]">{item.label}</span>
             )}
           </Link>
         ))}
-      </div>
+
+        {/* Workspace — toggles inline file tree */}
+        <button
+          type="button"
+          onClick={toggleWorkspace}
+          title="Workspace"
+          aria-label="Workspace"
+          aria-expanded={workspaceOpen}
+          className={`${btnCls} ${btnW}`}
+        >
+          <FolderOpen className="size-4" />
+          {!collapsed && <span className="truncate text-[length:var(--text-md)]">Workspace</span>}
+        </button>
+
+        {workspaceOpen && !collapsed && (
+          <div className="overflow-y-auto">
+            {workspaceLoading ? (
+              <div className="px-3 py-2 text-xs text-[var(--text-dim)]">Loading...</div>
+            ) : (
+              <FileTree
+                entries={workspaceEntries}
+                selectedPath={selectedPath}
+                onSelect={handleSelectFile}
+              />
+            )}
+          </div>
+        )}
+      </nav>
     </div>
   )
 }

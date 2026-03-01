@@ -11,6 +11,7 @@ export interface Job {
   type: JobType
   status: JobStatus
   target: string
+  collection: string | null
   createdAt: string
   startedAt: string | null
   finishedAt: string | null
@@ -63,26 +64,28 @@ function statusWhere(filter: StatusFilter): string {
 async function queryCrawl(statusFilter: StatusFilter, limit: number, offset: number) {
   const where = statusWhere(statusFilter)
   const rows = await pool.query(
-    `SELECT id, url, status, created_at, started_at, finished_at, error_text
+    `SELECT id, url, status, created_at, started_at, finished_at, error_text,
+            config_json->>'collection' AS collection,
+            COUNT(*) OVER() AS total
      FROM axon_crawl_jobs
      WHERE ${where}
      ORDER BY created_at DESC
      LIMIT $1 OFFSET $2`,
     [limit, offset],
   )
-  const count = await pool.query(`SELECT COUNT(*) FROM axon_crawl_jobs WHERE ${where}`)
   return {
     jobs: rows.rows.map((r) => ({
       id: r.id as string,
       type: 'crawl' as JobType,
       status: safeStatus(r.status as string),
       target: truncate(r.url as string),
+      collection: r.collection as string | null,
       createdAt: (r.created_at as Date).toISOString(),
       startedAt: r.started_at ? (r.started_at as Date).toISOString() : null,
       finishedAt: r.finished_at ? (r.finished_at as Date).toISOString() : null,
       errorText: r.error_text as string | null,
     })),
-    total: Number((count.rows[0] as { count: string }).count),
+    total: Number((rows.rows[0] as { total?: string } | undefined)?.total ?? 0),
   }
 }
 
@@ -107,6 +110,7 @@ async function queryExtract(statusFilter: StatusFilter, limit: number, offset: n
         type: 'extract' as JobType,
         status: safeStatus(r.status as string),
         target: truncate(label),
+        collection: null,
         createdAt: (r.created_at as Date).toISOString(),
         startedAt: r.started_at ? (r.started_at as Date).toISOString() : null,
         finishedAt: r.finished_at ? (r.finished_at as Date).toISOString() : null,
@@ -120,7 +124,7 @@ async function queryExtract(statusFilter: StatusFilter, limit: number, offset: n
 async function queryEmbed(statusFilter: StatusFilter, limit: number, offset: number) {
   const where = statusWhere(statusFilter)
   const rows = await pool.query(
-    `SELECT id, input_text, status, created_at, started_at, finished_at, error_text
+    `SELECT id, input_text, status, created_at, started_at, finished_at, error_text, config_json->>'collection' AS collection
      FROM axon_embed_jobs
      WHERE ${where}
      ORDER BY created_at DESC
@@ -134,6 +138,7 @@ async function queryEmbed(statusFilter: StatusFilter, limit: number, offset: num
       type: 'embed' as JobType,
       status: safeStatus(r.status as string),
       target: truncate(r.input_text as string),
+      collection: r.collection as string | null,
       createdAt: (r.created_at as Date).toISOString(),
       startedAt: r.started_at ? (r.started_at as Date).toISOString() : null,
       finishedAt: r.finished_at ? (r.finished_at as Date).toISOString() : null,
@@ -160,6 +165,7 @@ async function queryIngest(statusFilter: StatusFilter, limit: number, offset: nu
       type: 'ingest' as JobType,
       status: safeStatus(r.status as string),
       target: truncate(`${r.source_type as string}: ${r.target as string}`),
+      collection: null,
       createdAt: (r.created_at as Date).toISOString(),
       startedAt: r.started_at ? (r.started_at as Date).toISOString() : null,
       finishedAt: r.finished_at ? (r.finished_at as Date).toISOString() : null,

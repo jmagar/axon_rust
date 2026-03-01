@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-03-01 (session: docker inotify fix, pnpm ownership, EADDRINUSE port race)
+Last Modified: 2026-03-01 (session: xterm.js terminal emulator, sidebar nav, logs TS fix)
 
 ## [Unreleased] — feat/crawl-download-pack
 
@@ -9,6 +9,10 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
+| *(this commit)* | feat(web) | xterm.js terminal emulator at /terminal — WS integration, design system theming, sidebar nav |
+| `a31a58ea` | fix(docker) | install uvx for neo4j-memory MCP, add pnpm-dev finish script |
+| `2a23d860` | feat(web) | hoist PulseSidebar to AppShell — visible on all pages |
+| `a5dc786c` | fix(docker) | resolve inotify watch limit, EADDRINUSE port race, and node_modules ownership |
 | `4e45fb38` | fix(web) | use ExtractedSection in results-panel instead of inline file list |
 | `6b0619ed` | fix(web) | restore selectedFile/selectFile in results-panel with inline file list |
 | `22a96263` | fix(web) | remove unused selectedFile/selectFile from results-panel destructure |

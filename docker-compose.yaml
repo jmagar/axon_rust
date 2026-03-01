@@ -224,6 +224,9 @@ services:
       # Uncomment to mount host SSH keys (opt-in — exposes keys to the container):
       # - ${HOST_HOME:-${HOME}}/.ssh:/home/node/.ssh:ro
       - ${AXON_WORKSPACE:-${HOME}/workspace}:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # required for /api/logs (dockerode)
+    group_add:
+      - "981"  # host docker group GID — grants node user socket access
     depends_on:
       axon-workers:
         condition: service_healthy

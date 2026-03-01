@@ -1,7 +1,6 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { type FileEntry, FileTree } from '@/components/workspace/file-tree'
 
 interface WorkspaceSectionProps {
@@ -57,8 +56,8 @@ export function WorkspaceSection({ onSelect }: WorkspaceSectionProps) {
   }
 
   return (
-    <ScrollArea className="max-h-[30vh]">
+    <div className="overflow-y-auto">
       <FileTree entries={entries} selectedPath={selectedPath} onSelect={handleSelect} />
-    </ScrollArea>
+    </div>
   )
 }

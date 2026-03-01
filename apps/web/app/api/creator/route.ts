@@ -66,20 +66,57 @@ async function scanCategory(
 
   try {
     const entries = await fs.readdir(dirPath, { withFileTypes: true })
-    const files = await Promise.all(
-      entries
-        .filter((e) => e.isFile() && !e.name.startsWith('.'))
-        .map(async (e) => {
-          const absPath = path.join(dirPath, e.name)
-          const filePath = `${CLAUDE_PREFIX}/${categoryName}/${e.name}`
-          try {
-            const stat = await fs.stat(absPath)
-            return { name: e.name, path: filePath, size: stat.size } satisfies CreatorFile
-          } catch {
-            return { name: e.name, path: filePath, size: 0 } satisfies CreatorFile
-          }
-        }),
-    )
+    const files = (
+      await Promise.all(
+        entries
+          .filter((e) => !e.name.startsWith('.'))
+          .map(async (e): Promise<CreatorFile | null> => {
+            const absPath = path.join(dirPath, e.name)
+            if (e.isFile()) {
+              const filePath = `${CLAUDE_PREFIX}/${categoryName}/${e.name}`
+              try {
+                const stat = await fs.stat(absPath)
+                return { name: e.name, path: filePath, size: stat.size }
+              } catch {
+                return { name: e.name, path: filePath, size: 0 }
+              }
+            }
+            if (e.isDirectory()) {
+              // Skill packages: look for SKILL.md, then README.md, then first .md file
+              const candidates = ['SKILL.md', 'README.md']
+              for (const candidate of candidates) {
+                const candidatePath = path.join(absPath, candidate)
+                try {
+                  const stat = await fs.stat(candidatePath)
+                  return {
+                    name: e.name,
+                    path: `${CLAUDE_PREFIX}/${categoryName}/${e.name}/${candidate}`,
+                    size: stat.size,
+                  }
+                } catch {
+                  // not found, try next
+                }
+              }
+              // Fall back to first .md file in the directory
+              try {
+                const inner = await fs.readdir(absPath)
+                const md = inner.find((f) => f.endsWith('.md'))
+                if (md) {
+                  const stat = await fs.stat(path.join(absPath, md))
+                  return {
+                    name: e.name,
+                    path: `${CLAUDE_PREFIX}/${categoryName}/${e.name}/${md}`,
+                    size: stat.size,
+                  }
+                }
+              } catch {
+                // ignore
+              }
+            }
+            return null
+          }),
+      )
+    ).filter((f): f is CreatorFile => f !== null)
     result.files = files.sort((a, b) => a.name.localeCompare(b.name))
   } catch {
     // Directory doesn't exist — return empty files array
