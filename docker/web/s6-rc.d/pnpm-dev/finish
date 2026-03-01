@@ -1,0 +1,7 @@
+#!/bin/sh
+# Called by s6 after pnpm-dev exits (before restart).
+# pnpm run dev spawns next dev which spawns turbopack workers — these become
+# orphan processes when pnpm exits and keep holding :49010, causing EADDRINUSE
+# on the next start. Kill them here before s6 restarts the service.
+pkill -9 -f "next" 2>/dev/null || true
+sleep 2

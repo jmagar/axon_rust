@@ -27,10 +27,7 @@ export function PulseWorkspace() {
     pulsePermissionLevel,
     setPulseModel,
     setPulsePermissionLevel,
-    crawlFiles,
     selectedFile,
-    selectFile,
-    currentJobId,
     markdownContent,
   } = useWsMessages()
   const { subscribe } = useAxonWs()

@@ -19,6 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# uv + uvx — required for stdio MCP servers (e.g. mcp-neo4j-memory)
+RUN curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
+
 # s6-overlay for process supervision (pnpm-dev)
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
