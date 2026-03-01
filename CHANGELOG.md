@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-03-01 (session: docs knowledge base page, sidebar nav cleanup, PTY shell)
+Last Modified: 2026-03-01 (session: job detail pages, docs knowledge base page, sidebar nav cleanup)
 
 ## [Unreleased] — feat/crawl-download-pack
 
@@ -7,6 +7,7 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 ### Highlights
 
+- **Job Detail Pages (`/jobs/[id]`)** — clickable job rows on `/jobs` now navigate to a dedicated detail page showing status, pages crawled/discovered, markdown created, timing, config, and raw result JSON; live-polls every 3s for running jobs
 - **Knowledge Base (`/docs`)** — new page listing every scraped/crawled page from the axon output directory, grouped by domain, with markdown content viewer; backed by filesystem manifest.jsonl reads (no Qdrant calls)
 - **PTY Shell** — real interactive shell at `/terminal` via `portable-pty` + dedicated `/ws/shell` WebSocket
 - **Sidebar nav** — "Files" replaced with "Docs" → `/docs`; AXON logo made a home link; section-tab architecture with extracted/starred/recents/templates/workspace content panels
@@ -15,6 +16,8 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
+| *(this commit)* | feat(web) | /jobs/[id] detail page — status, stats, timing, config, live polling |
+| `ac294073` | feat(web) | /docs knowledge base page — filesystem-backed manifest reader |
 | `9fdf8913` | feat(web) | terminal page — real PTY shell via useShellSession |
 | `d7cff203` | feat(web) | useShellSession hook — dedicated /ws/shell WebSocket |
 | `d357f088` | feat(web) | add /ws/shell route for PTY shell sessions |

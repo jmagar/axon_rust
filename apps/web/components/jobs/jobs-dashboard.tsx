@@ -1,6 +1,16 @@
 'use client'
 
-import { AlertCircle, Ban, CheckCircle2, Clock, Loader2, RefreshCw, Zap } from 'lucide-react'
+import {
+  AlertCircle,
+  Ban,
+  CheckCircle2,
+  Clock,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  Zap,
+} from 'lucide-react'
+import Link from 'next/link'
 import { useEffect, useRef, useState } from 'react'
 import type { Job, JobStatus, JobType } from '@/app/api/jobs/route'
 
@@ -175,12 +185,16 @@ function JobRow({ job, onCancel }: { job: Job; onCancel: (id: string, type: JobT
         <TypeChip type={job.type} />
       </td>
       <td className="px-3 py-2.5 max-w-[300px]">
-        <span
-          className="block truncate font-mono text-[11px] text-[var(--text-secondary)]"
+        <Link
+          href={`/jobs/${job.id}`}
+          className="group flex items-center gap-1.5 min-w-0"
           title={job.target}
         >
-          {job.target}
-        </span>
+          <span className="block truncate font-mono text-[11px] text-[var(--text-secondary)] group-hover:text-[var(--axon-primary)] transition-colors">
+            {job.target}
+          </span>
+          <ExternalLink className="size-3 flex-shrink-0 text-[var(--text-dim)] opacity-0 group-hover:opacity-100 transition-opacity" />
+        </Link>
       </td>
       <td className="px-3 py-2.5">
         {job.collection ? (
