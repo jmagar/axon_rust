@@ -5,7 +5,6 @@ import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ContentViewer } from '@/components/content-viewer'
 import { CrawlDownloadToolbar } from '@/components/crawl-download-toolbar'
-import { CrawlFileExplorer } from '@/components/crawl-file-explorer'
 import { CrawlProgress } from '@/components/crawl-progress'
 import { CardsRenderer } from '@/components/results/cards-renderer'
 import { JobLifecycleRenderer } from '@/components/results/job-lifecycle-renderer'
@@ -312,16 +311,6 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
                 </div>
               ) : isMarkdownMode ? (
                 <>
-                  {/* Crawl file explorer sidebar (drawer on mobile, inline on desktop) */}
-                  {hasCrawlFiles && (
-                    <CrawlFileExplorer
-                      files={crawlFiles}
-                      selectedFile={selectedFile}
-                      onSelectFile={selectFile}
-                      jobId={currentJobId}
-                    />
-                  )}
-
                   {/* Main content area */}
                   <div className="flex-1 overflow-y-auto p-3 text-sm leading-[1.75] text-[var(--text-secondary)] sm:p-4 md:p-6">
                     {/* Crawl progress bar */}
