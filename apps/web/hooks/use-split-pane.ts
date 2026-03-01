@@ -19,10 +19,10 @@ export function useSplitPane() {
   const desktopSplitPercentRef = useRef(50)
   const mobileSplitPercentRef = useRef(56)
   const dragStartRef = useRef<{ pointerX: number; startPercent: number } | null>(null)
-  const verticalDragStartRef = useRef<{ pointerY: number; startPercent: number } | null>(null)
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const splitHandleRef = useRef<HTMLDivElement>(null)
   const showEditorRef = useRef(true)
+  const showChatRef = useRef(true)
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -34,6 +34,9 @@ export function useSplitPane() {
   useEffect(() => {
     showEditorRef.current = showEditor
   }, [showEditor])
+  useEffect(() => {
+    showChatRef.current = showChat
+  }, [showChat])
 
   // Storage restore effect
   useEffect(() => {
@@ -89,8 +92,9 @@ export function useSplitPane() {
       dragStartRef.current = null
       splitHandleRef.current?.classList.remove('bg-[rgba(175,215,255,0.15)]')
       if (totalMovement < 4) {
-        // Click — toggle the editor panel
+        // Click — toggle the editor panel; block collapse if chat is already collapsed
         const next = !showEditorRef.current
+        if (!next && !showChatRef.current) return
         setShowEditor(next)
         try {
           window.localStorage.setItem(SHOW_EDITOR_STORAGE_KEY, String(next))
@@ -118,38 +122,6 @@ export function useSplitPane() {
     }
   }, [])
 
-  // Vertical drag effect (mobile)
-  useEffect(() => {
-    function onPointerMove(event: PointerEvent) {
-      const start = verticalDragStartRef.current
-      const container = splitContainerRef.current
-      if (!start || !container) return
-      const rect = container.getBoundingClientRect()
-      if (rect.height <= 0) return
-      const deltaPx = event.clientY - start.pointerY
-      const deltaPercent = (deltaPx / rect.height) * 100
-      const next = Math.max(35, Math.min(70, start.startPercent + deltaPercent))
-      setMobileSplitPercent(next)
-    }
-
-    function stopVerticalDrag() {
-      if (!verticalDragStartRef.current) return
-      verticalDragStartRef.current = null
-      try {
-        window.localStorage.setItem(MOBILE_SPLIT_STORAGE_KEY, String(mobileSplitPercentRef.current))
-      } catch {
-        /* ignore */
-      }
-    }
-
-    window.addEventListener('pointermove', onPointerMove)
-    window.addEventListener('pointerup', stopVerticalDrag)
-    return () => {
-      window.removeEventListener('pointermove', onPointerMove)
-      window.removeEventListener('pointerup', stopVerticalDrag)
-    }
-  }, [])
-
   const persistMobilePane = useCallback((pane: 'chat' | 'editor') => {
     setMobilePane(pane)
     try {
@@ -162,6 +134,8 @@ export function useSplitPane() {
   const toggleChat = useCallback((next?: boolean) => {
     setShowChat((prev) => {
       const value = next ?? !prev
+      // Block collapse when editor is already collapsed — both-panels-collapsed is a dead state
+      if (!value && !showEditorRef.current) return prev
       try {
         window.localStorage.setItem(SHOW_CHAT_STORAGE_KEY, String(value))
       } catch {
@@ -174,6 +148,8 @@ export function useSplitPane() {
   const toggleEditor = useCallback((next?: boolean) => {
     setShowEditor((prev) => {
       const value = next ?? !prev
+      // Block collapse when chat is already collapsed — both-panels-collapsed is a dead state
+      if (!value && !showChatRef.current) return prev
       try {
         window.localStorage.setItem(SHOW_EDITOR_STORAGE_KEY, String(value))
       } catch {
@@ -200,7 +176,6 @@ export function useSplitPane() {
     splitContainerRef,
     splitHandleRef,
     dragStartRef,
-    verticalDragStartRef,
     desktopSplitPercentRef,
     mobileSplitPercentRef,
   }

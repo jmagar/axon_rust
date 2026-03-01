@@ -33,6 +33,7 @@ const SaveStatusBadge = memo(function SaveStatusBadge({
 function EditorPageInner() {
   const searchParams = useSearchParams()
   const docParam = searchParams.get('doc')
+  const workspaceParam = searchParams.get('workspace')
 
   const [markdown, setMarkdown] = useState('')
   const [title, setTitle] = useState('Untitled')
@@ -40,7 +41,7 @@ function EditorPageInner() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const loadedDocRef = useRef<string | null>(null)
 
-  // Load doc when ?doc= param changes (survives in-page navigations without unmount)
+  // Load pulse doc when ?doc= param changes
   useEffect(() => {
     if (!docParam || loadedDocRef.current === docParam) return
     loadedDocRef.current = docParam
@@ -62,6 +63,34 @@ function EditorPageInner() {
       }
     })()
   }, [docParam])
+
+  // Load workspace file when ?workspace= param changes
+  useEffect(() => {
+    if (!workspaceParam || loadedDocRef.current === `ws:${workspaceParam}`) return
+    loadedDocRef.current = `ws:${workspaceParam}`
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/workspace?action=read&path=${encodeURIComponent(workspaceParam)}`,
+        )
+        if (!res.ok) {
+          setLoadError(res.status === 404 ? 'File not found' : 'Failed to load file')
+          return
+        }
+        setLoadError(null)
+        const data = (await res.json()) as { name?: string; content?: string; type?: string }
+        if (data.type === 'binary') {
+          setLoadError('Binary files cannot be displayed in the editor')
+          return
+        }
+        setTitle(data.name ?? workspaceParam.split('/').pop() ?? 'Untitled')
+        setMarkdown(data.content ?? '')
+        // No docFilename — workspace files are viewed in-editor but saved as new pulse docs if modified
+      } catch {
+        setLoadError('Failed to load file')
+      }
+    })()
+  }, [workspaceParam])
 
   const { saveStatus, savedFilename } = usePulseAutosave(markdown, title, docFilename)
 

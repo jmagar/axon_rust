@@ -60,3 +60,6 @@ apps/web/app/settings/page.tsx
 apps/web/components/results/table-renderer.tsx
 
 # worker_lane split into worker_lane/{mod,amqp,poll,delivery}.rs (2026-02-28)
+
+# 670 lines — pre-existing jobs dashboard with table + filters; split planned (2026-03-01)
+apps/web/components/jobs/jobs-dashboard.tsx

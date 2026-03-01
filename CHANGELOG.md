@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-03-01 (session: pulse autosave optimization, editor UX, z-index fix, ws/shell proxy)
+Last Modified: 2026-03-01 (session: jobs dashboard UX — color-coded badges, stats bar, sort, relative times, smart truncation, hover actions, active progress)
 
 ## [Unreleased] — feat/crawl-download-pack
 
@@ -7,6 +7,8 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 ### Highlights
 
+- **Jobs dashboard UX overhaul** — color-coded type badges (crawl=sky, embed=amber, extract=violet, ingest=rose), stats summary bar with live counts per status, sortable column headers (type/target/collection/status/started), relative timestamps ("5m ago") with absolute on hover, smart URL truncation (last 2 path segments), row hover actions (cancel/retry/view), animated ping ring + shimmer progress bar for active jobs; API extended with `StatusCounts` from parallel DB queries
+- **Pulse 3-panel collapsible layout** — chat panel left, editor right, chevron strips to collapse/expand; `showChat`/`showEditor` booleans replace `DesktopViewMode`/`DesktopPaneOrder`; `use-split-pane` rewritten for 3-panel chevron layout
 - **Pulse autosave optimization** — `updatePulseDoc` skips file read when client caches `createdAt`/`tags`/`collections` from last save response; pre-deletes stale Qdrant vectors before re-embed; save response now includes `createdAt`, `tags`, `collections`
 - **Editor UX** — `loadedDocRef` tracks loaded doc param so re-navigation to a different `?doc=` reloads content; `SaveStatusBadge` wrapped in `memo`; `Suspense` fallback skeleton added
 - **Z-index fix** — sidebar `z-[2]`, main content `z-[1]` — prevents NeuralCanvas/floating elements from bleeding over the sidebar
@@ -19,7 +21,16 @@ This section documents commits on `feat/crawl-download-pack` relative to `main` 
 
 | Commit | Type | Message |
 |---|---|---|
-| *(this commit)* | fix(web) | pulse autosave: skip file read, pre-delete stale vectors, editor doc-reload fix, z-index |
+| *(this commit)* | feat(web) | jobs dashboard — color badges, stats bar, sort, relative time, smart truncation, hover actions, active progress |
+| `61a1696e` | fix(web) | remove unused verticalDragStartRef from pulse-workspace destructure |
+| `3359e863` | feat(web) | 3-panel collapsible layout — chat left, editor right, chevron strips |
+| `cf1323ce` | fix(web) | remove unused showChatRef from use-split-pane |
+| `50dd9473` | feat(web) | update use-pulse-persistence for showChat/showEditor |
+| `f5c13206` | feat(web) | remove view-mode toggle buttons from PulseToolbar |
+| `60cd01ed` | feat(web) | rewrite use-split-pane for 3-panel chevron layout |
+| `1925a5bb` | feat(web) | replace DesktopViewMode/DesktopPaneOrder with showChat/showEditor booleans |
+| `8ad11100` | fix(web) | pulse autosave update-in-place + editor hardening |
+| *(2d32f42e)* | fix(web) | pulse autosave: skip file read, pre-delete stale vectors, editor doc-reload fix, z-index |
 | `394917d5` | feat(web) | /jobs/[id] detail page — status, stats, timing, config, live polling |
 | `ac294073` | feat(web) | /docs knowledge base page — filesystem-backed manifest reader |
 | `9fdf8913` | feat(web) | terminal page — real PTY shell via useShellSession |

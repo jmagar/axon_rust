@@ -1,13 +1,12 @@
 'use client'
 
+import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import { type FileEntry, FileTree } from '@/components/workspace/file-tree'
+import { pushRecent } from './recents-section'
 
-interface WorkspaceSectionProps {
-  onSelect?: (entry: FileEntry) => void
-}
-
-export function WorkspaceSection({ onSelect }: WorkspaceSectionProps) {
+export function WorkspaceSection() {
+  const router = useRouter()
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
@@ -34,9 +33,13 @@ export function WorkspaceSection({ onSelect }: WorkspaceSectionProps) {
   const handleSelect = useCallback(
     (entry: FileEntry) => {
       setSelectedPath(entry.path)
-      onSelect?.(entry)
+      if (entry.type === 'file') {
+        const url = `/editor?workspace=${encodeURIComponent(entry.path)}`
+        pushRecent(url, entry.name)
+        router.push(url)
+      }
     },
-    [onSelect],
+    [router],
   )
 
   if (loading) {
@@ -56,7 +59,7 @@ export function WorkspaceSection({ onSelect }: WorkspaceSectionProps) {
   }
 
   return (
-    <div className="overflow-y-auto">
+    <div className="h-full overflow-y-auto">
       <FileTree entries={entries} selectedPath={selectedPath} onSelect={handleSelect} />
     </div>
   )

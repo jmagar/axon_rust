@@ -592,7 +592,7 @@ export function Omnibox() {
   return (
     <div ref={omniboxRef} className="space-y-2">
       <div
-        className={`relative flex min-h-[52px] items-center rounded-2xl transition-all duration-300 sm:min-h-[44px] ${
+        className={`relative flex min-h-[36px] items-center rounded-2xl transition-all duration-300 sm:min-h-[44px] ${
           isProcessing
             ? 'border-[rgba(175,215,255,0.4)] shadow-[0_0_20px_rgba(175,215,255,0.15)]'
             : 'border-[var(--border-accent)]'
@@ -646,7 +646,7 @@ export function Omnibox() {
           onBlur={() => setIsFocused(false)}
           rows={1}
           placeholder={PLACEHOLDER_TEXTS[0]}
-          className="min-w-0 flex-1 resize-none bg-transparent px-3 py-3 font-sans text-sm leading-[var(--leading-tight)] text-foreground outline-none placeholder:opacity-0 sm:py-2 sm:px-4"
+          className="min-w-0 flex-1 resize-none bg-transparent px-3 py-1.5 font-sans text-sm leading-[var(--leading-tight)] text-foreground outline-none placeholder:opacity-0 sm:py-2 sm:px-4"
           style={{ overflowY: 'hidden' }}
           disabled={isProcessing}
         />

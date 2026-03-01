@@ -413,6 +413,7 @@ export function PulseWorkspace() {
               aria-valuenow={Math.round(desktopSplitPercent)}
               aria-valuemin={20}
               aria-valuemax={80}
+              aria-valuetext={`Chat: ${Math.round(desktopSplitPercent)}%, Editor: ${Math.round(100 - desktopSplitPercent)}%`}
               className={`group mx-0.5 hidden w-2 cursor-col-resize items-center justify-center rounded-sm transition-colors hover:bg-[var(--border-subtle)] ${
                 showChat && showEditor ? 'lg:flex' : 'lg:hidden'
               }`}
@@ -437,14 +438,18 @@ export function PulseWorkspace() {
             className={`group/editor relative flex h-full flex-col overflow-hidden rounded-xl bg-[rgba(10,18,35,0.5)] transition-all duration-200 ${
               isDesktop
                 ? showEditor
-                  ? 'lg:flex-none'
+                  ? showChat
+                    ? 'lg:flex-none'
+                    : 'lg:flex-1'
                   : 'lg:w-7 lg:flex-none'
                 : mobilePane === 'editor'
                   ? 'flex'
                   : 'hidden'
             }`}
             style={
-              isDesktop && showEditor ? { flexBasis: `${100 - desktopSplitPercent}%` } : undefined
+              isDesktop && showEditor && showChat
+                ? { flexBasis: `${100 - desktopSplitPercent}%` }
+                : undefined
             }
           >
             {isDesktop && !showEditor ? (

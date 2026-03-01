@@ -1,6 +1,7 @@
 'use client'
 
 import { ExternalLink } from 'lucide-react'
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { RecentItem } from './types'
@@ -57,31 +58,47 @@ export function RecentsSection() {
   }
 
   return (
-    <ScrollArea className="max-h-[30vh]">
-      {items.map((item) => (
-        <div
-          key={item.url}
-          className="group flex items-center justify-between gap-1.5 border-b border-[var(--border-subtle)] px-3 py-2 hover:bg-[var(--surface-float)]"
-        >
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[length:var(--text-md)] font-medium text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]">
-              {item.title}
+    <ScrollArea className="h-full">
+      {items.map((item) => {
+        const isExternal = /^https?:\/\//.test(item.url)
+        const rowContent = (
+          <>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[length:var(--text-md)] font-medium text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]">
+                {item.title}
+              </div>
+              <div className="truncate text-[length:var(--text-xs)] text-[var(--text-dim)]">
+                {formatRelativeTime(item.accessedAt)}
+              </div>
             </div>
-            <div className="truncate text-[length:var(--text-xs)] text-[var(--text-dim)]">
-              {formatRelativeTime(item.accessedAt)}
-            </div>
-          </div>
+            {isExternal && (
+              <ExternalLink className="size-3 flex-shrink-0 text-[var(--text-dim)] opacity-0 transition-opacity group-hover:opacity-100" />
+            )}
+          </>
+        )
+
+        return isExternal ? (
           <a
+            key={item.url}
             href={item.url}
             target="_blank"
             rel="noopener noreferrer"
-            title="Open in browser"
-            className="flex-shrink-0 rounded p-0.5 text-[var(--text-dim)] opacity-0 group-hover:opacity-100 transition-opacity hover:text-[var(--axon-primary)]"
+            title={item.title}
+            className="group flex items-center justify-between gap-1.5 border-b border-[var(--border-subtle)] px-3 py-2 hover:bg-[var(--surface-float)]"
           >
-            <ExternalLink className="size-3" />
+            {rowContent}
           </a>
-        </div>
-      ))}
+        ) : (
+          <Link
+            key={item.url}
+            href={item.url}
+            title={item.title}
+            className="group flex items-center justify-between gap-1.5 border-b border-[var(--border-subtle)] px-3 py-2 hover:bg-[var(--surface-float)]"
+          >
+            {rowContent}
+          </Link>
+        )
+      })}
     </ScrollArea>
   )
 }

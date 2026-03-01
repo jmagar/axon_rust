@@ -40,7 +40,7 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { id: 'extracted', label: 'Files', icon: <FileText className="size-4" /> },
+  { id: 'extracted', label: 'Extracted', icon: <FileText className="size-4" /> },
   { id: 'starred', label: 'Starred', icon: <Star className="size-4" /> },
   { id: 'recents', label: 'Recents', icon: <Clock className="size-4" /> },
   { id: 'templates', label: 'Skills', icon: <LayoutTemplate className="size-4" /> },

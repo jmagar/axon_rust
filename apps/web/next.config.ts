@@ -38,7 +38,7 @@ const nextConfig: NextConfig = {
       },
       {
         source: '/ws/shell',
-        destination: `${axonBackendUrl}/ws/shell`,
+        destination: `http://127.0.0.1:${process.env.SHELL_SERVER_PORT ?? 49011}`,
       },
       {
         source: '/download/:path*',

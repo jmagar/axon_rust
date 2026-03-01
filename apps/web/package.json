@@ -33,6 +33,7 @@
     "dockerode": "^4.0.9",
     "lucide-react": "^0.575.0",
     "next": "16.1.6",
+    "node-pty": "^1.1.0",
     "pg": "^8.19.0",
     "platejs": "^52.0.17",
     "radix-ui": "^1.4.3",
@@ -41,6 +42,7 @@
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "tailwind-merge": "^3.5.0",
+    "ws": "^8.19.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

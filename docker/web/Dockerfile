@@ -13,10 +13,13 @@ ARG S6_OVERLAY_VERSION=3.2.1.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
+        g++ \
         git \
         inotify-tools \
+        make \
         openssh-client \
         procps \
+        python3 \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
@@ -85,6 +88,7 @@ RUN find /etc/s6-overlay/s6-rc.d -type f -name run    -exec chmod +x {} + \
     && mkdir -p \
         /var/log/axon/pnpm-dev \
         /var/log/axon/pnpm-watcher \
+        /var/log/axon/shell-server \
     && chown -R node:node /var/log/axon
 
 # NOTE: s6-overlay v3 requires root for /init (PID 1) to manage process

@@ -18,10 +18,18 @@ export interface Job {
   errorText: string | null
 }
 
+export interface StatusCounts {
+  running: number
+  pending: number
+  completed: number
+  failed: number
+}
+
 interface JobsResponse {
   jobs: Job[]
   total: number
   hasMore: boolean
+  counts: StatusCounts
 }
 
 // ── DB pool ────────────────────────────────────────────────────────────────────
@@ -176,6 +184,37 @@ async function queryIngest(statusFilter: StatusFilter, limit: number, offset: nu
   }
 }
 
+// ── Status counts (all tables, all statuses, unfiltered) ─────────────────────
+
+async function getStatusCounts(): Promise<StatusCounts> {
+  const countSql = (table: string) =>
+    pool.query<{ running: string; pending: string; completed: string; failed: string }>(
+      `SELECT
+        COUNT(*) FILTER (WHERE status = 'running')                    AS running,
+        COUNT(*) FILTER (WHERE status = 'pending')                    AS pending,
+        COUNT(*) FILTER (WHERE status = 'completed')                  AS completed,
+        COUNT(*) FILTER (WHERE status IN ('failed','canceled'))       AS failed
+       FROM ${table}`,
+    )
+  const [crawl, extract, embed, ingest] = await Promise.all([
+    countSql('axon_crawl_jobs'),
+    countSql('axon_extract_jobs'),
+    countSql('axon_embed_jobs'),
+    countSql('axon_ingest_jobs'),
+  ])
+  const sum = (key: keyof StatusCounts) =>
+    [crawl, extract, embed, ingest].reduce(
+      (acc, r) => acc + Number((r.rows[0] as Record<string, string>)[key] ?? 0),
+      0,
+    )
+  return {
+    running: sum('running'),
+    pending: sum('pending'),
+    completed: sum('completed'),
+    failed: sum('failed'),
+  }
+}
+
 // ── GET /api/jobs ──────────────────────────────────────────────────────────────
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -188,6 +227,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
     let jobs: Job[] = []
     let total = 0
+    const counts = await getStatusCounts()
 
     if (type === 'all') {
       // Fetch from all 4 tables, merge, sort by createdAt desc, paginate
@@ -220,6 +260,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       jobs,
       total,
       hasMore: offset + jobs.length < total,
+      counts,
     }
     return NextResponse.json(response)
   } catch (err) {
