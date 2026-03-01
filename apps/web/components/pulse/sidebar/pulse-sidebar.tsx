@@ -101,7 +101,9 @@ export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: 
   useEffect(() => {
     try {
       const stored = localStorage.getItem(COLLAPSED_KEY)
-      if (stored !== null) setCollapsed(stored === 'true')
+      const next = stored === 'true'
+      setCollapsed(next)
+      document.documentElement.style.setProperty('--sidebar-w', next ? '48px' : '260px')
     } catch {
       /* ignore */
     }
@@ -112,6 +114,7 @@ export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: 
       const next = !prev
       try {
         localStorage.setItem(COLLAPSED_KEY, String(next))
+        document.documentElement.style.setProperty('--sidebar-w', next ? '48px' : '260px')
       } catch {
         /* ignore */
       }
@@ -135,20 +138,39 @@ export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: 
 
   return (
     <div
-      className={`relative flex flex-shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[rgba(10,18,35,0.8)] backdrop-blur-sm transition-all duration-200 ${
+      className={`flex flex-shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[rgba(10,18,35,0.85)] backdrop-blur-sm transition-all duration-200 ${
         collapsed ? 'w-12' : 'w-[260px]'
       }`}
     >
-      {/* Toggle button */}
-      <button
-        type="button"
-        onClick={toggleCollapsed}
-        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        className="absolute -right-3 top-3 z-10 flex size-6 items-center justify-center rounded-full border border-[var(--border-standard)] bg-[var(--surface-base)] text-[var(--text-muted)] shadow-sm transition-colors hover:bg-[var(--surface-float)] hover:text-[var(--axon-primary)]"
+      {/* Header — AXON logo + collapse toggle */}
+      <div
+        className={`flex h-11 flex-shrink-0 items-center border-b border-[var(--border-subtle)] px-2 ${
+          collapsed ? 'justify-center' : 'justify-between'
+        }`}
       >
-        {collapsed ? <ChevronRight className="size-3" /> : <ChevronLeft className="size-3" />}
-      </button>
+        {!collapsed && (
+          <span
+            className="select-none text-sm font-extrabold tracking-[3px]"
+            style={{
+              background: 'linear-gradient(135deg, #afd7ff 0%, #ff87af 50%, #8787af 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text',
+            }}
+          >
+            AXON
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          className="flex size-6 items-center justify-center rounded border border-[var(--border-subtle)] text-[var(--text-muted)] transition-colors hover:border-[rgba(175,215,255,0.25)] hover:text-[var(--axon-primary)]"
+        >
+          {collapsed ? <ChevronRight className="size-3.5" /> : <ChevronLeft className="size-3.5" />}
+        </button>
+      </div>
 
       {/* Icon rail (always visible) */}
       <nav className="flex flex-col items-center gap-0.5 py-2" aria-label="Sidebar sections">

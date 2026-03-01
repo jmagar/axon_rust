@@ -128,21 +128,6 @@ export default function DashboardPage() {
     <>
       <NeuralCanvas ref={canvasRef} profile={canvasProfile} />
       <WsIndicator />
-      {/* Gradient logo — fixed top-left */}
-      <div className="fixed left-6 top-5 z-10 select-none">
-        <h1
-          className="text-base font-extrabold tracking-[3px]"
-          style={{
-            background: 'linear-gradient(135deg, #afd7ff 0%, #ff87af 50%, #8787af 100%)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            backgroundClip: 'text',
-          }}
-        >
-          AXON
-        </h1>
-      </div>
-
       {/* Main container — centered vertically, slides up on results */}
       <main
         className={`relative z-[1] mx-auto max-w-[1180px] transition-[padding] duration-500 ease-[cubic-bezier(0.4,0,0.2,1)] xl:max-w-[1240px] ${
@@ -241,7 +226,10 @@ export default function DashboardPage() {
 
       {/* Fixed bottom omnibox — only when Pulse workspace is active */}
       {isPulseWorkspaceActive && (
-        <div className="fixed bottom-0 left-0 right-0 z-20 px-2.5 pb-3 sm:px-3.5 sm:pb-4">
+        <div
+          className="fixed bottom-0 right-0 z-20 px-2.5 pb-3 sm:px-3.5 sm:pb-4"
+          style={{ left: 'var(--sidebar-w, 260px)' }}
+        >
           <div className="mx-auto max-w-[1180px] xl:max-w-[1240px]">
             <div
               className="rounded-xl border p-1 backdrop-blur-xl"
