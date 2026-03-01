@@ -3,6 +3,7 @@
 export interface LogEntry {
   text: string
   ts: number
+  service?: string
 }
 
 // Matches: 2026-03-01T07:06:25.417745Z  INFO axon::crates::core::logging: message
@@ -43,6 +44,17 @@ const MESSAGE_TEXT: Record<Level, string> = {
   ERROR: 'text-[var(--axon-secondary)]',
 }
 
+// One distinct color per service — cycles through design system palette
+const SERVICE_COLORS: Record<string, string> = {
+  'axon-workers': 'var(--axon-primary)', // blue
+  'axon-web': 'var(--axon-secondary)', // pink
+  'axon-postgres': 'var(--axon-success)', // green
+  'axon-redis': 'var(--axon-warning)', // orange
+  'axon-rabbitmq': 'var(--axon-primary-strong)', // brighter blue
+  'axon-qdrant': 'rgba(174,136,255,0.9)', // purple
+  'axon-chrome': 'rgba(255,220,100,0.9)', // yellow
+}
+
 // axon::crates::core::logging → core::logging (last 2 segments)
 function shortenModule(mod: string): string {
   const parts = mod.split('::')
@@ -74,6 +86,19 @@ interface LogLineProps {
   entry: LogEntry
 }
 
+function ServiceBadge({ service }: { service: string }) {
+  const color = SERVICE_COLORS[service] ?? 'var(--text-dim)'
+  const label = service.replace('axon-', '')
+  return (
+    <span
+      className="shrink-0 font-mono text-[length:var(--text-2xs)] font-semibold uppercase tabular-nums"
+      style={{ color, minWidth: '4.5rem' }}
+    >
+      {label}
+    </span>
+  )
+}
+
 export function LogLine({ entry }: LogLineProps) {
   const parsed = parseLine(entry.text)
 
@@ -84,6 +109,8 @@ export function LogLine({ entry }: LogLineProps) {
         className="flex min-w-0 select-text items-baseline gap-2 break-all"
         style={{ paddingBlock: '2px', lineHeight: 'var(--leading-copy)' }}
       >
+        {entry.service && <ServiceBadge service={entry.service} />}
+
         {/* Timestamp — text-2xs (10px) per design system chip/micro-label scale */}
         <span className="shrink-0 font-mono text-[length:var(--text-2xs)] tabular-nums text-[var(--text-dim)]">
           {time}
@@ -94,8 +121,8 @@ export function LogLine({ entry }: LogLineProps) {
           {level}
         </span>
 
-        {/* Module path — ui-mono: text-sm (12px), JetBrains Mono */}
-        <span className="ui-mono shrink-0 text-[var(--text-dim)] opacity-50">{module}</span>
+        {/* Module path — ui-mono: text-sm (12px) */}
+        <span className="ui-mono shrink-0 text-[var(--text-dim)]">{module}</span>
 
         {/* Message — ui-mono for code-adjacent content */}
         <span className={`ui-mono min-w-0 ${MESSAGE_TEXT[level]}`}>{message}</span>
@@ -106,10 +133,11 @@ export function LogLine({ entry }: LogLineProps) {
   // Unstructured line (docker system messages, pnpm output, etc.)
   return (
     <div
-      className={`ui-mono select-text break-all ${fallbackColor(entry.text)}`}
+      className={`flex min-w-0 select-text items-baseline gap-2 break-all ${fallbackColor(entry.text)}`}
       style={{ paddingBlock: '2px', lineHeight: 'var(--leading-copy)' }}
     >
-      {entry.text}
+      {entry.service && <ServiceBadge service={entry.service} />}
+      <span className="ui-mono min-w-0">{entry.text}</span>
     </div>
   )
 }

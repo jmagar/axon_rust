@@ -1,5 +1,5 @@
 # Axon UI Design System
-Last updated: 2026-02-28
+Last updated: 2026-03-01
 
 Reference for all visual decisions in `apps/web`. When building new UI, use this document exclusively — do not invent new raw color values or ad-hoc token names.
 
@@ -105,19 +105,19 @@ These still exist in `:root` for backward compatibility with the Plate editor in
 
 ### Font Stack
 
-| Role | CSS Variable | Loaded Font | Fallback |
-|------|-------------|-------------|----------|
-| Display / Headings | `--font-display` → `--font-space-mono` | Space Mono 400, 700 | monospace |
-| Body / UI | `--font-sans` → `--font-sora` | Sora 300–700 | system-ui, sans-serif |
-| Code / Mono | `--font-mono` → `--font-jetbrains-mono` | JetBrains Mono 400, 500 | monospace |
+| Role | CSS Variable | Next.js Variable | Loaded Font | Fallback |
+|------|-------------|-----------------|-------------|----------|
+| Display / Headings | `--font-display` → `--font-noto-sans` | `--font-noto-sans` | Noto Sans 300–700 | system-ui, sans-serif |
+| Body / UI | `--font-sans` → `--font-noto-sans` | `--font-noto-sans` | Noto Sans 300–700 | system-ui, sans-serif |
+| Code / Mono | `--font-mono` → `--font-noto-sans-mono` | `--font-noto-sans-mono` | Noto Sans Mono 400, 500, 600 | monospace |
 
-All `h1`–`h4` automatically get `font-display` via global CSS. Use `.font-display` class manually anywhere else you need the Space Mono treatment (section titles, branding labels, breadcrumb current path).
+Both `--font-display` and `--font-sans` resolve to the same Noto Sans variable — there is intentionally no separate display typeface. All `h1`–`h4` automatically get `font-display` via global CSS. Use `.font-display` class manually for section titles, branding labels, and breadcrumb current path.
 
 ```tsx
 // Headings — auto
 <h1>Workspace</h1>
 
-// Manual display font
+// Manual display font (same as body, used for semantic distinction)
 <span className="font-display text-sm">Explorer</span>
 
 // Mono content
@@ -151,7 +151,7 @@ body default:    1.6   /* Long-form content */
 | `.ui-label` | `--text-2xs` | 600 | `0.1em` + uppercase | Section labels, form field labels |
 | `.ui-meta` | `--text-xs` | 400 | normal | Timestamps, counts, secondary info |
 | `.ui-copy` | `--text-md` | 400 | normal | Primary content text |
-| `.ui-mono` | `--text-sm` | 400 | normal | Code, paths, IDs |
+| `.ui-mono` | `--text-sm` | 400 | normal | Code, paths, IDs (Noto Sans Mono) |
 | `.ui-long-copy` | fluid `0.75–0.875rem` | 400 | normal | Readable multi-line content |
 | `.font-display` | inherited | inherited | `-0.01em` | Space Mono headings |
 

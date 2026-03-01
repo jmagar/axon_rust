@@ -2,7 +2,7 @@
 
 import { Pause, Play } from 'lucide-react'
 
-export const ALLOWED_SERVICES = [
+export const SERVICES = [
   'axon-workers',
   'axon-web',
   'axon-postgres',
@@ -12,7 +12,8 @@ export const ALLOWED_SERVICES = [
   'axon-chrome',
 ] as const
 
-export type ServiceName = (typeof ALLOWED_SERVICES)[number]
+export type IndividualService = (typeof SERVICES)[number]
+export type ServiceName = IndividualService | 'all'
 
 export const TAIL_OPTIONS = [50, 100, 200, 500, 1000] as const
 export type TailLines = (typeof TAIL_OPTIONS)[number]
@@ -62,7 +63,8 @@ export function LogsToolbar({
           onChange={(e) => onServiceChange(e.target.value as ServiceName)}
           aria-label="Select service"
         >
-          {ALLOWED_SERVICES.map((s) => (
+          <option value="all">All services</option>
+          {SERVICES.map((s) => (
             <option key={s} value={s}>
               {s}
             </option>

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { ensureRepoRootEnvLoaded } from '@/lib/pulse/server-env'
-import { savePulseDoc } from '@/lib/pulse/storage'
+import { savePulseDoc, updatePulseDoc } from '@/lib/pulse/storage'
 
 const SaveRequestSchema = z.object({
   title: z.string().min(1).max(200),
@@ -10,6 +10,7 @@ const SaveRequestSchema = z.object({
   tags: z.array(z.string()).optional(),
   collections: z.array(z.string()).optional(),
   embed: z.boolean().default(true),
+  filename: z.string().optional(),
 })
 
 /** GET first; only PUT on 404 — safe to call on existing collections. */
@@ -60,13 +61,10 @@ export async function POST(request: Request) {
       )
     }
 
-    const { title, markdown, tags, collections, embed } = parsed.data
-    const { path, filename } = await savePulseDoc({
-      title,
-      markdown,
-      tags,
-      collections,
-    })
+    const { title, markdown, tags, collections, embed, filename: incomingFilename } = parsed.data
+    const { path, filename } = incomingFilename
+      ? await updatePulseDoc(incomingFilename, { title, markdown, tags, collections })
+      : await savePulseDoc({ title, markdown, tags, collections })
 
     if (embed) {
       const teiUrl = process.env.TEI_URL

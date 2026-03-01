@@ -1,14 +1,25 @@
 # Changelog
-Last Modified: 2026-03-01 (session: xterm.js terminal emulator, sidebar nav, logs TS fix)
+Last Modified: 2026-03-01 (session: docs knowledge base page, sidebar nav cleanup, PTY shell)
 
 ## [Unreleased] — feat/crawl-download-pack
 
 This section documents commits on `feat/crawl-download-pack` relative to `main` (`4777f76`).
 
+### Highlights
+
+- **Knowledge Base (`/docs`)** — new page listing every scraped/crawled page from the axon output directory, grouped by domain, with markdown content viewer; backed by filesystem manifest.jsonl reads (no Qdrant calls)
+- **PTY Shell** — real interactive shell at `/terminal` via `portable-pty` + dedicated `/ws/shell` WebSocket
+- **Sidebar nav** — "Files" replaced with "Docs" → `/docs`; AXON logo made a home link; section-tab architecture with extracted/starred/recents/templates/workspace content panels
+
 ### Commit Summary (main..HEAD)
 
 | Commit | Type | Message |
 |---|---|---|
+| `9fdf8913` | feat(web) | terminal page — real PTY shell via useShellSession |
+| `d7cff203` | feat(web) | useShellSession hook — dedicated /ws/shell WebSocket |
+| `d357f088` | feat(web) | add /ws/shell route for PTY shell sessions |
+| `e9011060` | feat(web) | PTY shell WebSocket handler in crates/web/shell.rs |
+| `e55c4e00` | chore(deps) | add portable-pty for PTY shell support |
 | `ac16331b` | feat(web) | xterm.js terminal emulator at /terminal — WS integration, design system theming, sidebar nav |
 | `a31a58ea` | fix(docker) | install uvx for neo4j-memory MCP, add pnpm-dev finish script |
 | `2a23d860` | feat(web) | hoist PulseSidebar to AppShell — visible on all pages |

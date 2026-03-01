@@ -16,9 +16,16 @@ sync_packages() {
         touch "$SENTINEL"
         log "done — stopping pnpm-dev"
         s6-svc -d /run/service/pnpm-dev
-        # Wait for Next.js to fully release the port before bringing it back up.
-        # s6-svc -r restarts too fast and causes EADDRINUSE on the new instance.
-        sleep 3
+        # Wait until s6 confirms the service's run script has exited.
+        # s6-svwait -D returns as soon as pnpm-dev is in "down" state.
+        /command/s6-svwait -D -t 15000 /run/service/pnpm-dev 2>/dev/null || true
+        # Port guard: poll until :49010 is free. The finish script kills the orphan
+        # concurrently; this loop waits for it regardless of how long that takes.
+        i=0
+        while [ "$i" -lt 15 ] && ss -tlnp 2>/dev/null | grep -q ':49010'; do
+            sleep 1
+            i=$((i + 1))
+        done
         log "starting pnpm-dev"
         s6-svc -u /run/service/pnpm-dev
     else

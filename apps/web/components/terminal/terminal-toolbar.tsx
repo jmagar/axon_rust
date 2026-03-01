@@ -55,7 +55,7 @@ export function TerminalToolbar({
       <div className="flex items-center gap-3">
         <span
           className="select-none font-mono text-[11px] font-semibold tracking-[2px]"
-          style={{ color: 'var(--axon-text-muted, #93aaca)' }}
+          style={{ color: 'var(--text-muted)' }}
         >
           TERMINAL
         </span>
@@ -109,19 +109,16 @@ export function TerminalToolbar({
           title="Toggle search (Ctrl+F)"
           className="flex items-center justify-center rounded px-1.5 py-1 transition-colors"
           style={{
-            color: searchVisible
-              ? 'var(--axon-accent-blue, #afd7ff)'
-              : 'var(--axon-text-muted, #93aaca)',
+            color: searchVisible ? 'var(--axon-primary-strong)' : 'var(--text-muted)',
             background: searchVisible ? 'rgba(135,175,255,0.1)' : 'transparent',
           }}
           onMouseEnter={(e) => {
             if (!searchVisible)
-              (e.currentTarget as HTMLButtonElement).style.color =
-                'var(--axon-accent-blue, #afd7ff)'
+              (e.currentTarget as HTMLButtonElement).style.color = 'var(--axon-primary-strong)'
           }}
           onMouseLeave={(e) => {
             if (!searchVisible)
-              (e.currentTarget as HTMLButtonElement).style.color = 'var(--axon-text-muted, #93aaca)'
+              (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-muted)'
           }}
         >
           <Search className="size-3.5" />
@@ -146,7 +143,7 @@ function ToolbarButton({
   onClick,
   label,
   style,
-  hoverColor = 'var(--axon-accent-blue, #afd7ff)',
+  hoverColor = 'var(--axon-primary-strong)',
 }: ToolbarButtonProps) {
   return (
     <button
@@ -154,15 +151,14 @@ function ToolbarButton({
       onClick={onClick}
       className="rounded px-2 py-1 font-mono text-[10px] font-medium tracking-wide transition-colors"
       style={{
-        color: 'var(--axon-text-muted, #93aaca)',
+        color: 'var(--text-muted)',
         ...style,
       }}
       onMouseEnter={(e) => {
         ;(e.currentTarget as HTMLButtonElement).style.color = hoverColor
       }}
       onMouseLeave={(e) => {
-        ;(e.currentTarget as HTMLButtonElement).style.color =
-          style?.color ?? 'var(--axon-text-muted, #93aaca)'
+        ;(e.currentTarget as HTMLButtonElement).style.color = style?.color ?? 'var(--text-muted)'
       }}
     >
       {label}

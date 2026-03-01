@@ -1,4 +1,4 @@
-import type { Readable } from 'node:stream'
+import { PassThrough, type Readable } from 'node:stream'
 import Dockerode from 'dockerode'
 import type { NextRequest } from 'next/server'
 
@@ -10,23 +10,63 @@ function stripAnsi(s: string): string {
 
 export const dynamic = 'force-dynamic'
 
-const ALLOWED_SERVICES = new Set([
+export const SERVICES = [
+  'axon-workers',
+  'axon-web',
   'axon-postgres',
   'axon-redis',
   'axon-rabbitmq',
   'axon-qdrant',
   'axon-chrome',
-  'axon-workers',
-  'axon-web',
-])
+] as const
+
+const ALLOWED_SERVICES = new Set<string>(SERVICES)
 
 const docker = new Dockerode({ socketPath: '/var/run/docker.sock' })
+
+type SendLine = (line: string, service?: string) => void
+
+function attachContainerStream(
+  svc: string,
+  tail: number,
+  sendLine: SendLine,
+  onDone: () => void,
+  logStreams: Readable[],
+): void {
+  docker
+    .getContainer(svc)
+    .logs({ follow: true, stdout: true, stderr: true, tail })
+    .then((raw) => {
+      const logStream = raw as Readable
+      logStreams.push(logStream)
+
+      const pt = new PassThrough()
+      docker.modem.demuxStream(logStream, pt, pt)
+
+      pt.on('data', (chunk: Buffer) => {
+        for (const line of chunk.toString().split('\n')) {
+          const clean = stripAnsi(line)
+          if (clean.trim()) sendLine(clean, svc)
+        }
+      })
+      pt.on('end', onDone)
+      pt.on('error', (err: Error) => {
+        sendLine(`[stream error] ${err.message}`, svc)
+        onDone()
+      })
+    })
+    .catch((err: unknown) => {
+      sendLine(`[stream error] ${err instanceof Error ? err.message : String(err)}`, svc)
+      onDone()
+    })
+}
 
 export async function GET(req: NextRequest) {
   const service = req.nextUrl.searchParams.get('service') ?? 'axon-workers'
   const tail = Math.min(Number(req.nextUrl.searchParams.get('tail') ?? '200'), 1000)
+  const isAll = service === 'all'
 
-  if (!ALLOWED_SERVICES.has(service)) {
+  if (!isAll && !ALLOWED_SERVICES.has(service)) {
     return new Response('Invalid service', { status: 400 })
   }
 
@@ -34,12 +74,18 @@ export async function GET(req: NextRequest) {
     return new Response('Invalid tail value', { status: 400 })
   }
 
+  const targets: string[] = isAll ? [...SERVICES] : [service]
   const encoder = new TextEncoder()
+  const logStreams: Readable[] = []
 
   const stream = new ReadableStream({
-    async start(controller) {
-      function sendLine(line: string) {
-        const payload = JSON.stringify({ line, ts: Date.now() })
+    start(controller) {
+      function sendLine(line: string, svc?: string) {
+        const payload = JSON.stringify({
+          line,
+          ts: Date.now(),
+          ...(svc && isAll ? { service: svc } : {}),
+        })
         controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
       }
 
@@ -51,42 +97,20 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      try {
-        const container = docker.getContainer(service)
-        const logStream = (await container.logs({
-          follow: true,
-          stdout: true,
-          stderr: true,
-          tail,
-        })) as Readable
+      let active = targets.length
 
-        // Docker multiplexes stdout/stderr in an 8-byte frame header when not in TTY mode.
-        // demuxStream splits them into separate writable streams.
-        const passThrough = new (await import('node:stream')).PassThrough()
-
-        docker.modem.demuxStream(logStream, passThrough, passThrough)
-
-        passThrough.on('data', (chunk: Buffer) => {
-          for (const line of chunk.toString().split('\n')) {
-            const clean = stripAnsi(line)
-            if (clean.trim()) sendLine(clean)
-          }
-        })
-
-        passThrough.on('end', close)
-        passThrough.on('error', (err: Error) => {
-          sendLine(`[stream error] ${err.message}`)
-          close()
-        })
-
-        req.signal.addEventListener('abort', () => {
-          logStream.destroy()
-          close()
-        })
-      } catch (err) {
-        sendLine(`[stream error] ${err instanceof Error ? err.message : String(err)}`)
-        close()
+      function onDone() {
+        if (--active <= 0) close()
       }
+
+      for (const svc of targets) {
+        attachContainerStream(svc, tail, sendLine, onDone, logStreams)
+      }
+
+      req.signal.addEventListener('abort', () => {
+        for (const s of logStreams) s.destroy()
+        close()
+      })
     },
   })
 

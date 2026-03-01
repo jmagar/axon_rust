@@ -36,6 +36,7 @@ export type PersistedPulseWorkspaceState = {
   documentMarkdown: string
   chatHistory: ChatMessage[]
   documentTitle: string
+  currentDocFilename: string | null
   chatSessionId: string | null
   indexedSources: string[]
   activeThreadSources: string[]
@@ -89,6 +90,8 @@ export function parsePersistedWorkspaceState(
       documentMarkdown: parsed.documentMarkdown,
       chatHistory: Array.isArray(parsed.chatHistory) ? parsed.chatHistory.slice(-250) : [],
       documentTitle: parsed.documentTitle,
+      currentDocFilename:
+        typeof parsed.currentDocFilename === 'string' ? parsed.currentDocFilename : null,
       chatSessionId: typeof parsed.chatSessionId === 'string' ? parsed.chatSessionId : null,
       indexedSources: Array.isArray(parsed.indexedSources) ? parsed.indexedSources.slice(-50) : [],
       activeThreadSources: Array.isArray(parsed.activeThreadSources)

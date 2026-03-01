@@ -20,6 +20,7 @@ interface UsePulsePersistenceInput {
   documentMarkdown: string
   chatHistory: ChatMessage[]
   documentTitle: string
+  currentDocFilename: string | null
   chatSessionId: string | null
   indexedSources: string[]
   activeThreadSources: string[]
@@ -34,6 +35,7 @@ interface UsePulsePersistenceInput {
   setDocumentMarkdown: (v: string) => void
   setChatHistory: (v: ChatMessage[]) => void
   setDocumentTitle: (v: string) => void
+  setCurrentDocFilename: (v: string | null) => void
   setChatSessionId: (v: string | null) => void
   setIndexedSources: (v: string[]) => void
   setActiveThreadSources: (v: string[]) => void
@@ -52,6 +54,7 @@ export function usePulsePersistence({
   documentMarkdown,
   chatHistory,
   documentTitle,
+  currentDocFilename,
   chatSessionId,
   indexedSources,
   activeThreadSources,
@@ -66,6 +69,7 @@ export function usePulsePersistence({
   setDocumentMarkdown,
   setChatHistory,
   setDocumentTitle,
+  setCurrentDocFilename,
   setChatSessionId,
   setIndexedSources,
   setActiveThreadSources,
@@ -94,6 +98,7 @@ export function usePulsePersistence({
       setDocumentMarkdown(restored.documentMarkdown)
       setChatHistory(restored.chatHistory)
       setDocumentTitle(restored.documentTitle)
+      setCurrentDocFilename(restored.currentDocFilename)
       setChatSessionId(restored.chatSessionId)
       setIndexedSources(restored.indexedSources)
       setActiveThreadSources(restored.activeThreadSources)
@@ -114,6 +119,7 @@ export function usePulsePersistence({
     setActiveThreadSources,
     setChatHistory,
     setChatSessionId,
+    setCurrentDocFilename,
     setDesktopPaneOrder,
     setDesktopSplitPercent,
     setDesktopViewMode,
@@ -136,6 +142,7 @@ export function usePulsePersistence({
         documentMarkdown,
         chatHistory,
         documentTitle,
+        currentDocFilename,
         chatSessionId,
         indexedSources,
         activeThreadSources,
@@ -154,6 +161,7 @@ export function usePulsePersistence({
     activeThreadSources,
     chatHistory,
     chatSessionId,
+    currentDocFilename,
     desktopPaneOrder,
     desktopSplitPercent,
     desktopViewMode,

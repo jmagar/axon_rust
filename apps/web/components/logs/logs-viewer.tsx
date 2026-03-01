@@ -5,13 +5,7 @@ import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type LogEntry, LogLine } from './log-line'
-import {
-  ALLOWED_SERVICES,
-  LogsToolbar,
-  type ServiceName,
-  TAIL_OPTIONS,
-  type TailLines,
-} from './logs-toolbar'
+import { LogsToolbar, type ServiceName, TAIL_OPTIONS, type TailLines } from './logs-toolbar'
 
 const NeuralCanvas = dynamic(() => import('@/components/neural-canvas'), { ssr: false })
 
@@ -19,7 +13,7 @@ const MAX_LINES = 2000
 
 export function LogsViewer() {
   const router = useRouter()
-  const [service, setService] = useState<ServiceName>(ALLOWED_SERVICES[0])
+  const [service, setService] = useState<ServiceName>('all')
   const [tailLines, setTailLines] = useState<TailLines>(TAIL_OPTIONS[2]) // 200
   const [lines, setLines] = useState<LogEntry[]>([])
   const [filter, setFilter] = useState('')
@@ -46,8 +40,19 @@ export function LogsViewer() {
 
     es.onmessage = (e: MessageEvent<string>) => {
       try {
-        const { line, ts } = JSON.parse(e.data) as { line: string; ts: number }
-        setLines((prev) => [...prev.slice(-(MAX_LINES - 1)), { text: line, ts }])
+        const {
+          line,
+          ts,
+          service: svc,
+        } = JSON.parse(e.data) as {
+          line: string
+          ts: number
+          service?: string
+        }
+        setLines((prev) => [
+          ...prev.slice(-(MAX_LINES - 1)),
+          { text: line, ts, ...(svc ? { service: svc } : {}) },
+        ])
         // Scroll after React re-renders via queueMicrotask
         if (autoScrollRef.current) {
           queueMicrotask(() => {
@@ -169,7 +174,9 @@ export function LogsViewer() {
           }}
           role="log"
           aria-live="polite"
-          aria-label={`Log output for ${service}`}
+          aria-label={
+            service === 'all' ? 'Log output for all services' : `Log output for ${service}`
+          }
         >
           {filteredLines.length === 0 && (
             <div className="flex h-full items-center justify-center">

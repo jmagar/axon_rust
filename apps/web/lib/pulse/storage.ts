@@ -103,6 +103,28 @@ export async function savePulseDoc(
   return { path: filePath, filename }
 }
 
+export async function updatePulseDoc(
+  filename: string,
+  payload: SavePayload,
+): Promise<{ path: string; filename: string }> {
+  await mkdir(PULSE_DIR, { recursive: true })
+  const safeName = path.basename(filename)
+  const filePath = path.join(PULSE_DIR, safeName)
+  const now = new Date().toISOString()
+  const existing = await loadPulseDoc(safeName)
+  const doc: StoredDoc = {
+    title: payload.title,
+    markdown: payload.markdown,
+    tags: payload.tags ?? existing?.tags ?? [],
+    collections: payload.collections ??
+      existing?.collections ?? [process.env.AXON_COLLECTION ?? 'cortex'],
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  }
+  await writeFile(filePath, toFrontmatter(doc), 'utf-8')
+  return { path: filePath, filename: safeName }
+}
+
 export async function loadPulseDoc(filename: string): Promise<StoredDoc | null> {
   const safeName = path.basename(filename)
   const fullPath = path.join(PULSE_DIR, safeName)

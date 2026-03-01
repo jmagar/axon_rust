@@ -92,14 +92,14 @@ async function queryCrawl(statusFilter: StatusFilter, limit: number, offset: num
 async function queryExtract(statusFilter: StatusFilter, limit: number, offset: number) {
   const where = statusWhere(statusFilter)
   const rows = await pool.query(
-    `SELECT id, urls_json, status, created_at, started_at, finished_at, error_text
+    `SELECT id, urls_json, status, created_at, started_at, finished_at, error_text,
+            COUNT(*) OVER() AS total
      FROM axon_extract_jobs
      WHERE ${where}
      ORDER BY created_at DESC
      LIMIT $1 OFFSET $2`,
     [limit, offset],
   )
-  const count = await pool.query(`SELECT COUNT(*) FROM axon_extract_jobs WHERE ${where}`)
   return {
     jobs: rows.rows.map((r) => {
       const urls = Array.isArray(r.urls_json) ? (r.urls_json as string[]) : []
@@ -117,21 +117,22 @@ async function queryExtract(statusFilter: StatusFilter, limit: number, offset: n
         errorText: r.error_text as string | null,
       }
     }),
-    total: Number((count.rows[0] as { count: string }).count),
+    total: Number((rows.rows[0] as { total?: string } | undefined)?.total ?? 0),
   }
 }
 
 async function queryEmbed(statusFilter: StatusFilter, limit: number, offset: number) {
   const where = statusWhere(statusFilter)
   const rows = await pool.query(
-    `SELECT id, input_text, status, created_at, started_at, finished_at, error_text, config_json->>'collection' AS collection
+    `SELECT id, input_text, status, created_at, started_at, finished_at, error_text,
+            config_json->>'collection' AS collection,
+            COUNT(*) OVER() AS total
      FROM axon_embed_jobs
      WHERE ${where}
      ORDER BY created_at DESC
      LIMIT $1 OFFSET $2`,
     [limit, offset],
   )
-  const count = await pool.query(`SELECT COUNT(*) FROM axon_embed_jobs WHERE ${where}`)
   return {
     jobs: rows.rows.map((r) => ({
       id: r.id as string,
@@ -144,21 +145,21 @@ async function queryEmbed(statusFilter: StatusFilter, limit: number, offset: num
       finishedAt: r.finished_at ? (r.finished_at as Date).toISOString() : null,
       errorText: r.error_text as string | null,
     })),
-    total: Number((count.rows[0] as { count: string }).count),
+    total: Number((rows.rows[0] as { total?: string } | undefined)?.total ?? 0),
   }
 }
 
 async function queryIngest(statusFilter: StatusFilter, limit: number, offset: number) {
   const where = statusWhere(statusFilter)
   const rows = await pool.query(
-    `SELECT id, source_type, target, status, created_at, started_at, finished_at, error_text
+    `SELECT id, source_type, target, status, created_at, started_at, finished_at, error_text,
+            COUNT(*) OVER() AS total
      FROM axon_ingest_jobs
      WHERE ${where}
      ORDER BY created_at DESC
      LIMIT $1 OFFSET $2`,
     [limit, offset],
   )
-  const count = await pool.query(`SELECT COUNT(*) FROM axon_ingest_jobs WHERE ${where}`)
   return {
     jobs: rows.rows.map((r) => ({
       id: r.id as string,
@@ -171,7 +172,7 @@ async function queryIngest(statusFilter: StatusFilter, limit: number, offset: nu
       finishedAt: r.finished_at ? (r.finished_at as Date).toISOString() : null,
       errorText: r.error_text as string | null,
     })),
-    total: Number((count.rows[0] as { count: string }).count),
+    total: Number((rows.rows[0] as { total?: string } | undefined)?.total ?? 0),
   }
 }
 

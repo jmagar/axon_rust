@@ -34,6 +34,7 @@ export function PulseWorkspace() {
 
   const [documentMarkdown, setDocumentMarkdown] = useState('')
   const [documentTitle, setDocumentTitle] = useState('Untitled')
+  const [currentDocFilename, setCurrentDocFilename] = useState<string | null>(null)
   const [pendingOps, setPendingOps] = useState<DocOperation[] | null>(null)
   const [pendingValidation, setPendingValidation] = useState<ValidationResult | null>(null)
   const [sourcesExpanded, setSourcesExpanded] = useState(false)
@@ -139,6 +140,7 @@ export function PulseWorkspace() {
     setChatHistory([])
     setDocumentMarkdown('')
     setDocumentTitle('Untitled')
+    setCurrentDocFilename(null)
     setChatSessionId(null)
     setIndexedSources([])
     setActiveThreadSources([])
@@ -161,6 +163,7 @@ export function PulseWorkspace() {
     documentMarkdown,
     chatHistory,
     documentTitle,
+    currentDocFilename,
     chatSessionId,
     indexedSources,
     activeThreadSources,
@@ -175,6 +178,7 @@ export function PulseWorkspace() {
     setDocumentMarkdown,
     setChatHistory,
     setDocumentTitle,
+    setCurrentDocFilename,
     setChatSessionId,
     setIndexedSources,
     setActiveThreadSources,
@@ -187,7 +191,18 @@ export function PulseWorkspace() {
     messageIdRef,
   })
 
-  const { saveStatus } = usePulseAutosave(documentMarkdown, documentTitle)
+  const { saveStatus, savedFilename } = usePulseAutosave(
+    documentMarkdown,
+    documentTitle,
+    currentDocFilename,
+  )
+
+  // Sync savedFilename back to currentDocFilename after the first save creates the file
+  useEffect(() => {
+    if (savedFilename && !currentDocFilename) {
+      setCurrentDocFilename(savedFilename)
+    }
+  }, [savedFilename, currentDocFilename])
 
   // File selection effect — set documentMarkdown from markdownContent
   useEffect(() => {
@@ -195,6 +210,12 @@ export function PulseWorkspace() {
     setDocumentMarkdown(markdownContent)
     const parts = selectedFile.split('/')
     setDocumentTitle(parts[parts.length - 1] ?? selectedFile)
+    if (selectedFile.includes('.cache/pulse/')) {
+      const basename = parts[parts.length - 1] ?? null
+      setCurrentDocFilename(basename)
+    } else {
+      setCurrentDocFilename(null)
+    }
   }, [markdownContent, selectedFile])
 
   // Update workspace context effect
