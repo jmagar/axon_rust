@@ -1,7 +1,7 @@
 'use client'
 
 import { Activity, AlertCircle, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { JobEntry, StatusResult } from '@/lib/result-types'
 
 // ── Status badge ──────────────────────────────────────────────────────────────
@@ -112,10 +112,10 @@ function JobCard({ title, jobs, color }: { title: string; jobs: JobEntry[]; colo
 
 function SummaryBar({ data }: { data: StatusResult }) {
   const all = [
-    ...data.local_crawl_jobs,
-    ...data.local_extract_jobs,
-    ...data.local_embed_jobs,
-    ...data.local_ingest_jobs,
+    ...(data.local_crawl_jobs ?? []),
+    ...(data.local_extract_jobs ?? []),
+    ...(data.local_embed_jobs ?? []),
+    ...(data.local_ingest_jobs ?? []),
   ]
   const counts = {
     running: all.filter((j) => j.status === 'running').length,
@@ -175,17 +175,22 @@ export function StatusDashboard() {
   const [loading, setLoading] = useState(true)
   const [spinning, setSpinning] = useState(false)
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   async function load(isManual = false) {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     if (isManual) setSpinning(true)
     setError(null)
     try {
-      const res = await fetch('/api/cortex/status')
+      const res = await fetch('/api/cortex/status', { signal: controller.signal })
       const json = (await res.json()) as ApiResponse
       if (!json.ok) throw new Error(json.error ?? 'Unknown error')
       setData(json.data ?? null)
       setUpdatedAt(new Date())
     } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setLoading(false)
@@ -193,11 +198,14 @@ export function StatusDashboard() {
     }
   }
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: load is stable within the render; deps would cause double-fetch on mount
+  // biome-ignore lint/correctness/useExhaustiveDependencies: load intentionally captured at mount; abortRef cleanup handles unmount race
   useEffect(() => {
     void load()
     const id = setInterval(() => void load(), 5_000)
-    return () => clearInterval(id)
+    return () => {
+      clearInterval(id)
+      abortRef.current?.abort()
+    }
   }, [])
 
   return (
@@ -214,7 +222,7 @@ export function StatusDashboard() {
         <button
           type="button"
           onClick={() => void load(true)}
-          disabled={loading}
+          disabled={loading || spinning}
           className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-float)] hover:text-[var(--axon-primary)] disabled:opacity-40"
         >
           <RefreshCw className={`size-3.5 ${spinning ? 'animate-spin' : ''}`} />

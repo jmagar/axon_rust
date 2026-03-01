@@ -2,6 +2,7 @@
 
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { AlertCircle, Library, RefreshCw, Search } from 'lucide-react'
+import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SourcesResult } from '@/lib/result-types'
 
@@ -12,12 +13,13 @@ interface ApiResponse {
 }
 
 export function SourcesDashboard() {
+  const searchParams = useSearchParams()
   const [data, setData] = useState<SourcesResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [spinning, setSpinning] = useState(false)
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(() => searchParams.get('q') ?? '')
   const parentRef = useRef<HTMLDivElement>(null)
 
   async function load(isManual = false) {
@@ -65,7 +67,7 @@ export function SourcesDashboard() {
         <h1 className="text-[18px] font-bold tracking-tight text-[var(--text-primary)]">Sources</h1>
         {data && (
           <span className="rounded-full bg-[rgba(135,175,255,0.12)] px-2 py-0.5 text-[10px] font-semibold text-[var(--axon-primary)]">
-            {Object.keys(data).toLocaleString()} URLs
+            {Object.keys(data).length.toLocaleString()} URLs
           </span>
         )}
         <div className="flex-1" />
@@ -77,7 +79,7 @@ export function SourcesDashboard() {
         <button
           type="button"
           onClick={() => void load(true)}
-          disabled={loading}
+          disabled={loading || spinning}
           className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-float)] hover:text-[var(--axon-primary)] disabled:opacity-40"
         >
           <RefreshCw className={`size-3.5 ${spinning ? 'animate-spin' : ''}`} />

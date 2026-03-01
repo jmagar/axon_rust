@@ -1,7 +1,7 @@
 'use client'
 
 import { AlertCircle, CheckCircle2, RefreshCw, Stethoscope, XCircle } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { DoctorResult, DoctorServiceStatus } from '@/lib/result-types'
 
 // ── Service card ──────────────────────────────────────────────────────────────
@@ -48,17 +48,22 @@ export function DoctorDashboard() {
   const [loading, setLoading] = useState(true)
   const [spinning, setSpinning] = useState(false)
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   async function load(isManual = false) {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     if (isManual) setSpinning(true)
     setError(null)
     try {
-      const res = await fetch('/api/cortex/doctor')
+      const res = await fetch('/api/cortex/doctor', { signal: controller.signal })
       const json = (await res.json()) as ApiResponse
       if (!json.ok) throw new Error(json.error ?? 'Unknown error')
       setData(json.data ?? null)
       setUpdatedAt(new Date())
     } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setLoading(false)
@@ -66,11 +71,14 @@ export function DoctorDashboard() {
     }
   }
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: load is stable within the render; deps would cause double-fetch on mount
+  // biome-ignore lint/correctness/useExhaustiveDependencies: load intentionally captured at mount; abortRef cleanup handles unmount race
   useEffect(() => {
     void load()
     const id = setInterval(() => void load(), 15_000)
-    return () => clearInterval(id)
+    return () => {
+      clearInterval(id)
+      abortRef.current?.abort()
+    }
   }, [])
 
   const allOk = data?.all_ok ?? false
@@ -91,7 +99,7 @@ export function DoctorDashboard() {
         <button
           type="button"
           onClick={() => void load(true)}
-          disabled={loading}
+          disabled={loading || spinning}
           className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-float)] hover:text-[var(--axon-primary)] disabled:opacity-40"
         >
           <RefreshCw className={`size-3.5 ${spinning ? 'animate-spin' : ''}`} />

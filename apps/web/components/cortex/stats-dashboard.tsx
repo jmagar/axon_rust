@@ -1,7 +1,7 @@
 'use client'
 
 import { AlertCircle, BarChart2, RefreshCw } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { StatsResult } from '@/lib/result-types'
 
 interface ApiResponse {
@@ -33,17 +33,22 @@ export function StatsDashboard() {
   const [loading, setLoading] = useState(true)
   const [spinning, setSpinning] = useState(false)
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   async function load(isManual = false) {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     if (isManual) setSpinning(true)
     setError(null)
     try {
-      const res = await fetch('/api/cortex/stats')
+      const res = await fetch('/api/cortex/stats', { signal: controller.signal })
       const json = (await res.json()) as ApiResponse
       if (!json.ok) throw new Error(json.error ?? 'Unknown error')
       setData(json.data ?? null)
       setUpdatedAt(new Date())
     } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setLoading(false)
@@ -51,11 +56,14 @@ export function StatsDashboard() {
     }
   }
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: load is stable within the render; deps would cause double-fetch on mount
+  // biome-ignore lint/correctness/useExhaustiveDependencies: load intentionally captured at mount; abortRef cleanup handles unmount race
   useEffect(() => {
     void load()
     const id = setInterval(() => void load(), 30_000)
-    return () => clearInterval(id)
+    return () => {
+      clearInterval(id)
+      abortRef.current?.abort()
+    }
   }, [])
 
   return (
@@ -83,7 +91,7 @@ export function StatsDashboard() {
         <button
           type="button"
           onClick={() => void load(true)}
-          disabled={loading}
+          disabled={loading || spinning}
           className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-float)] hover:text-[var(--axon-primary)] disabled:opacity-40"
         >
           <RefreshCw className={`size-3.5 ${spinning ? 'animate-spin' : ''}`} />

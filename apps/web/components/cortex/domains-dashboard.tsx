@@ -72,7 +72,7 @@ export function DomainsDashboard() {
         <button
           type="button"
           onClick={() => void load(true)}
-          disabled={loading}
+          disabled={loading || spinning}
           className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-float)] hover:text-[var(--axon-primary)] disabled:opacity-40"
         >
           <RefreshCw className={`size-3.5 ${spinning ? 'animate-spin' : ''}`} />

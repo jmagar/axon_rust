@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic'
 export async function GET() {
   ensureRepoRootEnvLoaded()
   const root = getWorkspaceRoot()
-  const bin = path.join(root, 'scripts', 'axon')
+  const bin = process.env.AXON_BIN ?? path.join(root, 'scripts', 'axon')
   try {
     const { stdout } = await execFileAsync(bin, ['status', '--json'], {
       timeout: 30_000,

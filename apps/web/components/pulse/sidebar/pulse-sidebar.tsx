@@ -145,6 +145,7 @@ export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: 
       setCollapsed(false)
       try {
         localStorage.setItem(COLLAPSED_KEY, 'false')
+        document.documentElement.style.setProperty('--sidebar-w', '260px')
       } catch {
         /* ignore */
       }
@@ -287,6 +288,8 @@ export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: 
                 key={link.href}
                 href={link.href}
                 title={link.label}
+                aria-label={link.label}
+                aria-current={isActive ? 'page' : undefined}
                 className={`flex items-center gap-2 rounded py-1 pl-7 pr-3 text-xs transition-colors ${
                   isActive
                     ? 'bg-[rgba(135,175,255,0.10)] text-[var(--axon-primary)]'

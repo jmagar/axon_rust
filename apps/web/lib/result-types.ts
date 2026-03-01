@@ -157,6 +157,7 @@ export interface StatsResult {
 export interface JobEntry {
   id: string
   url?: string
+  target?: string
   status: string
   [key: string]: unknown
 }
