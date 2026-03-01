@@ -62,7 +62,6 @@ export function PulseWorkspace() {
     splitContainerRef,
     splitHandleRef,
     dragStartRef,
-    verticalDragStartRef,
   } = useSplitPane()
 
   const applyOperations = useCallback((ops: DocOperation[]) => {
