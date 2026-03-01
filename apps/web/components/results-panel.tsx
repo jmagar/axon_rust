@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ContentViewer } from '@/components/content-viewer'
 import { CrawlDownloadToolbar } from '@/components/crawl-download-toolbar'
 import { CrawlProgress } from '@/components/crawl-progress'
+import { ExtractedSection } from '@/components/pulse/sidebar/extracted-section'
 import { CardsRenderer } from '@/components/results/cards-renderer'
 import { JobLifecycleRenderer } from '@/components/results/job-lifecycle-renderer'
 import { RawRenderer } from '@/components/results/raw-renderer'
@@ -311,28 +312,18 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
                 </div>
               ) : isMarkdownMode ? (
                 <>
-                  {/* Inline file list for crawl results */}
+                  {/* Crawl file list — reuses the sidebar's ExtractedSection */}
                   {hasCrawlFiles && (
                     <aside
-                      className="hidden w-52 shrink-0 flex-col border-r border-[var(--border-subtle)] md:flex"
+                      className="hidden w-64 shrink-0 border-r border-[var(--border-subtle)] md:flex md:flex-col"
                       style={{ background: 'var(--surface-base)' }}
                     >
-                      <div className="border-b border-[var(--border-subtle)] px-3 py-2 text-[9px] font-semibold uppercase tracking-widest text-[var(--text-dim)]">
-                        Files ({crawlFiles.length})
-                      </div>
-                      <ul className="flex-1 overflow-y-auto">
-                        {crawlFiles.map((f) => (
-                          <li key={f.relative_path}>
-                            <button
-                              type="button"
-                              onClick={() => selectFile(f.relative_path)}
-                              className={`w-full truncate px-3 py-1.5 text-left text-[10px] transition-colors ${selectedFile === f.relative_path ? 'bg-[rgba(135,175,255,0.12)] text-[var(--axon-primary)]' : 'text-[var(--text-dim)] hover:bg-[var(--surface-float)] hover:text-[var(--text-secondary)]'}`}
-                            >
-                              {f.relative_path.split('/').pop() ?? f.relative_path}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
+                      <ExtractedSection
+                        files={crawlFiles}
+                        selectedFile={selectedFile}
+                        onSelectFile={selectFile}
+                        jobId={currentJobId}
+                      />
                     </aside>
                   )}
                   {/* Main content area */}
