@@ -18,6 +18,32 @@ pub(super) fn collection_needs_init(name: &str) -> bool {
     true
 }
 
+/// Creates keyword payload indexes on `url` and `domain` fields.
+///
+/// These indexes are required by the Qdrant `/facet` endpoint used by the
+/// `domains` and `sources` MCP actions.  The operation is idempotent —
+/// Qdrant returns HTTP 200 when the index already exists.
+async fn ensure_payload_indexes(cfg: &Config) -> Result<(), Box<dyn Error>> {
+    let client = http_client()?;
+    let index_url = format!(
+        "{}/collections/{}/index?wait=true",
+        qdrant_base(cfg),
+        cfg.collection
+    );
+    for field in &["url", "domain"] {
+        client
+            .put(&index_url)
+            .json(&serde_json::json!({
+                "field_name": field,
+                "field_schema": "keyword"
+            }))
+            .send()
+            .await?
+            .error_for_status()?;
+    }
+    Ok(())
+}
+
 pub(super) async fn ensure_collection(cfg: &Config, dim: usize) -> Result<(), Box<dyn Error>> {
     let client = http_client()?;
     let url = format!("{}/collections/{}", qdrant_base(cfg), cfg.collection);
@@ -30,6 +56,7 @@ pub(super) async fn ensure_collection(cfg: &Config, dim: usize) -> Result<(), Bo
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
         if existing_dim == dim {
+            ensure_payload_indexes(cfg).await?;
             return Ok(());
         }
     }
@@ -42,6 +69,7 @@ pub(super) async fn ensure_collection(cfg: &Config, dim: usize) -> Result<(), Bo
         resp.error_for_status()?;
     }
 
+    ensure_payload_indexes(cfg).await?;
     Ok(())
 }
 
