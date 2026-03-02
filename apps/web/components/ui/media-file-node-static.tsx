@@ -19,7 +19,8 @@ function getSafeFileHref(url: unknown): string | undefined {
     const parsed = new URL(trimmed)
     return SAFE_FILE_PROTOCOLS.has(parsed.protocol) ? trimmed : undefined
   } catch {
-    return undefined
+    // URL parsing failed — if there's no colon it's a bare relative path (e.g. "attachments/report.pdf")
+    return trimmed.includes(':') ? undefined : trimmed
   }
 }
 

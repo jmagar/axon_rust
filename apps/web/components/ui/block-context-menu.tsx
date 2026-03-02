@@ -73,7 +73,7 @@ export function BlockContextMenu({ children }: { children: React.ReactNode }) {
       <ContextMenuTrigger
         asChild
         onContextMenu={(event) => {
-          const target = event.target as HTMLElement | null
+          const target = event.target instanceof Element ? event.target : null
           const host = target?.closest<HTMLElement>(
             '[data-slate-editor],[data-plate-open-context-menu]',
           )

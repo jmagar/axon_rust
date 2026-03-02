@@ -43,7 +43,7 @@ type ResizeHandleProps = Omit<ResizeHandlePrimitiveProps, 'direction'> &
   VariantProps<typeof resizeHandleVariants>
 
 export function ResizeHandle({ className, options, direction, ...props }: ResizeHandleProps) {
-  const state = useResizeHandleState(options ?? {})
+  const state = useResizeHandleState({ ...options, ...(direction != null ? { direction } : {}) })
   const resizeHandle = useResizeHandle(state)
   const resolvedDirection = direction ?? options?.direction
 

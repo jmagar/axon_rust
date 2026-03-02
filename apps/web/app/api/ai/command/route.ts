@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
       model?: string
     }
 
-    if (!ctx || !('children' in ctx) || !('selection' in ctx)) {
+    if (!ctx || typeof ctx !== 'object' || !('children' in ctx) || !('selection' in ctx)) {
       return NextResponse.json({ error: 'Missing required ctx payload.' }, { status: 400 })
     }
     if (!Array.isArray(messagesRaw)) {

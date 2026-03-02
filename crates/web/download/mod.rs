@@ -1,0 +1,202 @@
+//! HTTP download handlers for crawl results.
+//!
+//! Four routes:
+//! - `GET /download/{job_id}/pack.md`  — Repomix-style packed Markdown
+//! - `GET /download/{job_id}/pack.xml` — Repomix-style packed XML
+//! - `GET /download/{job_id}/archive.zip` — ZIP of all markdown files
+//! - `GET /download/{job_id}/file/*path` — Single file download
+
+mod archive;
+mod manifest;
+mod validation;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use axum::extract::{Path as AxumPath, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use dashmap::DashMap;
+
+use self::archive::build_zip;
+use self::manifest::load_all_files;
+use self::validation::{sanitize_filename, validate_job_dir};
+
+use super::pack;
+
+/// `GET /download/{job_id}/pack.md`
+pub async fn serve_pack_md(
+    AxumPath(job_id): AxumPath<String>,
+    State(job_dirs): State<Arc<DashMap<String, PathBuf>>>,
+) -> Response {
+    let job_dir = match validate_job_dir(&job_dirs, &job_id).await {
+        Ok(d) => d,
+        Err((status, msg)) => return (status, msg).into_response(),
+    };
+
+    let (domain, entries) = match load_all_files(&job_dir).await {
+        Ok(v) => v,
+        Err((status, msg)) => return (status, msg).into_response(),
+    };
+
+    let body = pack::build_pack_md(&domain, &entries);
+    let safe_filename = sanitize_filename(&format!("{domain}-pack.md"));
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("text/markdown; charset=utf-8"),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{safe_filename}\"")
+            .parse::<header::HeaderValue>()
+            .unwrap_or_else(|_| {
+                header::HeaderValue::from_static("attachment; filename=\"download\"")
+            }),
+    );
+
+    (headers, body).into_response()
+}
+
+/// `GET /download/{job_id}/pack.xml`
+pub async fn serve_pack_xml(
+    AxumPath(job_id): AxumPath<String>,
+    State(job_dirs): State<Arc<DashMap<String, PathBuf>>>,
+) -> Response {
+    let job_dir = match validate_job_dir(&job_dirs, &job_id).await {
+        Ok(d) => d,
+        Err((status, msg)) => return (status, msg).into_response(),
+    };
+
+    let (domain, entries) = match load_all_files(&job_dir).await {
+        Ok(v) => v,
+        Err((status, msg)) => return (status, msg).into_response(),
+    };
+
+    let body = pack::build_pack_xml(&domain, &entries);
+    let safe_filename = sanitize_filename(&format!("{domain}-pack.xml"));
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/xml; charset=utf-8"),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{safe_filename}\"")
+            .parse::<header::HeaderValue>()
+            .unwrap_or_else(|_| {
+                header::HeaderValue::from_static("attachment; filename=\"download\"")
+            }),
+    );
+
+    (headers, body).into_response()
+}
+
+/// `GET /download/{job_id}/archive.zip`
+pub async fn serve_zip(
+    AxumPath(job_id): AxumPath<String>,
+    State(job_dirs): State<Arc<DashMap<String, PathBuf>>>,
+) -> Response {
+    let job_dir = match validate_job_dir(&job_dirs, &job_id).await {
+        Ok(d) => d,
+        Err((status, msg)) => return (status, msg).into_response(),
+    };
+
+    let (domain, entries) = match load_all_files(&job_dir).await {
+        Ok(v) => v,
+        Err((status, msg)) => return (status, msg).into_response(),
+    };
+
+    // Capture filename before moving domain into the blocking closure
+    let filename = format!("{domain}-crawl.zip");
+    let zip_result = tokio::task::spawn_blocking(move || build_zip(&domain, &entries)).await;
+
+    match zip_result {
+        Ok(Ok(bytes)) => {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static("application/zip"),
+            );
+            let safe_filename = sanitize_filename(&filename);
+            headers.insert(
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{safe_filename}\"")
+                    .parse::<header::HeaderValue>()
+                    .unwrap_or_else(|_| {
+                        header::HeaderValue::from_static("attachment; filename=\"download\"")
+                    }),
+            );
+            (headers, bytes).into_response()
+        }
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("zip creation failed: {e}"),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("zip task panicked: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /download/{job_id}/file/{path}`
+pub async fn serve_file(
+    AxumPath((job_id, file_path)): AxumPath<(String, String)>,
+    State(job_dirs): State<Arc<DashMap<String, PathBuf>>>,
+) -> Response {
+    let job_dir = match validate_job_dir(&job_dirs, &job_id).await {
+        Ok(d) => d,
+        Err((status, msg)) => return (status, msg).into_response(),
+    };
+
+    // Reject obvious traversal attempts before touching the filesystem
+    if file_path.contains("..") || file_path.contains('\0') {
+        return (StatusCode::BAD_REQUEST, "invalid file path").into_response();
+    }
+
+    let full_path = job_dir.join(&file_path);
+
+    // Canonicalize both paths and verify containment
+    let Ok(canonical_base) = tokio::fs::canonicalize(&job_dir).await else {
+        return (StatusCode::NOT_FOUND, "job directory not found").into_response();
+    };
+    let Ok(canonical_file) = tokio::fs::canonicalize(&full_path).await else {
+        return (StatusCode::NOT_FOUND, "file not found").into_response();
+    };
+
+    if !canonical_file.starts_with(&canonical_base) {
+        return (StatusCode::FORBIDDEN, "path outside job directory").into_response();
+    }
+
+    let content = match tokio::fs::read_to_string(&canonical_file).await {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::NOT_FOUND, "file not found").into_response(),
+    };
+
+    let filename = canonical_file
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "download.md".to_string());
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("text/markdown; charset=utf-8"),
+    );
+    let safe_filename = sanitize_filename(&filename);
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{safe_filename}\"")
+            .parse::<header::HeaderValue>()
+            .unwrap_or_else(|_| {
+                header::HeaderValue::from_static("attachment; filename=\"download\"")
+            }),
+    );
+
+    (headers, content).into_response()
+}

@@ -5,22 +5,15 @@
 # Example:
 # crates/core/massive_module.rs
 
-# === Pre-existing large files NOT touched in this refactor wave ===
-# These files were already over 500 lines before the monolith splits.
-# They are tracked here for future refactoring.
+# === No active exceptions — all monoliths resolved ===
 
-# 1117 lines — Rust config type definitions; large enum/struct surface area (2026-02-19)
-crates/core/config/types.rs
-# 879 lines — config parsing logic; tightly coupled to types.rs (2026-02-19)
-crates/core/config/parse.rs
-# 669 lines — code generation script, not application code (2026-02-19)
-scripts/generate_mcp_schema_doc.py
-# 665 lines — HTTP client utilities; split planned (2026-02-19)
-crates/core/http.rs
-# 595 lines — download pack logic; split planned (2026-02-26)
-crates/web/download.rs
-# 578 lines — ingest job orchestration; split planned (2026-02-19)
-crates/jobs/ingest.rs
+# === Successfully split in wave 5 (2026-03-01) ===
+# crates/core/config/types.rs: 1117→split into types/ (enums, config, config_impls)
+# crates/core/config/parse.rs: 879→split into parse/ (docker, helpers, build_config)
+# scripts/generate_mcp_schema_doc.py: 669→split into models, parser, renderer modules
+# crates/core/http.rs: 665→split into http/ (error, normalize, ssrf, client, cdp, tests)
+# crates/web/download.rs: 595→split into download/ (validation, manifest, archive)
+# crates/jobs/ingest.rs: 578→split into ingest/ (types, schema, ops, process, tests)
 
 # === Successfully split in wave 4 (2026-03-01) ===
 # tests.rs: 563→split into tests/ directory (watchdog, dotenv, db_lifecycle)

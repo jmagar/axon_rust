@@ -33,8 +33,12 @@ async function resolveWebSocketConstructor(): Promise<WebSocketConstructor> {
 
   // Use dynamic module name to avoid type-check coupling to ws type declarations.
   const wsModuleName = 'ws'
-  const wsModule = (await import(wsModuleName)) as { WebSocket?: WebSocketConstructor }
+  const wsModule = (await import(wsModuleName)) as {
+    WebSocket?: WebSocketConstructor
+    default?: WebSocketConstructor
+  }
   if (wsModule.WebSocket) return wsModule.WebSocket
+  if (wsModule.default) return wsModule.default
 
   throw new Error('WebSocket runtime is unavailable. Install ws or use Node.js 22+.')
 }

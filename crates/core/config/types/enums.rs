@@ -1,0 +1,160 @@
+use clap::ValueEnum;
+use std::fmt;
+
+#[derive(Debug, Clone, Copy)]
+pub enum CommandKind {
+    Scrape,
+    Crawl,
+    Refresh,
+    Map,
+    Extract,
+    Search,
+    Embed,
+    Debug,
+    Doctor,
+    Query,
+    Retrieve,
+    Ask,
+    Evaluate,
+    Suggest,
+    Sources,
+    Domains,
+    Stats,
+    Status,
+    Dedupe,
+    Github,
+    Ingest,
+    Reddit,
+    Youtube,
+    Sessions,
+    Research,
+    Screenshot,
+    Serve,
+}
+
+impl CommandKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Scrape => "scrape",
+            Self::Crawl => "crawl",
+            Self::Refresh => "refresh",
+            Self::Map => "map",
+            Self::Extract => "extract",
+            Self::Search => "search",
+            Self::Embed => "embed",
+            Self::Debug => "debug",
+            Self::Doctor => "doctor",
+            Self::Query => "query",
+            Self::Retrieve => "retrieve",
+            Self::Ask => "ask",
+            Self::Evaluate => "evaluate",
+            Self::Suggest => "suggest",
+            Self::Sources => "sources",
+            Self::Domains => "domains",
+            Self::Stats => "stats",
+            Self::Status => "status",
+            Self::Dedupe => "dedupe",
+            Self::Github => "github",
+            Self::Ingest => "ingest",
+            Self::Reddit => "reddit",
+            Self::Youtube => "youtube",
+            Self::Sessions => "sessions",
+            Self::Research => "research",
+            Self::Screenshot => "screenshot",
+            Self::Serve => "serve",
+        }
+    }
+}
+
+impl fmt::Display for CommandKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RenderMode {
+    Http,
+    Chrome,
+    #[value(name = "auto-switch")]
+    AutoSwitch,
+}
+
+impl fmt::Display for RenderMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Http => "http",
+            Self::Chrome => "chrome",
+            Self::AutoSwitch => "auto-switch",
+        };
+        f.write_str(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScrapeFormat {
+    Markdown,
+    Html,
+    #[value(name = "rawHtml")]
+    #[serde(rename = "rawHtml")]
+    RawHtml,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RedditSort {
+    Hot,
+    Top,
+    New,
+    Rising,
+}
+
+impl fmt::Display for RedditSort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Hot => "hot",
+            Self::Top => "top",
+            Self::New => "new",
+            Self::Rising => "rising",
+        };
+        f.write_str(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RedditTime {
+    Hour,
+    Day,
+    Week,
+    Month,
+    Year,
+    All,
+}
+
+impl fmt::Display for RedditTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Hour => "hour",
+            Self::Day => "day",
+            Self::Week => "week",
+            Self::Month => "month",
+            Self::Year => "year",
+            Self::All => "all",
+        };
+        f.write_str(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PerformanceProfile {
+    #[value(name = "high-stable")]
+    HighStable,
+    Extreme,
+    Balanced,
+    Max,
+}

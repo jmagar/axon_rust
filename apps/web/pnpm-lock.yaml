@@ -20,9 +20,6 @@ importers:
       '@emoji-mart/data':
         specifier: 1.2.1
         version: 1.2.1
-      '@faker-js/faker':
-        specifier: ^10.3.0
-        version: 10.3.0
       '@platejs/ai':
         specifier: ^52.3.1
         version: 52.3.1(platejs@52.0.17(@types/react@19.2.14)(immer@10.2.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(scheduler@0.27.0)(use-sync-external-store@1.6.0(react@19.2.4)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(typescript@5.9.3)
@@ -116,9 +113,6 @@ importers:
       '@tanstack/react-virtual':
         specifier: ^3.13.19
         version: 3.13.19(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@types/pg':
-        specifier: ^8.18.0
-        version: 8.18.0
       '@udecode/cn':
         specifier: ^52.0.11
         version: 52.0.11(@types/react@19.2.14)(class-variance-authority@0.7.1)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwind-merge@3.5.0)
@@ -234,6 +228,9 @@ importers:
       '@biomejs/biome':
         specifier: ^2.4.4
         version: 2.4.4
+      '@faker-js/faker':
+        specifier: ^10.3.0
+        version: 10.3.0
       '@tailwindcss/postcss':
         specifier: ^4
         version: 4.2.1
@@ -246,6 +243,9 @@ importers:
       '@types/node':
         specifier: ^20
         version: 20.19.33
+      '@types/pg':
+        specifier: ^8.18.0
+        version: 8.18.0
       '@types/react':
         specifier: ^19
         version: 19.2.14
