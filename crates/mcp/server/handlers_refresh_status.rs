@@ -20,10 +20,7 @@ impl AxonMcpServer {
         &self,
         _req: StatusRequest,
     ) -> Result<AxonToolResponse, ErrorData> {
-        let json = crate::crates::cli::commands::status::status_snapshot(self.cfg.as_ref())
-            .await
-            .map_err(|e| internal_error(e.to_string()))?;
-        let text = crate::crates::cli::commands::status::status_text(self.cfg.as_ref())
+        let (json, text) = crate::crates::cli::commands::status::status_full(self.cfg.as_ref())
             .await
             .map_err(|e| internal_error(e.to_string()))?;
 

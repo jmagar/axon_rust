@@ -38,6 +38,29 @@ pub async fn status_text(cfg: &Config) -> Result<String, Box<dyn Error>> {
     Ok(lines.join("\n"))
 }
 
+pub(crate) async fn status_full(
+    cfg: &Config,
+) -> Result<(serde_json::Value, String), Box<dyn Error>> {
+    let jobs = load_status_jobs(cfg).await?;
+    let json = status_payload(
+        &jobs.crawl,
+        &jobs.extract,
+        &jobs.embed,
+        &jobs.ingest,
+        &jobs.refresh,
+    );
+    let text = [
+        "Axon Status".to_string(),
+        format!("crawl jobs:   {}", jobs.crawl.len()),
+        format!("extract jobs: {}", jobs.extract.len()),
+        format!("embed jobs:   {}", jobs.embed.len()),
+        format!("ingest jobs:  {}", jobs.ingest.len()),
+        format!("refresh jobs: {}", jobs.refresh.len()),
+    ]
+    .join("\n");
+    Ok((json, text))
+}
+
 struct StatusJobs {
     crawl: Vec<CrawlJob>,
     extract: Vec<ExtractJob>,

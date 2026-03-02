@@ -99,7 +99,7 @@ impl AxonMcpServer {
                 let limit = parse_limit_usize(req.limit, 25, 500);
                 let head = text.lines().take(limit).collect::<Vec<_>>().join("\n");
                 Ok(AxonToolResponse::ok(
-                    "head",
+                    "artifacts",
                     "head",
                     serde_json::json!({
                         "path": path,
@@ -125,7 +125,7 @@ impl AxonMcpServer {
                     .map(|(idx, line)| serde_json::json!({ "line": idx + 1, "text": line }))
                     .collect::<Vec<_>>();
                 Ok(AxonToolResponse::ok(
-                    "grep",
+                    "artifacts",
                     "grep",
                     serde_json::json!({
                         "path": path,
@@ -137,7 +137,7 @@ impl AxonMcpServer {
                 ))
             }
             ArtifactsSubaction::Wc => Ok(AxonToolResponse::ok(
-                "wc",
+                "artifacts",
                 "wc",
                 serde_json::json!({
                     "path": path,
@@ -156,7 +156,7 @@ impl AxonMcpServer {
                     .collect::<Vec<_>>()
                     .join("\n");
                 Ok(AxonToolResponse::ok(
-                    "read",
+                    "artifacts",
                     "read",
                     serde_json::json!({
                         "path": path,
