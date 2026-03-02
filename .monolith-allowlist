@@ -21,24 +21,18 @@ crates/core/http.rs
 crates/web/download.rs
 # 578 lines — ingest job orchestration; split planned (2026-02-19)
 crates/jobs/ingest.rs
-# 563 lines — test module; large test files are acceptable (2026-02-19)
-crates/jobs/common/tests.rs
-# 562 lines — Reddit ingest pipeline; split planned (2026-02-19)
-crates/ingest/reddit.rs
-# 558 lines — screenshot command with browser automation; split planned (2026-02-19)
-crates/cli/commands/screenshot.rs
-# 543 lines — CLI argument definitions; tightly coupled to config types (2026-02-19)
-crates/core/config/cli.rs
-# 521 lines — content extraction utilities; split planned (2026-02-19)
-crates/core/content.rs
-# 502 lines — ask command implementation; split planned (2026-02-19)
-crates/vector/ops/commands/ask.rs
-# 501 lines — refresh processor; split planned (2026-02-28)
-crates/jobs/refresh/processor.rs
-# 501 lines — MCP components page; split planned (2026-03-01)
-apps/web/app/mcp/components.tsx
 
-# === Successfully split in this wave (2026-03-02) — all entries removed ===
+# === Successfully split in wave 4 (2026-03-01) ===
+# tests.rs: 563→split into tests/ directory (watchdog, dotenv, db_lifecycle)
+# processor.rs: 501→379, tests extracted to processor_tests.rs
+# reddit.rs: 562→split into reddit/ module (mod, types, comments, client)
+# screenshot.rs: 558→split into screenshot/ module (mod, cdp, util)
+# cli.rs: 543→split into cli/ module (mod, global_args)
+# content.rs: 521→323, engine extracted to content/engine.rs
+# ask.rs: 502→45, split into ask/ module (normalize, output, tests)
+# components.tsx: 501→271, split into mcp-types, kv-editor, mcp-server-card
+
+# === Successfully split in waves 1-3 (2026-03-02) ===
 # engine.rs: 598→297, split into engine/{runtime,url_utils}.rs
 # tei.rs: 505→119, split into tei/{pipeline,prepare,qdrant_store,tei_client}.rs
 # enforce_monoliths.py: 562→10, split into enforce_monoliths_{impl,helpers}.py
