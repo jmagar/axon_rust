@@ -171,6 +171,7 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
             )
         }
         CliCommand::Screenshot(args) => (CommandKind::Screenshot, args.positional_urls),
+        CliCommand::Mcp => (CommandKind::Mcp, Vec::new()),
         CliCommand::Serve(args) => {
             serve_port = args.port;
             (CommandKind::Serve, Vec::new())

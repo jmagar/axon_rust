@@ -29,6 +29,7 @@ pub enum CommandKind {
     Sessions,
     Research,
     Screenshot,
+    Mcp,
     Serve,
 }
 
@@ -61,6 +62,7 @@ impl CommandKind {
             Self::Sessions => "sessions",
             Self::Research => "research",
             Self::Screenshot => "screenshot",
+            Self::Mcp => "mcp",
             Self::Serve => "serve",
         }
     }

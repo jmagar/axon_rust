@@ -43,6 +43,7 @@ pub(super) enum CliCommand {
     Youtube(YoutubeArgs),
     Sessions(SessionsArgs),
     Screenshot(ScrapeArgs),
+    Mcp,
     Serve(ServeArgs),
 }
 

@@ -22,6 +22,11 @@ mod tests {
     }
 
     #[test]
+    fn test_command_kind_mcp_as_str() {
+        assert_eq!(CommandKind::Mcp.as_str(), "mcp");
+    }
+
+    #[test]
     fn config_default_screenshot_settings() {
         let cfg = Config::default();
         assert!(cfg.screenshot_full_page);

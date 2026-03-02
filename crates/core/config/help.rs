@@ -197,6 +197,7 @@ fn print_top_level_help() {
         dim("LLM-assisted stack troubleshooting")
     );
     println!("  {:<28} {}", cmd("doctor"), dim("Run local diagnostics"));
+    println!("  {:<28} {}", cmd("mcp"), dim("Start MCP stdio server"));
     println!();
     println!(
         "  {}",

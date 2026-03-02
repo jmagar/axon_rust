@@ -1,3 +1,4 @@
+use html5gum::{Token, Tokenizer};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -95,33 +96,39 @@ impl DeterministicParser for JsonLdParser {
 
     fn parse(&self, page_url: &str, html: &str) -> Vec<serde_json::Value> {
         let mut out = Vec::new();
-        let mut pos = 0usize;
+        let mut in_target_script = false;
+        let mut current_json = String::new();
 
-        while let Some(rel) = html[pos..].find("<script") {
-            let script_start = pos + rel;
-            let Some(tag_end_rel) = html[script_start..].find('>') else {
-                break;
-            };
-            let tag_end = script_start + tag_end_rel;
-            let tag = &html[script_start..=tag_end];
-            let tag_lower = tag.to_ascii_lowercase();
-
-            if !tag_lower.contains("application/ld+json") {
-                pos = tag_end + 1;
-                continue;
+        for token in Tokenizer::new(html).infallible() {
+            match token {
+                Token::StartTag(tag) => {
+                    if &tag.name[..] == b"script" {
+                        if let Some(type_attr) = tag.attributes.get(&b"type"[..]) {
+                            let type_str = String::from_utf8_lossy(type_attr).to_lowercase();
+                            if type_str.contains("application/ld+json") {
+                                in_target_script = true;
+                                current_json.clear();
+                            }
+                        }
+                    }
+                }
+                Token::String(s) => {
+                    if in_target_script {
+                        current_json.push_str(&String::from_utf8_lossy(&s));
+                    }
+                }
+                Token::EndTag(tag) => {
+                    if in_target_script && &tag.name[..] == b"script" {
+                        in_target_script = false;
+                        if let Ok(value) =
+                            serde_json::from_str::<serde_json::Value>(current_json.trim())
+                        {
+                            flatten_results(&value, &mut out);
+                        }
+                    }
+                }
+                _ => {}
             }
-
-            let Some(close_rel) = html[tag_end + 1..].find("</script>") else {
-                break;
-            };
-            let close = tag_end + 1 + close_rel;
-            let raw_json = html[tag_end + 1..close].trim();
-
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw_json) {
-                flatten_results(&value, &mut out);
-            }
-
-            pos = close + "</script>".len();
         }
 
         if out.is_empty() {
@@ -150,29 +157,31 @@ impl DeterministicParser for OpenGraphParser {
     }
 
     fn parse(&self, page_url: &str, html: &str) -> Vec<serde_json::Value> {
-        let lower = html.to_ascii_lowercase();
         let mut og_fields = serde_json::Map::new();
-        let mut pos = 0usize;
 
-        while let Some(rel) = lower[pos..].find("<meta") {
-            let start = pos + rel;
-            let Some(end_rel) = lower[start..].find('>') else {
-                break;
-            };
-            let end = start + end_rel;
-            let tag = &html[start..=end];
-            let tag_lower = &lower[start..=end];
+        for token in Tokenizer::new(html).infallible() {
+            if let Token::StartTag(tag) = token {
+                if &tag.name[..] == b"meta" {
+                    let mut property = None;
+                    if let Some(prop) = tag.attributes.get(&b"property"[..]) {
+                        property = Some(String::from_utf8_lossy(prop).into_owned());
+                    } else if let Some(name) = tag.attributes.get(&b"name"[..]) {
+                        property = Some(String::from_utf8_lossy(name).into_owned());
+                    }
 
-            if tag_lower.contains("property=\"og:") || tag_lower.contains("name=\"og:") {
-                let property = extract_attr(tag, "property")
-                    .or_else(|| extract_attr(tag, "name"))
-                    .unwrap_or_default();
-                let content = extract_attr(tag, "content").unwrap_or_default();
-                if !property.is_empty() && !content.is_empty() {
-                    og_fields.insert(property, serde_json::Value::String(content));
+                    if let Some(prop) = property {
+                        let prop_lower = prop.to_lowercase();
+                        if prop_lower.starts_with("og:") {
+                            if let Some(content_attr) = tag.attributes.get(&b"content"[..]) {
+                                let content = String::from_utf8_lossy(content_attr).into_owned();
+                                if !content.is_empty() {
+                                    og_fields.insert(prop, serde_json::Value::String(content));
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            pos = end + 1;
         }
 
         if og_fields.is_empty() {
@@ -201,52 +210,39 @@ impl DeterministicParser for HtmlTableParser {
 
     fn parse(&self, page_url: &str, html: &str) -> Vec<serde_json::Value> {
         let mut out = Vec::new();
-        let mut pos = 0usize;
+        let mut table_depth = 0;
+        let mut row_count = 0;
 
-        while let Some(rel) = html[pos..].find("<table") {
-            let table_start = pos + rel;
-            let Some(table_end_rel) = html[table_start..].find("</table>") else {
-                break;
-            };
-            let table_end = table_start + table_end_rel + "</table>".len();
-            let table_html = &html[table_start..table_end];
-            let row_count = table_html.matches("<tr").count();
-            if row_count > 0 {
-                out.push(serde_json::json!({
-                    "_parser": self.name(),
-                    "_source_url": page_url,
-                    "rows": row_count,
-                    "html_preview": table_html.chars().take(500).collect::<String>(),
-                }));
+        for token in Tokenizer::new(html).infallible() {
+            match token {
+                Token::StartTag(tag) => {
+                    if &tag.name[..] == b"table" {
+                        if table_depth == 0 {
+                            row_count = 0;
+                        }
+                        table_depth += 1;
+                    } else if &tag.name[..] == b"tr" && table_depth > 0 {
+                        row_count += 1;
+                    }
+                }
+                Token::EndTag(tag) => {
+                    if &tag.name[..] == b"table" && table_depth > 0 {
+                        table_depth -= 1;
+                        if table_depth == 0 && row_count > 0 {
+                            out.push(serde_json::json!({
+                                "_parser": self.name(),
+                                "_source_url": page_url,
+                                "rows": row_count,
+                            }));
+                        }
+                    }
+                }
+                _ => {}
             }
-            pos = table_end;
         }
 
         out
     }
-}
-
-pub(crate) fn extract_attr(tag: &str, attr_name: &str) -> Option<String> {
-    let tag_lc = tag.to_ascii_lowercase();
-    let attr_lc = attr_name.to_ascii_lowercase();
-    let patterns = [
-        format!("{attr_lc}=\""),
-        format!("{attr_lc}='"),
-        format!("{attr_lc} = \""),
-        format!("{attr_lc} = '"),
-    ];
-
-    for pattern in &patterns {
-        if let Some(idx) = tag_lc.find(pattern) {
-            let quote_char = pattern.chars().last().unwrap_or('"');
-            let start = idx + pattern.len();
-            let rest = &tag[start..];
-            let end = rest.find(quote_char)?;
-            return Some(rest[..end].trim().to_string());
-        }
-    }
-
-    None
 }
 
 pub(crate) fn flatten_results(value: &serde_json::Value, out: &mut Vec<serde_json::Value>) {

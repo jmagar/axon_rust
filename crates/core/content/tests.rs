@@ -1,4 +1,7 @@
 use super::*;
+use crate::crates::core::content::deterministic::{
+    DeterministicExtractionEngine, estimate_llm_cost_usd,
+};
 
 #[test]
 fn test_redact_url_postgres() {
@@ -69,23 +72,14 @@ fn test_default_engine_dedups_identical_json_ld_items() {
 }
 
 #[test]
-fn test_extract_attr_case_insensitive() {
-    let tag = r#"<meta PROPERTY = "og:title" content="Example">"#;
-    assert_eq!(
-        deterministic::extract_attr(tag, "property").as_deref(),
-        Some("og:title")
-    );
-}
-
-#[test]
 fn test_estimate_llm_cost_usd_zero_for_unknown_model() {
-    let cost = deterministic::estimate_llm_cost_usd("unknown-model", 10_000, 1_000);
+    let cost = estimate_llm_cost_usd("unknown-model", 10_000, 1_000);
     assert_eq!(cost, 0.0);
 }
 
 #[test]
 fn test_estimate_llm_cost_usd_known_model() {
-    let cost = deterministic::estimate_llm_cost_usd("gpt-4o-mini", 100_000, 20_000);
+    let cost = estimate_llm_cost_usd("gpt-4o-mini", 100_000, 20_000);
     assert!(cost > 0.0);
 }
 
