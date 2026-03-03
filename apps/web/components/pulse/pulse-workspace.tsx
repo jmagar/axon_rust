@@ -250,28 +250,47 @@ export function PulseWorkspace() {
     return () => updateWorkspaceContext(null)
   }, [updateWorkspaceContext])
 
-  // Keyboard shortcut effect — model/permission hotkeys
+  // Keyboard shortcut effect — model/permission hotkeys + layout toggles
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (!event.altKey) return
-      const key = event.key
-      if (key !== '1' && key !== '2' && key !== '3') return
-      event.preventDefault()
-      if (event.shiftKey) {
-        const permissionByIndex: PulsePermissionLevel[] = [
-          'plan',
-          'accept-edits',
-          'bypass-permissions',
-        ]
-        setPulsePermissionLevel(permissionByIndex[Number(key) - 1] ?? 'accept-edits')
+      if (event.altKey) {
+        const key = event.key
+        if (key !== '1' && key !== '2' && key !== '3') return
+        event.preventDefault()
+        if (event.shiftKey) {
+          const permissionByIndex: PulsePermissionLevel[] = [
+            'plan',
+            'accept-edits',
+            'bypass-permissions',
+          ]
+          setPulsePermissionLevel(permissionByIndex[Number(key) - 1] ?? 'accept-edits')
+          return
+        }
+        const modelByIndex: PulseModel[] = ['sonnet', 'opus', 'haiku']
+        setPulseModel(modelByIndex[Number(key) - 1] ?? 'sonnet')
         return
       }
-      const modelByIndex: PulseModel[] = ['sonnet', 'opus', 'haiku']
-      setPulseModel(modelByIndex[Number(key) - 1] ?? 'sonnet')
+      // Layout toggle shortcuts — Cmd/Ctrl+B, Cmd/Ctrl+Shift+C, Cmd/Ctrl+Shift+E
+      const isMod = event.metaKey || event.ctrlKey
+      if (isMod && event.key === 'b') {
+        event.preventDefault()
+        document.dispatchEvent(new CustomEvent('axon:sidebar:toggle'))
+        return
+      }
+      if (isMod && event.shiftKey && event.key === 'E') {
+        event.preventDefault()
+        toggleEditor()
+        return
+      }
+      if (isMod && event.shiftKey && event.key === 'C') {
+        event.preventDefault()
+        toggleChat()
+        return
+      }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [setPulseModel, setPulsePermissionLevel])
+  }, [setPulseModel, setPulsePermissionLevel, toggleChat, toggleEditor])
 
   // Keep a ref to the latest handlePrompt so the workspace-prompt effect never needs
   // handlePrompt in its dependency array.  Without this, any re-creation of handlePrompt
@@ -323,7 +342,9 @@ export function PulseWorkspace() {
               title={sourcesExpanded ? 'Hide sources' : 'Show sources'}
             >
               <BookOpen className="size-3.5" />
-              {Math.max(activeThreadSources.length, latestCitationCount)}
+              {Math.max(activeThreadSources.length, latestCitationCount) > 0 && (
+                <span>{Math.max(activeThreadSources.length, latestCitationCount)}</span>
+              )}
               <ChevronDown
                 className={`size-3.5 transition-transform ${sourcesExpanded ? 'rotate-180' : ''}`}
               />
@@ -349,7 +370,7 @@ export function PulseWorkspace() {
         >
           {/* ── Chat panel ── */}
           <div
-            className={`group/chat relative flex h-full flex-col overflow-hidden rounded-xl bg-[rgba(10,18,35,0.52)] transition-all duration-200 ${
+            className={`group/chat relative flex h-full flex-col overflow-hidden rounded-xl bg-[rgba(10,18,35,0.52)] transition-all duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] ${
               isDesktop
                 ? showChat
                   ? 'lg:flex-1'
@@ -365,10 +386,13 @@ export function PulseWorkspace() {
                 type="button"
                 onClick={() => toggleChat(true)}
                 aria-label="Expand chat"
-                title="Expand chat"
-                className="flex h-full w-7 flex-col items-center justify-center text-[var(--text-dim)] transition-colors hover:text-[var(--axon-primary)]"
+                title="Expand chat [⌘⇧C]"
+                className="flex h-full w-7 lg:w-8 flex-col items-center justify-center gap-2 border-l border-[rgba(135,175,255,0.15)] text-[var(--text-dim)] transition-colors hover:text-[var(--axon-primary)]"
               >
                 <ChevronRight className="size-4" />
+                <span className="[writing-mode:vertical-rl] rotate-180 text-[length:var(--text-2xs)] tracking-widest uppercase">
+                  CHAT
+                </span>
               </button>
             ) : (
               <>
@@ -411,7 +435,7 @@ export function PulseWorkspace() {
                     type="button"
                     onClick={() => toggleChat(false)}
                     aria-label="Collapse chat"
-                    title="Collapse chat"
+                    title="Collapse chat [⌘⇧C]"
                     className="absolute right-0 top-1/2 z-10 flex h-10 w-4 -translate-y-1/2 items-center justify-center rounded-l border border-r-0 border-[var(--border-subtle)] bg-[rgba(10,18,35,0.72)] text-[var(--text-dim)] opacity-0 transition-opacity hover:text-[var(--axon-primary)] group-hover/chat:opacity-100"
                   >
                     <ChevronLeft className="size-3" />
@@ -427,6 +451,7 @@ export function PulseWorkspace() {
               ref={splitHandleRef}
               role="separator"
               aria-label="Resize chat/editor — drag or click to toggle editor"
+              title="Drag to resize · Click to toggle editor [⌘⇧E]"
               aria-orientation="vertical"
               aria-valuenow={Math.round(desktopSplitPercent)}
               aria-valuemin={20}
@@ -443,7 +468,7 @@ export function PulseWorkspace() {
                 splitHandleRef.current?.classList.add('bg-[rgba(175,215,255,0.15)]')
               }}
             >
-              <div className="flex flex-col gap-0.5 opacity-30 transition-opacity group-hover:opacity-70">
+              <div className="flex flex-col gap-1 opacity-30 transition-opacity group-hover:opacity-70">
                 {[0, 1, 2, 3, 4].map((i) => (
                   <div key={i} className="size-0.5 rounded-full bg-[var(--text-muted)]" />
                 ))}
@@ -453,7 +478,7 @@ export function PulseWorkspace() {
 
           {/* ── Editor panel ── */}
           <div
-            className={`group/editor relative flex h-full flex-col overflow-hidden rounded-xl bg-[rgba(10,18,35,0.5)] transition-all duration-200 ${
+            className={`group/editor relative flex h-full flex-col overflow-hidden rounded-xl bg-[rgba(10,18,35,0.5)] transition-all duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] ${
               isDesktop
                 ? showEditor
                   ? showChat
@@ -476,10 +501,13 @@ export function PulseWorkspace() {
                 type="button"
                 onClick={() => toggleEditor(true)}
                 aria-label="Expand editor"
-                title="Expand editor"
-                className="flex h-full w-7 flex-col items-center justify-center text-[var(--text-dim)] transition-colors hover:text-[var(--axon-primary)]"
+                title="Expand editor [⌘⇧E]"
+                className="flex h-full w-7 lg:w-8 flex-col items-center justify-center gap-2 border-r border-[rgba(135,175,255,0.15)] text-[var(--text-dim)] transition-colors hover:text-[var(--axon-primary)]"
               >
                 <ChevronLeft className="size-4" />
+                <span className="[writing-mode:vertical-rl] rotate-180 text-[length:var(--text-2xs)] tracking-widest uppercase">
+                  EDIT
+                </span>
               </button>
             ) : (
               <>
@@ -489,7 +517,7 @@ export function PulseWorkspace() {
                     type="button"
                     onClick={() => toggleEditor(false)}
                     aria-label="Collapse editor"
-                    title="Collapse editor"
+                    title="Collapse editor [⌘⇧E]"
                     className="absolute left-0 top-1/2 z-10 flex h-10 w-4 -translate-y-1/2 items-center justify-center rounded-r border border-l-0 border-[var(--border-subtle)] bg-[rgba(10,18,35,0.72)] text-[var(--text-dim)] opacity-0 transition-opacity hover:text-[var(--axon-primary)] group-hover/editor:opacity-100"
                   >
                     <ChevronRight className="size-3" />

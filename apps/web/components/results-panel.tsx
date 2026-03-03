@@ -259,25 +259,25 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
                 className={`flex-1 rounded-md px-3.5 py-2 text-center text-[11px] font-medium tracking-wide transition-all duration-200 sm:flex-none sm:py-1 ${
                   activeTab === tab.id
                     ? 'bg-[var(--surface-elevated)] font-semibold text-[var(--axon-primary)]'
-                    : 'text-[var(--text-muted)] hover:bg-[var(--surface-float)] hover:text-[var(--axon-primary)]'
+                    : 'font-semibold text-[var(--text-muted)] hover:bg-[var(--surface-float)] hover:text-[var(--axon-primary)]'
                 }`}
               >
-                {tab.label}
-                {tab.id === 'content' && hasCrawlFiles && (
-                  <span className="ml-1.5 text-[10px] text-[var(--text-muted)]">
-                    {crawlFiles.length}
-                  </span>
-                )}
-                {tab.id === 'stats' && logLines.length > 0 && (
-                  <span className="ml-1.5 text-[10px] text-[var(--text-muted)]">
-                    {logLines.length}
-                  </span>
-                )}
-                {tab.id === 'recent' && recentRuns.length > 0 && (
-                  <span className="ml-1.5 text-[10px] text-[var(--text-muted)]">
-                    {recentRuns.length}
-                  </span>
-                )}
+                <span className="inline-flex items-center gap-1.5">
+                  {tab.label}
+                  {tab.id === 'content' && hasCrawlFiles && (
+                    <span className="text-[10px] text-[var(--text-muted)]">
+                      {crawlFiles.length}
+                    </span>
+                  )}
+                  {tab.id === 'stats' && logLines.length > 0 && (
+                    <span className="text-[10px] text-[var(--text-muted)]">{logLines.length}</span>
+                  )}
+                  {tab.id === 'recent' && recentRuns.length > 0 && (
+                    <span className="text-[10px] text-[var(--text-muted)]">
+                      {recentRuns.length}
+                    </span>
+                  )}
+                </span>
               </button>
             ))}
           </div>

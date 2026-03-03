@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-03-02 (session: suppress raw JSON in CmdK palette; add vector/cancel integration tests; fix include_subdomains default)
+Last Modified: 2026-03-02 (session: integration/proptest test suite; MCP typed schema; ask context heuristics; sidebar cleanup; CI service containers)
 
 ## [Unreleased] — feat/sidebar
 
@@ -7,6 +7,12 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 ### Highlights
 
+- **Integration/proptest test suite** — new integration tests for AMQP channel/queue (`amqp_integration.rs`), Redis pool (`redis_integration.rs`), heartbeat (`heartbeat.rs`), Postgres pool (`pool_integration.rs`), refresh job scheduling (`schedule_integration_tests.rs`), and WS protocol/allowlist/ANSI stripping (`ws_protocol_tests.rs`); proptest suites for `is_junk_discovered_url` (`url_utils_proptest.rs`), HTTP SSRF validators (`proptest_tests.rs`), and vector input chunking (`input_proptest.rs`); CI adds Redis 8.2, RabbitMQ 4.0, and Qdrant 1.13.1 service containers with health checks + `AXON_TEST_REDIS_URL` / `AXON_TEST_AMQP_URL` / `AXON_TEST_QDRANT_URL` env vars
+- **MCP typed schema** — `crates/mcp/schema.rs` introduces fully-typed `AxonRequest` enum (tagged union, `snake_case`, `schemars::JsonSchema`) covering all 22+ actions (status/crawl/extract/embed/ingest/query/retrieve/search/map/doctor/domains/sources/stats/help/artifacts/scrape/research/ask/screenshot/refresh and more) with per-action request structs
+- **Ask context heuristics module** — budget helpers and supplemental-injection logic extracted to `crates/vector/ops/commands/ask/context/heuristics.rs`; `push_context_entry` respects `max_chars` budget; `should_inject_supplemental` gates domain-boost on coverage gaps; `SUPPLEMENTAL_CONTEXT_BUDGET_PCT` / `SUPPLEMENTAL_MIN_TOP_CHUNKS_FOR_COVERAGE` / `SUPPLEMENTAL_RELEVANCE_BONUS` constants
+- **Qdrant utils + tests expanded** — `crates/vector/ops/qdrant/utils.rs` (+229 lines) and `crates/vector/ops/qdrant/tests.rs` (+366 lines): test helpers, scroll utilities, source display improvements, additional coverage for search and facet paths
+- **Sidebar simplified** — removed `recents-section.tsx`, `starred-section.tsx`, `templates-section.tsx`; `SidebarSectionId` reduced to `'extracted' | 'workspace'`; `StarredItem`, `RecentItem`, `TagDef`, `TaggedItem` types removed from `types.ts`
+- **Web deprecation cleanup** — deleted creator dashboard + route (`/api/creator`, `/creator`), tasks dashboard + route (`/api/tasks`, `/tasks`), and all associated components (`task-form.tsx`, `tasks-dashboard.tsx`, `tasks-list.tsx`, `creator-dashboard.tsx`)
 - **CmdK palette — no raw JSON** — `CmdKPalette` tracks `jsonCount` separately; `command.output.json` events increment the counter instead of `JSON.stringify`-ing into the log lines array; `CmdKOutput` shows a "N data objects received — see results panel" badge; `classifyLine` drops the `json` case; `formatToolArg` in `tool-badge.tsx` renders tool call inputs as human-readable labels (arrays as `[N items]`, objects as `{key, key, …}`) instead of raw `JSON.stringify`
 - **Integration tests: vector + cancel** — `resolve_test_redis_url` + `resolve_test_qdrant_url` helpers added to `common/mod.rs` (skip-not-fail if env var unset); `poll_cancel_key` integration test in `process.rs`; `ensure_collection` idempotency test in `qdrant_store.rs`; new `crates/vector/ops/qdrant/tests.rs` (search + url_facets); new `crates/vector/ops/tei/tests.rs` (empty-input short-circuit + 429 retry via httpmock); `resolve_test_pg_url` no longer falls through to `AXON_PG_URL` production DB
 - **`--include-subdomains` default changed to `false`** — was accidentally `true`; default is now documented and matches the CLAUDE.md gotcha note
@@ -35,7 +41,11 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 | Commit | Type | Message |
 |---|---|---|
-| *(this commit)* | fix(web)+test(rust) | suppress raw JSON in CmdK palette; add vector/cancel integration tests; fix include_subdomains default |
+| *(this commit)* | test(rust)+refactor(web) | integration/proptest test suite; MCP typed schema; ask context heuristics; sidebar cleanup; CI service containers |
+| `9428156c` | fix(ci) | remove invalid cargo-audit --deny flag; add Qdrant keyword indexes on collection init |
+| `fa8ddc29` | revert | remove redundant .cargo/config.toml — sccache already in ~/.cargo/config.toml |
+| `149325f0` | fix | restore sccache config; patch minimatch ReDoS (CVE high x2) |
+| `edaafabf` | fix(web)+test(rust) | suppress raw JSON in CmdK palette; add vector/cancel integration tests; fix include_subdomains default |
 | `959537ac` | refactor(mcp) | deduplicate DB queries in handle_status; fix artifacts action field |
 | `76356b0e` | refactor(mcp+cli) | CLI command handlers, MCP wiring, and web fixes |
 | `186a6936` | refactor(mcp+cli) | MCP as axon mcp subcommand; CLI common.rs JobStatus trait; smart dotenv loading; misc fixes |

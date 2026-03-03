@@ -91,8 +91,37 @@ pub(crate) fn retrieve_max_points(max_points: Option<usize>) -> usize {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 mod tests {
-    use super::{RETRIEVE_MAX_POINTS_CEILING, retrieve_max_points};
+    use super::super::types::{QdrantPayload, QdrantPoint};
+    use super::{
+        RETRIEVE_MAX_POINTS_CEILING, base_url, env_usize_clamped, query_snippet,
+        render_full_doc_from_points, retrieve_max_points,
+    };
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    fn make_point(chunk_text: &str, text: &str, chunk_index: Option<i64>) -> QdrantPoint {
+        QdrantPoint {
+            payload: QdrantPayload {
+                url: String::new(),
+                chunk_text: chunk_text.to_string(),
+                text: text.to_string(),
+                chunk_index,
+            },
+        }
+    }
+
+    fn make_payload(chunk_text: &str, text: &str) -> QdrantPayload {
+        QdrantPayload {
+            url: String::new(),
+            chunk_text: chunk_text.to_string(),
+            text: text.to_string(),
+            chunk_index: None,
+        }
+    }
+
+    // ── retrieve_max_points ───────────────────────────────────────────────────
 
     #[test]
     fn retrieve_max_points_defaults_to_ceiling() {
@@ -110,5 +139,203 @@ mod tests {
     #[test]
     fn retrieve_max_points_preserves_lower_values() {
         assert_eq!(retrieve_max_points(Some(128)), 128);
+    }
+
+    // ── render_full_doc_from_points ───────────────────────────────────────────
+
+    #[test]
+    fn render_full_doc_empty_vec_returns_empty_string() {
+        assert_eq!(render_full_doc_from_points(vec![]), "");
+    }
+
+    #[test]
+    fn render_full_doc_single_chunk_renders_text() {
+        let points = vec![make_point("hello world", "", Some(0))];
+        assert_eq!(render_full_doc_from_points(points), "hello world");
+    }
+
+    #[test]
+    fn render_full_doc_sorts_by_chunk_index_ascending() {
+        // Supply chunks out of order; output must be ordered 0 → 1 → 2.
+        let points = vec![
+            make_point("second", "", Some(2)),
+            make_point("first", "", Some(0)),
+            make_point("middle", "", Some(1)),
+        ];
+        let result = render_full_doc_from_points(points);
+        let pos_first = result.find("first").unwrap();
+        let pos_middle = result.find("middle").unwrap();
+        let pos_second = result.find("second").unwrap();
+        assert!(pos_first < pos_middle, "first must come before middle");
+        assert!(pos_middle < pos_second, "middle must come before second");
+    }
+
+    #[test]
+    fn render_full_doc_none_chunk_index_comes_last() {
+        let points = vec![
+            make_point("no-index", "", None),
+            make_point("indexed", "", Some(0)),
+        ];
+        let result = render_full_doc_from_points(points);
+        let pos_indexed = result.find("indexed").unwrap();
+        let pos_none = result.find("no-index").unwrap();
+        assert!(
+            pos_indexed < pos_none,
+            "indexed chunk must appear before None chunk"
+        );
+    }
+
+    #[test]
+    fn render_full_doc_skips_empty_chunks() {
+        // Both chunk_text and text are empty → the point is skipped entirely.
+        let points = vec![
+            make_point("", "", Some(0)),
+            make_point("real content", "", Some(1)),
+        ];
+        let result = render_full_doc_from_points(points);
+        assert_eq!(result, "real content");
+    }
+
+    #[test]
+    fn render_full_doc_prefers_chunk_text_over_text() {
+        // chunk_text is non-empty → it wins over text.
+        let points = vec![make_point("preferred", "fallback", Some(0))];
+        let result = render_full_doc_from_points(points);
+        assert!(result.contains("preferred"), "chunk_text should be used");
+        assert!(
+            !result.contains("fallback"),
+            "text should not appear when chunk_text is set"
+        );
+    }
+
+    #[test]
+    fn render_full_doc_falls_back_to_text_when_chunk_text_empty() {
+        let points = vec![make_point("", "fallback text", Some(0))];
+        assert_eq!(render_full_doc_from_points(points), "fallback text");
+    }
+
+    // ── query_snippet ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn query_snippet_short_text_returned_in_full() {
+        let payload = make_payload("short text", "");
+        assert_eq!(query_snippet(&payload), "short text");
+    }
+
+    #[test]
+    fn query_snippet_exactly_140_chars_returned_in_full() {
+        let text = "a".repeat(140);
+        let payload = make_payload(&text, "");
+        let result = query_snippet(&payload);
+        assert_eq!(result.len(), 140);
+        assert_eq!(result, text);
+    }
+
+    #[test]
+    fn query_snippet_longer_than_140_chars_truncated() {
+        let text = "b".repeat(200);
+        let payload = make_payload(&text, "");
+        let result = query_snippet(&payload);
+        assert_eq!(result.len(), 140);
+    }
+
+    #[test]
+    fn query_snippet_newlines_replaced_with_spaces() {
+        let payload = make_payload("line one\nline two\nline three", "");
+        let result = query_snippet(&payload);
+        assert!(
+            !result.contains('\n'),
+            "newlines must be replaced with spaces"
+        );
+        assert!(
+            result.contains("line one line two"),
+            "spaces should separate former lines"
+        );
+    }
+
+    #[test]
+    fn query_snippet_uses_chunk_text_over_text() {
+        let payload = make_payload("chunk content", "text content");
+        let result = query_snippet(&payload);
+        assert!(result.contains("chunk content"));
+        assert!(!result.contains("text content"));
+    }
+
+    // ── base_url ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn base_url_standard_https_url() {
+        assert_eq!(
+            base_url("https://example.com/some/path?q=1"),
+            Some("https://example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn base_url_with_non_standard_port() {
+        assert_eq!(
+            base_url("https://example.com:8443/path"),
+            Some("https://example.com:8443".to_string())
+        );
+    }
+
+    #[test]
+    fn base_url_strips_path_keeps_scheme_and_host() {
+        assert_eq!(
+            base_url("https://docs.example.com/guide/intro"),
+            Some("https://docs.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn base_url_invalid_url_returns_none() {
+        assert_eq!(base_url("not a url at all ://???"), None);
+    }
+
+    // ── env_usize_clamped ─────────────────────────────────────────────────────
+
+    #[test]
+    fn env_usize_clamped_missing_key_returns_default() {
+        // Use a key that is guaranteed to never be set in any environment.
+        let val = env_usize_clamped("TEST_AXON_UTILS_CLAMP_MISSING_XYZ_1", 42, 1, 100);
+        assert_eq!(val, 42);
+    }
+
+    #[test]
+    fn env_usize_clamped_within_range_returns_value() {
+        // SAFETY: unique key name; no other test touches this var.
+        unsafe { std::env::set_var("TEST_AXON_UTILS_CLAMP_2", "50") };
+        let val = env_usize_clamped("TEST_AXON_UTILS_CLAMP_2", 10, 1, 100);
+        unsafe { std::env::remove_var("TEST_AXON_UTILS_CLAMP_2") };
+        assert_eq!(val, 50);
+    }
+
+    #[test]
+    fn env_usize_clamped_above_max_clamped_to_max() {
+        // SAFETY: unique key name; no other test touches this var.
+        unsafe { std::env::set_var("TEST_AXON_UTILS_CLAMP_3", "9999") };
+        let val = env_usize_clamped("TEST_AXON_UTILS_CLAMP_3", 10, 1, 100);
+        unsafe { std::env::remove_var("TEST_AXON_UTILS_CLAMP_3") };
+        assert_eq!(val, 100);
+    }
+
+    #[test]
+    fn env_usize_clamped_below_min_returns_default() {
+        // `.filter(|v| *v >= min)` drops the parsed value; `unwrap_or(default)` fires;
+        // `clamp(min, max)` then bounds-checks the default (10 >= 5, so stays 10).
+        // SAFETY: unique key name; no other test touches this var.
+        unsafe { std::env::set_var("TEST_AXON_UTILS_CLAMP_4", "2") };
+        let val = env_usize_clamped("TEST_AXON_UTILS_CLAMP_4", 10, 5, 100);
+        unsafe { std::env::remove_var("TEST_AXON_UTILS_CLAMP_4") };
+        assert_eq!(val, 10);
+    }
+
+    #[test]
+    fn env_usize_clamped_non_numeric_returns_default() {
+        // SAFETY: unique key name; no other test touches this var.
+        unsafe { std::env::set_var("TEST_AXON_UTILS_CLAMP_5", "not_a_number") };
+        let val = env_usize_clamped("TEST_AXON_UTILS_CLAMP_5", 7, 1, 100);
+        unsafe { std::env::remove_var("TEST_AXON_UTILS_CLAMP_5") };
+        assert_eq!(val, 7);
     }
 }

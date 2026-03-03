@@ -130,9 +130,6 @@ export function PulseEditorPane({
           >
             <div className="mb-1 flex items-center justify-between px-1.5">
               <p className="ui-label flex-none">Editor</p>
-              <span className="tabular-nums text-[10px] text-[var(--text-dim)]">
-                {wordCount} {wordCount === 1 ? 'word' : 'words'}
-              </span>
             </div>
 
             {/* Mobile compact toolbar */}
@@ -264,18 +261,34 @@ export function PulseEditorPane({
             className="hidden shrink-0 items-center gap-2 px-2.5 py-1 sm:flex"
             style={{ boxShadow: '0 -1px 0 rgba(135, 175, 255, 0.07)' }}
           >
-            <span className="text-[10px] text-[var(--text-dim)]">✦ AI copilot active</span>
-            <span className="text-[10px] text-[var(--text-dim)] opacity-60">·</span>
-            <span className="text-[10px] text-[var(--text-dim)]">
-              <kbd className="font-mono">Ctrl+Space</kbd> suggest
+            <span className="inline-flex items-center gap-1 text-[10px] text-[var(--text-dim)]">
+              <Sparkles className="size-2.5" />
+              AI copilot active
             </span>
             <span className="text-[10px] text-[var(--text-dim)] opacity-60">·</span>
             <span className="text-[10px] text-[var(--text-dim)]">
-              <kbd className="font-mono">Tab</kbd> accept
+              <kbd className="rounded border border-[var(--border-subtle)] bg-[var(--surface-primary)] px-1 font-mono text-[length:var(--text-2xs)] text-[var(--text-dim)]">
+                Ctrl+Space
+              </kbd>{' '}
+              suggest
             </span>
             <span className="text-[10px] text-[var(--text-dim)] opacity-60">·</span>
             <span className="text-[10px] text-[var(--text-dim)]">
-              <kbd className="font-mono">Esc</kbd> dismiss
+              <kbd className="rounded border border-[var(--border-subtle)] bg-[var(--surface-primary)] px-1 font-mono text-[length:var(--text-2xs)] text-[var(--text-dim)]">
+                Tab
+              </kbd>{' '}
+              accept
+            </span>
+            <span className="text-[10px] text-[var(--text-dim)] opacity-60">·</span>
+            <span className="text-[10px] text-[var(--text-dim)]">
+              <kbd className="rounded border border-[var(--border-subtle)] bg-[var(--surface-primary)] px-1 font-mono text-[length:var(--text-2xs)] text-[var(--text-dim)]">
+                Esc
+              </kbd>{' '}
+              dismiss
+            </span>
+            <span className="text-[10px] text-[var(--text-dim)] opacity-60">·</span>
+            <span className="tabular-nums text-[10px] text-[var(--text-dim)]">
+              {wordCount} {wordCount === 1 ? 'word' : 'words'}
             </span>
           </div>
 

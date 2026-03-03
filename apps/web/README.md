@@ -1,5 +1,5 @@
 # Axon Web (Next.js)
-Last Modified: 2026-02-25
+Last Modified: 2026-03-02
 
 `apps/web` is the Next.js interface for Axon. It provides a command omnibox, workspace flows, and live command execution over WebSocket.
 

@@ -2,17 +2,12 @@
 
 import {
   Brain,
-  CheckSquare,
   ChevronLeft,
   ChevronRight,
-  Clock,
   FileText,
   FolderOpen,
   Layers,
-  LayoutTemplate,
-  Paintbrush,
   ScrollText,
-  Star,
   TerminalSquare,
 } from 'lucide-react'
 import Link from 'next/link'
@@ -20,9 +15,6 @@ import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import type { CrawlFile } from '@/lib/ws-protocol'
 import { ExtractedSection } from './extracted-section'
-import { RecentsSection } from './recents-section'
-import { StarredSection } from './starred-section'
-import { TemplatesSection } from './templates-section'
 import type { SidebarSectionId } from './types'
 import { WorkspaceSection } from './workspace-section'
 
@@ -43,15 +35,10 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'extracted', label: 'Extracted', icon: <FileText className="size-4" /> },
-  { id: 'starred', label: 'Starred', icon: <Star className="size-4" /> },
-  { id: 'recents', label: 'Recents', icon: <Clock className="size-4" /> },
-  { id: 'templates', label: 'Skills', icon: <LayoutTemplate className="size-4" /> },
   { id: 'workspace', label: 'Workspace', icon: <FolderOpen className="size-4" /> },
 ]
 
 const PAGE_LINKS = [
-  { href: '/creator', label: 'Creator', icon: <Paintbrush className="size-4" /> },
-  { href: '/tasks', label: 'Tasks', icon: <CheckSquare className="size-4" /> },
   { href: '/jobs', label: 'Jobs', icon: <Layers className="size-4" /> },
   { href: '/logs', label: 'Logs', icon: <ScrollText className="size-4" /> },
   { href: '/terminal', label: 'Terminal', icon: <TerminalSquare className="size-4" /> },
@@ -81,12 +68,6 @@ function SectionContent({
           jobId={jobId}
         />
       )
-    case 'starred':
-      return <StarredSection />
-    case 'recents':
-      return <RecentsSection />
-    case 'templates':
-      return <TemplatesSection />
     case 'workspace':
       return <WorkspaceSection />
     default:
@@ -110,6 +91,12 @@ export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: 
     } catch {
       /* ignore */
     }
+  }, [])
+
+  useEffect(() => {
+    const handler = () => toggleCollapsed()
+    document.addEventListener('axon:sidebar:toggle', handler)
+    return () => document.removeEventListener('axon:sidebar:toggle', handler)
   }, [])
 
   const toggleCollapsed = () => {

@@ -130,6 +130,13 @@ export async function POST(request: Request) {
         let lastEmitAt = Date.now()
         let aborted = request.signal.aborted
 
+        let closed = false
+        const safeClose = () => {
+          if (closed) return
+          closed = true
+          controller.close()
+        }
+
         const enqueueEvent = (event: PulseChatStreamEvent) => {
           if (closed) return
           lastEmitAt = Date.now()
@@ -158,7 +165,7 @@ export async function POST(request: Request) {
 
         const emitErrorAndClose = (error: string, code?: string) => {
           emit({ type: 'error', error, code })
-          controller.close()
+          safeClose()
         }
 
         const buildTelemetry = () => {
@@ -186,7 +193,7 @@ export async function POST(request: Request) {
         }
 
         if (replayFromLastEventId()) {
-          controller.close()
+          safeClose()
           return
         }
 
@@ -204,7 +211,6 @@ export async function POST(request: Request) {
         let stderr = ''
         let stdoutRemainder = ''
         const parserState = createStreamParserState()
-        let closed = false
 
         const abortHandler = () => {
           aborted = true
@@ -267,6 +273,15 @@ export async function POST(request: Request) {
           closed = true
           cleanup()
 
+          // Flush any partial line that didn't end with a newline (e.g. the final `result` event).
+          if (stdoutRemainder.trim()) {
+            const flushResult = parseClaudeStreamLine(stdoutRemainder, parserState, startedAt)
+            stdoutRemainder = ''
+            if (flushResult.kind === 'assistant_events') {
+              for (const ev of flushResult.events) emit(ev)
+            }
+          }
+
           if (signal && !aborted) {
             emitErrorAndClose(
               `Claude CLI terminated by signal ${signal}`,
@@ -295,7 +310,7 @@ export async function POST(request: Request) {
                 },
               },
             })
-            controller.close()
+            safeClose()
             return
           }
 
@@ -328,7 +343,7 @@ export async function POST(request: Request) {
                   },
                 },
               })
-              controller.close()
+              safeClose()
               return
             }
             emitErrorAndClose(
@@ -384,7 +399,7 @@ export async function POST(request: Request) {
               },
             },
           })
-          controller.close()
+          safeClose()
         })
       },
     })

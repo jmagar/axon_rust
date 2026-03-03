@@ -20,7 +20,7 @@ export function PulseToolbar({
   const router = useRouter()
   const [isDirty, setIsDirty] = useState(false)
   return (
-    <div className="flex shrink-0 items-center gap-x-[var(--pulse-control-gap)] border-b border-[var(--border-subtle)] bg-[rgba(10,18,35,0.65)] px-[var(--space-2)] py-[var(--space-2)] backdrop-blur-sm">
+    <div className="flex min-h-11 shrink-0 items-center gap-x-[var(--pulse-control-gap)] border-b border-[var(--border-subtle)] bg-[rgba(10,18,35,0.65)] px-[var(--space-2)] py-[var(--space-2)] backdrop-blur-sm">
       <div className="relative flex min-w-0 flex-1 sm:flex-none sm:w-[40ch]">
         <input
           id="pulse-document-title"

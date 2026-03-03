@@ -154,3 +154,102 @@ fn url_path_portion(url: &str) -> &str {
         .unwrap_or(after_host.len());
     &after_host[..end]
 }
+
+#[cfg(test)]
+#[path = "url_utils_proptest.rs"]
+mod url_utils_proptest;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn excludes(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    // 1. Empty excludes list → empty result.
+    #[test]
+    fn build_exclude_blacklist_patterns_returns_empty_for_no_excludes() {
+        let patterns = build_exclude_blacklist_patterns("https://example.com", &[]);
+        assert!(patterns.is_empty());
+    }
+
+    // 2. Pattern starts with `^https?://` and contains the escaped host.
+    #[test]
+    fn build_exclude_blacklist_patterns_generates_anchored_host_scoped_regex() {
+        let patterns = build_exclude_blacklist_patterns("https://example.com", &excludes(&["/fr"]));
+        assert_eq!(patterns.len(), 1);
+        assert!(
+            patterns[0].starts_with("^https?://"),
+            "pattern should start with ^https?://, got: {}",
+            patterns[0]
+        );
+        assert!(
+            patterns[0].contains("example"),
+            "pattern should contain host, got: {}",
+            patterns[0]
+        );
+    }
+
+    // 3. Dots in hostname are escaped to `\.`.
+    #[test]
+    fn build_exclude_blacklist_patterns_escapes_dots_in_hostname() {
+        let patterns = build_exclude_blacklist_patterns("https://example.com", &excludes(&["/fr"]));
+        assert_eq!(patterns.len(), 1);
+        assert!(
+            patterns[0].contains("example\\.com"),
+            "dots in hostname should be escaped, got: {}",
+            patterns[0]
+        );
+    }
+
+    // 4. Prefix without leading slash and with leading slash produce the same pattern.
+    #[test]
+    fn build_exclude_blacklist_patterns_normalizes_prefix_without_leading_slash() {
+        let with_slash =
+            build_exclude_blacklist_patterns("https://example.com", &excludes(&["/fr"]));
+        let without_slash =
+            build_exclude_blacklist_patterns("https://example.com", &excludes(&["fr"]));
+        assert_eq!(
+            with_slash, without_slash,
+            "prefix 'fr' and '/fr' should yield identical patterns"
+        );
+    }
+
+    // 5. Three excludes → three patterns (one per exclude).
+    #[test]
+    fn build_exclude_blacklist_patterns_multiple_excludes_produces_one_pattern_each() {
+        let patterns = build_exclude_blacklist_patterns(
+            "https://example.com",
+            &excludes(&["/fr", "/de", "/ja"]),
+        );
+        assert_eq!(patterns.len(), 3);
+    }
+
+    // 6. Unparseable URL falls back to `[^/]+` as the host wildcard.
+    #[test]
+    fn build_exclude_blacklist_patterns_invalid_start_url_uses_wildcard_host() {
+        let patterns = build_exclude_blacklist_patterns("not-a-valid-url", &excludes(&["/fr"]));
+        assert_eq!(patterns.len(), 1);
+        assert!(
+            patterns[0].contains("[^/]+"),
+            "invalid URL should fall back to [^/]+ host pattern, got: {}",
+            patterns[0]
+        );
+    }
+
+    // 7. Pattern ends with the boundary alternation group.
+    //    The format! in build_exclude_blacklist_patterns uses `\\\\?` which in the
+    //    final string becomes `\\?` — i.e. a literal backslash followed by `?`.
+    #[test]
+    fn build_exclude_blacklist_patterns_pattern_ends_with_boundary_alternation() {
+        let patterns = build_exclude_blacklist_patterns("https://example.com", &excludes(&["/fr"]));
+        assert_eq!(patterns.len(), 1);
+        // `\\\\?` in the format string produces `\\?` in the output string.
+        assert!(
+            patterns[0].ends_with("(?:/|-|$|\\\\?|#)"),
+            "pattern should end with boundary alternation group, got: {}",
+            patterns[0]
+        );
+    }
+}

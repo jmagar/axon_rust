@@ -9,6 +9,8 @@ mod cdp;
 mod client;
 mod error;
 mod normalize;
+#[cfg(test)]
+mod proptest_tests;
 mod ssrf;
 #[cfg(test)]
 mod tests;

@@ -3,7 +3,6 @@
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import { type FileEntry, FileTree } from '@/components/workspace/file-tree'
-import { pushRecent } from './recents-section'
 
 export function WorkspaceSection() {
   const router = useRouter()
@@ -35,7 +34,6 @@ export function WorkspaceSection() {
       setSelectedPath(entry.path)
       if (entry.type === 'file') {
         const url = `/editor?workspace=${encodeURIComponent(entry.path)}`
-        pushRecent(url, entry.name)
         router.push(url)
       }
     },

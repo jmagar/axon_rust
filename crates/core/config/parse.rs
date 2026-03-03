@@ -296,6 +296,134 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_viewport_zero_both_dimensions_falls_back() {
+        // Both width and height are 0 — guard is `w > 0 && h > 0`
+        assert_eq!(super::helpers::parse_viewport("0x0"), (1920, 1080));
+    }
+
+    #[test]
+    fn test_parse_viewport_empty_string_falls_back() {
+        assert_eq!(super::helpers::parse_viewport(""), (1920, 1080));
+    }
+
+    #[test]
+    fn test_parse_viewport_uppercase_x_falls_back() {
+        // split_once is case-sensitive; 'X' != 'x', so no separator is found
+        assert_eq!(super::helpers::parse_viewport("1920X1080"), (1920, 1080));
+    }
+
+    #[test]
+    fn test_parse_viewport_surrounding_spaces_trimmed() {
+        // The code calls .trim() on each component before parsing
+        assert_eq!(super::helpers::parse_viewport(" 1280 x 720 "), (1280, 720));
+    }
+
+    #[test]
+    fn test_parse_viewport_large_positive_values_accepted() {
+        assert_eq!(
+            super::helpers::parse_viewport("99999x99999"),
+            (99999, 99999)
+        );
+    }
+
+    // --- normalize_local_service_url tests ---
+
+    #[test]
+    fn test_normalize_url_unrecognized_hostname_unchanged() {
+        let input = "postgresql://user:pass@some-other-host:5432/db".to_string();
+        assert_eq!(
+            super::docker::normalize_local_service_url(input.clone()),
+            input
+        );
+    }
+
+    #[test]
+    fn test_normalize_url_non_url_string_unchanged() {
+        let input = "not-a-url-at-all".to_string();
+        assert_eq!(
+            super::docker::normalize_local_service_url(input.clone()),
+            input
+        );
+    }
+
+    #[test]
+    fn test_normalize_url_empty_string_unchanged() {
+        let input = String::new();
+        assert_eq!(
+            super::docker::normalize_local_service_url(input.clone()),
+            input
+        );
+    }
+
+    #[test]
+    fn test_normalize_url_postgres_rewrites_when_not_in_docker() {
+        if std::path::Path::new("/.dockerenv").exists() {
+            return; // no-op inside a container
+        }
+        use spider::url::Url;
+        let url = "postgresql://axon:pass@axon-postgres:5432/axon".to_string();
+        let result = super::docker::normalize_local_service_url(url);
+        let parsed = Url::parse(&result).unwrap();
+        assert_eq!(parsed.host_str(), Some("127.0.0.1"));
+        assert_eq!(parsed.port(), Some(53432));
+    }
+
+    #[test]
+    fn test_normalize_url_redis_rewrites_when_not_in_docker() {
+        if std::path::Path::new("/.dockerenv").exists() {
+            return;
+        }
+        use spider::url::Url;
+        let url = "redis://:secret@axon-redis:6379".to_string();
+        let result = super::docker::normalize_local_service_url(url);
+        let parsed = Url::parse(&result).unwrap();
+        assert_eq!(parsed.host_str(), Some("127.0.0.1"));
+        assert_eq!(parsed.port(), Some(53379));
+    }
+
+    #[test]
+    fn test_normalize_url_rabbitmq_rewrites_when_not_in_docker() {
+        if std::path::Path::new("/.dockerenv").exists() {
+            return;
+        }
+        use spider::url::Url;
+        let url = "amqp://axon:pw@axon-rabbitmq:5672/vhost".to_string();
+        let result = super::docker::normalize_local_service_url(url);
+        let parsed = Url::parse(&result).unwrap();
+        assert_eq!(parsed.host_str(), Some("127.0.0.1"));
+        assert_eq!(parsed.port(), Some(45535));
+    }
+
+    #[test]
+    fn test_normalize_url_qdrant_rewrites_when_not_in_docker() {
+        if std::path::Path::new("/.dockerenv").exists() {
+            return;
+        }
+        use spider::url::Url;
+        let url = "http://axon-qdrant:6333/collections".to_string();
+        let result = super::docker::normalize_local_service_url(url);
+        let parsed = Url::parse(&result).unwrap();
+        assert_eq!(parsed.host_str(), Some("127.0.0.1"));
+        assert_eq!(parsed.port(), Some(53333));
+    }
+
+    #[test]
+    fn test_normalize_url_credentials_preserved_after_rewrite() {
+        if std::path::Path::new("/.dockerenv").exists() {
+            return;
+        }
+        use spider::url::Url;
+        let url = "postgresql://myuser:mypassword@axon-postgres:5432/mydb".to_string();
+        let result = super::docker::normalize_local_service_url(url);
+        let parsed = Url::parse(&result).unwrap();
+        assert_eq!(parsed.host_str(), Some("127.0.0.1"));
+        assert_eq!(parsed.port(), Some(53432));
+        assert_eq!(parsed.username(), "myuser");
+        assert_eq!(parsed.password(), Some("mypassword"));
+        assert_eq!(parsed.path(), "/mydb");
+    }
+
+    #[test]
     fn test_slash_disables_default_exclude_prefixes() {
         // "/" is treated identically to "" — it disables default exclusions.
         let normalized = super::excludes::normalize_exclude_prefixes(vec!["/".to_string()]);

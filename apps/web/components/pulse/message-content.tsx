@@ -2,6 +2,7 @@
 
 import { Brain, Check, ChevronDown, Copy, History, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
+import { parseClaudeAssistantPayload } from '@/lib/pulse/claude-response'
 import type { PulseMessageBlock } from '@/lib/pulse/types'
 import type { ChatMessage } from '@/lib/pulse/workspace-persistence'
 import { formatMessageTime } from './chat-utils'
@@ -123,10 +124,14 @@ export function MessageContent({ msg }: { msg: ChatMessage }) {
             // Prefer msg.content (parsed clean text set after completion) over
             // group.content only when there is a single text group — otherwise
             // msg.content (the full response) would be repeated for each segment.
+            // When group.content looks like raw Claude JSON, strip it to avoid
+            // showing the JSON wrapper from streaming deltas.
+            const rawGroupContent =
+              parseClaudeAssistantPayload(group.content)?.text ?? group.content
             const displayContent =
               msg.role === 'assistant' && msg.content && textGroupCount === 1
                 ? msg.content
-                : group.content
+                : rawGroupContent
             return msg.role === 'assistant' ? (
               <PulseMarkdown key={i} content={displayContent} />
             ) : (
@@ -176,9 +181,9 @@ export function MessageBubble({
     <div className={`flex w-full ${isUser ? 'justify-end' : 'justify-start'}`}>
       <article
         className={`w-full space-y-1.5 animate-fade-in-up ${
-          isUser ? 'mr-4 max-w-[72%]' : 'ml-2 max-w-[80%]'
+          isUser ? 'mr-4 max-w-[80%]' : 'ml-2 max-w-[80%]'
         }`}
-        style={{ animationDelay: `${index * 25}ms` }}
+        style={{ animationDelay: `${Math.min(index * 25, 150)}ms` }}
       >
         <div
           className={`rounded-xl border px-3 py-2.5 ${

@@ -18,7 +18,6 @@ import type {
   LogLine,
   RecentRun,
   ScreenshotFile,
-  WorkspaceContextState,
 } from './types'
 
 export interface MessageHandlerRefs {

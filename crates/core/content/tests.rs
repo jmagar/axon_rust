@@ -3,6 +3,38 @@ use crate::crates::core::content::deterministic::{
     DeterministicExtractionEngine, estimate_llm_cost_usd,
 };
 
+// ── Regression guard: build_transform_config() safety rails ─────────────────
+
+#[test]
+fn build_transform_config_readability_is_false() {
+    // Readability: true strips VitePress/sidebar layouts to just the page title —
+    // confirmed production regression. Mozilla Readability scores doc sites with
+    // sidebar + nested divs as low-quality (no <article> structure) and discards
+    // them, producing 97% thin pages. main_content=true handles structural
+    // extraction without the scoring penalty. DO NOT change this to true.
+    let cfg = build_transform_config();
+    assert!(
+        !cfg.readability,
+        "readability must stay false — setting it true causes a production regression \
+         where VitePress/sidebar doc pages are stripped to just the page title (97% thin rate)"
+    );
+}
+
+#[test]
+fn build_transform_config_clean_html_is_false() {
+    // clean_html: true uses [class*='ad'] which matches Tailwind shadow-* classes
+    // (sh**ad**ow contains "ad"). This silently wipes all shadow-styled elements
+    // from Tailwind CSS sites (react.dev, shadcn.com, etc.), leaving only the title.
+    // html2md ignores <script>/<style> natively so clean_html buys nothing here.
+    // DO NOT change this to true.
+    let cfg = build_transform_config();
+    assert!(
+        !cfg.clean_html,
+        "clean_html must stay false — [class*='ad'] matches Tailwind shadow-* classes, \
+         silently wiping shadow-styled elements from Tailwind sites"
+    );
+}
+
 #[test]
 fn test_redact_url_postgres() {
     let url = "postgresql://axon:secret123@localhost:5432/axon";

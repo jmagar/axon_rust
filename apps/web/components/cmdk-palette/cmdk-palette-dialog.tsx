@@ -1,6 +1,7 @@
 'use client'
 
 import { Command } from 'cmdk'
+import { Search } from 'lucide-react'
 import type { RefObject } from 'react'
 import {
   MODE_CATEGORY_LABELS,
@@ -46,20 +47,23 @@ const PALETTE_STYLES = `
     font-family: var(--font-mono);
     font-size: var(--text-md);
     color: var(--text-secondary);
-    border-left: 2px solid transparent;
-    transition: background 100ms, border-color 100ms, color 100ms;
+    transition: background 100ms, box-shadow 100ms, color 100ms;
   }
   [cmdk-item][data-selected=true] {
-    background: var(--surface-primary-active);
-    border-left-color: var(--axon-primary);
+    background: rgba(255, 135, 175, 0.08);
+    box-shadow: inset 0 0 0 1px rgba(255, 135, 175, 0.2);
     color: var(--axon-primary);
   }
   [cmdk-item]:hover:not([data-selected=true]) {
     background: var(--surface-primary);
   }
   [cmdk-empty] {
-    padding: 24px; text-align: center;
-    font-family: var(--font-mono);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 32px 24px;
+    font-family: var(--font-sans);
     font-size: var(--text-sm);
     color: var(--text-dim);
   }
@@ -83,7 +87,10 @@ function SelectPanel({ search, setSearch, handleSelectMode }: SelectPanelProps) 
         />
       </div>
       <Command.List>
-        <Command.Empty>No commands found.</Command.Empty>
+        <Command.Empty>
+          <Search className="size-4 opacity-40" />
+          <span>No commands found</span>
+        </Command.Empty>
         {MODE_CATEGORY_ORDER.filter((cat) => PALETTE_CATEGORIES.has(cat)).map((cat) => {
           const items = MODES.filter((m) => m.category === cat)
           if (!items.length) return null

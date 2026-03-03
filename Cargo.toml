@@ -76,6 +76,7 @@ regex = "1"
 httpmock = "0.8"
 insta = "1"
 serial_test = "3"
+proptest = "1"
 
 [lints.rust]
 unsafe_code = "deny"

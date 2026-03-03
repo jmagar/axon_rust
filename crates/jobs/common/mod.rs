@@ -184,6 +184,14 @@ pub(crate) fn resolve_test_pg_url() -> Option<String> {
 }
 
 #[cfg(test)]
+pub(crate) fn resolve_test_amqp_url() -> Option<String> {
+    // Do not fall through to AXON_AMQP_URL — that is the production broker.
+    env::var("AXON_TEST_AMQP_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+}
+
+#[cfg(test)]
 pub(crate) fn resolve_test_redis_url() -> Option<String> {
     env::var("AXON_TEST_REDIS_URL")
         .ok()

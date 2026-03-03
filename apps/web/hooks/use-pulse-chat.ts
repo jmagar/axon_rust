@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChatStreamEvent } from '@/lib/pulse/chat-api'
 import { runChatPrompt, runSourcePrompt } from '@/lib/pulse/chat-api'
+import { parseClaudeAssistantPayload } from '@/lib/pulse/claude-response'
 import type { ValidationResult } from '@/lib/pulse/doc-ops'
 import { validateDocOperations } from '@/lib/pulse/doc-ops'
 import { checkPermission } from '@/lib/pulse/permissions'
@@ -167,6 +168,11 @@ export function usePulseChat({
       }))
       const intent = detectPulsePromptIntent(trimmed)
 
+      // Hoisted so the catch block can recover structured content from streaming deltas.
+      let partialText = ''
+      let draftAdded = false
+      let assistantDraftId: string | undefined
+
       try {
         if (intent.kind === 'source') {
           const result = await runSourcePrompt(intent.urls, controller.signal)
@@ -214,11 +220,10 @@ export function usePulseChat({
           toolUses: [],
           blocks: [],
         })
+        assistantDraftId = assistantDraft.id
 
-        let partialText = ''
         const partialTools: PulseToolUse[] = []
         const partialBlocks: PulseMessageBlock[] = []
-        let draftAdded = false
         function ensureDraftAdded() {
           if (!draftAdded) {
             draftAdded = true
@@ -318,7 +323,7 @@ export function usePulseChat({
 
         updateChatMessage(assistantDraft.id!, (m) => ({
           ...m,
-          content: data.text || partialText,
+          content: data.text,
           citations: data.citations,
           operations: data.operations,
           toolUses: data.toolUses,
@@ -345,16 +350,32 @@ export function usePulseChat({
           return
         }
         if (inFlightPromptRef.current !== promptId) return
+        // If Claude streamed JSON before the error, extract the text instead of showing raw JSON.
+        const parsedPartial =
+          draftAdded && assistantDraftId ? parseClaudeAssistantPayload(partialText) : null
         const message = err instanceof Error ? err.message : 'Unknown error'
-        setChatHistory((prev) => [
-          ...prev,
-          createMessage({
-            role: 'assistant',
+        if (parsedPartial?.text && assistantDraftId) {
+          // Recovered the real response text from streaming deltas — show it cleanly.
+          updateChatMessage(assistantDraftId, (m) => ({ ...m, content: parsedPartial.text }))
+        } else if (draftAdded && assistantDraftId) {
+          // Draft is in history with raw streaming content — replace it with the error in-place.
+          updateChatMessage(assistantDraftId, (m) => ({
+            ...m,
             content: message,
             isError: true,
             retryPrompt: trimmed,
-          }),
-        ])
+          }))
+        } else {
+          setChatHistory((prev) => [
+            ...prev,
+            createMessage({
+              role: 'assistant',
+              content: message,
+              isError: true,
+              retryPrompt: trimmed,
+            }),
+          ])
+        }
       } finally {
         if (activePromptAbortRef.current === controller) activePromptAbortRef.current = null
         if (inFlightPromptRef.current === promptId) {

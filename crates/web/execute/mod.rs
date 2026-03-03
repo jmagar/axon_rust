@@ -16,7 +16,31 @@ mod ws_send;
 #[path = "tests/ws_event_v2_tests.rs"]
 mod ws_event_v2_tests;
 
+#[cfg(test)]
+#[path = "tests/ws_protocol_tests.rs"]
+mod ws_protocol_tests;
+
 pub(crate) use files::handle_read_file;
+
+#[cfg(test)]
+fn build_args(mode: &str, input: &str, flags: &serde_json::Value) -> Vec<String> {
+    args::build_args(mode, input, flags)
+}
+
+#[cfg(test)]
+fn strip_ansi(s: &str) -> String {
+    exe::strip_ansi(s)
+}
+
+#[cfg(test)]
+fn allowed_modes() -> &'static [&'static str] {
+    ALLOWED_MODES
+}
+
+#[cfg(test)]
+fn allowed_flags() -> &'static [(&'static str, &'static str)] {
+    ALLOWED_FLAGS
+}
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -24,6 +48,8 @@ use tokio::process::Command;
 use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
 
+#[cfg(test)]
+use constants::ALLOWED_FLAGS;
 use constants::{ALLOWED_MODES, ASYNC_MODES};
 use context::ExecCommandContext;
 

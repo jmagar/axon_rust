@@ -14,14 +14,14 @@ export function useSplitPane() {
   const [isDesktop, setIsDesktop] = useState(false)
   const [mobilePane, setMobilePane] = useState<'chat' | 'editor'>('chat')
   const [showChat, setShowChat] = useState(true)
-  const [showEditor, setShowEditor] = useState(true)
+  const [showEditor, setShowEditor] = useState(false)
 
   const desktopSplitPercentRef = useRef(50)
   const mobileSplitPercentRef = useRef(56)
   const dragStartRef = useRef<{ pointerX: number; startPercent: number } | null>(null)
   const splitContainerRef = useRef<HTMLDivElement>(null)
   const splitHandleRef = useRef<HTMLDivElement>(null)
-  const showEditorRef = useRef(true)
+  const showEditorRef = useRef(false)
   const showChatRef = useRef(true)
 
   // Keep refs in sync with state

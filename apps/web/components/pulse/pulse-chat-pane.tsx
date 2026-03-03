@@ -232,10 +232,16 @@ export function PulseChatPane({
                   {visibleSources.map((source) => (
                     <span
                       key={source}
-                      className="inline-flex max-w-[190px] items-center gap-1 truncate rounded-full border border-[rgba(95,135,175,0.28)] bg-[rgba(15,23,42,0.48)] px-1.5 py-0.5 text-[length:var(--text-2xs)] text-[var(--text-dim)]"
+                      className="inline-flex max-w-[160px] items-center gap-1 truncate rounded-full border border-[rgba(95,135,175,0.28)] bg-[rgba(15,23,42,0.48)] px-1.5 py-0.5 text-[length:var(--text-2xs)] text-[var(--text-dim)]"
                       title={source}
                     >
-                      {source}
+                      {(() => {
+                        try {
+                          return new URL(source).hostname
+                        } catch {
+                          return source
+                        }
+                      })()}
                       <button
                         type="button"
                         onClick={() => onRemoveSource(source)}
@@ -429,7 +435,7 @@ export function PulseChatPane({
               <button
                 type="button"
                 onClick={onCancelRequest}
-                className="ml-auto inline-flex items-center gap-1 rounded border border-[rgba(255,135,135,0.3)] bg-[rgba(127,29,29,0.28)] px-1.5 py-0.5 text-[length:var(--text-2xs)] text-rose-200"
+                className="ml-auto inline-flex items-center gap-1 rounded border border-[var(--border-subtle)] bg-[var(--surface-elevated)] px-1.5 py-0.5 text-[length:var(--text-2xs)] text-[var(--text-dim)] hover:border-[var(--border-accent)] hover:text-[var(--text-secondary)]"
               >
                 <Square className="size-2.5" />
                 Stop

@@ -144,7 +144,7 @@ function SessionRow({
       type="button"
       onClick={() => void handleClick()}
       disabled={loading}
-      className="flex w-full items-center justify-between rounded px-2 py-1.5 text-left transition-colors disabled:opacity-50 hover:bg-[var(--surface-float)]"
+      className="flex w-full items-center justify-between rounded px-2 py-1.5 text-left transition-colors disabled:opacity-50 hover:bg-[var(--surface-float)] hover:text-[var(--text-primary)]"
     >
       <div className="min-w-0 flex-1">
         {session.project !== 'tmp' && (

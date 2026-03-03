@@ -305,6 +305,9 @@ pub async fn recover_stale_refresh_jobs(
 }
 
 #[cfg(test)]
+mod schedule_integration_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::crates::jobs::common::{resolve_test_pg_url, test_config};

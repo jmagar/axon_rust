@@ -84,7 +84,7 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
     effectiveDropdownOpen,
     modeAppliedLabel,
     placeholderIdx,
-    placeholderVisible,
+    placeholderVisible: _placeholderVisible,
     isFocused,
     mentionTipSeen,
     contextUtilizationPercent,
@@ -92,7 +92,7 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
     workspaceContext,
     pulseModel,
     pulsePermissionLevel,
-    currentMode,
+    currentMode: _currentMode,
     isProcessingWithCurrentMode,
     inputRef,
     toolsRef,
@@ -171,22 +171,20 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
       />
 
       {/* Animated placeholder overlay */}
-      {!input && !isProcessing && (
-        <span
-          aria-hidden="true"
-          className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 select-none font-sans text-sm text-[var(--text-dim)] transition-opacity duration-300 sm:left-4 ${
-            placeholderVisible && !isFocused ? 'opacity-100' : 'opacity-0'
-          }`}
-        >
-          {PLACEHOLDER_TEXTS[placeholderIdx]}
-        </span>
-      )}
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 select-none font-sans text-sm text-[var(--text-dim)] transition-opacity duration-300 sm:left-4 ${
+          !input && !isProcessing ? 'opacity-100' : 'opacity-0'
+        }`}
+      >
+        {PLACEHOLDER_TEXTS[placeholderIdx]}
+      </span>
 
       {/* @mention discovery tip */}
       {!mentionTipSeen && isFocused && !input && (
         <div
           role="status"
-          className="absolute -bottom-6 left-2 text-[10px] text-[var(--text-dim)] animate-fade-in"
+          className="absolute -bottom-7 left-0 rounded border border-[var(--border-subtle)] bg-[var(--surface-base)] px-2 py-1 text-[10px] text-[var(--text-dim)] shadow-[var(--shadow-sm)] animate-fade-in backdrop-blur-sm"
           onMouseDown={(e) => e.preventDefault()}
         >
           Tip: type{' '}
@@ -223,7 +221,7 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
                   ? 'animate-pulse bg-[var(--axon-primary-strong)] shadow-[0_0_8px_rgba(175,215,255,0.7)]'
                   : statusType === 'done'
                     ? 'bg-[var(--axon-secondary)] shadow-[0_0_6px_rgba(255,135,175,0.5)]'
-                    : 'bg-[#ef4444] shadow-[0_0_6px_rgba(239,68,68,0.5)]'
+                    : 'bg-[var(--axon-error)] shadow-[0_0_6px_rgba(255,135,175,0.5)]'
               }`}
             />
             <span className="font-mono text-[length:var(--text-xs)] tracking-wide text-[var(--text-muted)]">
@@ -423,7 +421,7 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
             : input.trim().length > 0 && !isProcessing
               ? 'text-[var(--axon-secondary)] drop-shadow-[0_0_10px_rgba(255,135,175,0.5)] hover:text-white hover:drop-shadow-[0_0_14px_rgba(255,135,175,0.7)]'
               : 'text-[var(--axon-secondary)] hover:text-white'
-        } disabled:opacity-40 disabled:hover:text-[var(--axon-secondary)]`}
+        } disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--axon-secondary)]`}
         title={isProcessing ? 'Cancel' : 'Execute'}
       >
         {isProcessing ? <Square className="size-3.5" /> : <SendHorizontal className="size-3.5" />}
