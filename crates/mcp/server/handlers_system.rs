@@ -5,7 +5,7 @@ use super::common::{
     respond_with_mode, sha256_hex, validate_artifact_path,
 };
 use crate::crates::cli::commands::screenshot::{
-    cdp_screenshot, resolve_browser_ws_url, url_to_screenshot_filename,
+    spider_screenshot_with_options, url_to_screenshot_filename,
 };
 use crate::crates::core::http::{normalize_url, validate_url};
 use crate::crates::mcp::schema::{
@@ -29,13 +29,6 @@ impl AxonMcpServer {
         let normalized = normalize_url(&url);
         validate_url(&normalized).map_err(|e| invalid_params(e.to_string()))?;
 
-        let remote_url =
-            self.cfg.chrome_remote_url.as_deref().ok_or_else(|| {
-                invalid_params("AXON_CHROME_REMOTE_URL is required for screenshot")
-            })?;
-        let browser_ws = resolve_browser_ws_url(remote_url)
-            .await
-            .map_err(|e| internal_error(e.to_string()))?;
         let (width, height) = Self::parse_viewport(
             req.viewport.as_deref(),
             self.cfg.viewport_width,
@@ -43,16 +36,10 @@ impl AxonMcpServer {
         );
         let full_page = req.full_page.unwrap_or(self.cfg.screenshot_full_page);
 
-        let bytes = cdp_screenshot(
-            &browser_ws,
-            &normalized,
-            width,
-            height,
-            full_page,
-            self.cfg.chrome_network_idle_timeout_secs,
-        )
-        .await
-        .map_err(|e| internal_error(e.to_string()))?;
+        let bytes =
+            spider_screenshot_with_options(&self.cfg, &normalized, width, height, full_page)
+                .await
+                .map_err(|e| internal_error(e.to_string()))?;
 
         let path = if let Some(output) = req.output {
             resolve_artifact_output_path(&output)?

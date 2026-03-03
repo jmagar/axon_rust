@@ -1,16 +1,18 @@
+#[allow(dead_code)] // TODO: Remove cdp module entirely in Task 3.
 mod cdp;
+mod spider_capture;
 mod util;
 
 #[cfg(test)]
 mod screenshot_migration_tests;
 
-pub(crate) use cdp::{cdp_screenshot, resolve_browser_ws_url};
+pub(crate) use spider_capture::spider_screenshot_with_options;
 pub(crate) use util::url_to_screenshot_filename;
 
 use super::common::parse_urls;
 use crate::crates::core::config::Config;
 use crate::crates::core::http::{normalize_url, validate_url};
-use crate::crates::core::logging::{log_done, log_info};
+use crate::crates::core::logging::log_done;
 use crate::crates::core::ui::{primary, print_option, print_phase};
 use std::error::Error;
 use util::{format_screenshot_json, require_chrome};
@@ -45,22 +47,7 @@ async fn screenshot_one(cfg: &Config, url: &str, idx: usize) -> Result<(), Box<d
     );
     println!();
 
-    let remote_url = cfg
-        .chrome_remote_url
-        .as_deref()
-        .expect("require_chrome already validated");
-    let browser_ws = resolve_browser_ws_url(remote_url).await?;
-    log_info(&format!("[Screenshot] CDP browser: {browser_ws}"));
-
-    let bytes = cdp_screenshot(
-        &browser_ws,
-        &normalized,
-        cfg.viewport_width,
-        cfg.viewport_height,
-        cfg.screenshot_full_page,
-        cfg.chrome_network_idle_timeout_secs,
-    )
-    .await?;
+    let bytes = spider_capture::spider_screenshot(cfg, &normalized).await?;
 
     let path = if let Some(p) = &cfg.output_path {
         p.clone()
