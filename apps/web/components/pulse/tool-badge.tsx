@@ -172,7 +172,7 @@ export function ToolCallBadge({ tool }: { tool: BadgeTool }) {
       <button
         type="button"
         onClick={() => setPinned((v) => !v)}
-        className={`inline-flex size-5 items-center justify-center rounded border transition-all duration-150 hover:scale-110 hover:animate-badge-glow ${style.border} ${style.bg} ${style.label}`}
+        className={`inline-flex size-5 items-center justify-center rounded border transition-[transform] duration-150 hover:scale-110 hover:animate-badge-glow ${style.border} ${style.bg} ${style.label}`}
         aria-label={`${tool.name} — click to pin`}
         title={`${tool.name} — click to pin`}
       >

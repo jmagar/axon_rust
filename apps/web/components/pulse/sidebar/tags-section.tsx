@@ -5,12 +5,18 @@ import { useEffect, useState } from 'react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { TagDef, TaggedItem } from './types'
 
-const TAG_DEFS_KEY = 'axon.sidebar.tagDefs'
-const TAGGED_ITEMS_KEY = 'axon.sidebar.tags'
+const TAG_DEFS_KEY = 'axon.web.sidebar.tag-defs'
+const TAGGED_ITEMS_KEY = 'axon.web.sidebar.tags'
+const LEGACY_TAG_DEFS_KEY = 'axon.sidebar.tagDefs'
+const LEGACY_TAGGED_ITEMS_KEY = 'axon.sidebar.tags'
 
 function loadTagDefs(): TagDef[] {
   try {
-    const raw = localStorage.getItem(TAG_DEFS_KEY)
+    const raw = localStorage.getItem(TAG_DEFS_KEY) ?? localStorage.getItem(LEGACY_TAG_DEFS_KEY)
+    if (raw) {
+      localStorage.setItem(TAG_DEFS_KEY, raw)
+      localStorage.removeItem(LEGACY_TAG_DEFS_KEY)
+    }
     return raw ? (JSON.parse(raw) as TagDef[]) : []
   } catch {
     return []
@@ -19,7 +25,12 @@ function loadTagDefs(): TagDef[] {
 
 function loadTaggedItems(): TaggedItem[] {
   try {
-    const raw = localStorage.getItem(TAGGED_ITEMS_KEY)
+    const raw =
+      localStorage.getItem(TAGGED_ITEMS_KEY) ?? localStorage.getItem(LEGACY_TAGGED_ITEMS_KEY)
+    if (raw) {
+      localStorage.setItem(TAGGED_ITEMS_KEY, raw)
+      localStorage.removeItem(LEGACY_TAGGED_ITEMS_KEY)
+    }
     return raw ? (JSON.parse(raw) as TaggedItem[]) : []
   } catch {
     return []

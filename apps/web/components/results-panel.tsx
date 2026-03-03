@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ContentViewer } from '@/components/content-viewer'
 import { CrawlDownloadToolbar } from '@/components/crawl-download-toolbar'
 import { CrawlProgress } from '@/components/crawl-progress'
+import { PulseErrorBoundary } from '@/components/pulse/pulse-error-boundary'
 import { ExtractedSection } from '@/components/pulse/sidebar/extracted-section'
 import { CardsRenderer } from '@/components/results/cards-renderer'
 import { JobLifecycleRenderer } from '@/components/results/job-lifecycle-renderer'
@@ -14,7 +15,11 @@ import { ReportRenderer } from '@/components/results/report-renderer'
 import { ScreenshotRenderer } from '@/components/results/screenshot-renderer'
 import { StatusRenderer } from '@/components/results/status-renderer'
 import { TableRenderer } from '@/components/results/table-renderer'
-import { useWsMessages } from '@/hooks/use-ws-messages'
+import {
+  useWsExecutionState,
+  useWsMessageActions,
+  useWsWorkspaceState,
+} from '@/hooks/use-ws-messages'
 import { AXON_COMMAND_SPECS } from '@/lib/axon-command-map'
 import { normalizeResult } from '@/lib/result-normalizers'
 
@@ -90,7 +95,6 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
     currentMode,
     crawlFiles,
     selectedFile,
-    selectFile,
     crawlProgress,
     stdoutLines,
     stdoutJson,
@@ -98,9 +102,9 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
     commandMode,
     screenshotFiles,
     currentJobId,
-    workspaceMode,
-    workspacePromptVersion,
-  } = useWsMessages()
+  } = useWsExecutionState()
+  const { workspaceMode, workspacePromptVersion } = useWsWorkspaceState()
+  const { selectFile } = useWsMessageActions()
 
   const isPulseWorkspace = workspaceMode === 'pulse' && workspacePromptVersion > 0
 
@@ -236,7 +240,11 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
   }
 
   if (isPulseWorkspace) {
-    return <PulseWorkspace />
+    return (
+      <PulseErrorBoundary>
+        <PulseWorkspace />
+      </PulseErrorBoundary>
+    )
   }
 
   return (
@@ -287,7 +295,9 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
       {/* Content pane */}
       {(activeTab === 'content' || isPulseWorkspace) &&
         (isPulseWorkspace ? (
-          <PulseWorkspace />
+          <PulseErrorBoundary>
+            <PulseWorkspace />
+          </PulseErrorBoundary>
         ) : (
           <>
             {/* Download toolbar — visible after crawl completes */}

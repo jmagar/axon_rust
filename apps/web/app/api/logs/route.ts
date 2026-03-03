@@ -22,6 +22,12 @@ export const SERVICES = [
 
 const ALLOWED_SERVICES = new Set<string>(SERVICES)
 
+/**
+ * SECURITY: Docker socket grants full Docker API access. This route is scoped
+ * to read-only container log streaming (getContainer().logs()) against the
+ * ALLOWED_SERVICES allowlist. No exec, stop, remove, or image operations.
+ * Auth is enforced by middleware.ts (AXON_WEB_API_TOKEN).
+ */
 const docker = new Dockerode({ socketPath: '/var/run/docker.sock' })
 
 type SendLine = (line: string, service?: string) => void

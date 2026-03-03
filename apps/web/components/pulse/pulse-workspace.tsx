@@ -1,390 +1,90 @@
 'use client'
 
 import { BookOpen, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useAxonWs } from '@/hooks/use-axon-ws'
-import { usePulseAutosave } from '@/hooks/use-pulse-autosave'
-import { usePulseChat } from '@/hooks/use-pulse-chat'
-import { usePulsePersistence } from '@/hooks/use-pulse-persistence'
-import { usePulseSettings } from '@/hooks/use-pulse-settings'
-import { useSplitPane } from '@/hooks/use-split-pane'
-import { useWsMessages } from '@/hooks/use-ws-messages'
-import type { ValidationResult } from '@/lib/pulse/doc-ops'
-import type { DocOperation, PulseModel, PulsePermissionLevel } from '@/lib/pulse/types'
-import { PULSE_WORKSPACE_STATE_KEY } from '@/lib/pulse/workspace-persistence'
+import dynamic from 'next/dynamic'
+import { usePulseWorkspaceBehavior } from '@/hooks/use-pulse-workspace'
 import { PulseChatPane } from './pulse-chat-pane'
-import { PulseEditorPane } from './pulse-editor-pane'
 import { PulseMobilePaneSwitcher } from './pulse-mobile-pane-switcher'
 import { PulseOpConfirmation } from './pulse-op-confirmation'
 import { PulseToolbar } from './pulse-toolbar'
 
+const PulseEditorPane = dynamic(
+  () => import('./pulse-editor-pane').then((m) => ({ default: m.PulseEditorPane })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-full items-center justify-center text-[var(--text-dim)]">
+        Loading editor…
+      </div>
+    ),
+  },
+)
+
 export function PulseWorkspace() {
-  const {
-    workspacePrompt,
-    workspacePromptVersion,
-    updateWorkspaceContext,
-    pulseModel,
-    pulsePermissionLevel,
-    setPulseModel,
-    setPulsePermissionLevel,
-    selectedFile,
-    markdownContent,
-  } = useWsMessages()
-  const { subscribe } = useAxonWs()
-
-  const [documentMarkdown, setDocumentMarkdown] = useState('')
-  const [documentTitle, setDocumentTitle] = useState('Untitled')
-  const [currentDocFilename, setCurrentDocFilename] = useState<string | null>(null)
-  const [pendingOps, setPendingOps] = useState<DocOperation[] | null>(null)
-  const [pendingValidation, setPendingValidation] = useState<ValidationResult | null>(null)
-  const [sourcesExpanded, setSourcesExpanded] = useState(false)
-
-  const model = pulseModel as PulseModel
-  const permissionLevel = pulsePermissionLevel as PulsePermissionLevel
-
-  const lastHandledPromptVersionRef = useRef(0)
-  const { settings: pulseSettings } = usePulseSettings()
-
-  const {
-    desktopSplitPercent,
-    setDesktopSplitPercent,
-    mobileSplitPercent,
-    setMobileSplitPercent,
-    isDesktop,
-    mobilePane,
-    setMobilePane,
-    showChat,
-    setShowChat,
-    toggleChat,
-    showEditor,
-    setShowEditor,
-    toggleEditor,
-    splitContainerRef,
-    splitHandleRef,
-    dragStartRef,
-  } = useSplitPane()
-
-  const applyOperations = useCallback((ops: DocOperation[]) => {
-    setDocumentMarkdown((prev) => {
-      let next = prev
-      for (const op of ops) {
-        switch (op.type) {
-          case 'replace_document':
-            next = op.markdown
-            break
-          case 'append_markdown':
-            next = `${next}\n\n${op.markdown}`
-            break
-          case 'insert_section':
-            next =
-              op.position === 'top'
-                ? `## ${op.heading}\n\n${op.markdown}\n\n${next}`
-                : `${next}\n\n## ${op.heading}\n\n${op.markdown}`
-            break
-        }
-      }
-      return next
-    })
-  }, [])
-
-  const {
-    chatHistory,
-    setChatHistory,
-    isChatLoading,
-    chatSessionId,
-    setChatSessionId,
-    indexedSources,
-    setIndexedSources,
-    activeThreadSources,
-    setActiveThreadSources,
-    lastResponseLatencyMs,
-    setLastResponseLatencyMs,
-    lastResponseModel,
-    setLastResponseModel,
-    lastContextStats,
-    streamPhase,
-    liveToolUses,
-    requestNotice,
-    handlePrompt,
-    handleCancelPrompt,
-    messageIdRef,
-  } = usePulseChat({
-    documentMarkdown,
-    permissionLevel,
-    model,
-    subscribe,
-    onApplyOperations: applyOperations,
-    onPendingOps: setPendingOps,
-    onPendingValidation: setPendingValidation,
-    effort: pulseSettings.effort,
-    maxTurns: pulseSettings.maxTurns,
-    maxBudgetUsd: pulseSettings.maxBudgetUsd,
-    appendSystemPrompt: pulseSettings.appendSystemPrompt,
-    disableSlashCommands: pulseSettings.disableSlashCommands,
-    noSessionPersistence: pulseSettings.noSessionPersistence,
-    fallbackModel: pulseSettings.fallbackModel,
-    allowedTools: pulseSettings.allowedTools,
-    disallowedTools: pulseSettings.disallowedTools,
-  })
-
-  const latestCitationCount = useMemo(() => {
-    for (let i = chatHistory.length - 1; i >= 0; i -= 1) {
-      const msg = chatHistory[i]
-      if (msg.role === 'assistant' && msg.citations && msg.citations.length > 0) {
-        return msg.citations.length
-      }
-    }
-    return 0
-  }, [chatHistory])
-
-  const handleNewSession = useCallback(() => {
-    handleCancelPrompt()
-    setChatHistory([])
-    setDocumentMarkdown('')
-    setDocumentTitle('Untitled')
-    setCurrentDocFilename(null)
-    setChatSessionId(null)
-    setIndexedSources([])
-    setActiveThreadSources([])
-    try {
-      window.localStorage.removeItem(PULSE_WORKSPACE_STATE_KEY)
-    } catch {
-      // Ignore storage errors.
-    }
-  }, [
-    handleCancelPrompt,
-    setChatHistory,
-    setChatSessionId,
-    setIndexedSources,
-    setActiveThreadSources,
-  ])
-
-  usePulsePersistence({
-    permissionLevel,
-    model,
-    documentMarkdown,
-    chatHistory,
-    documentTitle,
-    currentDocFilename,
-    chatSessionId,
-    indexedSources,
-    activeThreadSources,
-    desktopSplitPercent,
-    mobileSplitPercent,
-    lastResponseLatencyMs,
-    lastResponseModel,
-    showChat,
-    showEditor,
-    setPulsePermissionLevel,
-    setPulseModel,
-    setDocumentMarkdown,
-    setChatHistory,
-    setDocumentTitle,
-    setCurrentDocFilename,
-    setChatSessionId,
-    setIndexedSources,
-    setActiveThreadSources,
-    setDesktopSplitPercent,
-    setMobileSplitPercent,
-    setLastResponseLatencyMs,
-    setLastResponseModel,
-    setShowChat,
-    setShowEditor,
-    messageIdRef,
-  })
-
-  const { saveStatus, savedFilename } = usePulseAutosave(
-    documentMarkdown,
-    documentTitle,
-    currentDocFilename,
-  )
-
-  // Sync savedFilename back to currentDocFilename after the first save creates the file
-  useEffect(() => {
-    if (savedFilename && !currentDocFilename) {
-      setCurrentDocFilename(savedFilename)
-    }
-  }, [savedFilename, currentDocFilename])
-
-  // File selection effect — set documentMarkdown from markdownContent
-  useEffect(() => {
-    if (!selectedFile || !markdownContent) return
-    setDocumentMarkdown(markdownContent)
-    const parts = selectedFile.split('/')
-    setDocumentTitle(parts[parts.length - 1] ?? selectedFile)
-    if (selectedFile.includes('/.cache/pulse/')) {
-      const basename = parts[parts.length - 1] ?? null
-      setCurrentDocFilename(basename)
-    } else {
-      setCurrentDocFilename(null)
-    }
-  }, [markdownContent, selectedFile])
-
-  // Update workspace context effect
-  useEffect(() => {
-    updateWorkspaceContext({
-      turns: chatHistory.length,
-      sourceCount: indexedSources.length,
-      threadSourceCount: activeThreadSources.length,
-      contextCharsTotal: lastContextStats?.contextCharsTotal ?? 0,
-      contextBudgetChars: lastContextStats?.contextBudgetChars ?? 0,
-      lastLatencyMs: lastResponseLatencyMs ?? 0,
-      model,
-      permissionLevel,
-      saveStatus,
-    })
-  }, [
-    activeThreadSources.length,
-    chatHistory.length,
-    indexedSources.length,
-    lastResponseLatencyMs,
-    lastContextStats,
-    model,
-    permissionLevel,
-    saveStatus,
-    updateWorkspaceContext,
-  ])
-
-  // Cleanup workspace context on unmount
-  useEffect(() => {
-    return () => updateWorkspaceContext(null)
-  }, [updateWorkspaceContext])
-
-  // Keyboard shortcut effect — model/permission hotkeys + layout toggles
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.altKey) {
-        const key = event.key
-        if (key !== '1' && key !== '2' && key !== '3') return
-        event.preventDefault()
-        if (event.shiftKey) {
-          const permissionByIndex: PulsePermissionLevel[] = [
-            'plan',
-            'accept-edits',
-            'bypass-permissions',
-          ]
-          setPulsePermissionLevel(permissionByIndex[Number(key) - 1] ?? 'accept-edits')
-          return
-        }
-        const modelByIndex: PulseModel[] = ['sonnet', 'opus', 'haiku']
-        setPulseModel(modelByIndex[Number(key) - 1] ?? 'sonnet')
-        return
-      }
-      // Layout toggle shortcuts — Cmd/Ctrl+B, Cmd/Ctrl+Shift+C, Cmd/Ctrl+Shift+E
-      const isMod = event.metaKey || event.ctrlKey
-      if (isMod && event.key === 'b') {
-        event.preventDefault()
-        document.dispatchEvent(new CustomEvent('axon:sidebar:toggle'))
-        return
-      }
-      if (isMod && event.shiftKey && event.key === 'E') {
-        event.preventDefault()
-        toggleEditor()
-        return
-      }
-      if (isMod && event.shiftKey && event.key === 'C') {
-        event.preventDefault()
-        toggleChat()
-        return
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [setPulseModel, setPulsePermissionLevel, toggleChat, toggleEditor])
-
-  // Keep a ref to the latest handlePrompt so the workspace-prompt effect never needs
-  // handlePrompt in its dependency array.  Without this, any re-creation of handlePrompt
-  // (e.g. documentMarkdown changes during initial state restore) would re-trigger the effect,
-  // and the StrictMode cleanup-then-remount cycle would abort the request then refuse to
-  // restart it (because lastHandledPromptVersionRef is already set).
-  const handlePromptRef = useRef(handlePrompt)
-  useEffect(() => {
-    handlePromptRef.current = handlePrompt
-  }, [handlePrompt])
-
-  // Workspace prompt handler effect
-  useEffect(() => {
-    if (workspacePromptVersion === 0) {
-      lastHandledPromptVersionRef.current = 0
-      return
-    }
-    if (!workspacePrompt) return
-    if (workspacePromptVersion <= lastHandledPromptVersionRef.current) return
-    lastHandledPromptVersionRef.current = workspacePromptVersion
-
-    void handlePromptRef.current(workspacePrompt)
-
-    // On StrictMode cleanup (dev-only mount→unmount→mount cycle), roll back the version
-    // counter so the re-mount is allowed to start a fresh request.
-    return () => {
-      if (lastHandledPromptVersionRef.current === workspacePromptVersion) {
-        lastHandledPromptVersionRef.current = workspacePromptVersion - 1
-      }
-    }
-  }, [workspacePromptVersion, workspacePrompt])
+  const ws = usePulseWorkspaceBehavior()
 
   return (
-    <div className={`flex h-full flex-col${!isDesktop ? ' pt-11' : ''}`}>
+    <div className={`flex h-full flex-col${!ws.isDesktop ? ' pt-11' : ''}`}>
       {/* Fixed mobile header — title + SRC + pane switcher */}
-      {!isDesktop && chatHistory.length > 0 && (
+      {!ws.isDesktop && ws.chatHistory.length > 0 && (
         <div className="fixed left-0 right-0 top-0 z-[9] flex h-11 items-center gap-2 border-b border-[var(--border-subtle)] bg-[rgba(3,7,18,0.45)] pl-3 pr-28 backdrop-blur-lg lg:hidden">
-          {/* Space for AXON logo (fixed left-6 top-5 z-10) */}
           <div className="w-14 shrink-0" />
-          {/* Spacer */}
           <div className="flex-1" />
-          {/* SRC button + pane switcher */}
           <div className="flex shrink-0 items-center gap-1.5">
             <button
               type="button"
-              onClick={() => setSourcesExpanded((prev) => !prev)}
+              onClick={() => ws.setSourcesExpanded((prev) => !prev)}
               className="ui-chip inline-flex items-center gap-1 rounded border border-[rgba(95,135,175,0.24)] bg-[rgba(10,18,35,0.45)] px-1.5 py-0.5 text-[var(--text-dim)]"
-              aria-expanded={sourcesExpanded}
-              title={sourcesExpanded ? 'Hide sources' : 'Show sources'}
+              aria-expanded={ws.sourcesExpanded}
+              title={ws.sourcesExpanded ? 'Hide sources' : 'Show sources'}
             >
               <BookOpen className="size-3.5" />
-              {Math.max(activeThreadSources.length, latestCitationCount) > 0 && (
-                <span>{Math.max(activeThreadSources.length, latestCitationCount)}</span>
+              {Math.max(ws.activeThreadSources.length, ws.latestCitationCount) > 0 && (
+                <span>{Math.max(ws.activeThreadSources.length, ws.latestCitationCount)}</span>
               )}
               <ChevronDown
-                className={`size-3.5 transition-transform ${sourcesExpanded ? 'rotate-180' : ''}`}
+                className={`size-3.5 transition-transform ${ws.sourcesExpanded ? 'rotate-180' : ''}`}
               />
             </button>
-            <PulseMobilePaneSwitcher mobilePane={mobilePane} onMobilePaneChange={setMobilePane} />
+            <PulseMobilePaneSwitcher
+              mobilePane={ws.mobilePane}
+              onMobilePaneChange={ws.setMobilePane}
+            />
           </div>
         </div>
       )}
 
       {/* Desktop toolbar */}
-      {isDesktop && (
+      {ws.isDesktop && (
         <PulseToolbar
-          title={documentTitle}
-          onTitleChange={setDocumentTitle}
-          isDesktop={isDesktop}
-          onNewSession={handleNewSession}
+          title={ws.documentTitle}
+          onTitleChange={ws.setDocumentTitle}
+          isDesktop={ws.isDesktop}
+          onNewSession={ws.handleNewSession}
         />
       )}
+
       <div className="flex flex-1 overflow-hidden bg-[rgba(10,18,35,0.42)]">
         <div
-          ref={splitContainerRef}
+          ref={ws.splitContainerRef}
           className="flex h-full min-w-0 flex-1 flex-col gap-1.5 p-1.5 lg:flex-row lg:gap-0"
         >
-          {/* ── Chat panel ── */}
+          {/* Chat panel */}
           <div
-            className={`group/chat relative flex h-full flex-col overflow-hidden rounded-xl bg-[rgba(10,18,35,0.52)] transition-all duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] ${
-              isDesktop
-                ? showChat
+            className={`group/chat relative flex h-full flex-col overflow-hidden rounded-xl bg-[rgba(10,18,35,0.52)] transition-[flex-basis,width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+              ws.isDesktop
+                ? ws.showChat
                   ? 'lg:flex-1'
                   : 'lg:w-7 lg:flex-none'
-                : mobilePane === 'chat'
+                : ws.mobilePane === 'chat'
                   ? 'flex'
                   : 'hidden'
             }`}
           >
-            {isDesktop && !showChat ? (
-              /* Collapsed chat strip */
+            {ws.isDesktop && !ws.showChat ? (
               <button
                 type="button"
-                onClick={() => toggleChat(true)}
+                onClick={() => ws.toggleChat(true)}
                 aria-label="Expand chat"
                 title="Expand chat [⌘⇧C]"
                 className="flex h-full w-7 lg:w-8 flex-col items-center justify-center gap-2 border-l border-[rgba(135,175,255,0.15)] text-[var(--text-dim)] transition-colors hover:text-[var(--axon-primary)]"
@@ -397,43 +97,40 @@ export function PulseWorkspace() {
             ) : (
               <>
                 <PulseChatPane
-                  messages={chatHistory}
-                  isLoading={isChatLoading}
-                  streamingPhase={streamPhase}
-                  liveToolUses={liveToolUses}
-                  onCancelRequest={handleCancelPrompt}
-                  indexedSources={indexedSources}
-                  activeThreadSources={activeThreadSources}
+                  messages={ws.chatHistory}
+                  isLoading={ws.isChatLoading}
+                  streamingPhase={ws.streamPhase}
+                  liveToolUses={ws.liveToolUses}
+                  onCancelRequest={ws.handleCancelPrompt}
+                  indexedSources={ws.indexedSources}
+                  activeThreadSources={ws.activeThreadSources}
                   onRemoveSource={(url) =>
-                    setActiveThreadSources((prev) => prev.filter((u) => u !== url))
+                    ws.setActiveThreadSources((prev) => prev.filter((u) => u !== url))
                   }
-                  onRetry={(prompt) => void handlePrompt(prompt)}
-                  sourcesExpanded={sourcesExpanded}
-                  onSourcesExpandedChange={setSourcesExpanded}
-                  requestNotice={requestNotice}
+                  onRetry={(prompt) => void ws.handlePrompt(prompt)}
+                  sourcesExpanded={ws.sourcesExpanded}
+                  onSourcesExpandedChange={ws.setSourcesExpanded}
+                  requestNotice={ws.requestNotice}
                 />
-                {pendingOps && pendingValidation && (
-                  <div className="p-3">
-                    <PulseOpConfirmation
-                      operations={pendingOps}
-                      validation={pendingValidation}
-                      onConfirm={() => {
-                        applyOperations(pendingOps)
-                        setPendingOps(null)
-                        setPendingValidation(null)
-                      }}
-                      onReject={() => {
-                        setPendingOps(null)
-                        setPendingValidation(null)
-                      }}
-                    />
-                  </div>
+                {ws.pendingOps && ws.pendingValidation && (
+                  <PulseOpConfirmation
+                    operations={ws.pendingOps}
+                    validation={ws.pendingValidation}
+                    onConfirm={() => {
+                      ws.applyOperations(ws.pendingOps!)
+                      ws.setPendingOps(null)
+                      ws.setPendingValidation(null)
+                    }}
+                    onReject={() => {
+                      ws.setPendingOps(null)
+                      ws.setPendingValidation(null)
+                    }}
+                  />
                 )}
-                {/* Collapse chat button — right inner edge, desktop only */}
-                {isDesktop && (
+                {ws.isDesktop && (
                   <button
                     type="button"
-                    onClick={() => toggleChat(false)}
+                    onClick={() => ws.toggleChat(false)}
                     aria-label="Collapse chat"
                     title="Collapse chat [⌘⇧C]"
                     className="absolute right-0 top-1/2 z-10 flex h-10 w-4 -translate-y-1/2 items-center justify-center rounded-l border border-r-0 border-[var(--border-subtle)] bg-[rgba(10,18,35,0.72)] text-[var(--text-dim)] opacity-0 transition-opacity hover:text-[var(--axon-primary)] group-hover/chat:opacity-100"
@@ -445,27 +142,27 @@ export function PulseWorkspace() {
             )}
           </div>
 
-          {/* ── Drag handle (desktop, both panels open) ── */}
-          {isDesktop && (
+          {/* Drag handle (desktop, both panels open) */}
+          {ws.isDesktop && (
             <div
-              ref={splitHandleRef}
+              ref={ws.splitHandleRef}
               role="separator"
               aria-label="Resize chat/editor — drag or click to toggle editor"
               title="Drag to resize · Click to toggle editor [⌘⇧E]"
               aria-orientation="vertical"
-              aria-valuenow={Math.round(desktopSplitPercent)}
+              aria-valuenow={Math.round(ws.desktopSplitPercent)}
               aria-valuemin={20}
               aria-valuemax={80}
-              aria-valuetext={`Chat: ${Math.round(desktopSplitPercent)}%, Editor: ${Math.round(100 - desktopSplitPercent)}%`}
+              aria-valuetext={`Chat: ${Math.round(ws.desktopSplitPercent)}%, Editor: ${Math.round(100 - ws.desktopSplitPercent)}%`}
               className={`group mx-0.5 hidden w-2 cursor-col-resize items-center justify-center rounded-sm transition-colors hover:bg-[var(--border-subtle)] ${
-                showChat && showEditor ? 'lg:flex' : 'lg:hidden'
+                ws.showChat && ws.showEditor ? 'lg:flex' : 'lg:hidden'
               }`}
               onPointerDown={(event) => {
-                dragStartRef.current = {
+                ws.dragStartRef.current = {
                   pointerX: event.clientX,
-                  startPercent: desktopSplitPercent,
+                  startPercent: ws.desktopSplitPercent,
                 }
-                splitHandleRef.current?.classList.add('bg-[rgba(175,215,255,0.15)]')
+                ws.splitHandleRef.current?.classList.add('bg-[rgba(175,215,255,0.15)]')
               }}
             >
               <div className="flex flex-col gap-1 opacity-30 transition-opacity group-hover:opacity-70">
@@ -476,30 +173,29 @@ export function PulseWorkspace() {
             </div>
           )}
 
-          {/* ── Editor panel ── */}
+          {/* Editor panel */}
           <div
-            className={`group/editor relative flex h-full flex-col overflow-hidden rounded-xl bg-[rgba(10,18,35,0.5)] transition-all duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] ${
-              isDesktop
-                ? showEditor
-                  ? showChat
+            className={`group/editor relative flex h-full flex-col overflow-hidden rounded-xl bg-[rgba(10,18,35,0.5)] transition-[flex-basis,width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+              ws.isDesktop
+                ? ws.showEditor
+                  ? ws.showChat
                     ? 'lg:flex-none'
                     : 'lg:flex-1'
                   : 'lg:w-7 lg:flex-none'
-                : mobilePane === 'editor'
+                : ws.mobilePane === 'editor'
                   ? 'flex'
                   : 'hidden'
             }`}
             style={
-              isDesktop && showEditor && showChat
-                ? { flexBasis: `${100 - desktopSplitPercent}%` }
+              ws.isDesktop && ws.showEditor && ws.showChat
+                ? { flexBasis: `${100 - ws.desktopSplitPercent}%` }
                 : undefined
             }
           >
-            {isDesktop && !showEditor ? (
-              /* Collapsed editor strip */
+            {ws.isDesktop && !ws.showEditor ? (
               <button
                 type="button"
-                onClick={() => toggleEditor(true)}
+                onClick={() => ws.toggleEditor(true)}
                 aria-label="Expand editor"
                 title="Expand editor [⌘⇧E]"
                 className="flex h-full w-7 lg:w-8 flex-col items-center justify-center gap-2 border-r border-[rgba(135,175,255,0.15)] text-[var(--text-dim)] transition-colors hover:text-[var(--axon-primary)]"
@@ -511,11 +207,10 @@ export function PulseWorkspace() {
               </button>
             ) : (
               <>
-                {/* Collapse editor button — left inner edge, desktop only */}
-                {isDesktop && (
+                {ws.isDesktop && (
                   <button
                     type="button"
-                    onClick={() => toggleEditor(false)}
+                    onClick={() => ws.toggleEditor(false)}
                     aria-label="Collapse editor"
                     title="Collapse editor [⌘⇧E]"
                     className="absolute left-0 top-1/2 z-10 flex h-10 w-4 -translate-y-1/2 items-center justify-center rounded-r border border-l-0 border-[var(--border-subtle)] bg-[rgba(10,18,35,0.72)] text-[var(--text-dim)] opacity-0 transition-opacity hover:text-[var(--axon-primary)] group-hover/editor:opacity-100"
@@ -524,11 +219,11 @@ export function PulseWorkspace() {
                   </button>
                 )}
                 <PulseEditorPane
-                  markdown={documentMarkdown}
-                  onMarkdownChange={setDocumentMarkdown}
+                  markdown={ws.documentMarkdown}
+                  onMarkdownChange={ws.setDocumentMarkdown}
                   scrollStorageKey={
-                    currentDocFilename
-                      ? `axon.web.pulse.editor-scroll.${currentDocFilename}`
+                    ws.currentDocFilename
+                      ? `axon.web.pulse.editor-scroll.${ws.currentDocFilename}`
                       : 'axon.web.pulse.editor-scroll'
                   }
                 />

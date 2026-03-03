@@ -1,6 +1,7 @@
 'use client'
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import type React from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useAxonWs } from '@/hooks/use-axon-ws'
 import type { CrawlFile, WsLifecycleEntry, WsServerMsg } from '@/lib/ws-protocol'
 import { handleWsMessage } from './ws-messages/handlers'
@@ -14,18 +15,59 @@ import type {
   RecentRun,
   ScreenshotFile,
   WorkspaceContextState,
+  WsMessagesActions,
   WsMessagesContextValue,
+  WsMessagesExecutionState,
+  WsMessagesWorkspaceState,
 } from './ws-messages/types'
 
 const WsMessagesContext = createContext<WsMessagesContextValue | null>(null)
+const WsMessagesExecutionContext = createContext<WsMessagesExecutionState | null>(null)
+const WsMessagesWorkspaceContext = createContext<WsMessagesWorkspaceState | null>(null)
+const WsMessagesActionsContext = createContext<WsMessagesActions | null>(null)
 
-export function useWsMessages() {
-  const ctx = useContext(WsMessagesContext)
-  if (!ctx) throw new Error('useWsMessages must be used within WsMessagesProvider')
-  return ctx
+function useRequiredContext<T>(context: React.Context<T | null>, errorMessage: string): T {
+  const value = useContext(context)
+  if (!value) throw new Error(errorMessage)
+  return value
 }
 
-export { WsMessagesContext, makeInitialRuntimeState, reduceRuntimeState }
+export function useWsMessages() {
+  return useRequiredContext(
+    WsMessagesContext,
+    'useWsMessages must be used within WsMessagesProvider',
+  )
+}
+
+export function useWsExecutionState() {
+  return useRequiredContext(
+    WsMessagesExecutionContext,
+    'useWsExecutionState must be used within WsMessagesProvider',
+  )
+}
+
+export function useWsWorkspaceState() {
+  return useRequiredContext(
+    WsMessagesWorkspaceContext,
+    'useWsWorkspaceState must be used within WsMessagesProvider',
+  )
+}
+
+export function useWsMessageActions() {
+  return useRequiredContext(
+    WsMessagesActionsContext,
+    'useWsMessageActions must be used within WsMessagesProvider',
+  )
+}
+
+export {
+  WsMessagesActionsContext,
+  WsMessagesContext,
+  WsMessagesExecutionContext,
+  WsMessagesWorkspaceContext,
+  makeInitialRuntimeState,
+  reduceRuntimeState,
+}
 export type {
   CancelResponseState,
   CrawlProgress,
@@ -48,10 +90,10 @@ export function useWsMessagesProvider() {
   const [hasResults, setHasResults] = useState(false)
   const [crawlFiles, setCrawlFiles] = useState<CrawlFile[]>([])
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
-  const [virtualFileContentByPath, setVirtualFileContentByPath] = useState<Record<string, string>>(
+  const [_virtualFileContentByPath, setVirtualFileContentByPath] = useState<Record<string, string>>(
     {},
   )
-  const [currentOutputDir, setCurrentOutputDir] = useState<string | null>(null)
+  const [_currentOutputDir, setCurrentOutputDir] = useState<string | null>(null)
   const currentModeRef = useRef('')
   const currentInputRef = useRef('')
   const [currentMode, setCurrentMode] = useState('')
@@ -78,25 +120,73 @@ export function useWsMessagesProvider() {
   const currentOutputDirRef = useRef<string | null>(null)
   const virtualFileContentByPathRef = useRef<Record<string, string>>({})
 
-  useEffect(() => {
-    crawlFilesRef.current = crawlFiles
-  }, [crawlFiles])
+  const setCrawlFilesTracked = useCallback((action: React.SetStateAction<CrawlFile[]>) => {
+    if (typeof action === 'function') {
+      setCrawlFiles((prev) => {
+        const next = action(prev)
+        crawlFilesRef.current = next
+        return next
+      })
+    } else {
+      crawlFilesRef.current = action
+      setCrawlFiles(action)
+    }
+  }, [])
 
-  useEffect(() => {
-    selectedFileRef.current = selectedFile
-  }, [selectedFile])
+  const setSelectedFileTracked = useCallback((action: React.SetStateAction<string | null>) => {
+    if (typeof action === 'function') {
+      setSelectedFile((prev) => {
+        const next = action(prev)
+        selectedFileRef.current = next
+        return next
+      })
+    } else {
+      selectedFileRef.current = action
+      setSelectedFile(action)
+    }
+  }, [])
 
-  useEffect(() => {
-    stdoutJsonRef.current = stdoutJson
-  }, [stdoutJson])
+  const setStdoutJsonTracked = useCallback((action: React.SetStateAction<unknown[]>) => {
+    if (typeof action === 'function') {
+      setStdoutJson((prev) => {
+        const next = action(prev)
+        stdoutJsonRef.current = next
+        return next
+      })
+    } else {
+      stdoutJsonRef.current = action
+      setStdoutJson(action)
+    }
+  }, [])
 
-  useEffect(() => {
-    currentOutputDirRef.current = currentOutputDir
-  }, [currentOutputDir])
+  const setCurrentOutputDirTracked = useCallback((action: React.SetStateAction<string | null>) => {
+    if (typeof action === 'function') {
+      setCurrentOutputDir((prev) => {
+        const next = action(prev)
+        currentOutputDirRef.current = next
+        return next
+      })
+    } else {
+      currentOutputDirRef.current = action
+      setCurrentOutputDir(action)
+    }
+  }, [])
 
-  useEffect(() => {
-    virtualFileContentByPathRef.current = virtualFileContentByPath
-  }, [virtualFileContentByPath])
+  const setVirtualFileContentByPathTracked = useCallback(
+    (action: React.SetStateAction<Record<string, string>>) => {
+      if (typeof action === 'function') {
+        setVirtualFileContentByPath((prev) => {
+          const next = action(prev)
+          virtualFileContentByPathRef.current = next
+          return next
+        })
+      } else {
+        virtualFileContentByPathRef.current = action
+        setVirtualFileContentByPath(action)
+      }
+    },
+    [],
+  )
 
   useEffect(() => {
     try {
@@ -169,14 +259,14 @@ export function useWsMessagesProvider() {
       setLogLines,
       setMarkdownContent,
       setHasResults,
-      setCrawlFiles,
-      setCurrentOutputDir,
-      setSelectedFile,
+      setCrawlFiles: setCrawlFilesTracked,
+      setCurrentOutputDir: setCurrentOutputDirTracked,
+      setSelectedFile: setSelectedFileTracked,
       setCrawlProgress,
       setCommandMode,
       setStdoutLines,
-      setStdoutJson,
-      setVirtualFileContentByPath,
+      setStdoutJson: setStdoutJsonTracked,
+      setVirtualFileContentByPath: setVirtualFileContentByPathTracked,
       setScreenshotFiles,
       setLifecycleEntries,
       setCancelResponse,
@@ -189,11 +279,19 @@ export function useWsMessagesProvider() {
       setCurrentJobIdTracked,
     }
     return subscribe((msg: WsServerMsg) => handleWsMessage(msg, refs, setters))
-  }, [setCurrentJobIdTracked, subscribe])
+  }, [
+    setCrawlFilesTracked,
+    setCurrentJobIdTracked,
+    setCurrentOutputDirTracked,
+    setSelectedFileTracked,
+    setStdoutJsonTracked,
+    setVirtualFileContentByPathTracked,
+    subscribe,
+  ])
 
   const selectFile = useCallback(
     (relativePath: string) => {
-      setSelectedFile(relativePath)
+      setSelectedFileTracked(relativePath)
       setMarkdownContent('')
       const virtualContent = virtualFileContentByPathRef.current[relativePath]
       if (typeof virtualContent === 'string') {
@@ -202,8 +300,45 @@ export function useWsMessagesProvider() {
       }
       send({ type: 'read_file', path: relativePath })
     },
-    [send],
+    [send, setSelectedFileTracked],
   )
+
+  const resetExecutionRuntime = useCallback(
+    ({ hasResults, isProcessing }: { hasResults: boolean; isProcessing: boolean }) => {
+      setMarkdownContent('')
+      setLogLines([])
+      setErrorMessage('')
+      setHasResults(hasResults)
+      setIsProcessing(isProcessing)
+      setCrawlFilesTracked([])
+      setSelectedFileTracked(null)
+      setVirtualFileContentByPathTracked({})
+      setCurrentOutputDirTracked(null)
+      setCrawlProgress(null)
+      setStdoutLines([])
+      setStdoutJsonTracked([])
+      setCommandMode(null)
+      setScreenshotFiles([])
+      setCurrentJobIdTracked(null)
+      setLifecycleEntries([])
+      setCancelResponse(null)
+    },
+    [
+      setCrawlFilesTracked,
+      setCurrentJobIdTracked,
+      setCurrentOutputDirTracked,
+      setSelectedFileTracked,
+      setStdoutJsonTracked,
+      setVirtualFileContentByPathTracked,
+    ],
+  )
+
+  const resetWorkspaceRuntime = useCallback((mode: string | null) => {
+    setWorkspaceMode(mode)
+    setWorkspacePrompt(null)
+    setWorkspacePromptVersion(0)
+    setWorkspaceContext(null)
+  }, [])
 
   const startExecution = useCallback(
     (mode: string, input?: string, options?: { preserveWorkspace?: boolean }) => {
@@ -211,31 +346,12 @@ export function useWsMessagesProvider() {
       currentModeRef.current = mode
       currentInputRef.current = input ?? ''
       setCurrentMode(mode)
-      setMarkdownContent('')
-      setLogLines([])
-      setErrorMessage('')
-      setIsProcessing(true)
-      setHasResults(true)
-      setCrawlFiles([])
-      setSelectedFile(null)
-      setVirtualFileContentByPath({})
-      setCurrentOutputDir(null)
-      setCrawlProgress(null)
-      setStdoutLines([])
-      setStdoutJson([])
-      setCommandMode(null)
-      setScreenshotFiles([])
-      setCurrentJobIdTracked(null)
-      setLifecycleEntries([])
-      setCancelResponse(null)
+      resetExecutionRuntime({ hasResults: true, isProcessing: true })
       if (!preserveWorkspace) {
-        setWorkspaceMode(null)
-        setWorkspacePrompt(null)
-        setWorkspacePromptVersion(0)
-        setWorkspaceContext(null)
+        resetWorkspaceRuntime(null)
       }
     },
-    [setCurrentJobIdTracked],
+    [resetExecutionRuntime, resetWorkspaceRuntime],
   )
 
   const activateWorkspace = useCallback(
@@ -243,29 +359,10 @@ export function useWsMessagesProvider() {
       currentModeRef.current = mode
       currentInputRef.current = ''
       setCurrentMode(mode)
-      setMarkdownContent('')
-      setLogLines([])
-      setErrorMessage('')
-      setHasResults(false)
-      setIsProcessing(false)
-      setCrawlFiles([])
-      setSelectedFile(null)
-      setVirtualFileContentByPath({})
-      setCurrentOutputDir(null)
-      setCrawlProgress(null)
-      setStdoutLines([])
-      setStdoutJson([])
-      setCommandMode(null)
-      setScreenshotFiles([])
-      setCurrentJobIdTracked(null)
-      setLifecycleEntries([])
-      setCancelResponse(null)
-      setWorkspaceMode(mode)
-      setWorkspacePrompt(null)
-      setWorkspacePromptVersion(0)
-      setWorkspaceContext(null)
+      resetExecutionRuntime({ hasResults: false, isProcessing: false })
+      resetWorkspaceRuntime(mode)
     },
-    [setCurrentJobIdTracked],
+    [resetExecutionRuntime, resetWorkspaceRuntime],
   )
 
   const submitWorkspacePrompt = useCallback((prompt: string) => {
@@ -294,37 +391,95 @@ export function useWsMessagesProvider() {
     setWorkspaceContext(context)
   }, [])
 
-  return {
-    markdownContent,
-    logLines,
-    errorMessage,
-    recentRuns,
-    isProcessing,
-    hasResults,
-    currentMode,
-    crawlFiles,
-    selectedFile,
-    selectFile,
-    crawlProgress,
-    stdoutLines,
-    stdoutJson,
-    commandMode,
-    screenshotFiles,
-    currentJobId,
-    lifecycleEntries,
-    cancelResponse,
-    workspaceMode,
-    workspacePrompt,
-    workspacePromptVersion,
-    workspaceContext,
-    pulseModel,
-    pulsePermissionLevel,
-    setPulseModel,
-    setPulsePermissionLevel,
-    activateWorkspace,
-    submitWorkspacePrompt,
-    deactivateWorkspace,
-    updateWorkspaceContext,
-    startExecution,
-  }
+  const executionState = useMemo<WsMessagesExecutionState>(
+    () => ({
+      markdownContent,
+      logLines,
+      errorMessage,
+      recentRuns,
+      isProcessing,
+      hasResults,
+      currentMode,
+      crawlFiles,
+      selectedFile,
+      crawlProgress,
+      stdoutLines,
+      stdoutJson,
+      commandMode,
+      screenshotFiles,
+      currentJobId,
+      lifecycleEntries,
+      cancelResponse,
+    }),
+    [
+      markdownContent,
+      logLines,
+      errorMessage,
+      recentRuns,
+      isProcessing,
+      hasResults,
+      currentMode,
+      crawlFiles,
+      selectedFile,
+      crawlProgress,
+      stdoutLines,
+      stdoutJson,
+      commandMode,
+      screenshotFiles,
+      currentJobId,
+      lifecycleEntries,
+      cancelResponse,
+    ],
+  )
+
+  const workspaceState = useMemo<WsMessagesWorkspaceState>(
+    () => ({
+      workspaceMode,
+      workspacePrompt,
+      workspacePromptVersion,
+      workspaceContext,
+      pulseModel,
+      pulsePermissionLevel,
+    }),
+    [
+      workspaceMode,
+      workspacePrompt,
+      workspacePromptVersion,
+      workspaceContext,
+      pulseModel,
+      pulsePermissionLevel,
+    ],
+  )
+
+  const actions = useMemo<WsMessagesActions>(
+    () => ({
+      selectFile,
+      setPulseModel,
+      setPulsePermissionLevel,
+      activateWorkspace,
+      submitWorkspacePrompt,
+      deactivateWorkspace,
+      updateWorkspaceContext,
+      startExecution,
+    }),
+    [
+      selectFile,
+      activateWorkspace,
+      submitWorkspacePrompt,
+      deactivateWorkspace,
+      updateWorkspaceContext,
+      startExecution,
+    ],
+  )
+
+  const value = useMemo<WsMessagesContextValue>(
+    () => ({
+      ...executionState,
+      ...workspaceState,
+      ...actions,
+    }),
+    [executionState, workspaceState, actions],
+  )
+
+  return { executionState, workspaceState, actions, value }
 }

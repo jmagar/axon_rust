@@ -1,6 +1,8 @@
+import { createGateway } from '@ai-sdk/gateway'
 import { generateText } from 'ai'
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
+import { apiError } from '@/lib/server/api-error'
 
 const DEFAULT_MODEL = 'gpt-4o-mini'
 const ALLOWED_MODELS = new Set([DEFAULT_MODEL, 'gpt-4.1-mini'])
@@ -49,28 +51,29 @@ export function parseOpenAiSseChunk(
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const key = typeof body?.apiKey === 'string' ? body.apiKey : undefined
     const model = typeof body?.model === 'string' ? body.model : DEFAULT_MODEL
     const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : ''
     const system = typeof body?.system === 'string' ? body.system : undefined
     const streamNdjson = req.headers.get('x-copilot-stream') === '1'
 
     if (!ALLOWED_MODELS.has(model)) {
-      return NextResponse.json({ error: 'Unsupported model.' }, { status: 400 })
+      return apiError(400, 'Unsupported model')
     }
     if (!prompt) {
-      return NextResponse.json({ error: 'prompt must be a non-empty string.' }, { status: 400 })
+      return apiError(400, 'prompt must be a non-empty string')
     }
 
-    const apiKey = key || process.env.AI_GATEWAY_API_KEY
+    const apiKey = process.env.AI_GATEWAY_API_KEY
     if (!apiKey) {
-      return NextResponse.json({ error: 'Missing ai gateway API key.' }, { status: 401 })
+      return apiError(401, 'Missing AI Gateway API key', { code: 'copilot_no_key' })
     }
+
+    const gateway = createGateway({ apiKey })
 
     const result = await generateText({
       abortSignal: req.signal,
       maxOutputTokens: 50,
-      model: `openai/${model}`,
+      model: gateway(`openai/${model}`),
       prompt,
       system,
       temperature: 0.7,
@@ -95,12 +98,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result)
   } catch (error) {
     if (error instanceof SyntaxError) {
-      return NextResponse.json({ error: 'Invalid JSON payload.' }, { status: 400 })
+      return apiError(400, 'Invalid JSON payload')
     }
     if (error instanceof Error && error.name === 'AbortError') {
-      return NextResponse.json(null, { status: 408 })
+      return apiError(408, 'Request timed out', { code: 'copilot_timeout' })
     }
 
-    return NextResponse.json({ error: 'Failed to process AI request' }, { status: 500 })
+    return apiError(500, 'Failed to process AI request', { code: 'copilot_internal' })
   }
 }

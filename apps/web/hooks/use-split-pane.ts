@@ -24,19 +24,25 @@ export function useSplitPane() {
   const showEditorRef = useRef(false)
   const showChatRef = useRef(true)
 
-  // Keep refs in sync with state
-  useEffect(() => {
-    desktopSplitPercentRef.current = desktopSplitPercent
-  }, [desktopSplitPercent])
-  useEffect(() => {
-    mobileSplitPercentRef.current = mobileSplitPercent
-  }, [mobileSplitPercent])
-  useEffect(() => {
-    showEditorRef.current = showEditor
-  }, [showEditor])
-  useEffect(() => {
-    showChatRef.current = showChat
-  }, [showChat])
+  const setDesktopSplitPercentTracked = useCallback((val: number) => {
+    desktopSplitPercentRef.current = val
+    setDesktopSplitPercent(val)
+  }, [])
+
+  const setMobileSplitPercentTracked = useCallback((val: number) => {
+    mobileSplitPercentRef.current = val
+    setMobileSplitPercent(val)
+  }, [])
+
+  const setShowEditorTracked = useCallback((val: boolean) => {
+    showEditorRef.current = val
+    setShowEditor(val)
+  }, [])
+
+  const setShowChatTracked = useCallback((val: boolean) => {
+    showChatRef.current = val
+    setShowChat(val)
+  }, [])
 
   // Storage restore effect
   useEffect(() => {
@@ -68,6 +74,7 @@ export function useSplitPane() {
   }, [])
 
   // Horizontal drag effect — click (< 4px) toggles editor; drag (>= 4px) resizes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount-once — refs used for all state reads; setters are stable
   useEffect(() => {
     function onPointerMove(event: PointerEvent) {
       const start = dragStartRef.current
@@ -78,7 +85,7 @@ export function useSplitPane() {
       const deltaPx = event.clientX - start.pointerX
       const deltaPercent = (deltaPx / rect.width) * 100
       const next = Math.max(20, Math.min(80, start.startPercent + deltaPercent))
-      setDesktopSplitPercent(next)
+      setDesktopSplitPercentTracked(next)
     }
 
     function stopDrag(event: PointerEvent) {
@@ -91,7 +98,7 @@ export function useSplitPane() {
         // Click — toggle the editor panel; block collapse if chat is already collapsed
         const next = !showEditorRef.current
         if (!next && !showChatRef.current) return
-        setShowEditor(next)
+        setShowEditorTracked(next)
         try {
           window.localStorage.setItem(SHOW_EDITOR_STORAGE_KEY, String(next))
         } catch {
@@ -130,8 +137,8 @@ export function useSplitPane() {
   const toggleChat = useCallback((next?: boolean) => {
     setShowChat((prev) => {
       const value = next ?? !prev
-      // Block collapse when editor is already collapsed — both-panels-collapsed is a dead state
       if (!value && !showEditorRef.current) return prev
+      showChatRef.current = value
       try {
         window.localStorage.setItem(SHOW_CHAT_STORAGE_KEY, String(value))
       } catch {
@@ -144,8 +151,8 @@ export function useSplitPane() {
   const toggleEditor = useCallback((next?: boolean) => {
     setShowEditor((prev) => {
       const value = next ?? !prev
-      // Block collapse when chat is already collapsed — both-panels-collapsed is a dead state
       if (!value && !showChatRef.current) return prev
+      showEditorRef.current = value
       try {
         window.localStorage.setItem(SHOW_EDITOR_STORAGE_KEY, String(value))
       } catch {
@@ -157,17 +164,17 @@ export function useSplitPane() {
 
   return {
     desktopSplitPercent,
-    setDesktopSplitPercent,
+    setDesktopSplitPercent: setDesktopSplitPercentTracked,
     mobileSplitPercent,
-    setMobileSplitPercent,
+    setMobileSplitPercent: setMobileSplitPercentTracked,
     isDesktop,
     mobilePane,
     setMobilePane: persistMobilePane,
     showChat,
-    setShowChat,
+    setShowChat: setShowChatTracked,
     toggleChat,
     showEditor,
-    setShowEditor,
+    setShowEditor: setShowEditorTracked,
     toggleEditor,
     splitContainerRef,
     splitHandleRef,

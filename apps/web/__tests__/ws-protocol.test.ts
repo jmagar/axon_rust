@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  isWorkspaceMode,
-  MODE_CATEGORY_LABELS,
-  MODE_CATEGORY_ORDER,
-  MODES,
-  NO_INPUT_MODES,
-} from '@/lib/ws-protocol'
+import { MODE_CATEGORY_LABELS, MODE_CATEGORY_ORDER, MODES, NO_INPUT_MODES } from '@/lib/ws-protocol'
 
 describe('ws-protocol mode registry', () => {
   it('does not include a workspace category', () => {
@@ -17,10 +11,5 @@ describe('ws-protocol mode registry', () => {
     const pulse = MODES.find((m) => m.id === 'pulse')
     expect(pulse).toBeUndefined()
     expect(NO_INPUT_MODES.has('pulse')).toBe(false)
-  })
-
-  it('does not map any mode as workspace-only', () => {
-    expect(isWorkspaceMode('pulse')).toBe(false)
-    expect(isWorkspaceMode('scrape')).toBe(false)
   })
 })

@@ -1,3 +1,4 @@
+import type { PulseModel, PulsePermissionLevel } from '@/lib/pulse/types'
 import type { WsLifecycleEntry, WsServerMsg } from '@/lib/ws-protocol'
 
 export interface LogLine {
@@ -50,8 +51,10 @@ export interface WorkspaceContextState {
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error'
 }
 
-export type PulseWorkspaceModel = 'sonnet' | 'opus' | 'haiku'
-export type PulseWorkspacePermission = 'plan' | 'accept-edits' | 'bypass-permissions'
+/** @deprecated Use PulseModel from @/lib/pulse/types directly */
+export type PulseWorkspaceModel = PulseModel
+/** @deprecated Use PulsePermissionLevel from @/lib/pulse/types directly */
+export type PulseWorkspacePermission = PulsePermissionLevel
 
 export interface WsMessagesRuntimeState {
   currentJobId: string | null
@@ -115,6 +118,46 @@ export interface WsMessagesContextValue {
   deactivateWorkspace: () => void
   updateWorkspaceContext: (context: WorkspaceContextState | null) => void
   startExecution: (mode: string, input?: string, options?: { preserveWorkspace?: boolean }) => void
+}
+
+export interface WsMessagesExecutionState {
+  markdownContent: WsMessagesContextValue['markdownContent']
+  logLines: WsMessagesContextValue['logLines']
+  errorMessage: WsMessagesContextValue['errorMessage']
+  recentRuns: WsMessagesContextValue['recentRuns']
+  isProcessing: WsMessagesContextValue['isProcessing']
+  hasResults: WsMessagesContextValue['hasResults']
+  currentMode: WsMessagesContextValue['currentMode']
+  crawlFiles: WsMessagesContextValue['crawlFiles']
+  selectedFile: WsMessagesContextValue['selectedFile']
+  crawlProgress: WsMessagesContextValue['crawlProgress']
+  stdoutLines: WsMessagesContextValue['stdoutLines']
+  stdoutJson: WsMessagesContextValue['stdoutJson']
+  commandMode: WsMessagesContextValue['commandMode']
+  screenshotFiles: WsMessagesContextValue['screenshotFiles']
+  currentJobId: WsMessagesContextValue['currentJobId']
+  lifecycleEntries: WsMessagesContextValue['lifecycleEntries']
+  cancelResponse: WsMessagesContextValue['cancelResponse']
+}
+
+export interface WsMessagesWorkspaceState {
+  workspaceMode: WsMessagesContextValue['workspaceMode']
+  workspacePrompt: WsMessagesContextValue['workspacePrompt']
+  workspacePromptVersion: WsMessagesContextValue['workspacePromptVersion']
+  workspaceContext: WsMessagesContextValue['workspaceContext']
+  pulseModel: WsMessagesContextValue['pulseModel']
+  pulsePermissionLevel: WsMessagesContextValue['pulsePermissionLevel']
+}
+
+export interface WsMessagesActions {
+  selectFile: WsMessagesContextValue['selectFile']
+  setPulseModel: WsMessagesContextValue['setPulseModel']
+  setPulsePermissionLevel: WsMessagesContextValue['setPulsePermissionLevel']
+  activateWorkspace: WsMessagesContextValue['activateWorkspace']
+  submitWorkspacePrompt: WsMessagesContextValue['submitWorkspacePrompt']
+  deactivateWorkspace: WsMessagesContextValue['deactivateWorkspace']
+  updateWorkspaceContext: WsMessagesContextValue['updateWorkspaceContext']
+  startExecution: WsMessagesContextValue['startExecution']
 }
 
 export interface WsMessageRuntimeMappers {

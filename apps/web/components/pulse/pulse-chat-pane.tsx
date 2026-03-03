@@ -1,14 +1,15 @@
 'use client'
 
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { MessageCircle, Send, Square, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PulseToolUse } from '@/lib/pulse/types'
 import type { ChatMessage } from '@/lib/pulse/workspace-persistence'
 import {
   CHAT_SCROLL_STORAGE_KEY,
-  computeMessageVirtualWindow,
   formatStreamPhaseLabel,
   MESSAGE_ESTIMATED_HEIGHT,
+  MESSAGE_VIRTUAL_THRESHOLD,
   SOURCE_LIST_OPEN_STORAGE_KEY,
   SOURCE_LIST_SCROLL_STORAGE_KEY,
   SOURCE_OVERSCAN,
@@ -49,6 +50,8 @@ export function PulseChatPane({
 }: PulseChatPaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const sourceListRef = useRef<HTMLDivElement>(null)
+  const scrollRafRef = useRef<number | null>(null)
+  const scrollStorageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [isNearBottom, setIsNearBottom] = useState(true)
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
   const [sourceListOpen, setSourceListOpen] = useState(false)
@@ -56,8 +59,6 @@ export function PulseChatPane({
     new Map(),
   )
   const [sourceListScrollTop, setSourceListScrollTop] = useState(0)
-  const [scrollTop, setScrollTop] = useState(0)
-  const [viewportHeight, setViewportHeight] = useState(0)
   const activeSources = useMemo(() => activeThreadSources, [activeThreadSources])
   const latestAssistantCitations = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -70,19 +71,14 @@ export function PulseChatPane({
   }, [messages])
   const visibleSources = useMemo(() => activeSources.slice(0, 4), [activeSources])
   const hiddenSourceCount = Math.max(0, activeSources.length - visibleSources.length)
-  const messageWindow = computeMessageVirtualWindow(messages.length, scrollTop, viewportHeight)
-  const shouldVirtualizeMessages = messageWindow.shouldVirtualize
-  const virtualStartIndex = messageWindow.start
-  const virtualEndIndex = messageWindow.end
-  const virtualMessages = shouldVirtualizeMessages
-    ? messages.slice(virtualStartIndex, virtualEndIndex)
-    : messages
-  const topSpacerHeight = shouldVirtualizeMessages
-    ? virtualStartIndex * MESSAGE_ESTIMATED_HEIGHT
-    : 0
-  const bottomSpacerHeight = shouldVirtualizeMessages
-    ? Math.max(0, (messages.length - virtualEndIndex) * MESSAGE_ESTIMATED_HEIGHT)
-    : 0
+  const shouldVirtualizeMessages = messages.length > MESSAGE_VIRTUAL_THRESHOLD
+  const messageVirtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => MESSAGE_ESTIMATED_HEIGHT,
+    overscan: 8,
+    enabled: shouldVirtualizeMessages,
+  })
   const shouldVirtualizeSources = sourceListOpen && activeSources.length > SOURCE_VIRTUAL_THRESHOLD
   const sourceVirtualStart = shouldVirtualizeSources
     ? Math.max(0, Math.floor(sourceListScrollTop / SOURCE_ROW_HEIGHT) - SOURCE_OVERSCAN)
@@ -103,6 +99,14 @@ export function PulseChatPane({
     ? Math.max(0, (activeSources.length - sourceVirtualEnd) * SOURCE_ROW_HEIGHT)
     : 0
 
+  // Cleanup pending rAF and debounce timers on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current)
+      if (scrollStorageTimerRef.current !== null) clearTimeout(scrollStorageTimerRef.current)
+    }
+  }, [])
+
   function scrollToBottom() {
     const node = scrollRef.current
     if (!node) return
@@ -113,12 +117,10 @@ export function PulseChatPane({
   useEffect(() => {
     const node = scrollRef.current
     if (!node) return
-    setViewportHeight(node.clientHeight)
     try {
       const saved = Number(window.localStorage.getItem(CHAT_SCROLL_STORAGE_KEY) ?? 0)
       if (Number.isFinite(saved) && saved > 0) {
         node.scrollTop = saved
-        setScrollTop(saved)
         const nearBottom = node.scrollHeight - (saved + node.clientHeight) < 42
         setIsNearBottom(nearBottom)
         setShowJumpToLatest(!nearBottom && messages.length > 0)
@@ -173,27 +175,7 @@ export function PulseChatPane({
 
   async function handleCopyError(content: string, messageId: string) {
     try {
-      const canUseClipboard =
-        typeof navigator !== 'undefined' &&
-        typeof navigator.clipboard !== 'undefined' &&
-        typeof navigator.clipboard.writeText === 'function'
-
-      if (canUseClipboard) {
-        await navigator.clipboard.writeText(content)
-      } else if (typeof document !== 'undefined') {
-        const textArea = document.createElement('textarea')
-        textArea.value = content
-        textArea.style.position = 'fixed'
-        textArea.style.left = '-9999px'
-        document.body.appendChild(textArea)
-        textArea.focus()
-        textArea.select()
-        const copied = document.execCommand('copy')
-        document.body.removeChild(textArea)
-        if (!copied) throw new Error('copy_failed')
-      } else {
-        throw new Error('clipboard_unavailable')
-      }
+      await navigator.clipboard.writeText(content)
       setCopyStatuses((prev) => new Map(prev).set(messageId, 'copied'))
       setTimeout(() => {
         setCopyStatuses((prev) => {
@@ -347,18 +329,26 @@ export function PulseChatPane({
       <div
         ref={scrollRef}
         onScroll={() => {
-          const node = scrollRef.current
-          if (!node) return
-          setScrollTop(node.scrollTop)
-          setViewportHeight(node.clientHeight)
-          const nearBottom = node.scrollHeight - (node.scrollTop + node.clientHeight) < 42
-          setIsNearBottom(nearBottom)
-          if (nearBottom) setShowJumpToLatest(false)
-          try {
-            window.localStorage.setItem(CHAT_SCROLL_STORAGE_KEY, String(node.scrollTop))
-          } catch {
-            // Ignore storage failures.
-          }
+          if (scrollRafRef.current !== null) return
+          scrollRafRef.current = requestAnimationFrame(() => {
+            scrollRafRef.current = null
+            const node = scrollRef.current
+            if (!node) return
+            const nearBottom = node.scrollHeight - (node.scrollTop + node.clientHeight) < 42
+            setIsNearBottom(nearBottom)
+            if (nearBottom) setShowJumpToLatest(false)
+            // Debounce localStorage writes to avoid synchronous I/O on every scroll frame
+            if (scrollStorageTimerRef.current !== null) {
+              clearTimeout(scrollStorageTimerRef.current)
+            }
+            scrollStorageTimerRef.current = setTimeout(() => {
+              try {
+                window.localStorage.setItem(CHAT_SCROLL_STORAGE_KEY, String(node.scrollTop))
+              } catch {
+                // Ignore storage failures.
+              }
+            }, 150)
+          })
         }}
         className="flex min-h-0 flex-1 flex-col space-y-2.5 overflow-y-auto px-3 py-2.5"
       >
@@ -389,30 +379,59 @@ export function PulseChatPane({
               </div>
             </div>
           </div>
-        ) : (
-          <>
-            {topSpacerHeight > 0 && <div style={{ height: `${topSpacerHeight}px` }} aria-hidden />}
-            {virtualMessages.map((msg, index) => {
-              const absoluteIndex = virtualStartIndex + index
+        ) : shouldVirtualizeMessages ? (
+          <div
+            style={{
+              height: `${messageVirtualizer.getTotalSize()}px`,
+              position: 'relative',
+            }}
+          >
+            {messageVirtualizer.getVirtualItems().map((virtualRow) => {
+              const msg = messages[virtualRow.index]
               const messageKey =
-                msg.id ?? `legacy-${absoluteIndex}-${msg.role}-${msg.content.slice(0, 24)}`
+                msg.id ?? `legacy-${virtualRow.index}-${msg.role}-${msg.content.slice(0, 24)}`
               return (
-                <MessageBubble
+                <div
                   key={messageKey}
-                  msg={msg}
-                  index={absoluteIndex}
-                  onRetry={onRetry}
-                  copyStatus={copyStatuses.get(messageKey) ?? 'idle'}
-                  onCopyError={(content) => {
-                    void handleCopyError(content, messageKey)
+                  data-index={virtualRow.index}
+                  ref={messageVirtualizer.measureElement}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${virtualRow.start}px)`,
                   }}
-                />
+                >
+                  <MessageBubble
+                    msg={msg}
+                    index={virtualRow.index}
+                    onRetry={onRetry}
+                    copyStatus={copyStatuses.get(messageKey) ?? 'idle'}
+                    onCopyError={(content) => {
+                      void handleCopyError(content, messageKey)
+                    }}
+                  />
+                </div>
               )
             })}
-            {bottomSpacerHeight > 0 && (
-              <div style={{ height: `${bottomSpacerHeight}px` }} aria-hidden />
-            )}
-          </>
+          </div>
+        ) : (
+          messages.map((msg, index) => {
+            const messageKey = msg.id ?? `legacy-${index}-${msg.role}-${msg.content.slice(0, 24)}`
+            return (
+              <MessageBubble
+                key={messageKey}
+                msg={msg}
+                index={index}
+                onRetry={onRetry}
+                copyStatus={copyStatuses.get(messageKey) ?? 'idle'}
+                onCopyError={(content) => {
+                  void handleCopyError(content, messageKey)
+                }}
+              />
+            )
+          })
         )}
 
         {isLoading && (

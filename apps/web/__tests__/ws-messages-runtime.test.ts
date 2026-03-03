@@ -23,12 +23,14 @@ describe('pushCapped', () => {
     expect(result).not.toBe(original)
   })
 
-  it('caps at MAX_STDOUT_ITEMS', () => {
+  it('trims 10% and appends when at cap', () => {
     const items = Array.from({ length: MAX_STDOUT_ITEMS }, (_, i) => i)
     const result = pushCapped(items, MAX_STDOUT_ITEMS)
-    expect(result).toHaveLength(MAX_STDOUT_ITEMS)
+    // Trims oldest 10% (500 items), keeps 4500, then appends 1 = 4501
+    const trimmed = Math.floor(MAX_STDOUT_ITEMS * 0.9)
+    expect(result).toHaveLength(trimmed + 1)
     expect(result[result.length - 1]).toBe(MAX_STDOUT_ITEMS)
-    expect(result[0]).toBe(1) // oldest item dropped
+    expect(result[0]).toBe(MAX_STDOUT_ITEMS - trimmed) // oldest surviving item
   })
 })
 
@@ -71,6 +73,8 @@ describe('toCrawlProgress', () => {
   it('maps crawl_progress message fields', () => {
     const msg = {
       type: 'crawl_progress' as const,
+      job_id: 'job-1',
+      status: 'running',
       pages_crawled: 10,
       pages_discovered: 50,
       md_created: 8,
@@ -154,6 +158,7 @@ describe('reduceRuntimeState', () => {
     const next = reduceRuntimeState(state, {
       type: 'command.output.json',
       data: { data: { job_id: 'j-1', pages: 5 } },
+      // biome-ignore lint/suspicious/noExplicitAny: test fixture — partial message shape
     } as any)
     expect(next.currentJobId).toBe('j-1')
     expect(next.stdoutJson).toHaveLength(1)
@@ -164,6 +169,7 @@ describe('reduceRuntimeState', () => {
     const next = reduceRuntimeState(state, {
       type: 'command.start',
       data: { ctx: { mode: 'crawl' } },
+      // biome-ignore lint/suspicious/noExplicitAny: test fixture — partial message shape
     } as any)
     expect(next.commandMode).toBe('crawl')
     expect(next.stdoutJson).toEqual([])
@@ -173,6 +179,8 @@ describe('reduceRuntimeState', () => {
     const state = makeInitialRuntimeState()
     const next = reduceRuntimeState(state, {
       type: 'crawl_progress',
+      job_id: 'job-1',
+      status: 'running',
       pages_crawled: 5,
       pages_discovered: 20,
       md_created: 4,

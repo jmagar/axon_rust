@@ -55,7 +55,8 @@ export function useShellSession({ onOutput }: UseShellSessionOptions): UseShellS
     const proto = globalThis.location?.protocol === 'https:' ? 'wss:' : 'ws:'
     const envUrl = process.env.NEXT_PUBLIC_AXON_WS_URL
     const base = envUrl ? envUrl.replace(/\/ws$/, '') : `${proto}//${globalThis.location?.host}`
-    const wsUrl = `${base}/ws/shell`
+    const token = process.env.NEXT_PUBLIC_SHELL_WS_TOKEN ?? process.env.NEXT_PUBLIC_AXON_API_TOKEN
+    const wsUrl = token ? `${base}/ws/shell?token=${encodeURIComponent(token)}` : `${base}/ws/shell`
 
     try {
       const ws = new WebSocket(wsUrl)

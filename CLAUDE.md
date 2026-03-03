@@ -282,6 +282,26 @@ AXON_JOB_STALE_TIMEOUT_SECS=300    # seconds before a running job is considered 
 AXON_JOB_STALE_CONFIRM_SECS=60     # additional grace period before stale reclaim
 ```
 
+### Web App Security Env (`apps/web`)
+
+```bash
+# API middleware auth + origin controls
+AXON_WEB_API_TOKEN=CHANGE_ME
+AXON_WEB_ALLOWED_ORIGINS=
+AXON_WEB_ALLOW_INSECURE_DEV=false
+
+# Optional shell websocket auth/origin overrides
+AXON_SHELL_WS_TOKEN=
+AXON_SHELL_ALLOWED_ORIGINS=
+
+# Optional client-side token wiring
+NEXT_PUBLIC_AXON_API_TOKEN=
+NEXT_PUBLIC_SHELL_WS_TOKEN=
+
+# Optional allowlist for Pulse chat --betas values
+AXON_ALLOWED_CLAUDE_BETAS=interleaved-thinking
+```
+
 ### Dev vs Container URL Resolution
 
 The CLI auto-detects whether it's running inside Docker:

@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@ai-sdk/gateway": "^1.0.15",
-    "@ai-sdk/react": "2.0.28",
+    "@ai-sdk/react": "3.0.110",
     "@ariakit/react": "^0.4.21",
     "@emoji-mart/data": "1.2.1",
     "@platejs/ai": "^52.3.1",
@@ -53,7 +53,7 @@
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",
-    "ai": "5.0.28",
+    "ai": "^6.0.108",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -61,7 +61,6 @@
     "dedent": "1.0.0",
     "dockerode": "^4.0.9",
     "html2canvas-pro": "^2.0.2",
-    "lodash": "^4.17.23",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.575.0",
     "next": "16.1.6",
@@ -86,11 +85,10 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@faker-js/faker": "^10.3.0",
     "@biomejs/biome": "^2.4.4",
+    "@faker-js/faker": "^10.3.0",
     "@tailwindcss/postcss": "^4",
     "@types/dockerode": "^4.0.1",
-    "@types/lodash": "^4.17.24",
     "@types/node": "^20",
     "@types/pg": "^8.18.0",
     "@types/react": "^19",

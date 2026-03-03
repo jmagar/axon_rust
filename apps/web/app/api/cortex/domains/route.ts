@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { runAxonCommandWs } from '@/lib/axon-ws-exec'
+import { apiError } from '@/lib/server/api-error'
 
 export const dynamic = 'force-dynamic'
 
@@ -8,7 +9,7 @@ export async function GET() {
     const data = await runAxonCommandWs('domains', 60_000)
     return NextResponse.json({ ok: true, data })
   } catch (err) {
-    console.error('domains route failed', err)
-    return NextResponse.json({ ok: false, error: 'Internal server error' }, { status: 500 })
+    console.error('[cortex/domains] failed', err)
+    return apiError(500, 'Failed to fetch indexed domains', { code: 'cortex_domains' })
   }
 }

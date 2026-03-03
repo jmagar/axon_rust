@@ -1,5 +1,5 @@
 # apps/web — Axon Next.js UI
-Last Modified: 2026-03-02
+Last Modified: 2026-03-03
 
 Next.js 16 App Router frontend for the Axon RAG system. Runs on port `49010` in Docker via the `axon-web` service.
 
@@ -17,10 +17,12 @@ pnpm format       # Biome format --write (auto-fix)
 
 ```
 app/layout.tsx           → Providers → AppShell → {children}
-app/providers.tsx        → AxonWsContext + WsMessagesContext + TooltipProvider
-components/app-shell.tsx → PulseSidebar + CmdKPalette + NeuralCanvas (subtle)
+app/providers.tsx        → AxonWsContext + split WsMessages contexts + TooltipProvider
+components/app-shell.tsx → PulseSidebar + CmdKPalette
 app/page.tsx             → DashboardPage (Omnibox + ResultsPanel + NeuralCanvas)
 ```
+
+App-level navigation buttons (`/mcp`, `/agents`, `/settings`) are hosted in `AppShell`, not in individual pages.
 
 ### Pages
 
@@ -40,6 +42,7 @@ app/page.tsx             → DashboardPage (Omnibox + ResultsPanel + NeuralCanva
 | Route | Purpose |
 |-------|---------|
 | `/api/pulse/chat` | Stream Claude CLI subprocess output (NDJSON) |
+| `/api/pulse/source` | Fetch and sanitize remote source text (SSRF-guarded) |
 | `/api/pulse/save` | Create/update Pulse docs (`.cache/pulse/*.md`) |
 | `/api/pulse/doc` | Load a Pulse doc by filename |
 | `/api/cortex/stats` | Qdrant + Postgres metrics |
@@ -50,16 +53,19 @@ app/page.tsx             → DashboardPage (Omnibox + ResultsPanel + NeuralCanva
 | `/api/mcp` | MCP server config (read/write) |
 | `/api/ai/command` | Plate.js AI editor commands (edit/generate/comment) |
 | `/api/ai/copilot` | Plate.js ghost-text copilot |
-| `/api/jobs` | Job list + job detail |
+| `/api/jobs` | Job list + job detail (strict validated filters) |
 
 ### WebSocket Proxy (next.config.ts)
 
 ```
 /ws         → AXON_BACKEND_URL/ws         (Rust axon-workers, port 49000)
-/ws/shell   → 127.0.0.1:SHELL_SERVER_PORT (node-pty shell, port 49011)
+/ws/shell   → 127.0.0.1:SHELL_SERVER_PORT (authenticated node-pty shell, port 49011)
 /download/* → AXON_BACKEND_URL/download/*
 /output/*   → AXON_BACKEND_URL/output/*
 ```
+
+`next.config.ts` also applies global security headers: CSP, `X-Frame-Options`, `Referrer-Policy`, `X-Content-Type-Options`, and HSTS outside development.
+It also sets cache headers for `/api/cortex/*`: `s-maxage=30, stale-while-revalidate=60`.
 
 WS client: `hooks/use-axon-ws.ts` — exponential backoff reconnect (1s → 30s), pending message queue. Reconnects on `online`, `pageshow`, and `visibilitychange`.
 
@@ -75,6 +81,29 @@ WS protocol types: `lib/ws-protocol.ts` — all message shapes for client↔serv
 - Timeout: 300s (`CLAUDE_TIMEOUT_MS`)
 - Context budget: 800k chars (~200k tokens)
 - `--dangerously-skip-permissions` on by default (no TTY in container); disable with `PULSE_SKIP_PERMISSIONS=false`
+
+### API Contracts
+
+`/api/jobs` query filters are validated against strict allowlists:
+- `type`: `crawl | extract | embed | github | reddit | youtube`
+- `status`: `pending | running | completed | failed | canceled`
+- `status=failed` includes both failed and canceled jobs
+- invalid filters return `400` with structured error body
+
+`/api/pulse/source` blocks private/loopback/local-network SSRF targets and returns `code: "ssrf_blocked"` on blocked URLs.
+
+### API Error Format
+
+Server routes use a shared JSON error envelope:
+
+```json
+{
+  "error": "Message",
+  "code": "optional_machine_code",
+  "errorId": "optional_debug_id",
+  "detail": {}
+}
+```
 
 ### Pulse File Storage
 
@@ -126,6 +155,27 @@ NEXT_PUBLIC_AXON_WS_URL=
 
 # Shell WebSocket port (node-pty)
 SHELL_SERVER_PORT=49011                    # default
+
+# API auth token required by middleware.ts (unless insecure dev bypass is enabled)
+AXON_WEB_API_TOKEN=CHANGE_ME
+
+# Comma-separated allowed origins for /api and /ws/shell (optional)
+AXON_WEB_ALLOWED_ORIGINS=
+
+# Development-only localhost bypass for auth gates (do not enable in production)
+AXON_WEB_ALLOW_INSECURE_DEV=false
+
+# Optional shell-specific token/origin overrides
+AXON_SHELL_WS_TOKEN=
+AXON_SHELL_ALLOWED_ORIGINS=
+
+# Optional client-side tokens used by shell websocket URL wiring
+NEXT_PUBLIC_AXON_API_TOKEN=
+NEXT_PUBLIC_SHELL_WS_TOKEN=
+
+# Optional allowlist for Pulse chat `--betas` values.
+# Defaults to: interleaved-thinking
+AXON_ALLOWED_CLAUDE_BETAS=interleaved-thinking
 
 # Qdrant collection (used in Pulse doc defaults)
 AXON_COLLECTION=cortex                    # default
@@ -187,6 +237,10 @@ The `axon-web` container runs a `pnpm-watcher` s6 service that polls `pnpm-lock.
 
 ### Shell Server
 `shell-server.mjs` is the node-pty WebSocket bridge. Runs on `SHELL_SERVER_PORT` (default 49011). It is started separately from Next.js — not part of `pnpm dev`.
+
+- Auth required via bearer/x-api-key/query token (`AXON_SHELL_WS_TOKEN` or fallback `AXON_WEB_API_TOKEN`)
+- Origin validation enforced (`AXON_SHELL_ALLOWED_ORIGINS` / `AXON_WEB_ALLOWED_ORIGINS` / same-host fallback)
+- PTY child env is allowlisted and no longer inherits full `process.env`
 
 ### WS Modes Must Match Rust Allow-List
 `lib/ws-protocol.ts` defines `MODES`. Any mode added here must also be added to `ALLOWED_MODES` in `crates/web/execute.rs`, or the backend will reject the request.

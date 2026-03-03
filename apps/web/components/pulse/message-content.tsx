@@ -1,7 +1,7 @@
 'use client'
 
 import { Brain, Check, ChevronDown, Copy, History, RotateCcw } from 'lucide-react'
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { parseClaudeAssistantPayload } from '@/lib/pulse/claude-response'
 import type { PulseMessageBlock } from '@/lib/pulse/types'
 import type { ChatMessage } from '@/lib/pulse/workspace-persistence'
@@ -168,7 +168,7 @@ interface MessageBubbleProps {
   onCopyError: (content: string) => void
 }
 
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   msg,
   index,
   onRetry,
@@ -274,4 +274,4 @@ export function MessageBubble({
       </article>
     </div>
   )
-}
+})

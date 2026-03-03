@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { useWsMessages } from '@/hooks/use-ws-messages'
+import { useWsMessageActions } from '@/hooks/use-ws-messages'
 
 export interface SessionSummary {
   id: string
@@ -33,7 +33,7 @@ function buildHandoffPrompt(project: string, messages: ParsedMessage[]): string 
 }
 
 export function useRecentSessions() {
-  const { submitWorkspacePrompt } = useWsMessages()
+  const { submitWorkspacePrompt } = useWsMessageActions()
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [isLoading, setIsLoading] = useState(true)
 

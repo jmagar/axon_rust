@@ -9,12 +9,12 @@ import {
   type UIMessageStreamWriter,
 } from 'ai'
 import type { NextRequest } from 'next/server'
-import { NextResponse } from 'next/server'
 import { createSlateEditor, nanoid, type SlateEditor } from 'platejs'
 import { z } from 'zod'
 import { BaseEditorKit } from '@/components/editor/editor-base-kit'
 import type { ChatMessage, ToolName } from '@/components/editor/use-chat'
 import { markdownJoinerTransform } from '@/lib/markdown-joiner-transform'
+import { apiError, makeErrorId } from '@/lib/server/api-error'
 
 import {
   buildEditTableMultiCellPrompt,
@@ -24,32 +24,31 @@ import {
   getGeneratePrompt,
 } from './prompt'
 
+/** Default model for tool-choosing / complex tasks (e.g. selection edits, comments). */
+const MODEL_TOOL_CHOOSER = 'google/gemini-2.5-flash'
+/** Default model for generation / simple edits. */
+const MODEL_GENERATE = 'openai/gpt-4o-mini'
+
+const CommandBodySchema = z.object({
+  ctx: z.object({
+    children: z.array(z.any()),
+    selection: z.any().nullable().optional(),
+    toolName: z.string().optional(),
+  }),
+  messages: z.array(z.any()).min(1),
+  model: z.string().optional(),
+})
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const {
-      apiKey: key,
-      ctx,
-      messages: messagesRaw,
-      model,
-    } = body as {
-      apiKey?: string
-      ctx?: {
-        children?: SlateEditor['children']
-        selection?: SlateEditor['selection']
-        toolName?: string
-      }
-      messages?: ChatMessage[]
-      model?: string
+    const parsed = CommandBodySchema.safeParse(body)
+
+    if (!parsed.success) {
+      return apiError(400, parsed.error.issues[0]?.message ?? 'Invalid request payload')
     }
 
-    if (!ctx || typeof ctx !== 'object' || !('children' in ctx) || !('selection' in ctx)) {
-      return NextResponse.json({ error: 'Missing required ctx payload.' }, { status: 400 })
-    }
-    if (!Array.isArray(messagesRaw)) {
-      return NextResponse.json({ error: 'Missing or invalid messages payload.' }, { status: 400 })
-    }
-
+    const { ctx, messages: messagesRaw, model } = parsed.data
     const { children, selection, toolName: toolNameParam } = ctx
 
     const editor = createSlateEditor({
@@ -58,9 +57,9 @@ export async function POST(req: NextRequest) {
       value: children,
     })
 
-    const apiKey = key || process.env.AI_GATEWAY_API_KEY
+    const apiKey = process.env.AI_GATEWAY_API_KEY
     if (!apiKey) {
-      return NextResponse.json({ error: 'Missing AI Gateway API key.' }, { status: 401 })
+      return apiError(401, 'Missing AI Gateway API key', { code: 'ai_command_no_key' })
     }
 
     const isSelecting = editor.api.isExpanded()
@@ -82,7 +81,7 @@ export async function POST(req: NextRequest) {
             messages: messagesRaw,
           })
 
-          const modelId = model || 'google/gemini-2.5-flash'
+          const modelId = model || MODEL_TOOL_CHOOSER
 
           const { text: rawToolName } = await generateText({
             model: gatewayProvider(modelId),
@@ -109,18 +108,18 @@ export async function POST(req: NextRequest) {
 
         const stream = streamText({
           experimental_transform: markdownJoinerTransform(),
-          model: gatewayProvider(model || 'openai/gpt-4o-mini'),
+          model: gatewayProvider(model || MODEL_GENERATE),
           // Not used
           prompt: '',
           tools: {
             comment: getCommentTool(editor, {
               messagesRaw,
-              model: gatewayProvider(model || 'google/gemini-2.5-flash'),
+              model: gatewayProvider(model || MODEL_TOOL_CHOOSER),
               writer,
             }),
             table: getTableTool(editor, {
               messagesRaw,
-              model: gatewayProvider(model || 'google/gemini-2.5-flash'),
+              model: gatewayProvider(model || MODEL_TOOL_CHOOSER),
               writer,
             }),
           },
@@ -152,8 +151,8 @@ export async function POST(req: NextRequest) {
                 model:
                   editType === 'selection'
                     ? //The selection task is more challenging, so we chose to use Gemini 2.5 Flash.
-                      gatewayProvider(model || 'google/gemini-2.5-flash')
-                    : gatewayProvider(model || 'openai/gpt-4o-mini'),
+                      gatewayProvider(model || MODEL_TOOL_CHOOSER)
+                    : gatewayProvider(model || MODEL_GENERATE),
                 messages: [
                   {
                     content: editPrompt,
@@ -178,7 +177,7 @@ export async function POST(req: NextRequest) {
                     role: 'user',
                   },
                 ],
-                model: gatewayProvider(model || 'openai/gpt-4o-mini'),
+                model: gatewayProvider(model || MODEL_GENERATE),
               }
             }
           },
@@ -189,8 +188,14 @@ export async function POST(req: NextRequest) {
     })
 
     return createUIMessageStreamResponse({ stream })
-  } catch {
-    return NextResponse.json({ error: 'Failed to process AI request' }, { status: 500 })
+  } catch (error) {
+    const errorId = makeErrorId('ai-command')
+    const message = error instanceof Error ? error.message : String(error)
+    console.error('[ai/command] unhandled error', { errorId, message, error })
+    return apiError(500, 'Failed to process AI request', {
+      code: 'ai_command_internal',
+      errorId,
+    })
   }
 }
 
@@ -230,8 +235,8 @@ const getCommentTool = (
             type: 'data-comment',
           })
         }
-      } catch {
-        // Ignore tool and JSON errors — fall through to finished signal.
+      } catch (err) {
+        console.error('[ai/command] comment tool error:', err)
       } finally {
         writer.write({
           id: nanoid(),
@@ -273,8 +278,8 @@ const getTableTool = (
             type: 'data-table',
           })
         }
-      } catch {
-        // Ignore tool and JSON errors — fall through to finished signal.
+      } catch (err) {
+        console.error('[ai/command] table tool error:', err)
       } finally {
         writer.write({
           id: nanoid(),

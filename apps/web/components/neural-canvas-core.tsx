@@ -25,7 +25,7 @@ import type { AnimState, NeuralCanvasHandle, NeuralCanvasProps } from './neural-
 // Hook: useNeuralCanvasProfile
 // ---------------------------------------------------------------------------
 
-const STORAGE_KEY = 'axon-canvas-profile'
+const STORAGE_KEY = 'axon.web.neural-canvas.profile'
 
 export function useNeuralCanvasProfile() {
   const [profile, setProfile] = useState<NeuralCanvasProfile>(() => {
@@ -163,11 +163,25 @@ const NeuralCanvas = forwardRef<NeuralCanvasHandle, NeuralCanvasProps>(function 
     })
     state.isVisible = document.visibilityState === 'visible'
     stateRef.current = state
+
+    // Track tab visibility
     const onVisibilityChange = () => {
       if (!stateRef.current) return
-      stateRef.current.isVisible = document.visibilityState === 'visible'
+      stateRef.current.isVisible = document.visibilityState === 'visible' && !canvasOccluded
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
+
+    // Occlusion detection — pause animation when canvas is fully covered by opaque overlay
+    let canvasOccluded = false
+    const intersectionObserver = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry || !stateRef.current) return
+        canvasOccluded = entry.intersectionRatio < 0.01
+        stateRef.current.isVisible = document.visibilityState === 'visible' && !canvasOccluded
+      },
+      { threshold: [0, 0.01, 0.1] },
+    )
+    intersectionObserver.observe(canvas)
 
     // Animation loop
     const animate = (currentTime: number) => {
@@ -358,6 +372,7 @@ const NeuralCanvas = forwardRef<NeuralCanvasHandle, NeuralCanvasProps>(function 
       cancelAnimationFrame(state.frameId)
       window.removeEventListener('resize', onResize)
       document.removeEventListener('visibilitychange', onVisibilityChange)
+      intersectionObserver.disconnect()
       clearTimeout(resizeTimeout)
       stateRef.current = null
     }

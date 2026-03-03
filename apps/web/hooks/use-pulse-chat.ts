@@ -1,6 +1,8 @@
 'use client'
 
+import type React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTimedNotice } from '@/hooks/use-timed-notice'
 import type { ChatStreamEvent } from '@/lib/pulse/chat-api'
 import { runChatPrompt, runSourcePrompt } from '@/lib/pulse/chat-api'
 import { parseClaudeAssistantPayload } from '@/lib/pulse/claude-response'
@@ -71,7 +73,7 @@ export function usePulseChat({
   } | null>(null)
   const [streamPhase, setStreamPhase] = useState<'started' | 'thinking' | 'finalizing' | null>(null)
   const [liveToolUses, setLiveToolUses] = useState<PulseToolUse[]>([])
-  const [requestNotice, setRequestNotice] = useState<string | null>(null)
+  const { notice: requestNotice, showNotice: showRequestNotice } = useTimedNotice()
 
   const chatHistoryRef = useRef<ChatMessage[]>([])
   const inFlightPromptRef = useRef(0)
@@ -80,10 +82,55 @@ export function usePulseChat({
   const lastCmdModeRef = useRef('')
   const lastCmdInputRef = useRef('')
 
-  // Keep chatHistoryRef in sync
-  useEffect(() => {
-    chatHistoryRef.current = chatHistory
-  }, [chatHistory])
+  // Refs for frequently-changing values used inside handlePrompt — avoids
+  // recreating the callback on every keystroke or streaming update (CQ-3).
+  const configRef = useRef({
+    chatSessionId,
+    documentMarkdown,
+    activeThreadSources,
+    scrapedContext,
+    permissionLevel,
+    model,
+    effort,
+    maxTurns,
+    maxBudgetUsd,
+    appendSystemPrompt,
+    disableSlashCommands,
+    noSessionPersistence,
+    fallbackModel,
+    allowedTools,
+    disallowedTools,
+  })
+  configRef.current = {
+    chatSessionId,
+    documentMarkdown,
+    activeThreadSources,
+    scrapedContext,
+    permissionLevel,
+    model,
+    effort,
+    maxTurns,
+    maxBudgetUsd,
+    appendSystemPrompt,
+    disableSlashCommands,
+    noSessionPersistence,
+    fallbackModel,
+    allowedTools,
+    disallowedTools,
+  }
+
+  const setChatHistoryTracked = useCallback((action: React.SetStateAction<ChatMessage[]>) => {
+    if (typeof action === 'function') {
+      setChatHistory((prev) => {
+        const next = action(prev)
+        chatHistoryRef.current = next
+        return next
+      })
+    } else {
+      chatHistoryRef.current = action
+      setChatHistory(action)
+    }
+  }, [])
 
   // WS scrape/crawl subscription
   useEffect(() => {
@@ -135,11 +182,11 @@ export function usePulseChat({
 
   const updateChatMessage = useCallback(
     (messageId: string, transform: (message: ChatMessage) => ChatMessage) => {
-      setChatHistory((prev) =>
+      setChatHistoryTracked((prev) =>
         prev.map((message) => (message.id === messageId ? transform(message) : message)),
       )
     },
-    [],
+    [setChatHistoryTracked],
   )
 
   const handlePrompt = useCallback(
@@ -151,13 +198,12 @@ export function usePulseChat({
       inFlightPromptRef.current = promptId
       if (activePromptAbortRef.current) {
         activePromptAbortRef.current.abort()
-        setRequestNotice('Previous request replaced by your latest prompt.')
-        window.setTimeout(() => setRequestNotice(null), 1800)
+        showRequestNotice('Previous request replaced by your latest prompt.')
       }
       const controller = new AbortController()
       activePromptAbortRef.current = controller
 
-      setChatHistory((prev) => [...prev, createMessage({ role: 'user', content: trimmed })])
+      setChatHistoryTracked((prev) => [...prev, createMessage({ role: 'user', content: trimmed })])
       setIsChatLoading(true)
       setStreamPhase('started')
       setLiveToolUses([])
@@ -206,7 +252,7 @@ export function usePulseChat({
             '',
             'Ask a follow-up question to use this fresh context.',
           ].join('\n')
-          setChatHistory((prev) => [
+          setChatHistoryTracked((prev) => [
             ...prev,
             createMessage({ role: 'assistant', content: assistantMessage }),
           ])
@@ -227,10 +273,11 @@ export function usePulseChat({
         function ensureDraftAdded() {
           if (!draftAdded) {
             draftAdded = true
-            setChatHistory((prev) => [...prev, assistantDraft])
+            setChatHistoryTracked((prev) => [...prev, assistantDraft])
           }
         }
 
+        const cfg = configRef.current
         const data = await runChatPrompt({
           prompt: boundedPrompt,
           conversationHistory,
@@ -292,21 +339,21 @@ export function usePulseChat({
               }))
             }
           },
-          chatSessionId,
-          documentMarkdown,
-          activeThreadSources,
-          scrapedContext,
-          permissionLevel,
-          model,
-          effort,
-          maxTurns,
-          maxBudgetUsd,
-          appendSystemPrompt,
-          disableSlashCommands,
-          noSessionPersistence,
-          fallbackModel,
-          allowedTools,
-          disallowedTools,
+          chatSessionId: cfg.chatSessionId,
+          documentMarkdown: cfg.documentMarkdown,
+          activeThreadSources: cfg.activeThreadSources,
+          scrapedContext: cfg.scrapedContext,
+          permissionLevel: cfg.permissionLevel,
+          model: cfg.model,
+          effort: cfg.effort,
+          maxTurns: cfg.maxTurns,
+          maxBudgetUsd: cfg.maxBudgetUsd,
+          appendSystemPrompt: cfg.appendSystemPrompt,
+          disableSlashCommands: cfg.disableSlashCommands,
+          noSessionPersistence: cfg.noSessionPersistence,
+          fallbackModel: cfg.fallbackModel,
+          allowedTools: cfg.allowedTools,
+          disallowedTools: cfg.disallowedTools,
         })
 
         if (inFlightPromptRef.current !== promptId) return
@@ -331,22 +378,21 @@ export function usePulseChat({
         }))
 
         if (data.operations.length > 0) {
-          const permission = checkPermission(permissionLevel, data.operations, {
+          const permission = checkPermission(cfg.permissionLevel, data.operations, {
             isCurrentDoc: true,
-            currentDocMarkdown: documentMarkdown,
+            currentDocMarkdown: cfg.documentMarkdown,
           })
           if (permission.allowed && !permission.requiresConfirmation) {
             onApplyOperations(data.operations)
           } else if (permission.allowed && permission.requiresConfirmation) {
-            const validation = validateDocOperations(data.operations, documentMarkdown)
+            const validation = validateDocOperations(data.operations, cfg.documentMarkdown)
             onPendingOps(data.operations)
             onPendingValidation(validation)
           }
         }
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'AbortError') {
-          setRequestNotice('Request stopped. Partial response preserved.')
-          window.setTimeout(() => setRequestNotice(null), 1800)
+          showRequestNotice('Request stopped. Partial response preserved.')
           return
         }
         if (inFlightPromptRef.current !== promptId) return
@@ -366,7 +412,7 @@ export function usePulseChat({
             retryPrompt: trimmed,
           }))
         } else {
-          setChatHistory((prev) => [
+          setChatHistoryTracked((prev) => [
             ...prev,
             createMessage({
               role: 'assistant',
@@ -386,25 +432,12 @@ export function usePulseChat({
       }
     },
     [
-      activeThreadSources,
-      allowedTools,
-      appendSystemPrompt,
-      chatSessionId,
       createMessage,
-      disableSlashCommands,
-      disallowedTools,
-      documentMarkdown,
-      effort,
-      fallbackModel,
-      maxBudgetUsd,
-      maxTurns,
-      model,
-      noSessionPersistence,
       onApplyOperations,
       onPendingOps,
       onPendingValidation,
-      permissionLevel,
-      scrapedContext,
+      setChatHistoryTracked,
+      showRequestNotice,
       updateChatMessage,
     ],
   )
@@ -417,13 +450,12 @@ export function usePulseChat({
     setIsChatLoading(false)
     setStreamPhase(null)
     setLiveToolUses([])
-    setRequestNotice('Request stopped. Partial response preserved.')
-    window.setTimeout(() => setRequestNotice(null), 1800)
-  }, [])
+    showRequestNotice('Request stopped. Partial response preserved.')
+  }, [showRequestNotice])
 
   return {
     chatHistory,
-    setChatHistory,
+    setChatHistory: setChatHistoryTracked,
     isChatLoading,
     chatSessionId,
     setChatSessionId,

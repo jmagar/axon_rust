@@ -73,6 +73,22 @@ export interface ClaudeBuildExtra {
   toolsRestrict?: string
 }
 
+const DEFAULT_ALLOWED_BETAS = new Set(['interleaved-thinking'])
+const envAllowedBetas = (process.env.AXON_ALLOWED_CLAUDE_BETAS ?? '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean)
+const ALLOWED_CLAUDE_BETAS =
+  envAllowedBetas.length > 0 ? new Set(envAllowedBetas) : DEFAULT_ALLOWED_BETAS
+
+function sanitizeBetas(raw: string): string {
+  return raw
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0 && ALLOWED_CLAUDE_BETAS.has(value))
+    .join(',')
+}
+
 // `/home/node` is the container user's home; process.env.HOME is NOT included because it
 // resolves to the developer's host home dir in test/dev environments, making path-traversal
 // attacks (e.g. ../../etc/passwd from a cwd deep inside HOME) pass the allowlist check.
@@ -182,7 +198,10 @@ export function buildClaudeArgs(
     }
   }
   if (extra?.betas) {
-    args.push('--betas', extra.betas)
+    const betas = sanitizeBetas(extra.betas)
+    if (betas) {
+      args.push('--betas', betas)
+    }
   }
   if (extra?.toolsRestrict) {
     args.push('--tools', extra.toolsRestrict)

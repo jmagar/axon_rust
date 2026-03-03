@@ -14,11 +14,15 @@ import type {
   WsMessagesRuntimeState,
 } from './types'
 
-export const MAX_STDOUT_ITEMS = 50000
+export const MAX_STDOUT_ITEMS = 5000
+export const MAX_LOG_LINES = 5000
 
-export function pushCapped<T>(items: T[], item: T): T[] {
-  const next = [...items, item]
-  return next.length > MAX_STDOUT_ITEMS ? next.slice(-MAX_STDOUT_ITEMS) : next
+export function pushCapped<T>(items: T[], item: T, cap = MAX_STDOUT_ITEMS): T[] {
+  if (items.length >= cap) {
+    // Trim 10% when at cap to amortize the copy cost
+    return items.slice(-Math.floor(cap * 0.9)).concat(item)
+  }
+  return items.concat(item)
 }
 
 function truncateText(input: string, maxChars: number): string {
@@ -91,6 +95,12 @@ export function makeInitialRuntimeState(): WsMessagesRuntimeState {
   }
 }
 
+/**
+ * Pure reducer for runtime state — mirrors a subset of handleWsMessage logic.
+ * Used by tests (ws-messages-runtime.test.ts, use-ws-messages.test.ts).
+ * IMPORTANT: When updating message handling in handlers.ts, update the
+ * matching cases here to prevent divergence.
+ */
 export function reduceRuntimeState(
   state: WsMessagesRuntimeState,
   msg: WsServerMsg,
@@ -152,7 +162,9 @@ export function setStatusResultLine(
   message?: string,
 ) {
   const line = message ?? (ok ? 'Cancel request accepted' : 'Cancel request failed')
-  setLogLines((prev) => [...prev, { content: `[cancel] ${line}`, timestamp: Date.now() }])
+  setLogLines((prev) =>
+    pushCapped(prev, { content: `[cancel] ${line}`, timestamp: Date.now() }, MAX_LOG_LINES),
+  )
 }
 
 export function buildWorkspaceHandoffPrompt(snapshot: RuntimeHandoffSnapshot): string {

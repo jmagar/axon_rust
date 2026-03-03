@@ -80,7 +80,7 @@ export function parsePersistedWorkspaceState(
       parsed.permissionLevel === 'accept-edits' ||
       parsed.permissionLevel === 'bypass-permissions'
         ? parsed.permissionLevel
-        : 'accept-edits'
+        : 'bypass-permissions'
     // Migration: if old desktopViewMode is present, derive showChat/showEditor from it.
     // New fields take priority.
     let showChat =

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { runAxonCommandWs } from '@/lib/axon-ws-exec'
+import { apiError } from '@/lib/server/api-error'
 
 export const dynamic = 'force-dynamic'
 
@@ -8,6 +9,7 @@ export async function GET() {
     const data = await runAxonCommandWs('status', 30_000)
     return NextResponse.json({ ok: true, data })
   } catch (err) {
-    return NextResponse.json({ ok: false, error: String(err) }, { status: 500 })
+    console.error('[cortex/status] failed', err)
+    return apiError(500, 'Failed to fetch job queue status', { code: 'cortex_status' })
   }
 }

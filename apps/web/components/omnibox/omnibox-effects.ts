@@ -7,9 +7,9 @@ import {
   rankFileSuggestions,
   rankModeSuggestions,
 } from '@/lib/omnibox'
+import type { CompletionStatus } from '@/lib/omnibox-types'
 import type { ModeDefinition, ModeId, WsServerMsg } from '@/lib/ws-protocol'
 import { MODES } from '@/lib/ws-protocol'
-import type { CompletionStatus } from './omnibox-types'
 import { PLACEHOLDER_TEXTS } from './utils'
 
 interface ActiveMentionToken {

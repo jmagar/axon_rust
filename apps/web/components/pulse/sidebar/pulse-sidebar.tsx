@@ -12,20 +12,15 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useWsExecutionState, useWsMessageActions } from '@/hooks/use-ws-messages'
 import type { CrawlFile } from '@/lib/ws-protocol'
 import { ExtractedSection } from './extracted-section'
 import type { SidebarSectionId } from './types'
 import { WorkspaceSection } from './workspace-section'
 
-const COLLAPSED_KEY = 'axon.sidebar.collapsed'
-
-interface PulseSidebarProps {
-  crawlFiles: CrawlFile[]
-  selectedFile: string | null
-  onSelectFile: (path: string) => void
-  jobId?: string | null
-}
+const COLLAPSED_KEY = 'axon.web.sidebar.collapsed'
+const LEGACY_COLLAPSED_KEY = 'axon.sidebar.collapsed'
 
 interface NavItem {
   id: SidebarSectionId
@@ -75,14 +70,32 @@ function SectionContent({
   }
 }
 
-export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: PulseSidebarProps) {
+export function PulseSidebar() {
+  const { crawlFiles, selectedFile, currentJobId: jobId } = useWsExecutionState()
+  const { selectFile: onSelectFile } = useWsMessageActions()
   const [collapsed, setCollapsed] = useState(false)
   const [activeSection, setActiveSection] = useState<SidebarSectionId>('extracted')
   const pathname = usePathname()
 
+  const toggleCollapsed = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev
+      try {
+        localStorage.setItem(COLLAPSED_KEY, String(next))
+        document.documentElement.style.setProperty('--sidebar-w', next ? '48px' : '260px')
+      } catch {
+        /* ignore */
+      }
+      return next
+    })
+  }, [])
+
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(COLLAPSED_KEY)
+      const stored =
+        localStorage.getItem(COLLAPSED_KEY) ?? localStorage.getItem(LEGACY_COLLAPSED_KEY)
+      if (stored !== null) localStorage.setItem(COLLAPSED_KEY, stored)
+      localStorage.removeItem(LEGACY_COLLAPSED_KEY)
       // Auto-collapse on mobile viewports (<768px) if no stored preference
       const isMobile = window.innerWidth < 768
       const next = stored !== null ? stored === 'true' : isMobile
@@ -97,20 +110,7 @@ export function PulseSidebar({ crawlFiles, selectedFile, onSelectFile, jobId }: 
     const handler = () => toggleCollapsed()
     document.addEventListener('axon:sidebar:toggle', handler)
     return () => document.removeEventListener('axon:sidebar:toggle', handler)
-  }, [])
-
-  const toggleCollapsed = () => {
-    setCollapsed((prev) => {
-      const next = !prev
-      try {
-        localStorage.setItem(COLLAPSED_KEY, String(next))
-        document.documentElement.style.setProperty('--sidebar-w', next ? '48px' : '260px')
-      } catch {
-        /* ignore */
-      }
-      return next
-    })
-  }
+  }, [toggleCollapsed])
 
   const handleNavClick = (id: SidebarSectionId) => {
     if (collapsed) {

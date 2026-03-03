@@ -1,4 +1,5 @@
-const HISTORY_KEY = 'axon.terminal.history'
+const HISTORY_KEY = 'axon.web.terminal.history'
+const LEGACY_HISTORY_KEY = 'axon.terminal.history'
 const MAX_HISTORY = 500
 
 /**
@@ -77,8 +78,10 @@ export class TerminalHistory {
   private load(): string[] {
     if (typeof window === 'undefined') return []
     try {
-      const raw = localStorage.getItem(HISTORY_KEY)
+      const raw = localStorage.getItem(HISTORY_KEY) ?? localStorage.getItem(LEGACY_HISTORY_KEY)
       if (!raw) return []
+      localStorage.setItem(HISTORY_KEY, raw)
+      localStorage.removeItem(LEGACY_HISTORY_KEY)
       const parsed: unknown = JSON.parse(raw)
       if (!Array.isArray(parsed)) return []
       return parsed.filter((item): item is string => typeof item === 'string')

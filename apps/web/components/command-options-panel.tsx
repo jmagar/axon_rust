@@ -2,10 +2,7 @@
 
 import { useCallback, useState } from 'react'
 import { AXON_COMMAND_OPTIONS, type AxonOptionSpec, getCommandSpec } from '@/lib/axon-command-map'
-
-export interface CommandOptionValues {
-  [key: string]: string | boolean | number
-}
+import type { CommandOptionValues } from '@/lib/command-options'
 
 interface CommandOptionsPanelProps {
   mode: string

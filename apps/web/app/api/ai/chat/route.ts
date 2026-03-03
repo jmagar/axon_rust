@@ -1,7 +1,7 @@
-import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { parseOpenAiSseChunk } from '@/app/api/ai/copilot/route'
 import { ensureRepoRootEnvLoaded } from '@/lib/pulse/server-env'
+import { apiError } from '@/lib/server/api-error'
 
 const AIChatRequestSchema = z.object({
   prompt: z.string().min(1).max(16_000),
@@ -18,20 +18,14 @@ export async function POST(request: Request) {
 
   if (!baseUrl || !apiKey) {
     const missing = [...(baseUrl ? [] : ['OPENAI_BASE_URL']), ...(apiKey ? [] : ['OPENAI_API_KEY'])]
-    return NextResponse.json(
-      { error: `${missing.join(', ')} must be set`, missing },
-      { status: 503 },
-    )
+    return apiError(503, `${missing.join(', ')} must be set`, { code: 'ai_chat_config' })
   }
 
   try {
     const body = await request.json()
     const parsed = AIChatRequestSchema.safeParse(body)
     if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request' },
-        { status: 400 },
-      )
+      return apiError(400, parsed.error.issues[0]?.message ?? 'Invalid request')
     }
 
     const { prompt, ctx } = parsed.data
@@ -56,7 +50,7 @@ export async function POST(request: Request) {
     }).finally(() => clearTimeout(timeout))
 
     if (!response.ok) {
-      return NextResponse.json({ error: `LLM API error: ${response.status}` }, { status: 502 })
+      return apiError(502, `LLM API error: ${response.status}`, { code: 'ai_chat_upstream' })
     }
 
     // Stream SSE directly back to client
@@ -110,6 +104,6 @@ export async function POST(request: Request) {
     )
   } catch (err) {
     console.error('[AI Chat] Unhandled error:', err)
-    return NextResponse.json({ error: 'AI chat request failed' }, { status: 500 })
+    return apiError(500, 'AI chat request failed', { code: 'ai_chat_internal' })
   }
 }

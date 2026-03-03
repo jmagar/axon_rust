@@ -59,8 +59,8 @@ describe('pruneReplayCache', () => {
 
   it('removes entries older than TTL', () => {
     const now = Date.now()
-    replayCache.set('old', { events: [], updatedAt: now - REPLAY_CACHE_TTL_MS - 1 })
-    replayCache.set('fresh', { events: [], updatedAt: now })
+    replayCache.set('old', { events: [], sizeBytes: 0, updatedAt: now - REPLAY_CACHE_TTL_MS - 1 })
+    replayCache.set('fresh', { events: [], sizeBytes: 0, updatedAt: now })
 
     pruneReplayCache(now)
 
@@ -70,7 +70,7 @@ describe('pruneReplayCache', () => {
 
   it('keeps entries exactly at TTL boundary', () => {
     const now = Date.now()
-    replayCache.set('boundary', { events: [], updatedAt: now - REPLAY_CACHE_TTL_MS })
+    replayCache.set('boundary', { events: [], sizeBytes: 0, updatedAt: now - REPLAY_CACHE_TTL_MS })
 
     pruneReplayCache(now)
 
@@ -84,9 +84,13 @@ describe('pruneReplayCache', () => {
   it('removes all stale entries at once', () => {
     const now = Date.now()
     for (let i = 0; i < 10; i++) {
-      replayCache.set(`stale-${i}`, { events: [], updatedAt: now - REPLAY_CACHE_TTL_MS - 1000 })
+      replayCache.set(`stale-${i}`, {
+        events: [],
+        sizeBytes: 0,
+        updatedAt: now - REPLAY_CACHE_TTL_MS - 1000,
+      })
     }
-    replayCache.set('keeper', { events: [], updatedAt: now })
+    replayCache.set('keeper', { events: [], sizeBytes: 0, updatedAt: now })
 
     pruneReplayCache(now)
 

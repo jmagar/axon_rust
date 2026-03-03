@@ -5,6 +5,7 @@ import type { WsClientMsg, WsServerMsg, WsStatus } from '@/lib/ws-protocol'
 
 const BASE_BACKOFF = 1000
 const MAX_BACKOFF = 30000
+const MAX_PENDING_MESSAGES = 100
 
 interface AxonWsContextValue {
   status: WsStatus
@@ -125,6 +126,9 @@ export function useAxonWsProvider() {
       return
     }
     pendingMessagesRef.current.push(msg)
+    if (pendingMessagesRef.current.length > MAX_PENDING_MESSAGES) {
+      pendingMessagesRef.current = pendingMessagesRef.current.slice(-MAX_PENDING_MESSAGES)
+    }
     if (
       wsRef.current?.readyState !== WebSocket.CONNECTING &&
       wsRef.current?.readyState !== WebSocket.OPEN

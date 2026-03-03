@@ -440,8 +440,3 @@ export const NO_INPUT_MODES: ReadonlySet<string> = new Set([
   'sessions',
   'dedupe',
 ])
-
-/** Modes in the workspace category bypass the WS executor entirely. */
-export function isWorkspaceMode(_id: string): boolean {
-  return false
-}

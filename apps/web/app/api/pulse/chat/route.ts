@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process'
 import os from 'node:os'
-import { NextResponse } from 'next/server'
 import {
   createPulseChatStreamEvent,
   encodePulseChatStreamEvent,
@@ -13,10 +12,12 @@ import { buildPulseSystemPrompt, retrieveFromCollections } from '@/lib/pulse/rag
 import { ensureRepoRootEnvLoaded } from '@/lib/pulse/server-env'
 import {
   DocOperationSchema,
+  type PulseChatRequest,
   PulseChatRequestSchema,
   type PulseChatResponse,
-  type PulseToolUse,
+  type PulseCitation,
 } from '@/lib/pulse/types'
+import { apiError, makeErrorId } from '@/lib/server/api-error'
 import {
   buildClaudeArgs,
   CLAUDE_TIMEOUT_MS,
@@ -30,8 +31,106 @@ import {
   pruneReplayCache,
   REPLAY_BUFFER_LIMIT,
   replayCache,
+  upsertReplayEntry,
 } from './replay-cache'
 import { createStreamParserState, parseClaudeStreamLine } from './stream-parser'
+
+// ── Request preparation (extracted from POST for readability) ────────────────
+
+function buildPromptText(userPrompt: string): string {
+  return [
+    userPrompt,
+    '',
+    'Respond as JSON only with this exact shape:',
+    '{"text":"...","operations":[...]}',
+    'Allowed operation types and their required fields:',
+    '  replace_document: {"type":"replace_document","markdown":"<full doc content>"}',
+    '  append_markdown:  {"type":"append_markdown","markdown":"<content to append>"}',
+    '  insert_section:   {"type":"insert_section","heading":"<title>","markdown":"<content>","position":"top"|"bottom"}',
+    'IMPORTANT: use "markdown" (not "content") for the document text field.',
+    'If no operations are needed, return operations as an empty array.',
+  ].join('\n')
+}
+
+function parseOperations(result: string): {
+  text: string
+  operations: PulseChatResponse['operations']
+} {
+  const parsedPayload = parseClaudeAssistantPayload(result)
+  if (!parsedPayload) {
+    return { text: fallbackAssistantText(result), operations: [] }
+  }
+
+  const operations: PulseChatResponse['operations'] = []
+  for (const op of parsedPayload.operations) {
+    const parsedOp = DocOperationSchema.safeParse(op)
+    if (parsedOp.success) {
+      operations.push(parsedOp.data)
+    }
+  }
+  return { text: parsedPayload.text, operations }
+}
+
+function buildDoneResponse(
+  req: PulseChatRequest,
+  citations: PulseCitation[],
+  parserState: ReturnType<typeof createStreamParserState>,
+  startedAt: number,
+  contextCharsTotal: number,
+  aborted: boolean,
+): Parameters<typeof createPulseChatStreamEvent>[0] {
+  const elapsed = Date.now() - startedAt
+  const telemetry = {
+    elapsedMs: elapsed,
+    contextCharsTotal,
+    contextBudgetChars: MODEL_CONTEXT_BUDGET_CHARS,
+    first_delta_ms: parserState.firstDeltaMs,
+    time_to_done_ms: elapsed,
+    delta_count: parserState.deltaCount,
+    aborted,
+  }
+
+  if (aborted) {
+    return {
+      type: 'done',
+      response: {
+        text: fallbackAssistantText(parserState.result),
+        sessionId: parserState.sessionId ?? undefined,
+        citations,
+        operations: [],
+        toolUses: parserState.toolUses,
+        blocks: parserState.blocks,
+        metadata: { model: req.model, ...telemetry },
+      },
+    }
+  }
+
+  let { text, operations } = parseOperations(parserState.result)
+
+  const permission = checkPermission(req.permissionLevel, operations, {
+    isCurrentDoc: true,
+    currentDocMarkdown: req.documentMarkdown,
+  })
+  if (!permission.allowed) {
+    operations = []
+    text = text || 'Operation blocked by permission policy.'
+  }
+
+  return {
+    type: 'done',
+    response: {
+      text,
+      sessionId: parserState.sessionId ?? undefined,
+      citations,
+      operations,
+      toolUses: parserState.toolUses,
+      blocks: parserState.blocks,
+      metadata: { model: req.model, ...telemetry },
+    },
+  }
+}
+
+// ── POST handler ─────────────────────────────────────────────────────────────
 
 export async function POST(request: Request) {
   ensureRepoRootEnvLoaded()
@@ -41,27 +140,18 @@ export async function POST(request: Request) {
   try {
     body = await request.json()
   } catch {
-    return NextResponse.json({ error: 'Request body must be valid JSON' }, { status: 400 })
+    return apiError(400, 'Request body must be valid JSON')
   }
 
   try {
     const parsed = PulseChatRequestSchema.safeParse(body)
     if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request payload' },
-        { status: 400 },
-      )
+      return apiError(400, parsed.error.issues[0]?.message ?? 'Invalid request payload')
     }
 
     const req = parsed.data
-    const bodyObject =
-      typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {}
-    const lastEventId =
-      typeof bodyObject.last_event_id === 'string'
-        ? bodyObject.last_event_id
-        : typeof bodyObject.lastEventId === 'string'
-          ? bodyObject.lastEventId
-          : undefined
+    // last_event_id / lastEventId — now validated through Zod instead of raw body cast
+    const lastEventId = req.last_event_id ?? req.lastEventId
 
     const replayKey = computeReplayKey({
       prompt: req.prompt,
@@ -78,18 +168,7 @@ export async function POST(request: Request) {
 
     const citations = await retrieveFromCollections(req.prompt, req.selectedCollections, 4)
     const systemPrompt = buildPulseSystemPrompt(req, citations)
-    const prompt = [
-      req.prompt,
-      '',
-      'Respond as JSON only with this exact shape:',
-      '{"text":"...","operations":[...]}',
-      'Allowed operation types and their required fields:',
-      '  replace_document: {"type":"replace_document","markdown":"<full doc content>"}',
-      '  append_markdown:  {"type":"append_markdown","markdown":"<content to append>"}',
-      '  insert_section:   {"type":"insert_section","heading":"<title>","markdown":"<content>","position":"top"|"bottom"}',
-      'IMPORTANT: use "markdown" (not "content") for the document text field.',
-      'If no operations are needed, return operations as an empty array.',
-    ].join('\n')
+    const prompt = buildPromptText(req.prompt)
 
     const args = buildClaudeArgs(prompt, systemPrompt, req.model, {
       effort: req.effort,
@@ -151,7 +230,7 @@ export async function POST(request: Request) {
         }
 
         const persistReplay = () => {
-          replayCache.set(replayKey, { events: replayBuffer, updatedAt: Date.now() })
+          upsertReplayEntry(replayKey, replayBuffer, Date.now())
         }
 
         const emit = (event: Parameters<typeof createPulseChatStreamEvent>[0]) => {
@@ -167,19 +246,6 @@ export async function POST(request: Request) {
         const emitErrorAndClose = (error: string, code?: string) => {
           emit({ type: 'error', error, code })
           safeClose()
-        }
-
-        const buildTelemetry = () => {
-          const elapsed = Date.now() - startedAt
-          return {
-            elapsedMs: elapsed,
-            contextCharsTotal,
-            contextBudgetChars: MODEL_CONTEXT_BUDGET_CHARS,
-            first_delta_ms: parserState.firstDeltaMs,
-            time_to_done_ms: elapsed,
-            delta_count: parserState.deltaCount,
-            aborted,
-          }
         }
 
         const replayFromLastEventId = (): boolean => {
@@ -291,33 +357,13 @@ export async function POST(request: Request) {
             return
           }
 
-          const toolUses: PulseToolUse[] = parserState.toolUses
-          const blocks = parserState.blocks
-          const result = parserState.result
-
           if (aborted) {
-            emit({
-              type: 'done',
-              response: {
-                text: fallbackAssistantText(result),
-                sessionId: parserState.sessionId ?? undefined,
-                citations,
-                operations: [],
-                toolUses,
-                blocks,
-                metadata: {
-                  model: req.model,
-                  ...buildTelemetry(),
-                },
-              },
-            })
+            emit(buildDoneResponse(req, citations, parserState, startedAt, contextCharsTotal, true))
             safeClose()
             return
           }
 
           if (code !== 0) {
-            // Prefer the result from the stream-json parser (auth errors, tool errors) over
-            // stderr (usually empty for non-zero exits) or raw stdout remainder.
             const cliErrorDetail = parserState.result || truncateForLog(stderr || stdoutRemainder)
             console.error('[pulse/chat] Claude CLI exited', code, {
               stderr: (stderr || '').slice(0, 500),
@@ -328,6 +374,7 @@ export async function POST(request: Request) {
               req.conversationHistory,
             )
             if (memoryFallbackText) {
+              const elapsed = Date.now() - startedAt
               emit({
                 type: 'done',
                 response: {
@@ -339,7 +386,13 @@ export async function POST(request: Request) {
                   blocks: [],
                   metadata: {
                     model: req.model,
-                    ...buildTelemetry(),
+                    elapsedMs: elapsed,
+                    contextCharsTotal,
+                    contextBudgetChars: MODEL_CONTEXT_BUDGET_CHARS,
+                    first_delta_ms: parserState.firstDeltaMs,
+                    time_to_done_ms: elapsed,
+                    delta_count: parserState.deltaCount,
+                    aborted,
                     fallback_source: 'conversation_memory' as const,
                   },
                 },
@@ -355,51 +408,7 @@ export async function POST(request: Request) {
           }
 
           emit({ type: 'status', phase: 'finalizing' })
-
-          let text = ''
-          let operations: PulseChatResponse['operations'] = []
-          const parsedPayload = parseClaudeAssistantPayload(result)
-          if (parsedPayload) {
-            text = parsedPayload.text
-            if (parsedPayload.operations.length > 0) {
-              const parsedOps: PulseChatResponse['operations'] = []
-              for (const op of parsedPayload.operations) {
-                const parsedOp = DocOperationSchema.safeParse(op)
-                if (parsedOp.success) {
-                  parsedOps.push(parsedOp.data)
-                }
-              }
-              operations = parsedOps
-            }
-          } else {
-            text = fallbackAssistantText(result)
-          }
-
-          const permission = checkPermission(req.permissionLevel, operations, {
-            isCurrentDoc: true,
-            currentDocMarkdown: req.documentMarkdown,
-          })
-
-          if (!permission.allowed) {
-            operations = []
-            text = text || 'Operation blocked by permission policy.'
-          }
-
-          emit({
-            type: 'done',
-            response: {
-              text,
-              sessionId: parserState.sessionId ?? undefined,
-              citations,
-              operations,
-              toolUses,
-              blocks,
-              metadata: {
-                model: req.model,
-                ...buildTelemetry(),
-              },
-            },
-          })
+          emit(buildDoneResponse(req, citations, parserState, startedAt, contextCharsTotal, false))
           safeClose()
         })
       },
@@ -413,13 +422,10 @@ export async function POST(request: Request) {
       },
     })
   } catch (error: unknown) {
-    const errorId = globalThis.crypto?.randomUUID?.() ?? `pulse-chat-${Date.now()}`
+    const errorId = makeErrorId('pulse-chat')
     const message = error instanceof Error ? error.message : String(error)
     console.error('[pulse/chat] unhandled error', { errorId, message, error })
-    return NextResponse.json(
-      { error: 'Chat request failed', code: 'pulse_chat_internal', errorId },
-      { status: 500 },
-    )
+    return apiError(500, 'Chat request failed', { code: 'pulse_chat_internal', errorId })
   }
 }
 

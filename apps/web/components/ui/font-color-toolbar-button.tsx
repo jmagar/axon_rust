@@ -3,7 +3,6 @@
 /* eslint-disable react-hooks/refs -- Ref usage for color picker component refs */
 
 import { useComposedRef } from '@udecode/cn'
-import debounce from 'lodash/debounce.js'
 import { EraserIcon, PlusIcon } from 'lucide-react'
 import { useEditorRef, useEditorSelector } from 'platejs/react'
 import React from 'react'
@@ -16,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { debounce } from '@/lib/debounce'
 import { cn } from '@/lib/utils'
 
 import { DEFAULT_COLORS, DEFAULT_CUSTOM_COLORS, type TColor } from './font-color-presets'

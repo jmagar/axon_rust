@@ -179,6 +179,19 @@ Copy `.env.example` to `.env`. At minimum set the `[REQUIRED]` vars:
 | `AXON_LOG_MAX_BYTES` | `10485760` | Max bytes per log file before rotation (10MB) |
 | `AXON_LOG_MAX_FILES` | `3` | Total log files to keep (`axon.log`, `.1`, `.2`) |
 
+### Optional Web App Security (`apps/web`)
+
+| Variable | Description |
+|----------|-------------|
+| `AXON_WEB_API_TOKEN` | Required API bearer/x-api-key token for `apps/web` middleware auth |
+| `AXON_WEB_ALLOWED_ORIGINS` | Comma-separated origin allowlist for `app/api/*` and shell websocket fallback |
+| `AXON_WEB_ALLOW_INSECURE_DEV` | Localhost-only development bypass (`true` only for local dev) |
+| `AXON_SHELL_WS_TOKEN` | Optional token specifically for `/ws/shell` auth (falls back to `AXON_WEB_API_TOKEN`) |
+| `AXON_SHELL_ALLOWED_ORIGINS` | Optional shell websocket origin allowlist |
+| `NEXT_PUBLIC_AXON_API_TOKEN` | Optional client token for API calls from the web app |
+| `NEXT_PUBLIC_SHELL_WS_TOKEN` | Optional client token for shell websocket auth |
+| `AXON_ALLOWED_CLAUDE_BETAS` | Comma-separated allowlist for Pulse chat `--betas` values |
+
 ### ask RAG Tuning
 
 The `ask` command retrieves chunks from Qdrant, reranks them, and builds a context window before calling the LLM. The following env vars tune that pipeline:

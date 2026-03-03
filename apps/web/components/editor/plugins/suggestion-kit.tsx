@@ -3,7 +3,7 @@
 import { type BaseSuggestionConfig, BaseSuggestionPlugin } from '@platejs/suggestion'
 import type { ExtendConfig, Path } from 'platejs'
 import { isSlateEditor, isSlateString } from 'platejs'
-import { toTPlatePlugin } from 'platejs/react'
+import { type RenderNodeWrapper, toTPlatePlugin } from 'platejs/react'
 
 import { SuggestionLeaf, SuggestionLineBreak } from '@/components/ui/suggestion-node'
 
@@ -81,9 +81,11 @@ export const suggestionPlugin = toTPlatePlugin<SuggestionConfig>(
     },
   },
   render: {
-    belowNodes: SuggestionLineBreak as any,
-    node: SuggestionLeaf,
-  },
+    belowNodes: SuggestionLineBreak as unknown as RenderNodeWrapper,
+    // biome-ignore lint/suspicious/noExplicitAny: Plate.js render config type mismatch
+    node: SuggestionLeaf as any,
+    // biome-ignore lint/suspicious/noExplicitAny: Plate.js plugin render shape mismatch
+  } as any,
 })
 
 export const SuggestionKit = [suggestionPlugin]

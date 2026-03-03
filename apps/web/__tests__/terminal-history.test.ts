@@ -1,5 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TerminalHistory } from '@/lib/terminal-history'
+
+const HISTORY_KEY = 'axon.web.terminal.history'
+const LEGACY_HISTORY_KEY = 'axon.terminal.history'
 
 // TerminalHistory checks `typeof window === 'undefined'` for SSR safety.
 // In Vitest's node environment, window doesn't exist, so we must stub both
@@ -14,12 +17,15 @@ function makeStorage(initial: Record<string, string> = {}) {
       setItem: vi.fn((key: string, value: string) => {
         data[key] = value
       }),
+      removeItem: vi.fn((key: string) => {
+        delete data[key]
+      }),
     },
   }
 }
 
 function stubWindow(storage: ReturnType<typeof makeStorage>) {
-  vi.stubGlobal('window', {})
+  vi.stubGlobal('window', { localStorage: storage.mock })
   vi.stubGlobal('localStorage', storage.mock)
 }
 
@@ -98,20 +104,20 @@ describe('TerminalHistory', () => {
     stubWindow(s)
     const h = new TerminalHistory()
     h.push('git status')
-    expect(s.mock.setItem).toHaveBeenCalledWith('axon.terminal.history', expect.any(String))
-    const saved = JSON.parse(s.data['axon.terminal.history'])
+    expect(s.mock.setItem).toHaveBeenCalledWith(HISTORY_KEY, expect.any(String))
+    const saved = JSON.parse(s.data[HISTORY_KEY])
     expect(saved).toEqual(['git status'])
   })
 
   it('constructor loads from localStorage', () => {
-    const s = makeStorage({ 'axon.terminal.history': JSON.stringify(['old-cmd']) })
+    const s = makeStorage({ [HISTORY_KEY]: JSON.stringify(['old-cmd']) })
     stubWindow(s)
     const h = new TerminalHistory()
     expect(h.getAll()).toEqual(['old-cmd'])
   })
 
   it('constructor handles corrupt localStorage gracefully', () => {
-    const s = makeStorage({ 'axon.terminal.history': 'not-json' })
+    const s = makeStorage({ [HISTORY_KEY]: 'not-json' })
     stubWindow(s)
     const h = new TerminalHistory()
     expect(h.getAll()).toEqual([])
@@ -119,11 +125,20 @@ describe('TerminalHistory', () => {
 
   it('constructor filters non-string items', () => {
     const s = makeStorage({
-      'axon.terminal.history': JSON.stringify(['valid', 42, null, 'also-valid']),
+      [HISTORY_KEY]: JSON.stringify(['valid', 42, null, 'also-valid']),
     })
     stubWindow(s)
     const h = new TerminalHistory()
     expect(h.getAll()).toEqual(['valid', 'also-valid'])
+  })
+
+  it('constructor migrates legacy storage key', () => {
+    const s = makeStorage({ [LEGACY_HISTORY_KEY]: JSON.stringify(['legacy-cmd']) })
+    stubWindow(s)
+    const h = new TerminalHistory()
+    expect(h.getAll()).toEqual(['legacy-cmd'])
+    expect(s.data[HISTORY_KEY]).toBe(JSON.stringify(['legacy-cmd']))
+    expect(s.data[LEGACY_HISTORY_KEY]).toBeUndefined()
   })
 
   describe('cursor navigation', () => {

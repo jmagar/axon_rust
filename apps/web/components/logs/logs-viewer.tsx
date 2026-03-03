@@ -1,13 +1,11 @@
 'use client'
 
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { ScrollText } from 'lucide-react'
-import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type LogEntry, LogLine } from './log-line'
 import { LogsToolbar, type ServiceName, TAIL_OPTIONS, type TailLines } from './logs-toolbar'
-
-const NeuralCanvas = dynamic(() => import('@/components/neural-canvas'), { ssr: false })
 
 const MAX_LINES = 2000
 
@@ -20,7 +18,6 @@ export function LogsViewer() {
   const [autoScroll, setAutoScroll] = useState(true)
   const [isConnected, setIsConnected] = useState(false)
 
-  const bottomRef = useRef<HTMLDivElement>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const autoScrollRef = useRef(autoScroll)
 
@@ -49,16 +46,15 @@ export function LogsViewer() {
           ts: number
           service?: string
         }
-        setLines((prev) => [
-          ...prev.slice(-(MAX_LINES - 1)),
-          { text: line, ts, ...(svc ? { service: svc } : {}) },
-        ])
-        // Scroll after React re-renders via queueMicrotask
-        if (autoScrollRef.current) {
-          queueMicrotask(() => {
-            bottomRef.current?.scrollIntoView({ behavior: 'instant' })
-          })
-        }
+        const newEntry: LogEntry = { text: line, ts, ...(svc ? { service: svc } : {}) }
+        setLines((prev) => {
+          if (prev.length >= MAX_LINES) {
+            const trimmed = prev.slice(prev.length - MAX_LINES + 1)
+            trimmed.push(newEntry)
+            return trimmed
+          }
+          return [...prev, newEntry]
+        })
       } catch {
         // malformed SSE data — ignore
       }
@@ -84,6 +80,20 @@ export function LogsViewer() {
     return lines.filter((l) => l.text.toLowerCase().includes(lower))
   }, [lines, filter])
 
+  const rowVirtualizer = useVirtualizer({
+    count: filteredLines.length,
+    getScrollElement: () => scrollAreaRef.current,
+    estimateSize: () => 20,
+    overscan: 30,
+  })
+
+  // Auto-scroll when new lines arrive
+  useEffect(() => {
+    if (autoScrollRef.current && filteredLines.length > 0) {
+      rowVirtualizer.scrollToIndex(filteredLines.length - 1)
+    }
+  }, [filteredLines.length, rowVirtualizer])
+
   function handleServiceChange(s: ServiceName) {
     setService(s)
   }
@@ -95,8 +105,8 @@ export function LogsViewer() {
   function handleAutoScrollToggle() {
     const next = !autoScroll
     setAutoScroll(next)
-    if (next && bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' })
+    if (next && filteredLines.length > 0) {
+      rowVirtualizer.scrollToIndex(filteredLines.length - 1)
     }
   }
 
@@ -108,11 +118,6 @@ export function LogsViewer() {
           'radial-gradient(ellipse at 14% 10%, rgba(175,215,255,0.08), transparent 34%), radial-gradient(ellipse at 82% 16%, rgba(255,135,175,0.07), transparent 38%), linear-gradient(180deg,#02040b 0%,#030712 60%,#040a14 100%)',
       }}
     >
-      {/* Neural background */}
-      <div className="pointer-events-none fixed inset-0 z-0">
-        <NeuralCanvas profile="subtle" />
-      </div>
-
       {/* Top bar */}
       <header
         className="sticky top-0 z-30 flex shrink-0 items-center gap-3 border-b px-4"
@@ -185,11 +190,24 @@ export function LogsViewer() {
               </p>
             </div>
           )}
-          {filteredLines.map((entry, i) => (
-            <LogLine key={`${entry.ts}-${i}`} entry={entry} />
-          ))}
-          {/* Scroll sentinel */}
-          <div ref={bottomRef} aria-hidden="true" />
+          <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: 'relative' }}>
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const entry = filteredLines[virtualRow.index]
+              return (
+                <div
+                  key={virtualRow.key}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    transform: `translateY(${virtualRow.start}px)`,
+                    width: '100%',
+                  }}
+                >
+                  <LogLine entry={entry} />
+                </div>
+              )
+            })}
+          </div>
         </div>
 
         {/* Footer meta */}

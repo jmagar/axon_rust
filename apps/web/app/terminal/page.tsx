@@ -1,13 +1,10 @@
 'use client'
 
-import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TerminalHandle } from '@/components/terminal/terminal-emulator'
 import { TerminalEmulatorWrapper } from '@/components/terminal/terminal-emulator-wrapper'
 import { TerminalToolbar } from '@/components/terminal/terminal-toolbar'
 import { useShellSession } from '@/hooks/use-shell-session'
-
-const NeuralCanvas = dynamic(() => import('@/components/neural-canvas'), { ssr: false })
 
 export default function TerminalPage() {
   const terminalRef = useRef<TerminalHandle | null>(null)
@@ -61,11 +58,6 @@ export default function TerminalPage() {
 
   return (
     <div className="relative flex h-screen flex-col overflow-hidden">
-      {/* Background */}
-      <div className="fixed inset-0 z-0">
-        <NeuralCanvas />
-      </div>
-
       {/* Toolbar */}
       <header className="relative z-30 flex-shrink-0">
         <TerminalToolbar

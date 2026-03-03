@@ -16,7 +16,6 @@ function makeMessage(role: 'user' | 'assistant', text: string): UIMessage {
     id: `msg-${Math.random()}`,
     role,
     parts: [{ type: 'text' as const, text }],
-    createdAt: new Date(),
   }
 }
 
@@ -95,7 +94,6 @@ describe('getTextFromMessage', () => {
         { type: 'text' as const, text: 'Hello ' },
         { type: 'text' as const, text: 'world' },
       ],
-      createdAt: new Date(),
     }
     expect(getTextFromMessage(msg)).toBe('Hello world')
   })

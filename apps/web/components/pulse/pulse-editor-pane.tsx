@@ -22,7 +22,7 @@ import {
   Undo2,
 } from 'lucide-react'
 import { Plate, useEditorRef, usePlateEditor } from 'platejs/react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { DndProvider } from 'react-dnd'
 import { HTML5Backend } from 'react-dnd-html5-backend'
 import { CopilotKit } from '@/components/editor/plugins/copilot-kit'
@@ -65,24 +65,35 @@ export function PulseEditorPane({
   onMarkdownChange,
   scrollStorageKey = 'axon.web.pulse.editor-scroll',
 }: PulseEditorPaneProps) {
+  // Memoize the initial Plate value so markdownToPlateNodes() is not called on every render.
+  // Only the first markdown prop matters — subsequent updates are applied via the effect below.
+  const [initialMarkdown] = useState(markdown)
+  const initialValue = useMemo(() => markdownToPlateNodes(initialMarkdown), [initialMarkdown])
   const editor = usePlateEditor({
     plugins: CopilotKit,
     // biome-ignore lint/suspicious/noExplicitAny: Plate value typing mismatch with Descendant[]
-    value: markdownToPlateNodes(markdown) as any,
+    value: initialValue as any,
   })
   const isApplyingExternalUpdateRef = useRef(false)
   const editorScrollRef = useRef<HTMLDivElement | null>(null)
   const scrollSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastAppliedMarkdownRef = useRef<string>(markdown)
+  const wordCountTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [wordCount, setWordCount] = useState(() => countWords(markdown))
 
   useEffect(() => {
+    if (markdown === lastAppliedMarkdownRef.current) return
     const current = serializeMd(editor)
-    if (current === markdown) return
+    if (current === markdown) {
+      lastAppliedMarkdownRef.current = markdown
+      return
+    }
     isApplyingExternalUpdateRef.current = true
     // biome-ignore lint/suspicious/noExplicitAny: Plate editor value assignment is not strongly typed
     ;(editor as any).children = markdownToPlateNodes(markdown) as any
     ;(editor as unknown as { onChange: () => void }).onChange()
     isApplyingExternalUpdateRef.current = false
+    lastAppliedMarkdownRef.current = markdown
     setWordCount(countWords(markdown))
   }, [editor, markdown])
 
@@ -101,10 +112,11 @@ export function PulseEditorPane({
     return () => clearTimeout(timerId)
   }, [scrollStorageKey])
 
-  // Cleanup debounce timer on unmount.
+  // Cleanup debounce timers on unmount.
   useEffect(() => {
     return () => {
       if (scrollSaveTimerRef.current) clearTimeout(scrollSaveTimerRef.current)
+      if (wordCountTimerRef.current) clearTimeout(wordCountTimerRef.current)
     }
   }, [])
 
@@ -115,8 +127,10 @@ export function PulseEditorPane({
         onChange={() => {
           if (isApplyingExternalUpdateRef.current) return
           const md = serializeMd(editor)
+          lastAppliedMarkdownRef.current = md
           onMarkdownChange(md)
-          setWordCount(countWords(md))
+          if (wordCountTimerRef.current) clearTimeout(wordCountTimerRef.current)
+          wordCountTimerRef.current = setTimeout(() => setWordCount(countWords(md)), 300)
         }}
       >
         <div className="axon-editor flex h-full min-h-0 flex-col">

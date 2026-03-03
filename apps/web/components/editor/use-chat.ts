@@ -55,13 +55,12 @@ export interface MessageDataPart {
 
 export type Chat = UseChatHelpers<ChatMessage>
 
-export type ChatMessage = UIMessage<{}, MessageDataPart>
+export type ChatMessage = UIMessage<unknown, MessageDataPart>
 
 export const useChat = () => {
   const editor = useEditorRef()
   const options = usePluginOption(aiChatPlugin, 'chatOptions')
 
-  // remove when you implement the route /api/ai/command
   const abortControllerRef = React.useRef<AbortController | null>(null)
   const _abortFakeStream = () => {
     if (abortControllerRef.current) {
@@ -74,7 +73,6 @@ export const useChat = () => {
     id: 'editor',
     transport: new DefaultChatTransport({
       api: options.api || '/api/ai/command',
-      // Mock the API response. Remove it when you implement the route /api/ai/command
       fetch: (async (input, init) => {
         const bodyOptions = editor.getOptions(aiChatPlugin).chatOptions?.body
 
@@ -275,10 +273,14 @@ export const useChat = () => {
     _abortFakeStream,
   }
 
+  const chatRef = React.useRef(chat)
+  chatRef.current = chat
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: status/messages/error are intentional triggers to re-sync chatRef.current into the plugin
   React.useEffect(() => {
-    editor.setOption(AIChatPlugin, 'chat', chat as any)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chat.status, chat.messages, chat.error, chat, editor.setOption])
+    // biome-ignore lint/suspicious/noExplicitAny: custom adapter shape differs from platejs internal ChatHelpers
+    editor.setOption(AIChatPlugin, 'chat', chatRef.current as any)
+  }, [editor, baseChat.status, baseChat.messages, baseChat.error])
 
   return chat
 }

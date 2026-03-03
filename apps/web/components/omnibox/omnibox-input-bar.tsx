@@ -13,10 +13,12 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import type { PulseWorkspaceModel, PulseWorkspacePermission } from '@/hooks/ws-messages/types'
+import type { CompletionStatus } from '@/lib/omnibox-types'
 import type { ModeDefinition, ModeId } from '@/lib/ws-protocol'
 import { NO_INPUT_MODES } from '@/lib/ws-protocol'
-import type { CompletionStatus } from './omnibox-types'
 import { PLACEHOLDER_TEXTS } from './utils'
+
+const MENTION_TIP_SEEN_KEY = 'axon.web.mention-tip-seen'
 
 interface OmniboxInputBarProps {
   input: string
@@ -196,7 +198,7 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
             type="button"
             onClick={() => {
               setMentionTipSeen(true)
-              localStorage.setItem('axon-mention-tip-seen', '1')
+              localStorage.setItem(MENTION_TIP_SEEN_KEY, '1')
             }}
             className="ml-2 text-[var(--text-dim)] hover:text-[var(--text-muted)]"
           >

@@ -1,10 +1,7 @@
 import { type NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
+import { apiError } from '@/lib/server/api-error'
+import { getJobsPgPool } from '@/lib/server/pg-pool'
 import type { JobStatus, JobType } from '../route'
-
-const pool = new Pool({
-  connectionString: process.env.AXON_PG_URL ?? 'postgresql://axon:postgres@axon-postgres:5432/axon',
-})
 
 function safeStatus(s: string): JobStatus {
   const valid: JobStatus[] = ['pending', 'running', 'completed', 'failed', 'canceled']
@@ -45,7 +42,7 @@ export interface JobDetail {
 }
 
 async function findCrawlJob(id: string): Promise<JobDetail | null> {
-  const r = await pool.query(
+  const r = await getJobsPgPool().query(
     `SELECT id, url, status, created_at, started_at, finished_at, error_text,
             result_json, config_json
      FROM axon_crawl_jobs WHERE id = $1`,
@@ -89,7 +86,7 @@ async function findCrawlJob(id: string): Promise<JobDetail | null> {
 }
 
 async function findEmbedJob(id: string): Promise<JobDetail | null> {
-  const r = await pool.query(
+  const r = await getJobsPgPool().query(
     `SELECT id, input_text, status, created_at, started_at, finished_at, error_text,
             result_json, config_json
      FROM axon_embed_jobs WHERE id = $1`,
@@ -133,7 +130,7 @@ async function findEmbedJob(id: string): Promise<JobDetail | null> {
 }
 
 async function findExtractJob(id: string): Promise<JobDetail | null> {
-  const r = await pool.query(
+  const r = await getJobsPgPool().query(
     `SELECT id, urls_json, status, created_at, started_at, finished_at, error_text,
             result_json, config_json
      FROM axon_extract_jobs WHERE id = $1`,
@@ -178,7 +175,7 @@ async function findExtractJob(id: string): Promise<JobDetail | null> {
 }
 
 async function findIngestJob(id: string): Promise<JobDetail | null> {
-  const r = await pool.query(
+  const r = await getJobsPgPool().query(
     `SELECT id, source_type, target, status, created_at, started_at, finished_at, error_text,
             result_json, config_json
      FROM axon_ingest_jobs WHERE id = $1`,
@@ -228,7 +225,7 @@ export async function GET(
   const { id } = await params
 
   if (!id || !/^[0-9a-f-]{36}$/i.test(id)) {
-    return NextResponse.json({ error: 'Invalid job ID' }, { status: 400 })
+    return apiError(400, 'Invalid job ID')
   }
 
   try {
@@ -240,12 +237,12 @@ export async function GET(
       (await findIngestJob(id))
 
     if (!job) {
-      return NextResponse.json({ error: 'Job not found' }, { status: 404 })
+      return apiError(404, 'Job not found')
     }
 
     return NextResponse.json(job)
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Database error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    console.error('[api/jobs/[id]] database error', err)
+    return apiError(500, 'Failed to fetch job details', { code: 'jobs_db_error' })
   }
 }

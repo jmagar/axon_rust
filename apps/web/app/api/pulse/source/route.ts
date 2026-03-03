@@ -4,6 +4,8 @@ import { NextResponse } from 'next/server'
 import { ensureRepoRootEnvLoaded } from '@/lib/pulse/server-env'
 import { PulseSourceRequestSchema, type PulseSourceResponse } from '@/lib/pulse/types'
 import { getWorkspaceRoot } from '@/lib/pulse/workspace-root'
+import { apiError } from '@/lib/server/api-error'
+import { validateUrlsForSsrf } from '@/lib/server/url-validation'
 
 const SOURCE_INDEX_TIMEOUT_MS = 8 * 60_000
 
@@ -91,24 +93,30 @@ export async function POST(request: Request) {
   try {
     body = await request.json()
   } catch {
-    return NextResponse.json({ error: 'Request body must be valid JSON' }, { status: 400 })
+    return apiError(400, 'Request body must be valid JSON')
   }
 
   const parsed = PulseSourceRequestSchema.safeParse(body)
   if (!parsed.success) {
-    return NextResponse.json(
-      { error: parsed.error.issues[0]?.message ?? 'Invalid request payload' },
-      { status: 400 },
-    )
+    return apiError(400, parsed.error.issues[0]?.message ?? 'Invalid request payload')
   }
 
   const { urls } = parsed.data
+
+  // SSRF validation — block private IPs and non-HTTP schemes before spawning subprocess
+  const ssrfCheck = validateUrlsForSsrf(urls)
+  if (!ssrfCheck.valid) {
+    return apiError(400, `Blocked URL: ${ssrfCheck.reason}`, {
+      code: 'ssrf_blocked',
+      detail: ssrfCheck.url,
+    })
+  }
+
   const result = await runAxonScrape(urls)
   if (!result.ok) {
-    return NextResponse.json(
-      { error: 'Source indexing failed', detail: result.output.slice(0, 6000) },
-      { status: 502 },
-    )
+    return apiError(502, 'Source indexing failed', {
+      detail: result.output.slice(0, 6000),
+    })
   }
 
   return NextResponse.json({

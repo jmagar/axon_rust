@@ -10,12 +10,11 @@ vi.mock('@/hooks/use-axon-ws', () => ({
 }))
 
 vi.mock('@/hooks/use-ws-messages', () => ({
-  useWsMessages: () => ({
-    startExecution: vi.fn(),
-    activateWorkspace: vi.fn(),
-    submitWorkspacePrompt: vi.fn(),
+  useWsExecutionState: () => ({
     currentJobId: null,
     currentMode: 'scrape',
+  }),
+  useWsWorkspaceState: () => ({
     workspaceMode: 'pulse',
     workspacePromptVersion: 1,
     workspacePrompt: null,
@@ -36,6 +35,11 @@ vi.mock('@/hooks/use-ws-messages', () => ({
     },
     pulseModel: 'sonnet',
     pulsePermissionLevel: 'accept-edits',
+  }),
+  useWsMessageActions: () => ({
+    startExecution: vi.fn(),
+    activateWorkspace: vi.fn(),
+    submitWorkspacePrompt: vi.fn(),
     setPulseModel: vi.fn(),
     setPulsePermissionLevel: vi.fn(),
   }),

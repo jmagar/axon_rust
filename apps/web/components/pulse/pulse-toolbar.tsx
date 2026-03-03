@@ -1,7 +1,6 @@
 'use client'
 
-import { Bot, Network, Plus, Settings2 } from 'lucide-react'
-import { useRouter } from 'next/navigation'
+import { Plus } from 'lucide-react'
 import { useState } from 'react'
 
 interface PulseToolbarProps {
@@ -17,7 +16,6 @@ export function PulseToolbar({
   isDesktop = false,
   onNewSession,
 }: PulseToolbarProps) {
-  const router = useRouter()
   const [isDirty, setIsDirty] = useState(false)
   return (
     <div className="flex min-h-11 shrink-0 items-center gap-x-[var(--pulse-control-gap)] border-b border-[var(--border-subtle)] bg-[rgba(10,18,35,0.65)] px-[var(--space-2)] py-[var(--space-2)] backdrop-blur-sm">
@@ -58,36 +56,6 @@ export function PulseToolbar({
               </button>
             </>
           )}
-
-          {/* Nav — MCP, Agents, Settings */}
-          <span className="mx-0.5 h-4 w-px bg-[var(--border-subtle)]" />
-          <button
-            type="button"
-            onClick={() => router.push('/mcp')}
-            title="MCP Servers"
-            aria-label="MCP Servers"
-            className="inline-flex size-6 items-center justify-center rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.42)] text-[var(--text-dim)] transition-colors hover:border-[rgba(175,215,255,0.25)] hover:text-[var(--axon-primary-strong)]"
-          >
-            <Network className="size-3" />
-          </button>
-          <button
-            type="button"
-            onClick={() => router.push('/agents')}
-            title="Available Agents"
-            aria-label="Available Agents"
-            className="inline-flex size-6 items-center justify-center rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.42)] text-[var(--text-dim)] transition-colors hover:border-[rgba(175,215,255,0.25)] hover:text-[var(--axon-primary-strong)]"
-          >
-            <Bot className="size-3" />
-          </button>
-          <button
-            type="button"
-            onClick={() => router.push('/settings')}
-            title="Settings"
-            aria-label="Open settings"
-            className="inline-flex size-6 items-center justify-center rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.42)] text-[var(--text-dim)] transition-colors hover:border-[rgba(175,215,255,0.25)] hover:text-[var(--axon-primary-strong)]"
-          >
-            <Settings2 className="size-3" />
-          </button>
         </div>
       )}
     </div>

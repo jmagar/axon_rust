@@ -7,8 +7,8 @@ function mockConn(bucket: 0 | 1 | 2): SynapticConnectionRef {
     preTerminal: { x: 0, y: 0 },
     dendriteTip: { x: 10, y: 10 },
     strength: 0.5,
-    baseAlpha: 0.1,
     bucket,
+    postNeuron: { receiveSignal: () => {} },
   }
 }
 

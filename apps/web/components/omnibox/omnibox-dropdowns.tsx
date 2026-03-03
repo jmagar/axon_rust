@@ -1,9 +1,10 @@
 'use client'
 
+import type { CommandOptionValues } from '@/lib/command-options'
 import type { LocalDocFile, MentionKind } from '@/lib/omnibox'
 import type { ModeCategory, ModeDefinition, ModeId } from '@/lib/ws-protocol'
 import { MODE_CATEGORY_LABELS, MODE_CATEGORY_ORDER } from '@/lib/ws-protocol'
-import { CommandOptionsPanel, type CommandOptionValues } from '../command-options-panel'
+import { CommandOptionsPanel } from '../command-options-panel'
 
 interface ModeDropdownProps {
   effectiveDropdownOpen: boolean

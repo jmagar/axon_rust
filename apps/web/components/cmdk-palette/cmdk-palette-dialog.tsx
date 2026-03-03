@@ -236,7 +236,7 @@ export function PaletteDialog({
     <>
       {/* biome-ignore lint/a11y/noStaticElementInteractions: backdrop dismiss is a recognized UX pattern for modals */}
       <div
-        className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+        className="fixed inset-0 bg-black/40"
         style={{ zIndex: 100 }}
         onClick={onBackdropClick}
       />

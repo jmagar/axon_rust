@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import type { NeuralCanvasHandle } from '@/components/neural-canvas'
 import { DEFAULT_PULSE_SETTINGS, usePulseSettings } from '@/hooks/use-pulse-settings'
-import { useWsMessages } from '@/hooks/use-ws-messages'
+import { useWsMessageActions, useWsWorkspaceState } from '@/hooks/use-ws-messages'
 import { Bot, NAV_SECTIONS, Server } from './settings-data'
 import { SettingsSections } from './settings-sections'
 
@@ -14,8 +14,8 @@ const NeuralCanvas = dynamic(() => import('@/components/neural-canvas'), { ssr: 
 
 export default function SettingsPage() {
   const router = useRouter()
-  const { pulseModel, pulsePermissionLevel, setPulseModel, setPulsePermissionLevel } =
-    useWsMessages()
+  const { pulseModel, pulsePermissionLevel } = useWsWorkspaceState()
+  const { setPulseModel, setPulsePermissionLevel } = useWsMessageActions()
   const { settings, updateSettings } = usePulseSettings()
   const [activeSection, setActiveSection] = useState('model')
   const canvasRef = useRef<NeuralCanvasHandle>(null)

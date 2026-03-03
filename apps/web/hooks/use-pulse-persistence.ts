@@ -10,7 +10,7 @@ import {
   parsePersistedWorkspaceState,
 } from '@/lib/pulse/workspace-persistence'
 
-interface UsePulsePersistenceInput {
+interface PersistenceData {
   permissionLevel: PulsePermissionLevel
   model: PulseModel
   documentMarkdown: string
@@ -26,6 +26,9 @@ interface UsePulsePersistenceInput {
   lastResponseModel: PulseModel | null
   showChat: boolean
   showEditor: boolean
+}
+
+interface PersistenceSetters {
   setPulsePermissionLevel: (v: PulsePermissionLevel) => void
   setPulseModel: (v: PulseModel) => void
   setDocumentMarkdown: (v: string) => void
@@ -41,46 +44,56 @@ interface UsePulsePersistenceInput {
   setLastResponseModel: (v: PulseModel | null) => void
   setShowChat: (v: boolean) => void
   setShowEditor: (v: boolean) => void
+}
+
+interface UsePulsePersistenceInput {
+  data: PersistenceData
+  setters: PersistenceSetters
   messageIdRef: React.MutableRefObject<number>
 }
 
-export function usePulsePersistence({
-  permissionLevel,
-  model,
-  documentMarkdown,
-  chatHistory,
-  documentTitle,
-  currentDocFilename,
-  chatSessionId,
-  indexedSources,
-  activeThreadSources,
-  desktopSplitPercent,
-  mobileSplitPercent,
-  lastResponseLatencyMs,
-  lastResponseModel,
-  showChat,
-  showEditor,
-  setPulsePermissionLevel,
-  setPulseModel,
-  setDocumentMarkdown,
-  setChatHistory,
-  setDocumentTitle,
-  setCurrentDocFilename,
-  setChatSessionId,
-  setIndexedSources,
-  setActiveThreadSources,
-  setDesktopSplitPercent,
-  setMobileSplitPercent,
-  setLastResponseLatencyMs,
-  setLastResponseModel,
-  setShowChat,
-  setShowEditor,
-  messageIdRef,
-}: UsePulsePersistenceInput) {
+export function usePulsePersistence({ data, setters, messageIdRef }: UsePulsePersistenceInput) {
+  const {
+    permissionLevel,
+    model,
+    documentMarkdown,
+    chatHistory,
+    documentTitle,
+    currentDocFilename,
+    chatSessionId,
+    indexedSources,
+    activeThreadSources,
+    desktopSplitPercent,
+    mobileSplitPercent,
+    lastResponseLatencyMs,
+    lastResponseModel,
+    showChat,
+    showEditor,
+  } = data
+  const {
+    setPulsePermissionLevel,
+    setPulseModel,
+    setDocumentMarkdown,
+    setChatHistory,
+    setDocumentTitle,
+    setCurrentDocFilename,
+    setChatSessionId,
+    setIndexedSources,
+    setActiveThreadSources,
+    setDesktopSplitPercent,
+    setMobileSplitPercent,
+    setLastResponseLatencyMs,
+    setLastResponseModel,
+    setShowChat,
+    setShowEditor,
+  } = setters
   const hasHydratedRef = useRef(false)
+  const persistFnRef = useRef<(() => void) | null>(null)
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Hydration effect — reads from localStorage, calls all setters
   useEffect(() => {
+    if (hasHydratedRef.current) return
     try {
       const restored = parsePersistedWorkspaceState(
         window.localStorage.getItem(PULSE_WORKSPACE_STATE_KEY),
@@ -171,14 +184,26 @@ export function usePulsePersistence({
     permissionLevel,
   ])
 
-  // Auto-persist effect
+  // Keep ref pointing at the latest persist function (avoids stale closures)
+  persistFnRef.current = persistWorkspaceState
+
+  // Auto-persist effect — debounced to 2s to avoid serialization storm during streaming
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — we use persistFnRef to avoid stale closures; the dep triggers the debounce cycle
   useEffect(() => {
-    persistWorkspaceState()
+    if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+    persistTimerRef.current = setTimeout(() => persistFnRef.current?.(), 2000)
   }, [persistWorkspaceState])
 
-  // Pagehide/visibilitychange effect
+  // Cleanup debounce timer on unmount
   useEffect(() => {
-    const flushState = () => persistWorkspaceState()
+    return () => {
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+    }
+  }, [])
+
+  // Pagehide/visibilitychange effect — immediate flush (no debounce)
+  useEffect(() => {
+    const flushState = () => persistFnRef.current?.()
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') flushState()
     }
@@ -188,5 +213,5 @@ export function usePulsePersistence({
       window.removeEventListener('pagehide', flushState)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [persistWorkspaceState])
+  }, [])
 }

@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
+import { apiError } from '@/lib/server/api-error'
+import { getJobsPgPool } from '@/lib/server/pg-pool'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -32,12 +33,6 @@ interface JobsResponse {
   counts: StatusCounts
 }
 
-// ── DB pool ────────────────────────────────────────────────────────────────────
-
-const pool = new Pool({
-  connectionString: process.env.AXON_PG_URL ?? 'postgresql://axon:postgres@axon-postgres:5432/axon',
-})
-
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function safeStatus(s: string): JobStatus {
@@ -52,7 +47,7 @@ function truncate(s: string | null | undefined, max = 120): string {
 
 // ── Query builders ─────────────────────────────────────────────────────────────
 
-type StatusFilter = 'all' | 'active' | 'pending' | 'completed' | 'failed'
+type StatusFilter = 'all' | 'active' | 'pending' | 'running' | 'completed' | 'failed' | 'canceled'
 
 function statusWhere(filter: StatusFilter): string {
   switch (filter) {
@@ -60,10 +55,14 @@ function statusWhere(filter: StatusFilter): string {
       return `status IN ('pending','running')`
     case 'pending':
       return `status = 'pending'`
+    case 'running':
+      return `status = 'running'`
     case 'completed':
       return `status = 'completed'`
     case 'failed':
       return `status IN ('failed','canceled')`
+    case 'canceled':
+      return `status = 'canceled'`
     default:
       return '1=1'
   }
@@ -71,7 +70,7 @@ function statusWhere(filter: StatusFilter): string {
 
 async function queryCrawl(statusFilter: StatusFilter, limit: number, offset: number) {
   const where = statusWhere(statusFilter)
-  const rows = await pool.query(
+  const rows = await getJobsPgPool().query(
     `SELECT id, url, status, created_at, started_at, finished_at, error_text,
             config_json->>'collection' AS collection,
             COUNT(*) OVER() AS total
@@ -99,7 +98,7 @@ async function queryCrawl(statusFilter: StatusFilter, limit: number, offset: num
 
 async function queryExtract(statusFilter: StatusFilter, limit: number, offset: number) {
   const where = statusWhere(statusFilter)
-  const rows = await pool.query(
+  const rows = await getJobsPgPool().query(
     `SELECT id, urls_json, status, created_at, started_at, finished_at, error_text,
             COUNT(*) OVER() AS total
      FROM axon_extract_jobs
@@ -131,7 +130,7 @@ async function queryExtract(statusFilter: StatusFilter, limit: number, offset: n
 
 async function queryEmbed(statusFilter: StatusFilter, limit: number, offset: number) {
   const where = statusWhere(statusFilter)
-  const rows = await pool.query(
+  const rows = await getJobsPgPool().query(
     `SELECT id, input_text, status, created_at, started_at, finished_at, error_text,
             config_json->>'collection' AS collection,
             COUNT(*) OVER() AS total
@@ -159,7 +158,7 @@ async function queryEmbed(statusFilter: StatusFilter, limit: number, offset: num
 
 async function queryIngest(statusFilter: StatusFilter, limit: number, offset: number) {
   const where = statusWhere(statusFilter)
-  const rows = await pool.query(
+  const rows = await getJobsPgPool().query(
     `SELECT id, source_type, target, status, created_at, started_at, finished_at, error_text,
             COUNT(*) OVER() AS total
      FROM axon_ingest_jobs
@@ -188,7 +187,7 @@ async function queryIngest(statusFilter: StatusFilter, limit: number, offset: nu
 
 async function getStatusCounts(): Promise<StatusCounts> {
   const countSql = (table: string) =>
-    pool.query<{ running: string; pending: string; completed: string; failed: string }>(
+    getJobsPgPool().query<{ running: string; pending: string; completed: string; failed: string }>(
       `SELECT
         COUNT(*) FILTER (WHERE status = 'running')                    AS running,
         COUNT(*) FILTER (WHERE status = 'pending')                    AS pending,
@@ -217,10 +216,38 @@ async function getStatusCounts(): Promise<StatusCounts> {
 
 // ── GET /api/jobs ──────────────────────────────────────────────────────────────
 
+const VALID_TYPES = new Set(['all', 'crawl', 'extract', 'embed', 'ingest'])
+const VALID_STATUSES = new Set([
+  'all',
+  'active',
+  'pending',
+  'running',
+  'completed',
+  'failed',
+  'canceled',
+])
+
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const { searchParams } = req.nextUrl
-  const type = (searchParams.get('type') ?? 'all') as 'all' | JobType
-  const statusRaw = (searchParams.get('status') ?? 'all') as StatusFilter
+
+  const typeRaw = searchParams.get('type') ?? 'all'
+  if (!VALID_TYPES.has(typeRaw)) {
+    return apiError(400, `Invalid type filter: ${typeRaw}`, {
+      code: 'invalid_type_filter',
+      detail: `Allowed values: ${[...VALID_TYPES].join(', ')}`,
+    })
+  }
+  const type = typeRaw as 'all' | JobType
+
+  const statusRaw = searchParams.get('status') ?? 'all'
+  if (!VALID_STATUSES.has(statusRaw)) {
+    return apiError(400, `Invalid status filter: ${statusRaw}`, {
+      code: 'invalid_status_filter',
+      detail: `Allowed values: ${[...VALID_STATUSES].join(', ')}`,
+    })
+  }
+  const safeStatusFilter = statusRaw as StatusFilter
+
   const limit = Math.min(Math.max(Number(searchParams.get('limit') ?? '50'), 1), 200)
   const offset = Math.max(Number(searchParams.get('offset') ?? '0'), 0)
 
@@ -230,18 +257,39 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const counts = await getStatusCounts()
 
     if (type === 'all') {
-      // Fetch from all 4 tables, merge, sort by createdAt desc, paginate
-      const [crawl, extract, embed, ingest] = await Promise.all([
-        queryCrawl(statusRaw, 500, 0),
-        queryExtract(statusRaw, 500, 0),
-        queryEmbed(statusRaw, 500, 0),
-        queryIngest(statusRaw, 500, 0),
-      ])
-      const all = [...crawl.jobs, ...extract.jobs, ...embed.jobs, ...ingest.jobs].sort((a, b) =>
-        b.createdAt.localeCompare(a.createdAt),
+      const where = statusWhere(safeStatusFilter)
+      const unionResult = await getJobsPgPool().query(
+        `WITH combined AS (
+          SELECT id, 'crawl' AS type, url AS target, NULL AS collection_val, status, created_at, started_at, finished_at, error_text
+            FROM axon_crawl_jobs WHERE ${where}
+          UNION ALL
+          SELECT id, 'extract', urls_json::text, NULL, status, created_at, started_at, finished_at, error_text
+            FROM axon_extract_jobs WHERE ${where}
+          UNION ALL
+          SELECT id, 'embed', input_text, config_json->>'collection', status, created_at, started_at, finished_at, error_text
+            FROM axon_embed_jobs WHERE ${where}
+          UNION ALL
+          SELECT id, 'ingest', source_type || ': ' || target, NULL, status, created_at, started_at, finished_at, error_text
+            FROM axon_ingest_jobs WHERE ${where}
+        )
+        SELECT *, COUNT(*) OVER() AS total
+        FROM combined
+        ORDER BY created_at DESC
+        LIMIT $1 OFFSET $2`,
+        [limit, offset],
       )
-      total = all.length
-      jobs = all.slice(offset, offset + limit)
+      total = Number((unionResult.rows[0] as { total?: string } | undefined)?.total ?? 0)
+      jobs = unionResult.rows.map((r) => ({
+        id: r.id as string,
+        type: r.type as JobType,
+        status: safeStatus(r.status as string),
+        target: truncate(r.target as string),
+        collection: (r.collection_val as string) ?? null,
+        createdAt: (r.created_at as Date).toISOString(),
+        startedAt: r.started_at ? (r.started_at as Date).toISOString() : null,
+        finishedAt: r.finished_at ? (r.finished_at as Date).toISOString() : null,
+        errorText: r.error_text as string | null,
+      }))
     } else {
       const query =
         type === 'crawl'
@@ -251,7 +299,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             : type === 'embed'
               ? queryEmbed
               : queryIngest
-      const result = await query(statusRaw, limit, offset)
+      const result = await query(safeStatusFilter, limit, offset)
       jobs = result.jobs
       total = result.total
     }
@@ -264,8 +312,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
     return NextResponse.json(response)
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Database error'
-    return NextResponse.json({ error: message }, { status: 500 })
+    console.error('[api/jobs] database error', err)
+    return apiError(500, 'Failed to query jobs', { code: 'jobs_db_error' })
   }
 }
 

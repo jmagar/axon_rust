@@ -1,14 +1,18 @@
 'use client'
 
-import { Bot, Network, Settings2 } from 'lucide-react'
 import dynamic from 'next/dynamic'
-import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DockerStats } from '@/components/docker-stats'
 import { LandingCards } from '@/components/landing-cards'
 import type { NeuralCanvasHandle } from '@/components/neural-canvas'
 import { Omnibox } from '@/components/omnibox'
-import { PulseEditorPane } from '@/components/pulse/pulse-editor-pane'
+
+const PulseEditorPane = dynamic(
+  () =>
+    import('@/components/pulse/pulse-editor-pane').then((m) => ({ default: m.PulseEditorPane })),
+  { ssr: false },
+)
+
 import { PulseMobilePaneSwitcher } from '@/components/pulse/pulse-mobile-pane-switcher'
 import { ResultsPanel } from '@/components/results-panel'
 import { WsIndicator } from '@/components/ws-indicator'
@@ -19,6 +23,7 @@ import {
   DEFAULT_NEURAL_CANVAS_PROFILE,
   type NeuralCanvasProfile,
 } from '@/lib/pulse/neural-canvas-presets'
+import { getStorageItem, setStorageItem } from '@/lib/storage'
 import type { ContainerStats, WsServerMsg } from '@/lib/ws-protocol'
 
 const NeuralCanvas = dynamic(() => import('@/components/neural-canvas'), {
@@ -28,7 +33,6 @@ const CANVAS_PROFILE_STORAGE_KEY = 'axon.web.neural-canvas.profile'
 const CANVAS_PROFILE_OPTIONS: NeuralCanvasProfile[] = ['current', 'subtle', 'cinematic', 'electric']
 
 export default function DashboardPage() {
-  const router = useRouter()
   const { subscribe } = useAxonWs()
   const canvasRef = useRef<NeuralCanvasHandle>(null)
   const { isProcessing, hasResults, workspaceMode, workspacePromptVersion } = useWsMessages()
@@ -41,51 +45,30 @@ export default function DashboardPage() {
   // Persist landing editor content across tab switches / page unloads
   const LANDING_EDITOR_KEY = 'axon.web.landing.editor-content'
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(LANDING_EDITOR_KEY)
-      if (saved) setLandingEditorMarkdown(saved)
-    } catch {
-      // Ignore storage errors.
-    }
+    const saved = getStorageItem(LANDING_EDITOR_KEY)
+    if (saved) setLandingEditorMarkdown(saved)
   }, [])
 
   const handleLandingEditorChange = useCallback((md: string) => {
     setLandingEditorMarkdown(md)
-    try {
-      window.localStorage.setItem(LANDING_EDITOR_KEY, md)
-    } catch {
-      // Ignore storage errors.
+    setStorageItem(LANDING_EDITOR_KEY, md)
+  }, [])
+
+  useEffect(() => {
+    const raw = getStorageItem(CANVAS_PROFILE_STORAGE_KEY)
+    if (raw && CANVAS_PROFILE_OPTIONS.includes(raw as NeuralCanvasProfile)) {
+      setCanvasProfile(raw as NeuralCanvasProfile)
     }
   }, [])
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(CANVAS_PROFILE_STORAGE_KEY)
-      if (!raw) return
-      if (CANVAS_PROFILE_OPTIONS.includes(raw as NeuralCanvasProfile)) {
-        setCanvasProfile(raw as NeuralCanvasProfile)
-      }
-    } catch {
-      // Ignore storage errors and keep default profile.
-    }
-  }, [])
-
-  useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(MOBILE_PANE_STORAGE_KEY)
-      if (saved === 'chat' || saved === 'editor') setLandingMobilePane(saved)
-    } catch {
-      // Ignore storage errors.
-    }
+    const saved = getStorageItem(MOBILE_PANE_STORAGE_KEY)
+    if (saved === 'chat' || saved === 'editor') setLandingMobilePane(saved)
   }, [])
 
   const handleLandingMobilePaneChange = useCallback((pane: 'chat' | 'editor') => {
     setLandingMobilePane(pane)
-    try {
-      window.localStorage.setItem(MOBILE_PANE_STORAGE_KEY, pane)
-    } catch {
-      // Ignore storage errors.
-    }
+    setStorageItem(MOBILE_PANE_STORAGE_KEY, pane)
   }, [])
 
   // Canvas intensity: full on execute start, pulse on command done/error.
@@ -189,8 +172,8 @@ export default function DashboardPage() {
         </main>
       )}
 
-      {/* Fixed top-right — pane switcher (landing + mobile) + nav icons (always) */}
-      <div className="fixed right-3 top-0 z-10 flex h-11 items-center gap-2">
+      {/* Fixed top-right — pane switcher (landing + mobile) */}
+      <div className="fixed right-28 top-0 z-10 flex h-11 items-center gap-2">
         {!hasResults && (
           <div className="lg:hidden">
             <PulseMobilePaneSwitcher
@@ -199,35 +182,6 @@ export default function DashboardPage() {
             />
           </div>
         )}
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => router.push('/mcp')}
-            title="MCP Servers"
-            aria-label="MCP Servers"
-            className="flex items-center justify-center size-7 rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.42)] text-[var(--text-dim)] transition-colors hover:border-[rgba(175,215,255,0.25)] hover:text-[var(--axon-primary-strong)] backdrop-blur-sm"
-          >
-            <Network className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => router.push('/agents')}
-            title="Available Agents"
-            aria-label="Available Agents"
-            className="flex items-center justify-center size-7 rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.42)] text-[var(--text-dim)] transition-colors hover:border-[rgba(175,215,255,0.25)] hover:text-[var(--axon-primary-strong)] backdrop-blur-sm"
-          >
-            <Bot className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => router.push('/settings')}
-            title="Settings"
-            aria-label="Open settings"
-            className="flex items-center justify-center size-7 rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.42)] text-[var(--text-dim)] transition-colors hover:border-[rgba(175,215,255,0.25)] hover:text-[var(--axon-primary-strong)] backdrop-blur-sm"
-          >
-            <Settings2 className="size-3.5" />
-          </button>
-        </div>
       </div>
 
       {/* Fixed bottom omnibox — only when Pulse workspace is active */}
