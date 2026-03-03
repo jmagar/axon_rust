@@ -135,10 +135,17 @@ pub(crate) async fn discover_sitemap_urls_with_robots(
 ) -> Result<SitemapDiscoveryResult, Box<dyn Error>> {
     let parsed = Url::parse(start_url)?;
     let scheme = parsed.scheme().to_string();
-    let host = parsed.host_str().ok_or("missing host")?.to_string();
+    let bare_host = parsed.host_str().ok_or("missing host")?.to_string();
+    // Include port when non-standard — without this, sitemap URLs targeting
+    // hosts on custom ports (e.g. dev servers) silently hit port 80/443.
+    let host = match parsed.port() {
+        Some(port) => format!("{bare_host}:{port}"),
+        None => bare_host.clone(),
+    };
     let root_path = parsed.path().trim_end_matches('/').to_string();
     let scoped_to_root = root_path.is_empty();
-    let host_suffix = format!(".{host}");
+    // Host suffix uses bare hostname (no port) for subdomain matching
+    let host_suffix = format!(".{bare_host}");
     let timeout = Duration::from_millis(cfg.request_timeout_ms.unwrap_or(30_000));
     let client = reqwest::Client::builder().timeout(timeout).build()?;
 
@@ -150,7 +157,9 @@ pub(crate) async fn discover_sitemap_urls_with_robots(
     enqueue_robots_sitemaps(cfg, &client, &scheme, &host, &mut queue, &mut stats).await;
 
     let scope = SitemapScope {
-        host: &host,
+        // Use bare hostname for scope checks — host_str() on discovered URLs
+        // never includes port, so scope comparison must use bare host too.
+        host: &bare_host,
         host_suffix,
         include_subdomains: cfg.include_subdomains,
         scoped_prefix: format!("{root_path}/"),

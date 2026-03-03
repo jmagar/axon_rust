@@ -35,6 +35,7 @@ done < <(find "$REPO_ROOT" \
     -not -path "*/node_modules/*" \
     -not -path "*/target/*" \
     -not -path "*/.cache/*" \
+    -not -path "*/.next/*" \
     -name "CLAUDE.md" \
     -print0)
 

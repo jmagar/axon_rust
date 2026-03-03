@@ -2,6 +2,8 @@ mod audit_diff;
 mod backfill;
 mod manifest_audit;
 mod sitemap;
+#[cfg(test)]
+mod sitemap_migration_tests;
 
 pub(super) use backfill::append_robots_backfill;
 use manifest_audit::CrawlAuditSnapshot;

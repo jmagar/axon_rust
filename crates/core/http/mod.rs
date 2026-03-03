@@ -19,6 +19,8 @@ mod tests;
 pub use client::{build_client, fetch_html, http_client};
 pub use error::HttpError;
 pub use normalize::normalize_url;
+#[cfg(test)]
+pub(crate) use ssrf::set_allow_loopback;
 pub(crate) use ssrf::ssrf_blacklist_patterns;
 pub use ssrf::validate_url;
 

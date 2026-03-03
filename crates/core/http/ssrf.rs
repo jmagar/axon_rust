@@ -6,6 +6,23 @@ use std::net::IpAddr;
 use super::error::HttpError;
 use super::normalize::normalize_url;
 
+// Test-only thread-local flag: when set, `validate_url` permits loopback
+// addresses so httpmock servers on 127.0.0.1 can be reached by code under
+// test. Production builds never see this — the flag is `#[cfg(test)]`-gated.
+//
+// Thread-local avoids cross-thread races with SSRF tests that assert
+// loopback is blocked. Each test thread controls its own flag independently.
+#[cfg(test)]
+thread_local! {
+    static ALLOW_LOOPBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Set the thread-local loopback bypass flag. Only available in test builds.
+#[cfg(test)]
+pub(crate) fn set_allow_loopback(allow: bool) {
+    ALLOW_LOOPBACK.with(|c| c.set(allow));
+}
+
 /// Reject URLs that would allow SSRF attacks.
 ///
 /// Blocks:
@@ -72,6 +89,12 @@ pub fn validate_url(url: &str) -> Result<(), HttpError> {
 /// IPv4-mapped IPv6 addresses. Extracted as a named function (not a closure)
 /// so the IPv4-mapped branch can recurse into the IPv4 checks.
 fn check_ip(ip: IpAddr) -> Result<(), HttpError> {
+    #[cfg(test)]
+    {
+        if ip.is_loopback() && ALLOW_LOOPBACK.with(|c| c.get()) {
+            return Ok(());
+        }
+    }
     if ip.is_loopback() {
         return Err(HttpError::BlockedIpRange(ip));
     }
