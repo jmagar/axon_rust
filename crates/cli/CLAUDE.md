@@ -24,9 +24,8 @@ cli/
     │   └── audit/                # crawl audit + crawl diff: snapshot generation and comparison
     │       ├── audit.rs          # Entry point + snapshot/diff dispatch
     │       ├── audit_diff.rs     # Diff computation (added/removed/changed URLs)
-    │       ├── backfill.rs       # robots.txt backfill logic
     │       ├── manifest_audit.rs # Snapshot persistence to disk
-    │       └── sitemap.rs        # Sitemap + robots.txt URL discovery
+    │       └── sitemap.rs        # Sitemap + robots.txt URL discovery (adapter over engine)
     ├── refresh.rs                # Refresh command entry point
     ├── refresh/
     │   ├── mod.rs                # Subcommand routing + schedule/status/cancel/list/...
@@ -192,6 +191,7 @@ Always call `bootstrap_chrome_runtime(cfg)` before Chrome-mode crawls; do not le
 - Checks 24-hour disk cache before crawling; returns cached result if hit
 - Supports sitemap-only mode (`--sitemap-only`) — skips main crawl, backfills from sitemap
 - Calls `should_fallback_to_chrome()` after HTTP crawl and retries with Chrome if thin rate is too high
+- Sitemap backfill delegates to `crawl::engine::append_sitemap_backfill()` — no CLI-owned fetch loop
 
 ## Testing
 
