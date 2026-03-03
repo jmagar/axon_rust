@@ -480,4 +480,472 @@ mod tests {
             "None timeout_ms must produce None passed to with_request_timeout"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // select_output — edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_select_output_empty_html_body() {
+        // An empty HTML string should not panic; markdown output is just empty.
+        let html = "";
+        let result = select_output(ScrapeFormat::Markdown, "https://example.com", html, 200)
+            .expect("select_output must handle empty HTML without error");
+        // Empty input produces empty (or whitespace-only) markdown.
+        assert!(
+            result.trim().is_empty(),
+            "empty HTML should produce empty markdown, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_select_output_json_missing_title() {
+        // HTML with no <title> tag: the title field must be an empty string, not null.
+        let html = "<html><body><p>No title here</p></body></html>";
+        let result = select_output(ScrapeFormat::Json, "https://example.com", html, 200)
+            .expect("select_output should succeed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("output should be valid JSON");
+        assert_eq!(
+            parsed["title"], "",
+            "missing <title> must produce empty string, not null"
+        );
+    }
+
+    #[test]
+    fn test_select_output_json_missing_description() {
+        // HTML with no <meta name="description">: description field must be empty string.
+        let html = "<html><head><title>T</title></head><body><p>Content</p></body></html>";
+        let result = select_output(ScrapeFormat::Json, "https://example.com", html, 200)
+            .expect("select_output should succeed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("output should be valid JSON");
+        assert_eq!(
+            parsed["description"], "",
+            "missing meta description must produce empty string, not null"
+        );
+    }
+
+    #[test]
+    fn test_select_output_json_includes_description() {
+        // Verify description field is populated from <meta name="description">.
+        let html = r#"<html><head><title>Page</title><meta name="description" content="A fine page"></head><body><p>Body</p></body></html>"#;
+        let result = select_output(ScrapeFormat::Json, "https://example.com", html, 200)
+            .expect("select_output should succeed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("output should be valid JSON");
+        assert_eq!(
+            parsed["description"], "A fine page",
+            "description must be extracted from meta tag"
+        );
+    }
+
+    #[test]
+    fn test_select_output_json_has_all_five_fields() {
+        // Contract: JSON output must contain exactly url, status_code, markdown, title, description.
+        let html = r#"<html><head><title>T</title><meta name="description" content="D"></head><body><p>B</p></body></html>"#;
+        let result = select_output(ScrapeFormat::Json, "https://example.com", html, 200)
+            .expect("select_output should succeed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("output should be valid JSON");
+        let obj = parsed.as_object().expect("JSON output must be an object");
+        for field in &["url", "status_code", "markdown", "title", "description"] {
+            assert!(
+                obj.contains_key(*field),
+                "JSON output missing required field: {field}"
+            );
+        }
+        assert_eq!(
+            obj.len(),
+            5,
+            "JSON output must contain exactly 5 fields, got: {:?}",
+            obj.keys().collect::<Vec<_>>()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // build_scrape_website — config-to-Spider mapping (pure, no network)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_build_scrape_website_sets_limit_one() {
+        let cfg = Config::default();
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        // with_limit(1) sets a budget of {"*": 1} — verify via the budget field.
+        let budget = website
+            .configuration
+            .budget
+            .as_ref()
+            .expect("budget must be set after with_limit(1)");
+        assert_eq!(
+            budget.len(),
+            1,
+            "budget should have exactly one entry (wildcard)"
+        );
+        let val = budget.values().next().expect("budget should have a value");
+        assert_eq!(*val, 1, "with_limit(1) must set budget wildcard to 1");
+    }
+
+    #[test]
+    fn test_build_scrape_website_blocks_assets() {
+        let cfg = Config::default();
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        assert!(
+            website.configuration.only_html,
+            "block_assets must be true for scrape (only fetch HTML, not images/CSS/JS)"
+        );
+    }
+
+    #[test]
+    fn test_build_scrape_website_wires_ssrf_blacklist() {
+        let cfg = Config::default();
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        let blacklist = website
+            .configuration
+            .blacklist_url
+            .as_ref()
+            .expect("blacklist_url must be set");
+        assert!(
+            !blacklist.is_empty(),
+            "SSRF blacklist patterns must be wired into spider"
+        );
+    }
+
+    #[test]
+    fn test_build_scrape_website_sets_retry_from_config() {
+        let cfg = Config {
+            fetch_retries: 5,
+            ..Config::default()
+        };
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        assert_eq!(
+            website.configuration.retry, 5,
+            "retry must match cfg.fetch_retries"
+        );
+    }
+
+    #[test]
+    fn test_build_scrape_website_sets_timeout_from_config() {
+        let cfg = Config {
+            request_timeout_ms: Some(10_000),
+            ..Config::default()
+        };
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        let timeout = website
+            .configuration
+            .request_timeout
+            .as_ref()
+            .expect("request_timeout must be set when cfg has timeout_ms");
+        assert_eq!(
+            timeout.as_millis(),
+            10_000,
+            "request_timeout must match cfg.request_timeout_ms"
+        );
+    }
+
+    #[test]
+    fn test_build_scrape_website_explicit_timeout_overrides_spider_default() {
+        // When cfg.request_timeout_ms is set, the resulting timeout must match exactly.
+        // When None, Spider keeps its own default — we only assert the explicit case.
+        let cfg_with = Config {
+            request_timeout_ms: Some(7_500),
+            ..Config::default()
+        };
+        let cfg_without = Config {
+            request_timeout_ms: None,
+            ..Config::default()
+        };
+        let ws_with = build_scrape_website(&cfg_with, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        let ws_without = build_scrape_website(&cfg_without, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        let timeout = ws_with
+            .configuration
+            .request_timeout
+            .as_ref()
+            .expect("timeout must be set when cfg has timeout_ms");
+        assert_eq!(timeout.as_millis(), 7_500, "explicit timeout must match");
+        // When None, spider uses its own default — just verify it differs from ours.
+        // (Spider's default is 15s; our explicit value is 7.5s — they must differ.)
+        let default_timeout = ws_without
+            .configuration
+            .request_timeout
+            .as_ref()
+            .map(|d| d.as_millis());
+        assert_ne!(
+            default_timeout,
+            Some(7_500),
+            "without explicit timeout, spider default must differ from our explicit value"
+        );
+    }
+
+    #[test]
+    fn test_build_scrape_website_wires_custom_headers() {
+        let cfg = Config {
+            custom_headers: vec![
+                "Authorization: Bearer test-token".to_string(),
+                "X-Custom: value".to_string(),
+            ],
+            ..Config::default()
+        };
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        let headers = website
+            .configuration
+            .headers
+            .as_ref()
+            .expect("headers must be set when custom_headers is non-empty");
+        assert!(
+            headers.contains_key("authorization"),
+            "Authorization header must be wired"
+        );
+        assert!(
+            headers.contains_key("x-custom"),
+            "X-Custom header must be wired"
+        );
+    }
+
+    #[test]
+    fn test_build_scrape_website_no_headers_when_empty() {
+        let cfg = Config {
+            custom_headers: vec![],
+            ..Config::default()
+        };
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        // When no custom headers, headers should remain None (spider default).
+        assert!(
+            website.configuration.headers.is_none(),
+            "headers must be None when custom_headers is empty"
+        );
+    }
+
+    #[test]
+    fn test_build_scrape_website_sets_no_control_thread() {
+        let cfg = Config::default();
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        assert!(
+            website.configuration.no_control_thread,
+            "no_control_thread must be true for single-page scrape"
+        );
+    }
+
+    #[test]
+    fn test_build_scrape_website_chrome_mode_sets_dismiss_dialogs() {
+        let cfg = Config {
+            render_mode: RenderMode::Chrome,
+            ..Config::default()
+        };
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        assert_eq!(
+            website.configuration.dismiss_dialogs,
+            Some(true),
+            "Chrome mode must set dismiss_dialogs"
+        );
+        assert!(
+            website.configuration.disable_log,
+            "Chrome mode must set disable_log"
+        );
+    }
+
+    #[test]
+    fn test_build_scrape_website_chrome_mode_with_csp_bypass() {
+        let cfg = Config {
+            render_mode: RenderMode::Chrome,
+            bypass_csp: true,
+            ..Config::default()
+        };
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        assert!(
+            website.configuration.bypass_csp,
+            "Chrome mode with bypass_csp must set csp_bypass on spider"
+        );
+    }
+
+    #[test]
+    fn test_build_scrape_website_http_mode_skips_chrome_options() {
+        let cfg = Config {
+            render_mode: RenderMode::Http,
+            bypass_csp: true, // should be ignored in HTTP mode
+            ..Config::default()
+        };
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        // In HTTP mode, Chrome-specific options must NOT be set.
+        assert_eq!(
+            website.configuration.dismiss_dialogs, None,
+            "HTTP mode must not set dismiss_dialogs"
+        );
+        assert!(
+            !website.configuration.disable_log,
+            "HTTP mode must not set disable_log"
+        );
+        assert!(
+            !website.configuration.bypass_csp,
+            "HTTP mode must not set bypass_csp even when cfg.bypass_csp is true"
+        );
+    }
+
+    #[test]
+    fn test_build_scrape_website_accept_invalid_certs() {
+        let cfg = Config {
+            accept_invalid_certs: true,
+            ..Config::default()
+        };
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        assert!(
+            website.configuration.accept_invalid_certs,
+            "accept_invalid_certs must be wired through to spider"
+        );
+    }
+
+    #[test]
+    fn test_build_scrape_website_wires_user_agent() {
+        let cfg = Config {
+            chrome_user_agent: Some("TestBot/1.0".to_string()),
+            ..Config::default()
+        };
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        let ua = website
+            .configuration
+            .user_agent
+            .as_ref()
+            .expect("user_agent must be set when chrome_user_agent is Some");
+        assert_eq!(
+            ua.as_str(),
+            "TestBot/1.0",
+            "user_agent must match cfg.chrome_user_agent"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // select_output — migration contract coverage
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_select_output_json_handles_missing_title() {
+        // Contract: when HTML has no <title> tag, the JSON title field must be
+        // an empty string (not null, not absent).
+        let html = "<html><head></head><body><p>No title tag at all</p></body></html>";
+        let result = select_output(ScrapeFormat::Json, "https://example.com", html, 200)
+            .expect("select_output should succeed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("output should be valid JSON");
+        assert_eq!(
+            parsed["title"], "",
+            "HTML with no <title> tag must produce empty string title"
+        );
+        assert!(
+            parsed["title"].is_string(),
+            "title must be a string, not null"
+        );
+    }
+
+    #[test]
+    fn test_select_output_json_handles_missing_description() {
+        // Contract: when HTML has no <meta name="description">, the JSON
+        // description field must be an empty string (not null, not absent).
+        let html =
+            "<html><head><title>Has Title</title></head><body><p>No meta desc</p></body></html>";
+        let result = select_output(ScrapeFormat::Json, "https://example.com", html, 200)
+            .expect("select_output should succeed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("output should be valid JSON");
+        assert_eq!(
+            parsed["description"], "",
+            "HTML with no meta description must produce empty string"
+        );
+        assert!(
+            parsed["description"].is_string(),
+            "description must be a string, not null"
+        );
+    }
+
+    #[test]
+    fn test_select_output_json_has_all_required_fields() {
+        // Contract: JSON output must contain exactly: url, status_code, title,
+        // description, markdown — no more, no fewer.
+        let html = r#"<html><head><title>T</title><meta name="description" content="D"></head><body><p>B</p></body></html>"#;
+        let result = select_output(ScrapeFormat::Json, "https://example.com", html, 200)
+            .expect("select_output should succeed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("output should be valid JSON");
+        let obj = parsed.as_object().expect("JSON output must be an object");
+        let required = ["url", "status_code", "title", "description", "markdown"];
+        for field in &required {
+            assert!(
+                obj.contains_key(*field),
+                "JSON output missing required field: {field}"
+            );
+        }
+        assert_eq!(
+            obj.len(),
+            required.len(),
+            "JSON output must contain exactly {} fields, got: {:?}",
+            required.len(),
+            obj.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_select_output_markdown_empty_body() {
+        // An HTML document with an empty <body> must not panic and should
+        // produce empty (or whitespace-only) markdown.
+        let html = "<html><head><title>Empty</title></head><body></body></html>";
+        let result = select_output(ScrapeFormat::Markdown, "https://example.com", html, 200)
+            .expect("select_output must not panic on empty body");
+        // Empty body → no text content → trimmed result should be empty.
+        assert!(
+            result.trim().is_empty(),
+            "empty <body></body> should produce empty markdown, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_select_output_html_preserves_entities() {
+        // Html format returns raw HTML unchanged — HTML entities like &amp;
+        // must be preserved verbatim (no double-encoding, no decoding).
+        let html = "<html><body><p>A &amp; B &lt; C</p></body></html>";
+        let result = select_output(ScrapeFormat::Html, "https://example.com", html, 200)
+            .expect("select_output should succeed");
+        assert_eq!(
+            result, html,
+            "Html format must return raw HTML with entities preserved"
+        );
+        assert!(
+            result.contains("&amp;"),
+            "HTML entities must not be decoded"
+        );
+        assert!(result.contains("&lt;"), "HTML entities must not be decoded");
+    }
+
+    #[test]
+    fn test_build_scrape_website_wires_proxy() {
+        let cfg = Config {
+            chrome_proxy: Some("http://proxy.example.com:8080".to_string()),
+            ..Config::default()
+        };
+        let website = build_scrape_website(&cfg, "https://example.com")
+            .expect("build_scrape_website should succeed");
+        let proxies = website
+            .configuration
+            .proxies
+            .as_ref()
+            .expect("proxies must be set when chrome_proxy is Some");
+        assert_eq!(proxies.len(), 1, "exactly one proxy must be configured");
+        assert_eq!(
+            proxies[0].addr, "http://proxy.example.com:8080",
+            "proxy address must match cfg.chrome_proxy"
+        );
+    }
 }
