@@ -1,50 +1,10 @@
 # Temporary file-level exceptions for monolith policy.
 # One repo-relative path per line, no globs.
 # Add a ticket/date in comments when possible, then remove quickly.
+# Temporary file-level exceptions for monolith policy.
+# One repo-relative path per line, no globs. 
+# Every entry MUST have an expiry date — CI fails without one.
+# Max 7 days out. Expired entries also fail CI.
 #
-# Example:
-# crates/core/massive_module.rs
-
-# === No active exceptions — all monoliths resolved ===
-
-# === Successfully split in wave 5 (2026-03-01) ===
-# crates/core/config/types.rs: 1117→split into types/ (enums, config, config_impls)
-# crates/core/config/parse.rs: 879→split into parse/ (docker, helpers, build_config)
-# scripts/generate_mcp_schema_doc.py: 669→split into models, parser, renderer modules
-# crates/core/http.rs: 665→split into http/ (error, normalize, ssrf, client, cdp, tests)
-# crates/web/download.rs: 595→split into download/ (validation, manifest, archive)
-# crates/jobs/ingest.rs: 578→split into ingest/ (types, schema, ops, process, tests)
-
-# === Successfully split in wave 4 (2026-03-01) ===
-# tests.rs: 563→split into tests/ directory (watchdog, dotenv, db_lifecycle)
-# processor.rs: 501→379, tests extracted to processor_tests.rs
-# reddit.rs: 562→split into reddit/ module (mod, types, comments, client)
-# screenshot.rs: 558→split into screenshot/ module (mod, cdp, util)
-# cli.rs: 543→split into cli/ module (mod, global_args)
-# content.rs: 521→323, engine extracted to content/engine.rs
-# ask.rs: 502→45, split into ask/ module (normalize, output, tests)
-# components.tsx: 501→271, split into mcp-types, kv-editor, mcp-server-card
-
-# === Successfully split in waves 1-3 (2026-03-02) ===
-# engine.rs: 598→297, split into engine/{runtime,url_utils}.rs
-# tei.rs: 505→119, split into tei/{pipeline,prepare,qdrant_store,tei_client}.rs
-# enforce_monoliths.py: 562→10, split into enforce_monoliths_{impl,helpers}.py
-# neural-canvas.tsx: 1081→2, split into neural-canvas-{core,impl}.tsx + 9 sibling modules
-# server.rs: 1598→157, split into server/{common,handlers_*}.rs
-# execute/mod.rs: 584→140, split into execute/{args,async_mode,cancel,constants,context,exe,sync_mode,ws_send}.rs
-# use-ws-messages.ts: 506→330, split into ws-messages/{handlers,runtime,types}.ts
-# crawl.rs: 598→205, split into crawl/subcommands.rs
-# ask/context.rs: split into context/{build,heuristics,retrieval,tests}.rs
-# status.rs: 539→232, split into status/presentation.rs
-# settings/page.tsx: 802→1, split into page-impl-content.tsx + settings-{components,data,sections}.tsx
-# CmdKPalette.tsx: 545→254, split into cmdk-palette-{dialog,types}.ts
-# use-chat.ts: reduced to 284 after fake-stream extraction
-# use-chat-fake-stream.ts: 1281→167, split into 5 sample modules + builders
-# table-icons-icons.tsx: 678→8, split into table-icons-{border-a,border-b,icons-core}.tsx
-# omnibox.tsx: 630→4, split into omnibox/{component,impl,hooks,effects,input-bar,dropdowns,types}
-# page-impl.tsx: 805→3, split into page-impl-content.tsx + settings modules
-# neural-canvas-impl.tsx: 1310→4, split into neural-canvas-core.tsx + 9 modules
-# qdrant-quality.py: split into 8 focused modules
-# qdrant_quality_impl.py: 1258→481, split into reporting/analysis modules
-# enforce_monoliths_impl.py: 562→208, split into helpers module
-# ai-menu.tsx, comment.tsx, emoji-toolbar-button.tsx, font-color-toolbar-button.tsx, table-icons.tsx, table-node.tsx: all under 500
+# Format:
+#   crates/core/massive_module.rs  # expires: 2026-03-09

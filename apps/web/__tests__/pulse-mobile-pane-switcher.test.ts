@@ -12,8 +12,8 @@ describe('pulse mobile pane switcher', () => {
       }),
     )
 
-    expect(markup).toContain('Show chat pane')
-    expect(markup).toContain('Show editor pane')
+    expect(markup).toContain('aria-label="Chat pane"')
+    expect(markup).toContain('aria-label="Editor pane"')
     expect(markup).toContain('aria-selected="true"')
   })
 

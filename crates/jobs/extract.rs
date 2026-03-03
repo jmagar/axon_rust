@@ -2,7 +2,9 @@
 //! See `common/schema.rs` for the canonical pattern.
 
 use crate::crates::core::config::Config;
-use crate::crates::core::content::{DeterministicExtractionEngine, run_extract_with_engine};
+use crate::crates::core::content::{
+    DeterministicExtractionEngine, ExtractWebConfig, run_extract_with_engine,
+};
 use crate::crates::core::health::redis_healthy;
 use crate::crates::core::logging::{log_done, log_info, log_warn};
 use crate::crates::jobs::common::{

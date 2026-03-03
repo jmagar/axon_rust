@@ -7,6 +7,7 @@ use crate::crates::core::http::{normalize_url, ssrf_blacklist_patterns, validate
 use crate::crates::core::logging::log_done;
 use crate::crates::core::ui::{muted, primary, print_option, print_phase};
 use crate::crates::vector::ops::embed_path_native;
+use futures_util::future::join_all;
 use spider::compact_str::CompactString;
 use spider::page::Page;
 use spider::website::Website;
@@ -45,6 +46,23 @@ fn build_scrape_website(cfg: &Config, url: &str) -> Result<Website, Box<dyn Erro
     }
     if let Some(proxy) = cfg.chrome_proxy.as_deref() {
         website.with_proxies(Some(vec![proxy.to_string()]));
+    }
+    // Wire custom headers so `--header` works for single-page scrapes too.
+    if !cfg.custom_headers.is_empty() {
+        let mut map = reqwest::header::HeaderMap::new();
+        for raw in &cfg.custom_headers {
+            if let Some((k, v)) = raw.split_once(": ") {
+                if let (Ok(name), Ok(val)) = (
+                    reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                    reqwest::header::HeaderValue::from_str(v),
+                ) {
+                    map.insert(name, val);
+                }
+            }
+        }
+        if !map.is_empty() {
+            website.with_headers(Some(map));
+        }
     }
     // Apply the same safe defaults as configure_website().
     website.with_no_control_thread(true);
@@ -144,13 +162,37 @@ pub async fn run_scrape(cfg: &Config) -> Result<(), Box<dyn Error>> {
                 .into(),
         );
     }
-    for url in &urls {
-        scrape_one(cfg, url).await?;
+
+    // Phase 1: scrape all URLs concurrently — each prints its result as it lands.
+    let tasks: Vec<_> = urls.iter().map(|url| scrape_one(cfg, url)).collect();
+    let mut to_embed: Vec<(String, String)> = Vec::new();
+    for result in join_all(tasks).await {
+        match result {
+            Ok(Some(pair)) => to_embed.push(pair),
+            Ok(None) => {}
+            Err(e) => eprintln!("scrape error: {e}"),
+        }
     }
+
+    // Phase 2: embed all collected markdowns in one batch (single embed_path_native call).
+    // Running this after Phase 1 avoids the bug where concurrent scrape_one calls each
+    // call embed_path_native on the shared dir, causing every subsequent call to re-embed
+    // all previously written files (O(n²) embed work).
+    if cfg.embed && !to_embed.is_empty() {
+        let embed_dir = cfg.output_dir.join("scrape-markdown");
+        tokio::fs::create_dir_all(&embed_dir).await?;
+        for (normalized, markdown) in &to_embed {
+            tokio::fs::write(embed_dir.join(url_to_filename(normalized, 1)), markdown).await?;
+        }
+        embed_path_native(cfg, &embed_dir.to_string_lossy()).await?;
+    }
+
     Ok(())
 }
 
-async fn scrape_one(cfg: &Config, url: &str) -> Result<(), Box<dyn Error>> {
+/// Returns `Some((normalized_url, markdown))` when `cfg.embed` is true so the
+/// caller can batch-embed after all scrapes complete. Returns `None` otherwise.
+async fn scrape_one(cfg: &Config, url: &str) -> Result<Option<(String, String)>, Box<dyn Error>> {
     let normalized = normalize_url(url);
 
     print_phase("◐", "Scraping", &normalized);
@@ -239,13 +281,10 @@ async fn scrape_one(cfg: &Config, url: &str) -> Result<(), Box<dyn Error>> {
     }
 
     if cfg.embed {
-        let embed_dir = cfg.output_dir.join("scrape-markdown");
-        tokio::fs::create_dir_all(&embed_dir).await?;
-        tokio::fs::write(embed_dir.join(url_to_filename(&normalized, 1)), &markdown).await?;
-        embed_path_native(cfg, &embed_dir.to_string_lossy()).await?;
+        Ok(Some((normalized, markdown)))
+    } else {
+        Ok(None)
     }
-
-    Ok(())
 }
 
 #[cfg(test)]

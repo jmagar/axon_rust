@@ -152,6 +152,30 @@ fn process_sse_line(
     Ok(false)
 }
 
+/// Scan `answer` (from `search_from` onwards) for a second `\n## Sources` occurrence.
+/// Returns the byte index of the second occurrence if found, so the caller can truncate there.
+/// `first_sources_pos` tracks where the first one was seen (None = not yet).
+fn check_sources_repetition(
+    answer: &str,
+    search_from: usize,
+    first_sources_pos: &mut Option<usize>,
+) -> Option<usize> {
+    let haystack = answer[search_from..].to_ascii_lowercase();
+    let needle = "\n## sources";
+    if let Some(rel) = haystack.find(needle) {
+        let abs = search_from + rel;
+        match *first_sources_pos {
+            None => {
+                *first_sources_pos = Some(abs);
+            }
+            Some(_) => {
+                return Some(abs);
+            }
+        }
+    }
+    None
+}
+
 async fn run_sse_stream(
     req: reqwest::RequestBuilder,
     print_tokens: bool,
@@ -165,6 +189,9 @@ async fn run_sse_stream(
     let mut answer = String::new();
     let mut pending = String::new();
     let mut saw_stream_payload = false;
+    // Repetition guard: tracks position of first \n## Sources so we can detect a second.
+    let mut first_sources_pos: Option<usize> = None;
+    let mut sources_search_from = 0usize;
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
@@ -176,9 +203,22 @@ async fn run_sse_stream(
             if line.ends_with('\r') {
                 let _ = line.pop();
             }
+            let len_before = answer.len();
             let done = process_sse_line(&line, &mut answer, print_tokens, &mut saw_stream_payload)?;
             if done {
                 return Ok(answer);
+            }
+            // Only scan newly appended content for the repetition pattern.
+            if answer.len() > len_before {
+                let scan_from = sources_search_from.saturating_sub(10); // small overlap for split tokens
+                if let Some(second_pos) =
+                    check_sources_repetition(&answer, scan_from, &mut first_sources_pos)
+                {
+                    // Second ## Sources found — truncate and stop streaming.
+                    answer.truncate(second_pos);
+                    return Ok(answer);
+                }
+                sources_search_from = answer.len().saturating_sub(15);
             }
         }
     }
@@ -322,4 +362,65 @@ pub(crate) async fn judge_llm_non_streaming(
         .as_str()
         .unwrap_or("(no analysis)")
         .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sources_repetition_no_sources() {
+        let answer = "Some answer with no sources section.";
+        let mut first = None;
+        assert!(check_sources_repetition(answer, 0, &mut first).is_none());
+        assert!(first.is_none());
+    }
+
+    #[test]
+    fn test_sources_repetition_single_sources() {
+        let answer = "Good answer.\n\n## Sources\n- [S1] https://example.com";
+        let mut first = None;
+        assert!(check_sources_repetition(answer, 0, &mut first).is_none());
+        assert!(first.is_some()); // first occurrence recorded
+    }
+
+    #[test]
+    fn test_sources_repetition_detects_second() {
+        let answer = "Good answer.\n\n## Sources\n- [S1] url\n\n## Sources\n## Sources\n## Sources";
+        let mut first = None;
+        // First scan: records first occurrence. May find both occurrences at once
+        // (returns Some) or just the first (returns None, sets `first`).
+        if let Some(second_pos) = check_sources_repetition(answer, 0, &mut first) {
+            // Both occurrences found in a single scan.
+            let truncated = &answer[..second_pos];
+            assert!(truncated.contains("- [S1] url"));
+        } else {
+            // First occurrence recorded in `first`; scan again to find the second.
+            let first_pos = first.expect("first occurrence must be set after first scan");
+            if let Some(second_pos) = check_sources_repetition(answer, first_pos + 1, &mut first) {
+                let truncated = &answer[..second_pos];
+                assert!(
+                    truncated.contains("- [S1] url"),
+                    "should preserve first sources block"
+                );
+                assert!(
+                    !truncated[truncated.find("## Sources").unwrap() + 11..].contains("## Sources"),
+                    "truncated answer should not have a second ## Sources"
+                );
+            } else {
+                panic!("should detect second ## Sources");
+            }
+        }
+    }
+
+    #[test]
+    fn test_sources_repetition_case_insensitive() {
+        let answer = "Answer.\n## SOURCES\nlist\n## sources\nrepeat";
+        let mut first = None;
+        let r1 = check_sources_repetition(answer, 0, &mut first);
+        if r1.is_none() {
+            let r2 = check_sources_repetition(answer, first.unwrap() + 1, &mut first);
+            assert!(r2.is_some(), "case-insensitive second detection failed");
+        }
+    }
 }

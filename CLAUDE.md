@@ -1,5 +1,5 @@
 # axon_cli — Axon CLI (Rust + Spider.rs)
-Last Modified: 2026-02-27
+Last Modified: 2026-03-03
 
 Web crawl, scrape, extract, embed, and query — all in one binary backed by a self-hosted RAG stack.
 
@@ -109,6 +109,7 @@ All flags are `--global` (usable with any subcommand).
 | `--min-markdown-chars <n>` | usize | `200` | Minimum markdown character count; pages below this are flagged as "thin". |
 | `--drop-thin-markdown <bool>` | bool | `true` | Skip thin pages — do not save or embed them. |
 | `--delay-ms <ms>` | u64 | `0` | Delay between requests in milliseconds. Useful for polite crawling. |
+| `--header <HEADER>` | string | — | Custom HTTP header in `Key: Value` format. Repeatable (`--header "Auth: Bearer ..." --header "X-Custom: val"`). Applied to crawl, scrape, extract, and Chrome re-fetch paths. |
 
 #### Output
 
@@ -343,8 +344,22 @@ cargo build --release --bin axon
 `Cargo.toml` uses `spider_agent = { path = "../spider/spider_agent", ... }` for local dev with a sibling `spider/` checkout. In CI or any environment without that sibling repo, switch to the registry version:
 
 ```toml
+spider = { version = "2", default-features = false, features = [
+    "basic", "chrome", "regex", "sitemap", "adblock",
+    "chrome_stealth", "chrome_screenshot", "chrome_store_page",
+    "chrome_headless_new", "chrome_simd",
+    "simd", "inline-more", "cache_mem",
+    "ua_generator", "headers", "glob", "time", "control",
+    "firewall",
+] }
 spider_agent = { version = "2.45", default-features = false, features = ["search_tavily", "openai"] }
 ```
+
+### Spider feature flags with observable behavior
+- **`firewall`**: Blocks known-bad domains (malware, phishing, spam) before fetch via `spider_firewall` crate. Some URLs may be rejected that weren't before — this is defense-in-depth on top of `validate_url()`.
+- **`chrome_headless_new`**: Uses `--headless=new` instead of legacy headless. Better DOM fidelity but slightly different rendering behavior on some sites.
+- **`balance`**: NOT enabled — silently throttles concurrency with zero logging. We manage concurrency explicitly via performance profiles.
+- Full flag inventory: [`docs/spider-feature-flags.md`](docs/spider-feature-flags.md)
 
 ### Subprocess stdout vs stderr
 CLI commands output JSON data to stdout and progress/logs to stderr (Spinner via indicatif, tracing via `log_info`/`log_done`). The web UI streams both: stdout as `"type": "output"`, stderr as `"type": "log"`. ANSI codes stripped via `console::strip_ansi_codes()`.

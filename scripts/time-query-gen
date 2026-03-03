@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# time-query-gen — benchmark query generation: claude haiku vs local LLM
+#
+# Usage: scripts/time-query-gen [topic]
+
+set -euo pipefail
+
+TOPIC="${*:-how do you create a claude code plugin that has hooks, commands, agents, skills, and mcp server?}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -f "${SCRIPT_DIR}/../.env" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/../.env"
+    set +a
+fi
+
+PROMPT="Generate exactly 3 search queries to thoroughly research the following topic.
+Each query should approach the topic from a different angle: one broad/conceptual,
+one practical/how-to, and one focused on specifics (schemas, configuration, examples).
+Make the queries specific enough to find technical documentation, not just overviews.
+Return ONLY a JSON array of 3 strings. No explanation. No markdown. No code fences.
+
+Topic: ${TOPIC}"
+
+# ── claude haiku ──────────────────────────────────────────────────────────────
+echo "⟳ claude-haiku-4-5 ..." >&2
+t0=$(date +%s%3N)
+result_haiku=$(echo "$PROMPT" | claude -p --model claude-haiku-4-5-20251001 2>/dev/null)
+t_haiku=$(( $(date +%s%3N) - t0 ))
+echo "✓ ${t_haiku}ms" >&2
+echo "  $result_haiku" >&2
+echo >&2
+
+# ── local LLM (OPENAI_MODEL) ──────────────────────────────────────────────────
+echo "⟳ ${OPENAI_MODEL} ..." >&2
+t0=$(date +%s%3N)
+result_local=$(python3 -c "
+import sys, json, urllib.request, os
+prompt = sys.stdin.read()
+base_url = os.environ['OPENAI_BASE_URL'].rstrip('/')
+api_key  = os.environ['OPENAI_API_KEY']
+model    = os.environ['OPENAI_MODEL']
+payload = json.dumps({
+    'model': model,
+    'messages': [{'role': 'user', 'content': prompt}],
+}).encode()
+req = urllib.request.Request(
+    base_url + '/chat/completions',
+    data=payload,
+    headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + api_key})
+with urllib.request.urlopen(req) as resp:
+    print(json.loads(resp.read())['choices'][0]['message']['content'].strip())
+" <<< "$PROMPT")
+t_local=$(( $(date +%s%3N) - t0 ))
+echo "✓ ${t_local}ms" >&2
+echo "  $result_local" >&2
+echo >&2
+
+# ── summary ───────────────────────────────────────────────────────────────────
+echo "claude-haiku-4-5:  ${t_haiku}ms"
+echo "${OPENAI_MODEL}: ${t_local}ms"
+if (( t_haiku < t_local )); then
+    echo "haiku is $(( t_local - t_haiku ))ms faster"
+else
+    echo "${OPENAI_MODEL} is $(( t_haiku - t_local ))ms faster"
+fi

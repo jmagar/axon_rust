@@ -363,6 +363,7 @@ async fn run_primary_with_optional_chrome_fallback(
     ctx: &JobExecutionContext,
     id: Uuid,
     progress_tx: tokio::sync::mpsc::Sender<CrawlSummary>,
+    crawl_id: &str,
 ) -> Result<(CrawlSummary, HashSet<String>), Box<dyn Error>> {
     let initial_mode =
         resolve_initial_mode(ctx.job_cfg.render_mode, ctx.job_cfg.cache_skip_browser);
@@ -374,6 +375,7 @@ async fn run_primary_with_optional_chrome_fallback(
         Some(progress_tx.clone()),
         false, // HTTP probe: sitemap runs in the final pass only
         ctx.previous_manifest.clone(),
+        Some(crawl_id),
     )
     .await?;
 
@@ -395,6 +397,7 @@ async fn run_primary_with_optional_chrome_fallback(
         Some(progress_tx),
         ctx.job_cfg.discover_sitemaps, // Chrome final pass: run sitemap if enabled
         ctx.previous_manifest.clone(),
+        Some(crawl_id),
     )
     .await
     {
@@ -422,12 +425,69 @@ async fn run_active_crawl_job(
     let manifest_path = ctx.job_cfg.output_dir.join("manifest.jsonl");
     let (progress_tx, progress_task) = spawn_progress_task(pool, id);
 
+    // Build the spider control target: crawl_id + url. spider::utils::shutdown()
+    // matches against this composite key to signal the correct crawl instance.
+    let crawl_id = id.to_string();
+    let control_target = format!("{crawl_id}{}", ctx.url);
+
     let final_prompt = ctx.extraction_prompt.clone();
     let result = async {
+        // Race the crawl against the Redis cancel poller. When cancel fires,
+        // signal spider's in-process control thread for an immediate graceful
+        // stop — spider drains in-flight requests and returns partial results
+        // instead of the future being abruptly dropped.
+        let crawl_fut = run_primary_with_optional_chrome_fallback(ctx, id, progress_tx, &crawl_id);
+        tokio::pin!(crawl_fut);
+
         let (summary, seen_urls) = tokio::select! {
-            result = run_primary_with_optional_chrome_fallback(ctx, id, progress_tx) => result?,
+            result = &mut crawl_fut => result?,
             _ = poll_cancel_key(&ctx.job_cfg, id) => {
-                log_info(&format!("crawl job {id} canceled mid-crawl; stopping"));
+                log_info(&format!("crawl job {id} canceled — signaling graceful shutdown"));
+                spider::utils::shutdown(&control_target).await;
+                // The crawl future is still alive — await it so spider finishes
+                // draining in-flight requests and returns partial results.
+                // Timeout: if spider doesn't stop within 30s, give up and hard-cancel.
+                let drain_result = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    crawl_fut,
+                ).await;
+                match drain_result {
+                    Ok(Ok((summary, _seen_urls))) => {
+                        log_info(&format!(
+                            "crawl job {id} shutdown complete (partial pages={})",
+                            summary.pages_seen
+                        ));
+                        // Save partial results before marking canceled — the data
+                        // is already on disk and worth preserving.
+                        let partial_json = serde_json::json!({
+                            "phase": "canceled",
+                            "md_created": summary.markdown_files,
+                            "thin_md": summary.thin_pages,
+                            "pages_crawled": summary.pages_seen,
+                            "elapsed_ms": summary.elapsed_ms,
+                            "output_dir": ctx.job_cfg.output_dir.to_string_lossy(),
+                            "graceful_shutdown": true,
+                        });
+                        let _ = sqlx::query(&format!(
+                            "UPDATE axon_crawl_jobs SET result_json=$2, updated_at=NOW() WHERE id=$1 AND status='{running}'",
+                            running = JobStatus::Running.as_str(),
+                        ))
+                        .bind(id)
+                        .bind(&partial_json)
+                        .execute(pool)
+                        .await;
+                    }
+                    Ok(Err(e)) => {
+                        log_warn(&format!(
+                            "crawl job {id} shutdown drain failed: {e}"
+                        ));
+                    }
+                    Err(_) => {
+                        log_warn(&format!(
+                            "crawl job {id} shutdown drain timed out after 30s"
+                        ));
+                    }
+                }
                 return Err(format!("crawl job {id} {CANCEL_SENTINEL}").into());
             }
         };

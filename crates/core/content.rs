@@ -8,7 +8,7 @@ pub use deterministic::{
     DeterministicExtractionEngine, DeterministicParser, ExtractRun, ExtractionMetrics,
     PageExtraction,
 };
-pub use engine::run_extract_with_engine;
+pub use engine::{ExtractWebConfig, run_extract_with_engine};
 
 use spider::url::Url;
 use spider_transformations::transformation::content::{

@@ -14,7 +14,7 @@ dependencies = [
  "bitflags 2.11.0",
  "flatbuffers",
  "idna",
- "itertools",
+ "itertools 0.13.0",
  "memchr",
  "once_cell",
  "percent-encoding",
@@ -1049,9 +1049,11 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sonic-rs",
  "spider_chromiumoxide_cdp",
  "spider_chromiumoxide_types",
  "spider_fingerprint",
+ "spider_firewall",
  "spider_network_blocker",
  "thiserror 1.0.69",
  "tokio",
@@ -1401,7 +1403,7 @@ dependencies = [
  "ciborium",
  "clap",
  "criterion-plot",
- "itertools",
+ "itertools 0.13.0",
  "num-traits",
  "oorandom",
  "page_size",
@@ -1421,7 +1423,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8d80a2f4f5b554395e47b5d8305bc3d27813bacb73493eb1001e8f76dae29ea"
 dependencies = [
  "cast",
- "itertools",
+ "itertools 0.13.0",
 ]
 
 [[package]]
@@ -2219,6 +2221,12 @@ name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
+
+[[package]]
+name = "fst"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ab85b9b05e3978cc9a9cf8fea7f01b494e1a09ed3037e16ba39edc7a29eb61a"
 
 [[package]]
 name = "futf"
@@ -3106,6 +3114,15 @@ name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
 dependencies = [
  "either",
 ]
@@ -5813,6 +5830,8 @@ dependencies = [
  "http",
  "http-cache-reqwest",
  "http-global-cache",
+ "httpdate",
+ "itertools 0.14.0",
  "lazy_static",
  "libc",
  "log",
@@ -5834,6 +5853,7 @@ dependencies = [
  "sonic-rs",
  "spider_agent_types",
  "spider_fingerprint",
+ "spider_firewall",
  "sqlx",
  "statrs",
  "string-interner",
@@ -5954,6 +5974,21 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "spider_firewall"
+version = "2.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4338af28f9696571924f2b6a1d31170ec382a04bbfac7731f8739643b0ec6b55"
+dependencies = [
+ "fst",
+ "hashbrown 0.15.5",
+ "phf 0.11.3",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "ua_generator",
 ]
 
 [[package]]

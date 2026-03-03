@@ -8,12 +8,14 @@ import sys
 
 from enforce_monoliths_helpers import (
     CHECKABLE_EXTENSIONS,
+    DEFAULT_ALLOWLIST_EXPIRY_DAYS,
     DEFAULT_FILE_MAX_LINES,
     DEFAULT_FUNCTION_MAX_LINES,
     DEFAULT_FUNCTION_WARN_LINES,
     REPO_ROOT,
     RUST_EXTENSIONS,
     changed_files,
+    check_allowlist_expiry,
     count_effective_c_like_lines,
     count_effective_lines,
     count_effective_python_lines,
@@ -40,7 +42,7 @@ def _self_test() -> int:
                     "let a = 1; // trailing",
                     "/* block start",
                     "still block */ let b = 2;",
-                    "let s = \"http://x\"; // url",
+                    'let s = "http://x"; // url',
                     "   ",
                     "// comment only",
                 ]
@@ -66,7 +68,8 @@ def _self_test() -> int:
     tests.append(
         (
             "hash_comments",
-            count_effective_lines(["# c1", "x=1", "   ", "echo hi # inline"], ".sh") == 2,
+            count_effective_lines(["# c1", "x=1", "   ", "echo hi # inline"], ".sh")
+            == 2,
         )
     )
 
@@ -100,18 +103,30 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", help="Base git ref")
     parser.add_argument("--head", help="Head git ref")
-    parser.add_argument("--file", help="Check a single repo-relative or absolute file path")
+    parser.add_argument(
+        "--file", help="Check a single repo-relative or absolute file path"
+    )
     parser.add_argument(
         "--staged",
         action="store_true",
         help="Use staged changes from git index (for local pre-commit)",
     )
-    parser.add_argument("--self-test", action="store_true", help="Run internal detector self-tests")
+    parser.add_argument(
+        "--self-test", action="store_true", help="Run internal detector self-tests"
+    )
     parser.add_argument("--file-max-lines", type=int, default=DEFAULT_FILE_MAX_LINES)
     parser.add_argument(
         "--function-warn-lines", type=int, default=DEFAULT_FUNCTION_WARN_LINES
     )
-    parser.add_argument("--function-max-lines", type=int, default=DEFAULT_FUNCTION_MAX_LINES)
+    parser.add_argument(
+        "--function-max-lines", type=int, default=DEFAULT_FUNCTION_MAX_LINES
+    )
+    parser.add_argument(
+        "--allowlist-expiry-days",
+        type=int,
+        default=DEFAULT_ALLOWLIST_EXPIRY_DAYS,
+        help="Max days an allowlist entry can live before it must be resolved",
+    )
     args = parser.parse_args()
 
     if args.self_test:
@@ -188,6 +203,10 @@ def main() -> int:
                     f"(warning {args.function_warn_lines}, limit {args.function_max_lines})"
                 )
 
+    # Check allowlist expiry (always, even in --file mode)
+    expiry_violations = check_allowlist_expiry(args.allowlist_expiry_days)
+    violations.extend(expiry_violations)
+
     if warnings:
         print("Monolith policy warnings:")
         for item in warnings:
@@ -197,7 +216,7 @@ def main() -> int:
         print("Monolith policy violations found:")
         for item in violations:
             print(f"  - {item}")
-        print("\nAdd temporary exceptions to .monolith-allowlist only when necessary.")
+        print("\nSplit the file — do not add allowlist exceptions.")
         return 1
 
     print("Monolith policy check passed.")

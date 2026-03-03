@@ -33,7 +33,7 @@ core/
 │   └── tests.rs          # 38 tests: URL normalization (11) + SSRF validation (27)
 ├── content.rs            # build_transform_config(), to_markdown(), url_to_filename(), extract_*()
 ├── content/
-│   ├── engine.rs         # run_extract_with_engine(): deterministic extraction + LLM fallback
+│   ├── engine.rs         # ExtractWebConfig + run_extract_with_engine(): deterministic extraction + LLM fallback
 │   ├── deterministic.rs  # DeterministicExtractionEngine, DeterministicParser trait, JsonLdParser, OgParser, HtmlTableParser
 │   └── tests.rs          # Content transformation and extraction tests
 ├── logging.rs            # init_tracing(), log_info/log_warn/log_done, SizeRotatingFile
@@ -62,7 +62,7 @@ The central state object. Populated once by `into_config()` and passed as `&Conf
 | RAG/Ask tuning | `ask_max_context_chars` (120k), `ask_candidate_limit` (64), `ask_chunk_limit` (10), `ask_full_docs` (4), `ask_min_relevance_score` (0.45) — all clamped |
 | Ingest credentials | `github_token`, `reddit_client_id`, `reddit_client_secret` |
 | Auto-switch | `auto_switch_thin_ratio` (0.60), `auto_switch_min_pages` (10) |
-| Spider tuning | `url_whitelist`, `block_assets`, `max_page_bytes`, `redirect_policy_strict`, `bypass_csp`, `accept_invalid_certs` |
+| Spider tuning | `url_whitelist`, `block_assets`, `max_page_bytes`, `redirect_policy_strict`, `bypass_csp`, `accept_invalid_certs`, `custom_headers` |
 | Job watchdog | `watchdog_stale_timeout_secs` (300), `watchdog_confirm_secs` (60) |
 | Web UI | `serve_port` (default 3939) |
 

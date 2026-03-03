@@ -11,6 +11,7 @@ import subprocess
 import token as token_mod
 import tokenize
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 
@@ -33,6 +34,9 @@ ALLOWLIST_FILE = REPO_ROOT / ".monolith-allowlist"
 DEFAULT_FILE_MAX_LINES = 500
 DEFAULT_FUNCTION_WARN_LINES = 80
 DEFAULT_FUNCTION_MAX_LINES = 120
+DEFAULT_ALLOWLIST_EXPIRY_DAYS = 7
+
+EXPIRES_RE = re.compile(r"#\s*expires:\s*(\d{4}-\d{2}-\d{2})")
 
 RUST_EXTENSIONS = {".rs"}
 CHECKABLE_EXTENSIONS = {
@@ -112,17 +116,73 @@ def run_git(args: list[str]) -> str:
     return result.stdout
 
 
-def load_allowlist() -> set[str]:
-    if not ALLOWLIST_FILE.exists():
-        return set()
+@dataclass
+class AllowlistEntry:
+    path: str
+    expires: date | None
+    line_number: int
 
-    allowed: set[str] = set()
-    for raw in ALLOWLIST_FILE.read_text(encoding="utf-8").splitlines():
+
+def load_allowlist() -> set[str]:
+    """Return just the set of allowed paths (backward-compatible)."""
+    return {e.path for e in load_allowlist_entries()}
+
+
+def load_allowlist_entries() -> list[AllowlistEntry]:
+    """Parse allowlist with expiry dates. Format: `path/to/file.rs  # expires: YYYY-MM-DD`"""
+    if not ALLOWLIST_FILE.exists():
+        return []
+
+    entries: list[AllowlistEntry] = []
+    for line_num, raw in enumerate(
+        ALLOWLIST_FILE.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        allowed.add(line)
-    return allowed
+        # Strip inline comment to get just the path
+        path = line.split("#")[0].strip() if "#" in line else line
+        expires_match = EXPIRES_RE.search(raw)
+        expires = None
+        if expires_match:
+            try:
+                expires = date.fromisoformat(expires_match.group(1))
+            except ValueError:
+                pass
+        entries.append(AllowlistEntry(path=path, expires=expires, line_number=line_num))
+    return entries
+
+
+def check_allowlist_expiry(
+    max_days: int = DEFAULT_ALLOWLIST_EXPIRY_DAYS,
+) -> list[str]:
+    """Return violations for stale or missing-expiry allowlist entries."""
+    entries = load_allowlist_entries()
+    today = date.today()
+    violations: list[str] = []
+
+    for entry in entries:
+        if entry.expires is None:
+            violations.append(
+                f"ALLOWLIST {ALLOWLIST_FILE.name}:{entry.line_number} "
+                f"'{entry.path}' has no expiry date. "
+                f"Add '# expires: YYYY-MM-DD' (max {max_days} days from now)."
+            )
+        elif entry.expires < today:
+            age = (today - entry.expires).days
+            violations.append(
+                f"ALLOWLIST {ALLOWLIST_FILE.name}:{entry.line_number} "
+                f"'{entry.path}' expired {age} day(s) ago ({entry.expires}). "
+                f"Split the file or extend the deadline."
+            )
+        elif (entry.expires - today).days > max_days:
+            violations.append(
+                f"ALLOWLIST {ALLOWLIST_FILE.name}:{entry.line_number} "
+                f"'{entry.path}' expires too far out ({entry.expires}, "
+                f"max {max_days} days). Keep deadlines tight."
+            )
+
+    return violations
 
 
 def is_excluded(path: str, allowlist: set[str]) -> bool:
@@ -164,7 +224,9 @@ def count_effective_lines(lines: list[str], suffix: str) -> int:
     if suffix in SLASH_COMMENT_EXTENSIONS:
         return count_effective_c_like_lines(lines)
     if suffix in HASH_COMMENT_EXTENSIONS:
-        return sum(1 for raw in lines if raw.strip() and not raw.lstrip().startswith("#"))
+        return sum(
+            1 for raw in lines if raw.strip() and not raw.lstrip().startswith("#")
+        )
     return sum(1 for raw in lines if raw.strip())
 
 
@@ -432,7 +494,9 @@ def normalize_file_arg(file_arg: str) -> str:
         try:
             return str(path.resolve().relative_to(REPO_ROOT))
         except ValueError as exc:
-            raise RuntimeError(f"--file path must be inside repo root: {REPO_ROOT}") from exc
+            raise RuntimeError(
+                f"--file path must be inside repo root: {REPO_ROOT}"
+            ) from exc
     return file_arg
 
 

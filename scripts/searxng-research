@@ -1,0 +1,440 @@
+#!/usr/bin/env bash
+# searxng-research — user query + 2 complementary → scrape 9 → gap 2 → scrape 6 + backfill 9
+#
+# Usage: scripts/searxng-research <query>
+#   SEARXNG_URL=https://s.tootie.tv scripts/searxng-research "rust async patterns"
+#
+# Env overrides:
+#   SEARXNG_QUERY_MODEL  — model for query generation (default: qwen3.5:4b)
+#   SEARXNG_QUERY_URL    — Ollama base URL for query gen (default: http://steamy-wsl:11434)
+#
+# Output: markdown streamed to stdout
+
+set -euo pipefail
+
+QUERY="${*:?Usage: $(basename "$0") <query>}"
+SEARXNG_URL="${SEARXNG_URL:-https://s.tootie.tv}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AXON="${AXON:-$SCRIPT_DIR/axon}"
+
+if [[ -f "${SCRIPT_DIR}/../.env" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "${SCRIPT_DIR}/../.env"
+    set +a
+fi
+
+t0=$(date +%s%3N)
+ts() { echo $(( $(date +%s%3N) - t0 ))ms; }
+
+# Small/fast local model for query generation (Ollama native API, think:false)
+QUERY_MODEL="${SEARXNG_QUERY_MODEL:-qwen3.5:4b}"
+QUERY_URL="${SEARXNG_QUERY_URL:-http://steamy-wsl:11434}"
+
+UA="${AXON_CHROME_USER_AGENT:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36}"
+
+# Temp files — auto-cleaned on exit
+_py_gen=$(mktemp /tmp/searxng-gen-XXXXXX.py)
+_py_gaps=$(mktemp /tmp/searxng-gaps-XXXXXX.py)
+_py_synth=$(mktemp /tmp/searxng-synth-XXXXXX.py)
+_gap_out=$(mktemp /tmp/searxng-gap-out-XXXXXX)
+_gap_urls_out=$(mktemp /tmp/searxng-gap-urls-XXXXXX)
+trap "rm -f $_py_gen $_py_gaps $_py_synth $_gap_out $_gap_urls_out" EXIT
+
+# ── Complementary query generation (2 queries to pair with user's raw query) ──
+cat > "$_py_gen" <<'PYEOF'
+import sys, json, re, urllib.request, os
+
+query    = sys.argv[1]
+base_url = (os.environ.get('SEARXNG_QUERY_URL') or 'http://steamy-wsl:11434').rstrip('/')
+model    = os.environ.get('SEARXNG_QUERY_MODEL') or 'qwen3.5:4b'
+
+prompt = (
+    'I am researching the following topic and will search it verbatim as my first query. '
+    'Generate exactly 2 complementary search queries that approach it from different angles '
+    'I would not cover with my original query. One should be practical/how-to, '
+    'the other focused on specifics (config, examples, edge cases).\n\n'
+    'Respond with ONLY a single JSON array of exactly 2 strings. '
+    'Example format: ["query one", "query two"]\n\n'
+    f'My query: {query}'
+)
+
+payload = json.dumps({
+    'model': model,
+    'stream': False,
+    'think': False,
+    'messages': [{'role': 'user', 'content': prompt}],
+}).encode()
+
+req = urllib.request.Request(
+    base_url + '/api/chat',
+    data=payload,
+    headers={'Content-Type': 'application/json'}
+)
+try:
+    with urllib.request.urlopen(req) as resp:
+        content = json.loads(resp.read())['message']['content'].strip()
+except Exception:
+    payload = json.dumps({
+        'model': model,
+        'messages': [{'role': 'user', 'content': prompt}],
+    }).encode()
+    req = urllib.request.Request(
+        base_url + '/v1/chat/completions',
+        data=payload,
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + os.environ.get('OPENAI_API_KEY', ''),
+        }
+    )
+    with urllib.request.urlopen(req) as resp:
+        content = json.loads(resp.read())['choices'][0]['message']['content'].strip()
+
+content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+m = re.search(r'\[.*?\]', content, re.DOTALL)
+if not m:
+    sys.exit(f'error: could not parse queries: {content[:200]}')
+print(json.dumps(json.loads(m.group())[:2]))
+PYEOF
+
+# ── Gap query generation (remote model — needs large context for full scrapes) ─
+cat > "$_py_gaps" <<'PYEOF'
+import sys, json, re, urllib.request, os
+
+query           = sys.argv[1]
+initial_queries = json.loads(sys.argv[2]) if len(sys.argv) > 2 else []
+scrape_raw      = sys.stdin.read()
+base_url        = os.environ['OPENAI_BASE_URL'].rstrip('/')
+api_key         = os.environ.get('OPENAI_API_KEY', '')
+model           = os.environ['OPENAI_MODEL']
+
+pages = []
+for line in scrape_raw.strip().splitlines():
+    try:
+        obj = json.loads(line.strip())
+        if obj:
+            pages.append(obj)
+    except Exception:
+        pass
+
+parts = [f'Research topic: {query}\n']
+if initial_queries:
+    parts.append('Queries already searched:\n' + '\n'.join(f'- {q}' for q in initial_queries) + '\n')
+parts.append('Content scraped so far:\n')
+for i, page in enumerate(pages, 1):
+    title = (page.get('title') or 'Untitled').strip()
+    url   = page.get('url', '')
+    md    = (page.get('markdown') or '').strip()
+    parts.append(f'--- Source {i}: {title}\nURL: {url}\n\n{md}\n')
+
+prompt = '\n'.join(parts) + (
+    '\n\nGiven the queries already searched and the content scraped so far, what specific information '
+    'is still missing, shallow, or uncovered? Generate exactly 2 new search queries that would fill '
+    'those gaps — do not repeat or rephrase the already-searched queries. '
+    'Respond with ONLY a single JSON array of exactly 2 strings. '
+    'Example: ["query one", "query two"]'
+)
+
+payload = json.dumps({
+    'model': model,
+    'messages': [{'role': 'user', 'content': prompt}],
+}).encode()
+
+req = urllib.request.Request(
+    base_url + '/chat/completions',
+    data=payload,
+    headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + api_key}
+)
+with urllib.request.urlopen(req) as resp:
+    content = json.loads(resp.read())['choices'][0]['message']['content'].strip()
+
+content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+m = re.search(r'\[.*?\]', content, re.DOTALL)
+if not m:
+    sys.exit(f'error: could not parse gap queries: {content[:200]}')
+print(json.dumps(json.loads(m.group())[:2]))
+PYEOF
+
+# ── Synthesis + streaming script ──────────────────────────────────────────────
+cat > "$_py_synth" <<'PYEOF'
+import sys, json, urllib.request, os
+
+SYSTEM_PROMPT = (
+    "You are a web research synthesis assistant. Your job is to produce a comprehensive, "
+    "well-structured answer by synthesizing information across multiple live web sources.\n\n"
+
+    "STEP 1 — SYNTHESIZE\n"
+    "- Combine information across all sources into a unified, coherent answer.\n"
+    "- Do not just summarize each source in turn — identify themes, agreements, and conflicts.\n"
+    "- You may use your own knowledge to fill minor gaps or provide context, but clearly "
+    "distinguish inferred/known context from what the sources directly state.\n\n"
+
+    "STEP 2 — CITE\n"
+    "- Every factual claim must include an inline citation: [S1], [S2][S4], etc.\n"
+    "- If sources conflict, note the discrepancy and cite both sides.\n"
+    "- If coverage of a topic is thin or missing, add a brief \"Gaps:\" note at the end "
+    "of that section.\n\n"
+
+    "STEP 3 — FORMAT\n"
+    "- Write clean markdown: use ## headers, bullet lists, and code blocks where appropriate.\n"
+    "- Be thorough but don't pad — if the sources cover it well, explain it well.\n"
+    "- End with a \"## Sources\" section listing every cited source as:\n"
+    "  [S1] Title — URL"
+)
+
+query      = sys.argv[1]
+scrape_raw = sys.stdin.read()
+base_url   = os.environ['OPENAI_BASE_URL'].rstrip('/')
+api_key    = os.environ['OPENAI_API_KEY']
+model      = os.environ['OPENAI_MODEL']
+
+pages = []
+for line in scrape_raw.strip().splitlines():
+    try:
+        obj = json.loads(line.strip())
+        if obj:
+            pages.append(obj)
+    except Exception:
+        pass
+
+if not pages:
+    print('error: no pages scraped', file=sys.stderr)
+    sys.exit(1)
+
+total_chars = sum(len(p.get('markdown') or '') for p in pages)
+print(f'prompt: {len(pages)} pages, {total_chars:,} chars', file=sys.stderr)
+
+source_blocks = []
+for i, page in enumerate(pages, 1):
+    title = (page.get('title') or 'Untitled').strip()
+    url   = page.get('url', '')
+    md    = (page.get('markdown') or '').strip()
+    source_blocks.append(f'[S{i}] {title}\nURL: {url}\n\n{md}')
+
+context = '\n\n---\n\n'.join(source_blocks)
+user_msg = f'Question: {query}\n\nContext:\n{context}'
+
+payload = json.dumps({
+    'model': model,
+    'messages': [
+        {'role': 'system', 'content': SYSTEM_PROMPT},
+        {'role': 'user',   'content': user_msg},
+    ],
+    'temperature': 0.1,
+    'stream': True,
+    'stream_options': {'include_usage': True},
+}).encode()
+
+req = urllib.request.Request(
+    base_url + '/chat/completions',
+    data=payload,
+    headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + api_key}
+)
+
+usage = {}
+with urllib.request.urlopen(req) as resp:
+    for raw in resp:
+        line = raw.decode('utf-8').strip()
+        if not line.startswith('data: '):
+            continue
+        data = line[6:]
+        if data == '[DONE]':
+            break
+        try:
+            chunk = json.loads(data)
+            if 'usage' in chunk and chunk['usage']:
+                usage = chunk['usage']
+            if chunk.get('choices'):
+                delta = chunk['choices'][0]['delta'].get('content', '')
+                if delta:
+                    print(delta, end='', flush=True)
+        except Exception:
+            pass
+
+print()
+
+if usage:
+    print(
+        f"tokens  prompt={usage.get('prompt_tokens',0)}  "
+        f"completion={usage.get('completion_tokens',0)}  "
+        f"total={usage.get('total_tokens',0)}",
+        file=sys.stderr
+    )
+PYEOF
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PHASE 1: User query + 2 complementary → SearXNG → scrape first 9
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── 1. Generate 2 complementary queries ───────────────────────────────────────
+echo "⟳ [+$(ts)] Generating 2 complementary queries (${QUERY_MODEL})..." >&2
+comp_json=$(python3 "$_py_gen" "$QUERY")
+echo "✓ [+$(ts)] Queries" >&2
+# Build full query list: user's raw query + 2 complementary
+queries_json=$(python3 -c "
+import sys, json
+comp = json.loads(sys.argv[1])
+user_q = sys.argv[2]
+print(json.dumps([user_q] + comp))
+" "$comp_json" "$QUERY")
+echo "$queries_json" | python3 -c "
+import sys, json
+for i, q in enumerate(json.loads(sys.stdin.read()), 1): print(f'  {i}. {q}')
+" >&2
+echo >&2
+
+# ── 2. 3 concurrent SearXNG searches (grab deep results for backfill later) ──
+echo "⟳ [+$(ts)] Searching SearXNG (3 concurrent)..." >&2
+# Returns JSON: {"per_query": [[url,...], [url,...], [url,...]], "batch_a": [...], "backfill": [...]}
+searxng_result=$(python3 -c "
+import sys, json, os, urllib.parse, urllib.request
+from concurrent.futures import ThreadPoolExecutor
+searxng_url = sys.argv[1]
+queries     = json.loads(sys.argv[2])
+ua = os.environ.get('AXON_CHROME_USER_AGENT',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36')
+def search_one(q):
+    req = urllib.request.Request(
+        searxng_url + '/search?q=' + urllib.parse.quote(q) + '&format=json',
+        headers={'User-Agent': ua, 'Accept': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return [x['url'] for x in json.loads(r.read()).get('results', []) if x.get('url')]
+    except Exception as e:
+        print(f'SearXNG error: {e}', file=sys.stderr); return []
+all_results = list(ThreadPoolExecutor(max_workers=3).map(search_one, queries))
+# Pick 2 unique per query for batch-a (globally deduped), rest go to backfill
+seen, batch_a, backfill = set(), [], []
+for result_urls in all_results:
+    picked = 0
+    for url in result_urls:
+        if url not in seen:
+            seen.add(url)
+            if picked < 2:
+                batch_a.append(url)
+                picked += 1
+            else:
+                backfill.append(url)
+print(json.dumps({'batch_a': batch_a, 'backfill': backfill}))
+" "$SEARXNG_URL" "$queries_json")
+echo "✓ [+$(ts)] SearXNG complete" >&2
+
+# Parse batch_a and backfill URL lists
+mapfile -t urls_a < <(echo "$searxng_result" | python3 -c "
+import sys, json
+for u in json.loads(sys.stdin.read())['batch_a']: print(u)
+")
+mapfile -t urls_backfill < <(echo "$searxng_result" | python3 -c "
+import sys, json
+for u in json.loads(sys.stdin.read())['backfill']: print(u)
+")
+
+if [[ ${#urls_a[@]} -eq 0 ]] || [[ -z "${urls_a[0]}" ]]; then
+    echo "error: no SearXNG results" >&2; exit 1
+fi
+echo "  batch-a: ${#urls_a[@]} URLs (scraping now)" >&2
+printf '    %s\n' "${urls_a[@]}" >&2
+echo "  backfill pool: ${#urls_backfill[@]} URLs (scraping in phase 2)" >&2
+echo >&2
+
+# ── 3. Scrape batch-a (first 9) ──────────────────────────────────────────────
+echo "⟳ [+$(ts)] Scraping batch-a ${#urls_a[@]} URLs (5s timeout)..." >&2
+scrape_a=$(timeout 5s "$AXON" scrape "${urls_a[@]}" --json 2>/dev/null || true)
+echo "✓ [+$(ts)] Batch-a scrape complete" >&2
+echo >&2
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PHASE 2: Gap queries + gap scrape + backfill scrape (concurrent)
+# ══════════════════════════════════════════════════════════════════════════════
+
+echo "⟳ [+$(ts)] Gap analysis + backfill (concurrent)..." >&2
+
+# All URLs seen so far (batch_a + backfill pool) — gap SearXNG must not repeat these
+all_seen_json=$(python3 -c "
+import sys, json
+d = json.loads(sys.argv[1])
+print(json.dumps(d['batch_a'] + d['backfill']))
+" "$searxng_result")
+
+# Background: gap LLM → gap SearXNG → gap scrape
+(
+    # Gap LLM: pipe full batch-a scrapes into Gemini
+    echo "$scrape_a" | python3 "$_py_gaps" "$QUERY" "$queries_json" > "$_gap_out"
+
+    # Gap SearXNG: 2 concurrent searches, top 3 each, deduped against everything seen
+    python3 -c "
+import sys, json, os, urllib.parse, urllib.request
+from concurrent.futures import ThreadPoolExecutor
+searxng_url  = sys.argv[1]
+queries      = json.loads(open(sys.argv[2]).read())
+already_seen = set(json.loads(sys.argv[3]))
+ua = os.environ.get('AXON_CHROME_USER_AGENT',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36')
+def search_one(q):
+    req = urllib.request.Request(
+        searxng_url + '/search?q=' + urllib.parse.quote(q) + '&format=json',
+        headers={'User-Agent': ua, 'Accept': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return [x['url'] for x in json.loads(r.read()).get('results', []) if x.get('url')]
+    except Exception as e:
+        print(f'SearXNG error: {e}', file=sys.stderr); return []
+all_results = list(ThreadPoolExecutor(max_workers=2).map(search_one, queries))
+seen, ordered = set(already_seen), []
+for result_urls in all_results:
+    picked = 0
+    for url in result_urls:
+        if url not in seen:
+            seen.add(url)
+            ordered.append(url)
+            picked += 1
+            if picked >= 3:
+                break
+for u in ordered: print(u)
+" "$SEARXNG_URL" "$_gap_out" "$all_seen_json" > "$_gap_urls_out"
+
+    # Scrape gap URLs
+    mapfile -t gap_urls < "$_gap_urls_out"
+    if [[ ${#gap_urls[@]} -gt 0 ]] && [[ -n "${gap_urls[0]}" ]]; then
+        timeout 5s "$AXON" scrape "${gap_urls[@]}" --json 2>/dev/null || true
+    fi
+) > /tmp/searxng-gap-scrape-$$ 2>/dev/null &
+_gap_pid=$!
+
+# Foreground: backfill scrape (up to 9 from initial SearXNG results beyond batch-a)
+scrape_backfill=""
+backfill_urls=("${urls_backfill[@]:0:9}")
+if [[ ${#backfill_urls[@]} -gt 0 ]] && [[ -n "${backfill_urls[0]}" ]]; then
+    echo "  backfilling ${#backfill_urls[@]} URLs..." >&2
+    scrape_backfill=$(timeout 5s "$AXON" scrape "${backfill_urls[@]}" --json 2>/dev/null || true)
+    echo "✓ [+$(ts)] Backfill scrape complete" >&2
+fi
+
+# Wait for gap chain
+wait $_gap_pid
+scrape_gap=$(cat /tmp/searxng-gap-scrape-$$ 2>/dev/null || true)
+rm -f /tmp/searxng-gap-scrape-$$
+
+gap_queries_json=$(cat "$_gap_out" 2>/dev/null || echo '[]')
+echo "✓ [+$(ts)] Gap analysis complete" >&2
+echo "$gap_queries_json" | python3 -c "
+import sys, json
+try:
+    for i, q in enumerate(json.loads(sys.stdin.read()), 1): print(f'  {i}. {q}')
+except: pass
+" >&2
+
+mapfile -t gap_urls_final < "$_gap_urls_out"
+if [[ ${#gap_urls_final[@]} -gt 0 ]] && [[ -n "${gap_urls_final[0]}" ]]; then
+    echo "  gap URLs scraped:" >&2
+    printf '    %s\n' "${gap_urls_final[@]}" >&2
+fi
+echo >&2
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PHASE 3: Stream synthesis over everything
+# ══════════════════════════════════════════════════════════════════════════════
+
+echo "⟳ [+$(ts)] Streaming synthesis from ${OPENAI_MODEL}..." >&2
+{ echo "$scrape_a"; echo "$scrape_backfill"; echo "$scrape_gap"; } | python3 "$_py_synth" "$QUERY"
+echo "✓ [total: $(( $(date +%s%3N) - t0 ))ms] Done" >&2

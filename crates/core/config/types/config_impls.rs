@@ -121,6 +121,7 @@ impl Default for Config {
             viewport_width: 1920,
             viewport_height: 1080,
             serve_port: 3939,
+            custom_headers: vec![],
         }
     }
 }
@@ -265,6 +266,7 @@ impl fmt::Debug for Config {
             .field("viewport_width", &self.viewport_width)
             .field("viewport_height", &self.viewport_height)
             .field("serve_port", &self.serve_port)
+            .field("custom_headers", &self.custom_headers)
             .finish()
     }
 }

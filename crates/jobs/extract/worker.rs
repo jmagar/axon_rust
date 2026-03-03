@@ -136,24 +136,22 @@ async fn execute_extract_runs(
 ) -> ExtractAggregation {
     let engine = Arc::new(DeterministicExtractionEngine::with_default_parsers());
 
+    let custom_headers = cfg.custom_headers.clone();
+
     let results: Vec<_> = futures_util::stream::iter(urls)
         .map(|url| {
             let engine = Arc::clone(&engine);
-            let prompt = prompt.clone();
-            let openai_base_url = cfg.openai_base_url.clone();
-            let openai_api_key = cfg.openai_api_key.clone();
-            let openai_model = cfg.openai_model.clone();
+            let wcfg = ExtractWebConfig {
+                start_url: url.clone(),
+                prompt: prompt.clone(),
+                limit: max_pages,
+                openai_base_url: cfg.openai_base_url.clone(),
+                openai_api_key: cfg.openai_api_key.clone(),
+                openai_model: cfg.openai_model.clone(),
+                custom_headers: custom_headers.clone(),
+            };
             async move {
-                let run = run_extract_with_engine(
-                    &url,
-                    &prompt,
-                    max_pages,
-                    &openai_base_url,
-                    &openai_api_key,
-                    &openai_model,
-                    engine,
-                )
-                .await;
+                let run = run_extract_with_engine(wcfg, engine).await;
                 (url, run)
             }
         })

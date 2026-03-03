@@ -3,8 +3,8 @@ use crate::crates::core::content::url_to_domain;
 use crate::crates::core::logging::log_done;
 use crate::crates::core::ui::{Spinner, accent, muted};
 use crate::crates::crawl::engine::{
-    CrawlSummary, run_crawl_once, run_sitemap_only, should_fallback_to_chrome,
-    update_latest_reflink,
+    CrawlSummary, chrome_refetch_thin_pages, run_crawl_once, run_sitemap_only,
+    should_fallback_to_chrome, update_latest_reflink,
 };
 use crate::crates::crawl::manifest::{
     manifest_cache_is_stale, read_manifest_data, read_manifest_urls, write_audit_diff,
@@ -72,7 +72,56 @@ async fn maybe_chrome_fallback(
     {
         return (http_summary, http_seen_urls);
     }
-    let spinner = Spinner::new("HTTP yielded thin results; retrying with Chrome");
+
+    // WAF-blocked pages: retry with stealth Chrome before falling back to thin-page logic.
+    // Feed WAF-blocked URLs into thin_urls so chrome_refetch_thin_pages re-fetches them.
+    if http_summary.waf_blocked_pages > 0 && !http_summary.waf_blocked_urls.is_empty() {
+        let blocked_count = http_summary.waf_blocked_pages;
+        crate::crates::core::logging::log_warn(&format!(
+            "waf: {blocked_count} page(s) blocked — retrying with stealth Chrome"
+        ));
+        let mut waf_summary = http_summary.clone();
+        waf_summary.thin_urls = http_summary.waf_blocked_urls.clone();
+        let updated = chrome_refetch_thin_pages(cfg, waf_summary, &cfg.output_dir).await;
+        return (updated, http_seen_urls);
+    }
+
+    // Prefer surgical re-fetch: only re-fetch the remaining thin pages with Chrome
+    // and keep the already-good HTTP pages. This avoids re-crawling the entire site.
+    //
+    // `thin_urls` is populated by the collector when `drop_thin_markdown` is true
+    // (the default). After the crawl it may already be partially or fully cleared by
+    // the inline Chrome rendering path (collector spawns Chrome tasks while the HTTP
+    // crawl is still running). If thin_urls is now empty, the inline path recovered
+    // everything — no post-crawl Chrome pass needed.
+    if !http_summary.thin_urls.is_empty() {
+        let thin_count = http_summary.thin_urls.len();
+        let spinner = Spinner::new(&format!(
+            "HTTP yielded thin results; re-fetching {thin_count} thin page(s) with Chrome"
+        ));
+        let updated_summary = chrome_refetch_thin_pages(cfg, http_summary, &cfg.output_dir).await;
+        spinner.finish(&format!(
+            "Chrome targeted re-fetch complete (pages={}, markdown={}, thin_remaining={})",
+            updated_summary.pages_seen, updated_summary.markdown_files, updated_summary.thin_pages,
+        ));
+        return (updated_summary, http_seen_urls);
+    }
+
+    // thin_urls is empty: either the inline Chrome path recovered all thin pages,
+    // or drop_thin_markdown=false and no thin URLs were tracked. In both cases we
+    // do not have per-URL targets. If the inline path was active, the summary
+    // already reflects Chrome-recovered content — return it as-is.
+    //
+    // If drop_thin_markdown=false (thin pages were saved as-is, URLs not tracked),
+    // we fall through to a full Chrome re-crawl as the only remaining option.
+    if cfg.drop_thin_markdown {
+        // Inline Chrome path was active (or there were simply no thin pages).
+        return (http_summary, http_seen_urls);
+    }
+
+    // Full Chrome re-crawl: thin URLs were not tracked because drop_thin_markdown
+    // is false, so we have no per-URL targets. Re-crawl the whole site with Chrome.
+    let spinner = Spinner::new("HTTP yielded thin results; retrying full crawl with Chrome");
     match run_crawl_once(
         cfg,
         start_url,
@@ -81,6 +130,7 @@ async fn maybe_chrome_fallback(
         None,
         cfg.discover_sitemaps,
         previous_manifest,
+        None,
     )
     .await
     {
@@ -98,6 +148,125 @@ async fn maybe_chrome_fallback(
             (http_summary, http_seen_urls)
         }
     }
+}
+
+/// Bootstrap Chrome, run the initial HTTP crawl, and apply any Chrome fallback.
+///
+/// Returns `(summary, seen_urls, effective_cfg_holder)` — the caller owns the
+/// `Config` holder so that `effective_cfg`'s lifetime extends past this call.
+async fn run_crawl_phase(
+    cfg: &Config,
+    start_url: &str,
+    previous_manifest: HashMap<String, crate::crates::crawl::manifest::ManifestEntry>,
+) -> Result<(CrawlSummary, HashSet<String>, Option<Config>), Box<dyn Error>> {
+    let initial_mode = super::runtime::resolve_initial_mode(cfg);
+    let chrome_bootstrap = super::runtime::bootstrap_chrome_runtime(cfg).await;
+    for warning in &chrome_bootstrap.warnings {
+        println!("{} {}", muted("[Chrome Bootstrap]"), warning);
+    }
+
+    // Thread the pre-resolved WebSocket URL through cfg so configure_website
+    // skips the redundant /json/version fetch on Chrome mode calls.
+    let ws_cfg_holder: Option<Config> =
+        chrome_bootstrap
+            .resolved_ws_url
+            .as_deref()
+            .map(|ws_url| Config {
+                chrome_remote_url: Some(ws_url.to_string()),
+                ..cfg.clone()
+            });
+    let effective_cfg: &Config = ws_cfg_holder.as_ref().unwrap_or(cfg);
+
+    let spinner = Spinner::new("running crawl");
+    let (http_summary, http_seen_urls) = run_crawl_once(
+        effective_cfg,
+        start_url,
+        initial_mode,
+        &cfg.output_dir,
+        None,
+        false,
+        previous_manifest.clone(),
+        None,
+    )
+    .await?;
+    spinner.finish(&format!(
+        "crawl phase complete (pages={}, markdown={})",
+        http_summary.pages_seen, http_summary.markdown_files
+    ));
+
+    let (summary, seen_urls) = maybe_chrome_fallback(
+        effective_cfg,
+        start_url,
+        http_summary,
+        http_seen_urls,
+        previous_manifest,
+    )
+    .await;
+
+    Ok((summary, seen_urls, ws_cfg_holder))
+}
+
+/// Queue an optional embed job, update the `latest` reflink, write the audit diff,
+/// and emit the final structured log line.
+async fn finalize_crawl(
+    cfg: &Config,
+    start_url: &str,
+    domain: &str,
+    manifest_path: &std::path::Path,
+    previous_urls: &HashSet<String>,
+    final_summary: &CrawlSummary,
+) -> Result<(), Box<dyn Error>> {
+    if cfg.embed {
+        let markdown_dir = cfg.output_dir.join("markdown");
+        let embed_job_id = start_embed_job(cfg, &markdown_dir.to_string_lossy()).await?;
+        println!(
+            "{} {}",
+            muted("Queued embed job:"),
+            accent(&embed_job_id.to_string())
+        );
+    }
+
+    let current_urls = read_manifest_urls(manifest_path).await?;
+
+    let latest_dir = cfg
+        .output_dir
+        .parent()
+        .ok_or_else(|| {
+            format!(
+                "output_dir '{}' has no parent directory",
+                cfg.output_dir.display()
+            )
+        })?
+        .join("latest");
+    if let Err(err) = update_latest_reflink(&cfg.output_dir, &latest_dir).await {
+        println!(
+            "{} failed to update 'latest' reflink for domain {}: {err}",
+            muted("[Warning]"),
+            domain
+        );
+    }
+
+    let (report_path, _) = write_audit_diff(
+        &cfg.output_dir,
+        start_url,
+        previous_urls,
+        &current_urls,
+        false,
+        None,
+    )
+    .await?;
+    log_done(&format!(
+        "command=crawl pages_seen={} markdown_files={} thin_pages={} error_pages={} waf_blocked={} elapsed_ms={} output_dir={} audit_report={}",
+        final_summary.pages_seen,
+        final_summary.markdown_files,
+        final_summary.thin_pages,
+        final_summary.error_pages,
+        final_summary.waf_blocked_pages,
+        final_summary.elapsed_ms,
+        cfg.output_dir.to_string_lossy(),
+        report_path.to_string_lossy(),
+    ));
+    Ok(())
 }
 
 pub(super) async fn run_sync_crawl(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>> {
@@ -122,51 +291,8 @@ pub(super) async fn run_sync_crawl(cfg: &Config, start_url: &str) -> Result<(), 
         return Ok(());
     }
 
-    let initial_mode = super::runtime::resolve_initial_mode(cfg);
-    let chrome_bootstrap = super::runtime::bootstrap_chrome_runtime(cfg).await;
-    for warning in &chrome_bootstrap.warnings {
-        println!("{} {}", muted("[Chrome Bootstrap]"), warning);
-    }
-
-    // Thread the pre-resolved WebSocket URL through cfg so configure_website
-    // skips the redundant /json/version fetch on Chrome mode calls.
-    let ws_cfg_holder: Config;
-    let effective_cfg: &Config = if let Some(ref ws_url) = chrome_bootstrap.resolved_ws_url {
-        ws_cfg_holder = Config {
-            chrome_remote_url: Some(ws_url.clone()),
-            ..cfg.clone()
-        };
-        &ws_cfg_holder
-    } else {
-        cfg
-    };
-
-    let spinner = Spinner::new("running crawl");
-    let (http_summary, http_seen_urls) = run_crawl_once(
-        effective_cfg,
-        start_url,
-        initial_mode,
-        &cfg.output_dir,
-        None,
-        false,
-        previous_manifest.clone(),
-    )
-    .await?;
-    spinner.finish(&format!(
-        "crawl phase complete (pages={}, markdown={})",
-        http_summary.pages_seen, http_summary.markdown_files
-    ));
-
-    let (summary, seen_urls) = maybe_chrome_fallback(
-        effective_cfg,
-        start_url,
-        http_summary,
-        http_seen_urls,
-        previous_manifest,
-    )
-    .await;
-
-    let mut final_summary = summary;
+    let (mut final_summary, seen_urls, _ws_cfg_holder) =
+        run_crawl_phase(cfg, start_url, previous_manifest).await?;
 
     if cfg.discover_sitemaps {
         // Spider-native sitemap already ran inside run_crawl_once() when run_sitemap=true.
@@ -199,48 +325,13 @@ pub(super) async fn run_sync_crawl(cfg: &Config, start_url: &str) -> Result<(), 
         ));
     }
 
-    if cfg.embed {
-        let markdown_dir = cfg.output_dir.join("markdown");
-        let embed_job_id = start_embed_job(cfg, &markdown_dir.to_string_lossy()).await?;
-        println!(
-            "{} {}",
-            muted("Queued embed job:"),
-            accent(&embed_job_id.to_string())
-        );
-    }
-
-    let current_urls = read_manifest_urls(&manifest_path).await?;
-
-    let latest_dir = cfg
-        .output_dir
-        .parent()
-        .expect("output_dir always has a parent")
-        .join("latest");
-    if let Err(err) = update_latest_reflink(&cfg.output_dir, &latest_dir).await {
-        println!(
-            "{} failed to update 'latest' reflink for domain {}: {err}",
-            muted("[Warning]"),
-            domain
-        );
-    }
-
-    let (report_path, _) = write_audit_diff(
-        &cfg.output_dir,
+    finalize_crawl(
+        cfg,
         start_url,
+        &domain,
+        &manifest_path,
         &previous_urls,
-        &current_urls,
-        false,
-        None,
+        &final_summary,
     )
-    .await?;
-    log_done(&format!(
-        "command=crawl pages_seen={} markdown_files={} thin_pages={} elapsed_ms={} output_dir={} audit_report={}",
-        final_summary.pages_seen,
-        final_summary.markdown_files,
-        final_summary.thin_pages,
-        final_summary.elapsed_ms,
-        cfg.output_dir.to_string_lossy(),
-        report_path.to_string_lossy(),
-    ));
-    Ok(())
+    .await
 }

@@ -134,7 +134,22 @@ pub(super) async fn configure_website(
     start_url: &str,
     mode: RenderMode,
 ) -> Result<Website, Box<dyn Error>> {
+    configure_website_with_crawl_id(cfg, start_url, mode, None).await
+}
+
+/// Configure a spider `Website` with an optional `crawl_id` for the control
+/// feature. When set, `spider::utils::shutdown("{crawl_id}{url}")` can signal
+/// an immediate graceful stop from inside the same process.
+pub(super) async fn configure_website_with_crawl_id(
+    cfg: &Config,
+    start_url: &str,
+    mode: RenderMode,
+    crawl_id: Option<&str>,
+) -> Result<Website, Box<dyn Error>> {
     let mut website = Website::new(start_url);
+    if let Some(id) = crawl_id {
+        website.with_crawl_id(id.to_string());
+    }
     website.with_depth(cfg.max_depth);
     website.with_subdomains(cfg.include_subdomains);
     // Disable TLD crawling unconditionally — we don't want to silently expand
@@ -198,11 +213,35 @@ pub(super) async fn configure_website(
         website.with_proxies(Some(vec![proxy.clone()]));
     }
     if let Some(ref ua) = cfg.chrome_user_agent {
+        // Explicit UA override takes precedence over the ua_generator feature.
         website.with_user_agent(Some(ua.as_str()));
     }
+    // When no explicit UA is set and the `ua_generator` feature is compiled in,
+    // spider::configuration::get_ua() automatically returns a randomised browser
+    // UA string on each call — no explicit wiring needed here.
 
-    // No control thread — we never pause/resume crawls externally; skip the overhead.
-    website.with_no_control_thread(true);
+    if !cfg.custom_headers.is_empty() {
+        let mut map = reqwest::header::HeaderMap::new();
+        for raw in &cfg.custom_headers {
+            if let Some((k, v)) = raw.split_once(": ") {
+                if let (Ok(name), Ok(val)) = (
+                    reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                    reqwest::header::HeaderValue::from_str(v),
+                ) {
+                    map.insert(name, val);
+                }
+            }
+        }
+        if !map.is_empty() {
+            website.with_headers(Some(map));
+        }
+    }
+
+    // Enable the spider control thread so in-process shutdown() can signal an
+    // immediate stop. The crawl worker calls spider::utils::shutdown() when a
+    // Redis cancel key is detected — this drains in-flight requests gracefully
+    // instead of abruptly dropping the crawl future.
+    website.with_no_control_thread(false);
 
     if cfg.cache {
         website.with_caching(true);

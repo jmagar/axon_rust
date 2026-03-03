@@ -1,5 +1,5 @@
 # crates/crawl — Spider.rs Crawl Engine
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Wraps spider.rs for site crawling with HTTP and Chrome rendering paths.
 
@@ -19,13 +19,19 @@ Wraps spider.rs for site crawling with HTTP and Chrome rendering paths.
 If Chrome is unavailable and mode is AutoSwitch, `try_auto_switch()` falls back and keeps the HTTP result.
 
 ### configure_website() Chain
-Called once per crawl in `engine.rs`. Fixed internal calls (do NOT remove):
+Called once per crawl in `engine.rs`. Two entry points:
+- `configure_website(cfg, url, mode)` — CLI path (no crawl_id, control thread is a no-op)
+- `configure_website_with_crawl_id(cfg, url, mode, Some(id))` — worker path (sets crawl_id for `spider::utils::shutdown()`)
+
+Both are `pub(super)` in `runtime.rs`. Fixed internal calls (do NOT remove):
 ```rust
 website.with_retry(retries as u8)   // clamp to u8 — must not exceed 255
        .with_normalize()             // URL normalization — required for dedup
        .with_tld(false);             // hardcoded — do not change
 ```
-`scrape.rs` has its **own independent** `with_retry()` call — keep both in sync when changing retry behavior.
+`with_no_control_thread(false)` enables spider's control handler — **do not set to `true`**, it breaks graceful cancel.
+
+`scrape.rs`, `thin_refetch.rs`, and `content/engine.rs` have their **own independent** `Website::new()` paths — keep retry, `custom_headers`, and UA settings in sync when changing `configure_website()` behavior.
 
 ### Auto-Switch Logic
 `try_auto_switch()` triggers Chrome fallback when:
@@ -46,12 +52,24 @@ Heuristics (each sufficient to reject):
 
 Returns `CaseInsensitiveString::default()` to reject; returns the original string to allow. Only checks the URL path, not the query string, to avoid false positives on legitimate query parameters.
 
-### Mid-Crawl Cancellation (Redis Key)
-`run_active_crawl_job` in `process.rs` wraps the crawl future in a `tokio::select!` that races against a cancel poller:
-- Polls Redis key `axon:crawl:cancel:{job_id}` every **3 seconds** via `is_crawl_canceled()`
-- If the key exists, the crawl future is dropped — drop semantics on `progress_tx` cause the progress task to exit cleanly
-- **Fail-safe:** `is_crawl_canceled` returns `false` on any Redis error — a Redis outage never false-cancels a crawl
+### Mid-Crawl Cancellation (Redis + Spider Control)
+Two-layer cancel: Redis for cross-process signaling, spider `control` feature for in-process graceful shutdown.
+
+**Redis layer** — `run_active_crawl_job` in `process.rs` races the crawl future against `poll_cancel_key`:
+- Polls Redis key `axon:crawl:cancel:{job_id}` every **3 seconds**
+- **Fail-safe:** returns `false` on any Redis error — a Redis outage never false-cancels a crawl
 - Cancel a running crawl: `axon crawl cancel <job_id>` (sets the Redis key)
+
+**Spider control layer** — when the Redis cancel key is detected:
+1. Calls `spider::utils::shutdown("{crawl_id}{url}")` — signals spider's in-process control thread via `AtomicI8`
+2. Spider stops dispatching new pages immediately, drains in-flight requests gracefully
+3. The crawl future is **awaited** (not dropped) with a 30s timeout, returning partial results
+4. Partial results (`pages_crawled`, `md_created`, `elapsed_ms`) are saved to `result_json` in the DB
+5. Job is marked `canceled` (not `failed`) — the `WHERE status='running'` guard prevents racing with natural completion
+
+**crawl_id wiring:** `configure_website_with_crawl_id()` in `runtime.rs` sets `website.with_crawl_id(job_uuid)`. The control target is `"{job_uuid}{start_url}"` — must match spider's `target_id()` format exactly.
+
+**Fallback:** If the 30s drain timeout expires or spider errors during shutdown, the cancel path falls back to the original hard-cancel behavior (no partial results saved).
 
 ### readability: false (DO NOT CHANGE)
 `build_transform_config()` in `crates/core/content.rs` sets `readability: false`. Changing to `true` causes Mozilla Readability to score VitePress/sidebar docs as low-quality and strip them to just the title — produces ~97% thin pages on most doc sites. `main_content: true` handles structural extraction without the scoring penalty.

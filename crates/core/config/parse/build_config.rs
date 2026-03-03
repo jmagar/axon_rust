@@ -423,6 +423,7 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
             h
         },
         serve_port,
+        custom_headers: global.custom_headers,
     };
 
     if cfg.exclude_path_prefix.is_empty() && !normalized_excludes.disable_defaults {

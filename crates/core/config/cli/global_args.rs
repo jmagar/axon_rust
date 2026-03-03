@@ -283,4 +283,8 @@ pub(in crate::crates::core::config) struct GlobalArgs {
     /// Viewport dimensions as WIDTHxHEIGHT (e.g. 1920x1080). Default: 1920x1080.
     #[arg(global = true, long, default_value = "1920x1080")]
     pub(in crate::crates::core::config) viewport: String,
+
+    /// Custom HTTP request header in `Key: Value` format. Can be specified multiple times.
+    #[arg(global = true, long = "header", value_name = "HEADER")]
+    pub(in crate::crates::core::config) custom_headers: Vec<String>,
 }

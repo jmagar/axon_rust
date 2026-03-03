@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-03-02 (session: integration/proptest test suite; MCP typed schema; ask context heuristics; sidebar cleanup; CI service containers)
+Last Modified: 2026-03-03 (session: inline Chrome thin-page recovery; CDP render module; custom headers; streaming sources dedup; spider feature flags docs)
 
 ## [Unreleased] — feat/sidebar
 
@@ -7,6 +7,13 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 ### Highlights
 
+- **Inline Chrome thin-page recovery** — new `cdp_render.rs` module renders thin pages inline via raw CDP WebSocket (`Page.setContent()` — no second HTTP request) while the HTTP crawl continues; `thin_refetch.rs` provides both inline (concurrent semaphore-gated) and batch fallback (spider-based post-crawl) re-fetch paths; `CollectorConfig` gains `chrome_ws_url`, `chrome_timeout_secs`, `output_dir`; `process_page()` extracted as pure function returning `PageOutcome` enum; collector spawns `JoinSet` of Chrome render tasks capped at `THIN_REFETCH_CONCURRENCY=4`
+- **Custom HTTP headers (`--header`)** — new `--header "Key: Value"` repeatable CLI flag; `Config.custom_headers: Vec<String>` threaded through crawl/scrape/extract/Chrome re-fetch paths; headers applied to spider `Website` config and to standalone reqwest calls
+- **Streaming sources dedup** — `check_sources_repetition()` in `streaming.rs` detects and truncates duplicate `## Sources` sections in LLM streaming responses; tracks first occurrence position and truncates at the second
+- **Spider feature flags documentation** — new `docs/spider-feature-flags.md` inventorying all spider/spider_agent feature flags with observable behavior notes
+- **Monolith enforcer improvements** — `enforce_monoliths_helpers.py` and `enforce_monoliths_impl.py` refined; `.monolith-allowlist` updated
+- **CI enhancements** — `.github/workflows/ci.yml` updated with additional service container config
+- **Web test improvements** — new/updated vitest tests for pulse mobile pane switcher; vitest config updates; 14 new web test files for various utilities
 - **Integration/proptest test suite** — new integration tests for AMQP channel/queue (`amqp_integration.rs`), Redis pool (`redis_integration.rs`), heartbeat (`heartbeat.rs`), Postgres pool (`pool_integration.rs`), refresh job scheduling (`schedule_integration_tests.rs`), and WS protocol/allowlist/ANSI stripping (`ws_protocol_tests.rs`); proptest suites for `is_junk_discovered_url` (`url_utils_proptest.rs`), HTTP SSRF validators (`proptest_tests.rs`), and vector input chunking (`input_proptest.rs`); CI adds Redis 8.2, RabbitMQ 4.0, and Qdrant 1.13.1 service containers with health checks + `AXON_TEST_REDIS_URL` / `AXON_TEST_AMQP_URL` / `AXON_TEST_QDRANT_URL` env vars
 - **MCP typed schema** — `crates/mcp/schema.rs` introduces fully-typed `AxonRequest` enum (tagged union, `snake_case`, `schemars::JsonSchema`) covering all 22+ actions (status/crawl/extract/embed/ingest/query/retrieve/search/map/doctor/domains/sources/stats/help/artifacts/scrape/research/ask/screenshot/refresh and more) with per-action request structs
 - **Ask context heuristics module** — budget helpers and supplemental-injection logic extracted to `crates/vector/ops/commands/ask/context/heuristics.rs`; `push_context_entry` respects `max_chars` budget; `should_inject_supplemental` gates domain-boost on coverage gaps; `SUPPLEMENTAL_CONTEXT_BUDGET_PCT` / `SUPPLEMENTAL_MIN_TOP_CHUNKS_FOR_COVERAGE` / `SUPPLEMENTAL_RELEVANCE_BONUS` constants
@@ -41,7 +48,8 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 | Commit | Type | Message |
 |---|---|---|
-| *(this commit)* | test(rust)+refactor(web) | integration/proptest test suite; MCP typed schema; ask context heuristics; sidebar cleanup; CI service containers |
+| *(this commit)* | feat(crawl)+refactor | inline Chrome thin-page recovery; CDP render module; custom headers; streaming sources dedup; spider feature flags docs |
+| `129eb1fa` | test(rust)+refactor(web) | integration/proptest test suite; MCP typed schema; ask context heuristics; sidebar cleanup; CI service containers |
 | `9428156c` | fix(ci) | remove invalid cargo-audit --deny flag; add Qdrant keyword indexes on collection init |
 | `fa8ddc29` | revert | remove redundant .cargo/config.toml — sccache already in ~/.cargo/config.toml |
 | `149325f0` | fix | restore sccache config; patch minimatch ReDoS (CVE high x2) |

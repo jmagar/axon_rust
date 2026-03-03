@@ -1,7 +1,9 @@
+mod cdp_render;
 mod collector;
 mod runtime;
 #[cfg(test)]
 mod tests;
+mod thin_refetch;
 mod url_utils;
 
 use crate::crates::core::config::{Config, RenderMode};
@@ -19,6 +21,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::Sender;
 
 pub(crate) use runtime::resolve_cdp_ws_url;
+pub(crate) use thin_refetch::chrome_refetch_thin_pages;
 pub(crate) use url_utils::{canonicalize_url_for_dedupe, is_excluded_url_path};
 #[cfg(test)]
 pub(crate) use url_utils::{is_junk_discovered_url, regex_escape};
@@ -31,6 +34,16 @@ pub struct CrawlSummary {
     pub reused_pages: u32,
     pub pages_discovered: u32,
     pub elapsed_ms: u128,
+    /// Canonical URLs of pages that were below `min_markdown_chars`.
+    /// Populated by the collector and used by the auto-switch path to
+    /// perform targeted per-URL Chrome re-fetches instead of a full re-crawl.
+    pub thin_urls: HashSet<String>,
+    /// Pages skipped due to non-2xx HTTP status codes.
+    pub error_pages: u32,
+    /// Pages blocked by a WAF or anti-bot system (`waf_check || blocked_crawl`).
+    pub waf_blocked_pages: u32,
+    /// Canonical URLs of WAF-blocked pages; used for targeted stealth Chrome retry.
+    pub waf_blocked_urls: HashSet<String>,
 }
 
 pub fn should_fallback_to_chrome(summary: &CrawlSummary, max_pages: u32, cfg: &Config) -> bool {
@@ -145,6 +158,7 @@ pub async fn update_latest_reflink(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_crawl_once(
     cfg: &Config,
     start_url: &str,
@@ -153,6 +167,7 @@ pub async fn run_crawl_once(
     progress_tx: Option<Sender<CrawlSummary>>,
     run_sitemap: bool,
     previous_manifest: HashMap<String, ManifestEntry>,
+    crawl_id: Option<&str>,
 ) -> Result<(CrawlSummary, HashSet<String>), Box<dyn Error>> {
     let markdown_dir = output_dir.join("markdown");
     let recycling_bin = output_dir.join("markdown.old");
@@ -189,7 +204,8 @@ pub async fn run_crawl_once(
     }
     tokio::fs::create_dir_all(&markdown_dir).await?;
 
-    let mut website = configure_website(cfg, start_url, mode).await?;
+    let mut website =
+        runtime::configure_website_with_crawl_id(cfg, start_url, mode, crawl_id).await?;
     // Buffer at least max_pages worth of messages to prevent silent page drops
     // under high-throughput crawls (extreme/max profiles). Clamp to 16 384 so
     // a large --max-pages value can't allocate an unbounded broadcast ring buffer.
@@ -206,6 +222,19 @@ pub async fn run_crawl_once(
     let crawl_start = Instant::now();
     let transform_cfg = build_transform_config();
 
+    // Enable inline Chrome re-rendering when the *config* requests AutoSwitch,
+    // even though `mode` is `Http` for the initial crawl phase (AutoSwitch
+    // always starts with HTTP — `resolve_initial_mode` converts AutoSwitch→Http).
+    // Chrome mode does its own rendering; Http mode with no AutoSwitch intent
+    // has no Chrome target. When cfg.render_mode is AutoSwitch and Chrome is
+    // configured, thin pages are re-rendered immediately while the HTTP crawl
+    // continues — no second pass needed.
+    let inline_chrome_ws_url = if matches!(cfg.render_mode, RenderMode::AutoSwitch) {
+        cfg.chrome_remote_url.clone()
+    } else {
+        None
+    };
+
     let join = tokio::spawn(collect_crawl_pages(
         rx,
         CollectorConfig {
@@ -217,6 +246,9 @@ pub async fn run_crawl_once(
             transform_cfg,
             progress_tx,
             previous_manifest,
+            chrome_ws_url: inline_chrome_ws_url,
+            chrome_timeout_secs: cfg.chrome_network_idle_timeout_secs,
+            output_dir: output_dir.to_path_buf(),
         },
     ));
 
@@ -281,6 +313,10 @@ pub async fn run_sitemap_only(
             transform_cfg,
             progress_tx: None,
             previous_manifest,
+            // Sitemap-only crawl: no inline Chrome rendering (HTTP-only path).
+            chrome_ws_url: None,
+            chrome_timeout_secs: cfg.chrome_network_idle_timeout_secs,
+            output_dir: output_dir.to_path_buf(),
         },
     ));
 

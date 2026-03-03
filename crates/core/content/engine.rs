@@ -13,6 +13,21 @@ use tokio::task::JoinSet;
 
 const FALLBACK_CONCURRENCY_LIMIT: usize = 4;
 
+/// Configuration bundle for `run_extract_with_engine`.
+///
+/// Replaces the previous 7-param function signature with a single struct,
+/// making it easy to add new fields (e.g. `custom_headers`) without churn.
+pub struct ExtractWebConfig {
+    pub start_url: String,
+    pub prompt: String,
+    pub limit: u32,
+    pub openai_base_url: String,
+    pub openai_api_key: String,
+    pub openai_model: String,
+    /// Custom HTTP headers in `"Key: Value"` format, passed through to spider.
+    pub custom_headers: Vec<String>,
+}
+
 struct FallbackConfig {
     api_url: String,
     api_key: String,
@@ -144,37 +159,52 @@ fn drain_fallback_result(
 }
 
 pub async fn run_extract_with_engine(
-    start_url: &str,
-    prompt: &str,
-    limit: u32,
-    openai_base_url: &str,
-    openai_api_key: &str,
-    openai_model: &str,
+    wcfg: ExtractWebConfig,
     engine: Arc<DeterministicExtractionEngine>,
 ) -> Result<ExtractRun, Box<dyn Error>> {
-    let api_url = format!("{}/chat/completions", openai_base_url.trim_end_matches('/'));
-    let has_fallback = !openai_base_url.is_empty()
-        && !openai_api_key.is_empty()
-        && !openai_model.is_empty()
-        && openai_base_url.starts_with("http");
+    let api_url = format!(
+        "{}/chat/completions",
+        wcfg.openai_base_url.trim_end_matches('/')
+    );
+    let has_fallback = !wcfg.openai_base_url.is_empty()
+        && !wcfg.openai_api_key.is_empty()
+        && !wcfg.openai_model.is_empty()
+        && wcfg.openai_base_url.starts_with("http");
 
-    validate_url(start_url)?;
+    validate_url(&wcfg.start_url)?;
     let ssrf_patterns: Vec<spider::compact_str::CompactString> = ssrf_blacklist_patterns()
         .iter()
         .copied()
         .map(Into::into)
         .collect();
-    let mut website = Website::new(start_url);
-    website.with_limit(limit);
+    let mut website = Website::new(&wcfg.start_url);
+    website.with_limit(wcfg.limit);
     website.with_blacklist_url(Some(ssrf_patterns));
+    // Wire custom headers so `--header` applies to extract crawls too.
+    if !wcfg.custom_headers.is_empty() {
+        let mut map = reqwest::header::HeaderMap::new();
+        for raw in &wcfg.custom_headers {
+            if let Some((k, v)) = raw.split_once(": ") {
+                if let (Ok(name), Ok(val)) = (
+                    reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                    reqwest::header::HeaderValue::from_str(v),
+                ) {
+                    map.insert(name, val);
+                }
+            }
+        }
+        if !map.is_empty() {
+            website.with_headers(Some(map));
+        }
+    }
     let mut website = website.build().map_err(|_| "build website")?;
 
     let rx = website.subscribe(16).ok_or("subscribe failed")?;
     let fallback_cfg = FallbackConfig {
         api_url,
-        api_key: openai_api_key.to_string(),
-        model: openai_model.to_string(),
-        prompt_text: prompt.to_string(),
+        api_key: wcfg.openai_api_key,
+        model: wcfg.openai_model,
+        prompt_text: wcfg.prompt,
         has_fallback,
     };
     let collect = tokio::spawn(collect_page_results(
@@ -195,7 +225,7 @@ pub async fn run_extract_with_engine(
         parser_hits,
     } = collect.await?;
     Ok(ExtractRun {
-        start_url: start_url.to_string(),
+        start_url: wcfg.start_url,
         pages_visited,
         pages_with_data,
         results,

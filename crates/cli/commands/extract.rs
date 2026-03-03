@@ -3,7 +3,9 @@ use crate::crates::cli::commands::common::{
     handle_job_recover, handle_job_status, parse_urls,
 };
 use crate::crates::core::config::Config;
-use crate::crates::core::content::{DeterministicExtractionEngine, run_extract_with_engine};
+use crate::crates::core::content::{
+    DeterministicExtractionEngine, ExtractWebConfig, run_extract_with_engine,
+};
 use crate::crates::core::logging::log_done;
 use crate::crates::core::ui::{accent, confirm_destructive, muted, primary, symbol_for_status};
 use crate::crates::jobs::extract::{
@@ -175,24 +177,22 @@ async fn execute_extract_runs(
     let openai_api_key_top = cfg.openai_api_key.clone();
     let openai_model_top = cfg.openai_model.clone();
 
+    let custom_headers = cfg.custom_headers.clone();
+
     let mut pending_runs = FuturesUnordered::new();
     for url in urls.iter().cloned() {
         let engine = Arc::clone(&engine);
-        let prompt = prompt.to_string();
-        let openai_base_url = openai_base_url_top.clone();
-        let openai_api_key = openai_api_key_top.clone();
-        let openai_model = openai_model_top.clone();
+        let wcfg = ExtractWebConfig {
+            start_url: url.clone(),
+            prompt: prompt.to_string(),
+            limit: max_pages,
+            openai_base_url: openai_base_url_top.clone(),
+            openai_api_key: openai_api_key_top.clone(),
+            openai_model: openai_model_top.clone(),
+            custom_headers: custom_headers.clone(),
+        };
         pending_runs.push(async move {
-            let run = run_extract_with_engine(
-                &url,
-                &prompt,
-                max_pages,
-                &openai_base_url,
-                &openai_api_key,
-                &openai_model,
-                engine,
-            )
-            .await;
+            let run = run_extract_with_engine(wcfg, engine).await;
             (url, run)
         });
     }

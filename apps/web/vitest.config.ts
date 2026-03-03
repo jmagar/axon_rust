@@ -5,6 +5,12 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['__tests__/**/*.test.{ts,tsx}'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json-summary'],
+      include: ['lib/**', 'app/api/**', 'hooks/**', 'components/**'],
+      exclude: ['**/*.test.*', '__tests__/**', 'node_modules/**'],
+    },
   },
   resolve: {
     alias: {

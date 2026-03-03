@@ -380,4 +380,7 @@ pub struct Config {
 
     /// Port for the `serve` web UI server. Flag: `--port`. Default: 3939.
     pub serve_port: u16,
+
+    /// Custom HTTP request headers in `"Key: Value"` format (repeatable). Flag: `--header`.
+    pub custom_headers: Vec<String>,
 }

@@ -1,7 +1,7 @@
 use crate::crates::core::config::Config;
-use crate::crates::core::logging::log_done;
+use crate::crates::core::logging::{log_done, log_warn};
 use crate::crates::core::ui::{muted, primary, print_phase};
-use spider_agent::{Agent, ResearchOptions, SearchOptions, TimeRange};
+use spider_agent::{Agent, Message, SearchOptions, TimeRange, TokenUsage};
 use std::error::Error;
 use std::sync::{
     Arc,
@@ -39,26 +39,32 @@ pub async fn research_payload(
         .with_search_tavily(&cfg.tavily_api_key)
         .build()?;
 
-    let extraction_prompt =
-        format!("Extract key facts, details, and insights relevant to: {query}");
+    // Step 1: search — Tavily returns URLs + content excerpts
     let mut search_options = SearchOptions::new().with_limit((limit + offset).clamp(1, 100));
     if let Some(tr) = time_range {
         search_options = search_options.with_time_range(tr);
     }
+    let search_results = agent.search_with_options(query, search_options).await?;
 
-    let research = agent
-        .research(
-            query,
-            ResearchOptions::new()
-                .with_max_pages((limit + offset).clamp(1, 100))
-                .with_search_options(search_options)
-                .with_extraction_prompt(extraction_prompt)
-                .with_synthesize(true),
-        )
-        .await?;
+    // Step 2: use Tavily's content excerpts directly — skip redundant fetch+extract
+    let extractions: Vec<serde_json::Value> = search_results
+        .results
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|r| {
+            serde_json::json!({
+                "url": r.url,
+                "title": r.title,
+                "extracted": r.snippet.as_deref().unwrap_or(""),
+            })
+        })
+        .collect();
 
-    let search_results = research
-        .search_results
+    // Step 3: synthesize — one LLM call over the snippets
+    let (summary, usage) = synthesize(query, &extractions, &agent).await;
+
+    let search_results_json = search_results
         .results
         .iter()
         .skip(offset)
@@ -73,36 +79,70 @@ pub async fn research_payload(
         })
         .collect::<Vec<_>>();
 
-    let extractions = research
-        .extractions
-        .iter()
-        .skip(offset)
-        .take(limit)
-        .map(|e| {
-            serde_json::json!({
-                "url": e.url,
-                "title": e.title,
-                "extracted": e.extracted,
-            })
-        })
-        .collect::<Vec<_>>();
-
     Ok(serde_json::json!({
         "query": query,
         "limit": limit,
         "offset": offset,
-        "search_results": search_results,
+        "search_results": search_results_json,
         "extractions": extractions,
-        "summary": research.summary,
+        "summary": summary,
         "usage": {
-            "prompt_tokens": research.usage.prompt_tokens,
-            "completion_tokens": research.usage.completion_tokens,
-            "total_tokens": research.usage.total_tokens,
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "total_tokens": usage.total_tokens,
         },
         "timing_ms": {
             "total": started.elapsed().as_millis(),
         },
     }))
+}
+
+async fn synthesize(
+    query: &str,
+    extractions: &[serde_json::Value],
+    agent: &Agent,
+) -> (Option<String>, TokenUsage) {
+    if extractions.is_empty() {
+        return (None, TokenUsage::default());
+    }
+
+    let mut context = String::new();
+    for (i, e) in extractions.iter().enumerate() {
+        context.push_str(&format!(
+            "\n\nSource {} ({}): {}\n{}",
+            i + 1,
+            e["url"].as_str().unwrap_or(""),
+            e["title"].as_str().unwrap_or(""),
+            e["extracted"].as_str().unwrap_or(""),
+        ));
+    }
+
+    let messages = vec![
+        Message::system(
+            "You are a research synthesis assistant. Summarize the findings from multiple sources into a coherent response.",
+        ),
+        Message::user(format!(
+            "Topic: {query}\n\nSources:{context}\n\nProvide a comprehensive summary of the findings, citing sources where appropriate. Return as JSON with a 'summary' field."
+        )),
+    ];
+
+    match agent.complete(messages).await {
+        Ok(response) => {
+            let summary = serde_json::from_str::<serde_json::Value>(&response.content)
+                .ok()
+                .and_then(|v| {
+                    v.get("summary")
+                        .and_then(|s| s.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or(response.content);
+            (Some(summary), response.usage)
+        }
+        Err(e) => {
+            log_warn(&format!("synthesis failed: {e}"));
+            (None, TokenUsage::default())
+        }
+    }
 }
 
 pub async fn run_research(cfg: &Config) -> Result<(), Box<dyn Error>> {

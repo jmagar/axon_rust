@@ -131,6 +131,7 @@ export async function POST(request: Request) {
         let aborted = request.signal.aborted
 
         let closed = false
+        let childHandled = false
         const safeClose = () => {
           if (closed) return
           closed = true
@@ -262,15 +263,15 @@ export async function POST(request: Request) {
         })
 
         child.on('error', (error: Error) => {
-          if (closed) return
-          closed = true
+          if (childHandled || closed) return
+          childHandled = true
           cleanup()
           emitErrorAndClose(`Failed to start Claude CLI: ${error.message}`, 'pulse_chat_spawn')
         })
 
         child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-          if (closed) return
-          closed = true
+          if (childHandled || closed) return
+          childHandled = true
           cleanup()
 
           // Flush any partial line that didn't end with a newline (e.g. the final `result` event).
