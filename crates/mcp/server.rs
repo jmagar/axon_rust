@@ -1,5 +1,5 @@
 #[path = "server/common.rs"]
-mod common;
+pub mod common;
 #[path = "server/handlers_crawl_extract.rs"]
 mod handlers_crawl_extract;
 #[path = "server/handlers_embed_ingest.rs"]

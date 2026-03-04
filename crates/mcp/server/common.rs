@@ -4,6 +4,9 @@ use crate::crates::core::config::{Config, RenderMode};
 use crate::crates::mcp::schema::{
     AxonToolResponse, CrawlRequest, McpRenderMode, ResponseMode, SearchTimeRange,
 };
+use crate::crates::services::types::{
+    MapOptions, Pagination, RetrieveOptions, SearchOptions, ServiceTimeRange,
+};
 use rmcp::ErrorData;
 use sha2::{Digest, Sha256};
 use spider_agent::TimeRange;
@@ -307,5 +310,49 @@ pub(super) fn map_search_time_range(range: &SearchTimeRange) -> TimeRange {
         SearchTimeRange::Week => TimeRange::Week,
         SearchTimeRange::Month => TimeRange::Month,
         SearchTimeRange::Year => TimeRange::Year,
+    }
+}
+
+/// Map MCP limit/offset params to service `Pagination`, clamping limit to [1, 500].
+pub fn to_pagination(limit: Option<usize>, offset: Option<usize>) -> Pagination {
+    Pagination {
+        limit: limit.unwrap_or(10).clamp(1, 500),
+        offset: offset.unwrap_or(0),
+    }
+}
+
+/// Map MCP limit/offset params to service `MapOptions`, clamping limit to [1, 500].
+pub fn to_map_options(limit: Option<usize>, offset: Option<usize>) -> MapOptions {
+    MapOptions {
+        limit: limit.unwrap_or(10).clamp(1, 500),
+        offset: offset.unwrap_or(0),
+    }
+}
+
+/// Map MCP `RetrieveOptions` (max_points field) to service `RetrieveOptions`.
+pub fn to_retrieve_options(max_points: Option<usize>) -> RetrieveOptions {
+    RetrieveOptions { max_points }
+}
+
+/// Map MCP `SearchTimeRange` enum to service `ServiceTimeRange`.
+pub fn to_service_time_range(tr: SearchTimeRange) -> ServiceTimeRange {
+    match tr {
+        SearchTimeRange::Day => ServiceTimeRange::Day,
+        SearchTimeRange::Week => ServiceTimeRange::Week,
+        SearchTimeRange::Month => ServiceTimeRange::Month,
+        SearchTimeRange::Year => ServiceTimeRange::Year,
+    }
+}
+
+/// Map MCP search params to service `SearchOptions`.
+pub fn to_search_options(
+    limit: Option<usize>,
+    offset: Option<usize>,
+    time_range: Option<SearchTimeRange>,
+) -> SearchOptions {
+    SearchOptions {
+        limit: limit.unwrap_or(10).clamp(1, 500),
+        offset: offset.unwrap_or(0),
+        time_range: time_range.map(to_service_time_range),
     }
 }
