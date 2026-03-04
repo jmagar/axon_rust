@@ -53,6 +53,10 @@ jobs:
   mcp-oauth-smoke:
     name: mcp-oauth-smoke
     runs-on: ubuntu-latest
+    env:
+      AXON_PG_URL: postgresql://axon:postgres@127.0.0.1:5432/axon
+      AXON_REDIS_URL: redis://127.0.0.1:6379
+      AXON_AMQP_URL: amqp://guest:guest@127.0.0.1:5672/%2f
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
