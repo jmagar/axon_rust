@@ -1,10 +1,9 @@
-//! Contract tests for sync crawl sitemap backfill delegation to the engine.
+//! Contract tests for the engine's `append_sitemap_backfill()` function.
 //!
-//! These tests verify that sync_crawl delegates sitemap backfill to the
-//! engine's `append_sitemap_backfill()` rather than the CLI's own
-//! `append_robots_backfill()` loop. The engine function does not exist yet
-//! (Task 2 will create it), so these tests fail to compile — the expected
-//! TDD RED state.
+//! These tests exercise `append_sitemap_backfill` directly against a mock
+//! HTTP server to verify sitemap discovery, deduplication, and manifest
+//! generation. `sync_crawl` delegates to this function — these tests
+//! validate the engine contract that `sync_crawl` relies on.
 //!
 //! Each test uses a global `ALLOW_LOOPBACK` bypass (via `LoopbackGuard`)
 //! to permit `validate_url` to accept 127.0.0.1 — required for httpmock.
@@ -66,13 +65,9 @@ fn sitemap_xml(urls: &[&str]) -> String {
     xml
 }
 
-/// After a sync crawl with sitemaps enabled, the summary must include
-/// sitemap metric fields that come from the engine's backfill output
-/// (not from a separate CLI loop). This validates the contract that
-/// sync_crawl delegates sitemap backfill to the engine.
-///
-/// The engine's `append_sitemap_backfill` function does not exist yet,
-/// so this test fails to compile — expected RED state.
+/// Verifies that `append_sitemap_backfill` discovers sitemap URLs and
+/// updates the `CrawlSummary` with backfill metrics (discovered_urls,
+/// markdown_files). This is the engine contract that `sync_crawl` relies on.
 #[tokio::test]
 #[serial]
 async fn sync_crawl_uses_engine_backfill_metrics_not_cli_loop() {
@@ -155,12 +150,9 @@ async fn sync_crawl_uses_engine_backfill_metrics_not_cli_loop() {
     );
 }
 
-/// Verify that the engine's backfill does not duplicate manifest rows for
-/// URLs already present in the seen set, and that the `changed` flag
-/// semantics match what the engine path produces.
-///
-/// The engine's `append_sitemap_backfill` function does not exist yet,
-/// so this test fails to compile — expected RED state.
+/// Verifies that `append_sitemap_backfill` does not duplicate manifest rows
+/// for URLs already present in the seen set, and that new entries use
+/// `changed: true`.
 #[tokio::test]
 #[serial]
 async fn sync_crawl_does_not_append_manifest_via_cli_backfill_codepath() {

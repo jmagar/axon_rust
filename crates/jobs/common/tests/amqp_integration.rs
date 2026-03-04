@@ -1,5 +1,6 @@
 use super::super::*;
-use lapin::options::{BasicAckOptions, BasicGetOptions};
+use lapin::options::{BasicAckOptions, BasicGetOptions, QueueDeleteOptions};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -24,6 +25,9 @@ async fn open_amqp_channel_connects_and_declares_durable_queue() -> Result<()> {
     );
 
     let (conn, ch) = result.unwrap();
+    let _ = ch
+        .queue_delete(&queue_name, QueueDeleteOptions::default())
+        .await;
     let _ = ch.close(0, "").await;
     let _ = conn.close(200, "").await;
 
@@ -80,15 +84,23 @@ async fn batch_enqueue_jobs_delivers_messages_to_queue() -> Result<()> {
         "expected empty queue after consuming all 3 messages, but got another message"
     );
 
-    // Verify each received body is one of the published UUIDs.
+    // Verify each published UUID was received exactly once (no duplicates, no missing).
     let published_strings: Vec<String> = ids.iter().map(|u| u.to_string()).collect();
+    let mut counts: HashMap<&str, usize> = HashMap::new();
     for received in &received_ids {
-        assert!(
-            published_strings.contains(received),
-            "received unexpected UUID body: {received}"
+        *counts.entry(received.as_str()).or_insert(0) += 1;
+    }
+    for expected in &published_strings {
+        let count = counts.get(expected.as_str()).copied().unwrap_or(0);
+        assert_eq!(
+            count, 1,
+            "expected UUID {expected} exactly once, got {count}"
         );
     }
 
+    let _ = ch
+        .queue_delete(&queue_name, QueueDeleteOptions::default())
+        .await;
     let _ = ch.close(0, "").await;
     let _ = conn.close(200, "").await;
 
@@ -127,6 +139,9 @@ async fn purge_queue_safe_removes_enqueued_messages() -> Result<()> {
         "expected empty queue after purge, but basic_get returned a message"
     );
 
+    let _ = ch
+        .queue_delete(&queue_name, QueueDeleteOptions::default())
+        .await;
     let _ = ch.close(0, "").await;
     let _ = conn.close(200, "").await;
 
@@ -174,6 +189,9 @@ async fn enqueue_job_publishes_single_message() -> Result<()> {
         "message body does not match the published job UUID"
     );
 
+    let _ = ch
+        .queue_delete(&queue_name, QueueDeleteOptions::default())
+        .await;
     let _ = ch.close(0, "").await;
     let _ = conn.close(200, "").await;
 

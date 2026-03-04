@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::crates::jobs::status::JobStatus;
 use chrono::Utc;
 use serial_test::serial;
 use uuid::Uuid;
@@ -59,41 +60,41 @@ async fn claim_next_pending_claims_oldest_job_first() -> Result<()> {
 
     // Clean up ALL pending rows before the FIFO test — any pending row (from
     // prior runs or other serial tests) would be claimed first and break ordering.
-    let _ = sqlx::query("DELETE FROM axon_embed_jobs WHERE status = 'pending'")
-        .execute(&pool)
-        .await;
+    let _ = sqlx::query(&format!(
+        "DELETE FROM axon_embed_jobs WHERE status = '{}'",
+        JobStatus::Pending.as_str()
+    ))
+    .execute(&pool)
+    .await;
 
     let id_old = Uuid::new_v4();
     let id_mid = Uuid::new_v4();
     let id_new = Uuid::new_v4();
 
     // Insert oldest first (T-3s), then T-2s, then T-1s.
-    sqlx::query(
+    let insert_sql = format!(
         "INSERT INTO axon_embed_jobs (id, status, input_text, config_json, created_at) \
-         VALUES ($1, 'pending', 'fifo-test', '{}'::jsonb, $2)",
-    )
-    .bind(id_old)
-    .bind(Utc::now() - chrono::Duration::seconds(3))
-    .execute(&pool)
-    .await?;
+         VALUES ($1, '{}', 'fifo-test', '{{}}'::jsonb, $2)",
+        JobStatus::Pending.as_str()
+    );
 
-    sqlx::query(
-        "INSERT INTO axon_embed_jobs (id, status, input_text, config_json, created_at) \
-         VALUES ($1, 'pending', 'fifo-test', '{}'::jsonb, $2)",
-    )
-    .bind(id_mid)
-    .bind(Utc::now() - chrono::Duration::seconds(2))
-    .execute(&pool)
-    .await?;
+    sqlx::query(&insert_sql)
+        .bind(id_old)
+        .bind(Utc::now() - chrono::Duration::seconds(3))
+        .execute(&pool)
+        .await?;
 
-    sqlx::query(
-        "INSERT INTO axon_embed_jobs (id, status, input_text, config_json, created_at) \
-         VALUES ($1, 'pending', 'fifo-test', '{}'::jsonb, $2)",
-    )
-    .bind(id_new)
-    .bind(Utc::now() - chrono::Duration::seconds(1))
-    .execute(&pool)
-    .await?;
+    sqlx::query(&insert_sql)
+        .bind(id_mid)
+        .bind(Utc::now() - chrono::Duration::seconds(2))
+        .execute(&pool)
+        .await?;
+
+    sqlx::query(&insert_sql)
+        .bind(id_new)
+        .bind(Utc::now() - chrono::Duration::seconds(1))
+        .execute(&pool)
+        .await?;
 
     let first = claim_next_pending(&pool, JobTable::Embed).await?;
     let second = claim_next_pending(&pool, JobTable::Embed).await?;

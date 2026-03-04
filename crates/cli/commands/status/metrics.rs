@@ -279,7 +279,11 @@ mod tests {
         let started = Utc::now() - Duration::seconds(125);
         let updated = Utc::now();
         let value = job_runtime_text("running", Some(&started), None, &updated);
-        assert_eq!(value, "2m5s");
+        // Allow 1s drift: Utc::now() inside job_runtime_text may differ from the one above.
+        assert!(
+            value == "2m5s" || value == "2m6s",
+            "expected '2m5s' or '2m6s', got '{value}'"
+        );
     }
 
     #[test]

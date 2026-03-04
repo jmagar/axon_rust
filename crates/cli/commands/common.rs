@@ -1,3 +1,6 @@
+use crate::crates::cli::commands::job_contracts::{
+    JobCancelResponse, JobErrorsResponse, JobStatusResponse, JobSummaryEntry,
+};
 use crate::crates::core::config::{CommandKind, Config};
 use crate::crates::core::http::normalize_url;
 use crate::crates::core::logging::log_warn;
@@ -163,6 +166,9 @@ pub trait JobStatus {
     fn created_at(&self) -> chrono::DateTime<chrono::Utc>;
     fn updated_at(&self) -> chrono::DateTime<chrono::Utc>;
     fn error_text(&self) -> Option<&str>;
+    fn to_status_response_json(&self) -> serde_json::Value;
+    fn to_summary_entry_json(&self) -> serde_json::Value;
+    fn to_errors_response_json(&self) -> serde_json::Value;
 }
 
 impl JobStatus for crate::crates::jobs::crawl::CrawlJob {
@@ -180,6 +186,20 @@ impl JobStatus for crate::crates::jobs::crawl::CrawlJob {
     }
     fn error_text(&self) -> Option<&str> {
         self.error_text.as_deref()
+    }
+    fn to_status_response_json(&self) -> serde_json::Value {
+        serde_json::to_value(JobStatusResponse::from_crawl(self)).unwrap_or_default()
+    }
+    fn to_summary_entry_json(&self) -> serde_json::Value {
+        serde_json::to_value(JobSummaryEntry::from_crawl(self)).unwrap_or_default()
+    }
+    fn to_errors_response_json(&self) -> serde_json::Value {
+        serde_json::to_value(JobErrorsResponse::from_job(
+            self.id,
+            self.status.clone(),
+            self.error_text.clone(),
+        ))
+        .unwrap_or_default()
     }
 }
 
@@ -199,6 +219,20 @@ impl JobStatus for crate::crates::jobs::extract::ExtractJob {
     fn error_text(&self) -> Option<&str> {
         self.error_text.as_deref()
     }
+    fn to_status_response_json(&self) -> serde_json::Value {
+        serde_json::to_value(JobStatusResponse::from_extract(self)).unwrap_or_default()
+    }
+    fn to_summary_entry_json(&self) -> serde_json::Value {
+        serde_json::to_value(JobSummaryEntry::from_extract(self)).unwrap_or_default()
+    }
+    fn to_errors_response_json(&self) -> serde_json::Value {
+        serde_json::to_value(JobErrorsResponse::from_job(
+            self.id,
+            self.status.clone(),
+            self.error_text.clone(),
+        ))
+        .unwrap_or_default()
+    }
 }
 
 impl JobStatus for crate::crates::jobs::ingest::IngestJob {
@@ -217,6 +251,20 @@ impl JobStatus for crate::crates::jobs::ingest::IngestJob {
     fn error_text(&self) -> Option<&str> {
         self.error_text.as_deref()
     }
+    fn to_status_response_json(&self) -> serde_json::Value {
+        serde_json::to_value(JobStatusResponse::from_ingest(self)).unwrap_or_default()
+    }
+    fn to_summary_entry_json(&self) -> serde_json::Value {
+        serde_json::to_value(JobSummaryEntry::from_ingest(self)).unwrap_or_default()
+    }
+    fn to_errors_response_json(&self) -> serde_json::Value {
+        serde_json::to_value(JobErrorsResponse::from_job(
+            self.id,
+            self.status.clone(),
+            self.error_text.clone(),
+        ))
+        .unwrap_or_default()
+    }
 }
 
 pub fn handle_job_status<T: JobStatus + serde::Serialize>(
@@ -228,7 +276,8 @@ pub fn handle_job_status<T: JobStatus + serde::Serialize>(
     match job {
         Some(job) => {
             if cfg.json_output {
-                println!("{}", serde_json::to_string_pretty(&job)?);
+                let json = job.to_status_response_json();
+                println!("{}", serde_json::to_string_pretty(&json)?);
             } else {
                 println!(
                     "{} {}",
@@ -276,13 +325,8 @@ pub fn handle_job_cancel(
     command_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if cfg.json_output {
-        println!(
-            "{}",
-            serde_json::json!({
-                "job_id": id,
-                "canceled": canceled
-            })
-        );
+        let resp = JobCancelResponse::new(id, canceled);
+        println!("{}", serde_json::to_string_pretty(&resp)?);
     } else if canceled {
         println!(
             "{} canceled {command_name} job {}",
@@ -310,14 +354,8 @@ pub fn handle_job_errors<T: JobStatus + serde::Serialize>(
     match job {
         Some(job) => {
             if cfg.json_output {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "job_id": id,
-                        "status": job.status(),
-                        "error_text": job.error_text()
-                    })
-                );
+                let contract = job.to_errors_response_json();
+                println!("{}", serde_json::to_string_pretty(&contract)?);
             } else {
                 println!(
                     "{} {} job {} {}",
@@ -361,7 +399,9 @@ pub fn handle_job_list<T: JobStatus + serde::Serialize>(
     command_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if cfg.json_output {
-        println!("{}", serde_json::to_string_pretty(&jobs)?);
+        let entries: Vec<serde_json::Value> =
+            jobs.iter().map(|j| j.to_summary_entry_json()).collect();
+        println!("{}", serde_json::to_string_pretty(&entries)?);
         return Ok(());
     }
 

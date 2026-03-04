@@ -263,6 +263,7 @@ pub async fn run_research(cfg: &Config) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+// TODO: This function is duplicated in search.rs. Extract to commands/common.rs as a shared helper.
 fn parse_search_time_range(value: Option<&str>) -> Option<TimeRange> {
     match value.map(str::trim).filter(|v| !v.is_empty()) {
         Some("day") => Some(TimeRange::Day),

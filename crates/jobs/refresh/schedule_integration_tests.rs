@@ -74,52 +74,58 @@ async fn claim_due_returns_exactly_two_due_rows_and_excludes_future_row()
     let id_b = insert_schedule_row(&pool, &name_b, true, now - Duration::minutes(1)).await?;
     let _id_c = insert_schedule_row(&pool, &name_c, true, now + Duration::hours(1)).await?;
 
-    // Claim with a high limit so we don't accidentally cap at 1.
-    let claimed = claim_due_refresh_schedules_with_pool(&pool, 1_000).await?;
+    // Run assertions in a closure so cleanup runs even on panic.
+    let result = async {
+        // Claim with a high limit so we don't accidentally cap at 1.
+        let claimed = claim_due_refresh_schedules_with_pool(&pool, 1_000).await?;
 
-    // Filter claimed IDs to only those belonging to this test (parallel tests may claim rows).
-    let our_claimed: Vec<Uuid> = claimed
-        .iter()
-        .filter(|s| s.id == id_a || s.id == id_b)
-        .map(|s| s.id)
-        .collect();
+        // Filter claimed IDs to only those belonging to this test (parallel tests may claim rows).
+        let our_claimed: Vec<Uuid> = claimed
+            .iter()
+            .filter(|s| s.id == id_a || s.id == id_b)
+            .map(|s| s.id)
+            .collect();
 
-    assert_eq!(
-        our_claimed.len(),
-        2,
-        "Expected exactly 2 due rows to be claimed (got {our_claimed:?})"
-    );
-    assert!(
-        our_claimed.contains(&id_a),
-        "Row A (due 2 min ago) must be in claimed set"
-    );
-    assert!(
-        our_claimed.contains(&id_b),
-        "Row B (due 1 min ago) must be in claimed set"
-    );
+        assert_eq!(
+            our_claimed.len(),
+            2,
+            "Expected exactly 2 due rows to be claimed (got {our_claimed:?})"
+        );
+        assert!(
+            our_claimed.contains(&id_a),
+            "Row A (due 2 min ago) must be in claimed set"
+        );
+        assert!(
+            our_claimed.contains(&id_b),
+            "Row B (due 1 min ago) must be in claimed set"
+        );
 
-    // Confirm the not-due row was NOT returned.
-    let future_in_claimed = claimed.iter().any(|s| s.name == name_c);
-    assert!(
-        !future_in_claimed,
-        "Row C (due in 1 hour) must NOT appear in claimed set"
-    );
+        // Confirm the not-due row was NOT returned.
+        let future_in_claimed = claimed.iter().any(|s| s.name == name_c);
+        assert!(
+            !future_in_claimed,
+            "Row C (due in 1 hour) must NOT appear in claimed set"
+        );
 
-    // Also verify row C is still in the future via direct DB read.
-    let row_c: RefreshSchedule =
-        sqlx::query_as("SELECT * FROM axon_refresh_schedules WHERE name = $1")
-            .bind(&name_c)
-            .fetch_one(&pool)
-            .await?;
-    assert!(
-        row_c.next_run_at > now,
-        "Row C next_run_at must remain in the future after claim"
-    );
+        // Also verify row C is still in the future via direct DB read.
+        let row_c: RefreshSchedule =
+            sqlx::query_as("SELECT * FROM axon_refresh_schedules WHERE name = $1")
+                .bind(&name_c)
+                .fetch_one(&pool)
+                .await?;
+        assert!(
+            row_c.next_run_at > now,
+            "Row C next_run_at must remain in the future after claim"
+        );
 
-    // Cleanup.
-    delete_schedule_by_name(&pool, &name_a).await?;
-    delete_schedule_by_name(&pool, &name_b).await?;
-    delete_schedule_by_name(&pool, &name_c).await?;
+        Ok::<(), Box<dyn Error>>(())
+    }
+    .await;
 
-    Ok(())
+    // Cleanup runs regardless of assertion outcome.
+    let _ = delete_schedule_by_name(&pool, &name_a).await;
+    let _ = delete_schedule_by_name(&pool, &name_b).await;
+    let _ = delete_schedule_by_name(&pool, &name_c).await;
+
+    result
 }

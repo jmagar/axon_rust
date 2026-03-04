@@ -33,9 +33,8 @@ impl From<SitemapDiscovery> for SitemapDiscoveryResult {
                 parsed_sitemap_documents: d.parsed_sitemap_documents,
                 discovered_urls: d.discovered_urls,
                 failed_fetches: d.failed_fetches,
-                // The engine handles filtering internally — these granular
-                // counters are not tracked by the engine, so default to 0.
-                discovered_sitemap_documents: 0,
+                discovered_sitemap_documents: d.robots_declared_sitemaps
+                    + d.seeded_default_sitemaps,
                 filtered_out_of_scope_host: 0,
                 filtered_out_of_scope_path: 0,
                 filtered_excluded_prefix: 0,

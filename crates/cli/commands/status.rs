@@ -120,8 +120,7 @@ async fn load_status_jobs(cfg: &Config) -> Result<StatusJobs, Box<dyn Error>> {
                 .map_err(|e| format!("refresh status lookup failed: {e}"))
         }
     );
-    let crawl = crawl_raw
-        .unwrap_or_default()
+    let crawl: Vec<_> = crawl_raw?
         .into_iter()
         .filter(|job| {
             include_status_job(
@@ -131,8 +130,7 @@ async fn load_status_jobs(cfg: &Config) -> Result<StatusJobs, Box<dyn Error>> {
             )
         })
         .collect();
-    let extract = extract_raw
-        .unwrap_or_default()
+    let extract: Vec<_> = extract_raw?
         .into_iter()
         .filter(|job| {
             include_status_job(
@@ -142,8 +140,7 @@ async fn load_status_jobs(cfg: &Config) -> Result<StatusJobs, Box<dyn Error>> {
             )
         })
         .collect();
-    let embed = embed_raw
-        .unwrap_or_default()
+    let embed: Vec<_> = embed_raw?
         .into_iter()
         .filter(|job| {
             include_status_job(
@@ -153,8 +150,7 @@ async fn load_status_jobs(cfg: &Config) -> Result<StatusJobs, Box<dyn Error>> {
             )
         })
         .collect();
-    let ingest = ingest_raw
-        .unwrap_or_default()
+    let ingest: Vec<_> = ingest_raw?
         .into_iter()
         .filter(|job| {
             include_status_job(
@@ -164,8 +160,7 @@ async fn load_status_jobs(cfg: &Config) -> Result<StatusJobs, Box<dyn Error>> {
             )
         })
         .collect();
-    let refresh = refresh_raw
-        .unwrap_or_default()
+    let refresh: Vec<_> = refresh_raw?
         .into_iter()
         .filter(|job| {
             include_status_job(
