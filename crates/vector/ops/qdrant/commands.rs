@@ -108,8 +108,12 @@ pub async fn run_sources_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         );
     } else {
         println!("{}", primary("Sources"));
-        for url in &result.urls {
-            println!("  • {}", accent(url));
+        for (url, chunks) in &result.urls {
+            println!(
+                "  • {} {}",
+                accent(url),
+                muted(&format!("(chunks: {chunks})"))
+            );
         }
         if url_count == facet_limit {
             println!(
@@ -130,12 +134,12 @@ pub async fn sources_payload(
 ) -> Result<serde_json::Value, Box<dyn Error>> {
     let sources = qdrant_url_facets(cfg, (limit + offset).clamp(1, 500)).await?;
     let total = sources.len();
-    let urls = sources
+    let urls: Vec<serde_json::Value> = sources
         .into_iter()
         .skip(offset)
         .take(limit)
-        .map(|(url, _chunks)| url)
-        .collect::<Vec<_>>();
+        .map(|(url, chunks)| serde_json::json!({"url": url, "chunks": chunks}))
+        .collect();
     Ok(serde_json::json!({
         "count": total,
         "limit": limit,

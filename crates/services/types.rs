@@ -35,7 +35,8 @@ pub struct SourcesResult {
     pub count: usize,
     pub limit: usize,
     pub offset: usize,
-    pub urls: Vec<String>,
+    /// Indexed URLs paired with their chunk counts.
+    pub urls: Vec<(String, usize)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

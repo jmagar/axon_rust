@@ -8,14 +8,20 @@ fn maps_source_facets_to_sources_result() {
         "count": 3,
         "limit": 2,
         "offset": 1,
-        "urls": ["https://a", "https://b"]
+        "urls": [
+            {"url": "https://a", "chunks": 5},
+            {"url": "https://b", "chunks": 12}
+        ]
     });
 
     let result = map_sources_payload(&payload).expect("valid sources payload");
     assert_eq!(result.count, 3);
     assert_eq!(result.limit, 2);
     assert_eq!(result.offset, 1);
-    assert_eq!(result.urls, vec!["https://a", "https://b"]);
+    assert_eq!(
+        result.urls,
+        vec![("https://a".to_string(), 5), ("https://b".to_string(), 12)]
+    );
 }
 
 #[test]

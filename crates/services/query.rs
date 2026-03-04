@@ -5,9 +5,9 @@ use crate::crates::services::types::{
     SuggestResult,
 };
 use crate::crates::vector::ops::commands::ask::ask_payload;
+use crate::crates::vector::ops::commands::discover_crawl_suggestions;
 use crate::crates::vector::ops::commands::query_results;
 use crate::crates::vector::ops::commands::run_evaluate_native;
-use crate::crates::vector::ops::commands::run_suggest_native;
 use crate::crates::vector::ops::qdrant::retrieve_result;
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -117,23 +117,15 @@ pub async fn evaluate(cfg: &Config, question: &str) -> Result<EvaluateResult, Bo
 
 /// Suggest new URLs to crawl based on the current Qdrant index and an optional focus.
 ///
-/// Note: `run_suggest_native` writes its JSON output to stdout when
-/// `cfg.json_output` is true. This wrapper extracts the suggestion URLs by
-/// calling the native function with `json_output` disabled and parsing any
-/// accepted suggestions from the emitted output as a side effect.
-/// Callers that need the full structured payload should capture stdout or
-/// call `run_suggest_native` directly with `json_output: true`.
+/// Returns the accepted suggestion URLs directly (no stdout side effects).
 pub async fn suggest(cfg: &Config, focus: Option<&str>) -> Result<SuggestResult, Box<dyn Error>> {
     let mut derived = cfg.clone();
-    if let Some(f) = focus {
-        derived.query = Some(f.to_string());
-    } else {
-        derived.query = None;
-    }
+    derived.query = focus.map(ToString::to_string);
     derived.positional = Vec::new();
-    // run_suggest_native writes to stdout as a side effect.
-    run_suggest_native(&derived).await?;
-    // Return an empty SuggestResult — callers needing URLs must capture stdout
-    // or call run_suggest_native directly.
-    Ok(SuggestResult { urls: Vec::new() })
+    let desired = derived.search_limit.clamp(1, 100);
+    let focus_str = focus.unwrap_or_default().to_string();
+    let pairs: Vec<(String, String)> =
+        discover_crawl_suggestions(&derived, &focus_str, desired).await?;
+    let urls = pairs.into_iter().map(|(url, _reason)| url).collect();
+    Ok(SuggestResult { urls })
 }

@@ -27,8 +27,8 @@ fn sources_result_fields_match_run_sources_native_expectations() {
         "limit": 5,
         "offset": 0,
         "urls": [
-            "https://docs.example.com/guide",
-            "https://docs.example.com/api"
+            {"url": "https://docs.example.com/guide", "chunks": 8},
+            {"url": "https://docs.example.com/api", "chunks": 3}
         ]
     });
     let result: SourcesResult = map_sources_payload(&payload).expect("valid payload");
@@ -36,7 +36,8 @@ fn sources_result_fields_match_run_sources_native_expectations() {
     assert_eq!(result.limit, 5);
     assert_eq!(result.offset, 0);
     assert_eq!(result.urls.len(), 2);
-    assert_eq!(result.urls[0], "https://docs.example.com/guide");
+    assert_eq!(result.urls[0].0, "https://docs.example.com/guide");
+    assert_eq!(result.urls[0].1, 8);
 }
 
 #[test]

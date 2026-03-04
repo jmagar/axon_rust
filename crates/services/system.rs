@@ -29,8 +29,11 @@ pub fn map_sources_payload(payload: &serde_json::Value) -> Result<SourcesResult,
         .and_then(serde_json::Value::as_array)
         .ok_or("missing urls")?
         .iter()
-        .filter_map(serde_json::Value::as_str)
-        .map(ToString::to_string)
+        .filter_map(|item| {
+            let url = item.get("url")?.as_str()?.to_string();
+            let chunks = item.get("chunks")?.as_u64()? as usize;
+            Some((url, chunks))
+        })
         .collect::<Vec<_>>();
 
     Ok(SourcesResult {
