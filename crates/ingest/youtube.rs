@@ -180,7 +180,20 @@ pub async fn ingest_youtube(cfg: &Config, url: &str) -> Result<usize, Box<dyn Er
 
     let mut count = 0usize;
 
+    /// Maximum VTT file size accepted before reading into memory (50 MiB).
+    const MAX_VTT_BYTES: u64 = 50 * 1024 * 1024;
+
     for vtt_path in &vtt_files {
+        let meta = tokio::fs::metadata(vtt_path).await?;
+        if meta.len() > MAX_VTT_BYTES {
+            log_warn(&format!(
+                "skipping oversized VTT file ({} bytes > {} limit): {}",
+                meta.len(),
+                MAX_VTT_BYTES,
+                vtt_path.display()
+            ));
+            continue;
+        }
         let vtt_text = tokio::fs::read_to_string(vtt_path).await?;
         let text = parse_vtt_to_text(&vtt_text);
 

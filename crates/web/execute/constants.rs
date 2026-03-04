@@ -1,3 +1,7 @@
+/// WebSocket allowed execution modes.
+/// IMPORTANT: This list MUST stay in sync with apps/web/lib/ws-protocol.ts (MODES constant).
+/// When adding a mode here, also add it to the TypeScript MODES array in that file.
+/// See docs/WS-PROTOCOL.md for the full protocol contract.
 pub(super) const ALLOWED_MODES: &[&str] = &[
     "scrape",
     "crawl",
@@ -63,4 +67,10 @@ pub(super) const ALLOWED_FLAGS: &[(&str, &str)] = &[
 pub(super) const ASYNC_MODES: &[&str] =
     &["crawl", "extract", "embed", "github", "reddit", "youtube"];
 
-pub(super) const NO_JSON_MODES: &[&str] = &["search", "research"];
+/// Commands that produce streaming/non-JSON output and must NOT receive --json.
+/// When adding a new command, the default is to receive --json. Add here only if
+/// the command's output format is inherently non-JSON (e.g., streaming text synthesis).
+pub(super) const NO_JSON_MODES: &[&str] = &[
+    "search", // Tavily streaming output — results are printed as plain text, not structured JSON
+    "research", // Spider agent streaming synthesis — narrative text output, not structured JSON
+];

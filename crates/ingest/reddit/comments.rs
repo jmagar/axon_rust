@@ -1,7 +1,6 @@
 use super::client::fetch_reddit_json;
 use super::types::CommentWithContext;
 use crate::crates::core::config::Config;
-use reqwest::Client;
 use std::error::Error;
 
 /// Recursively traverse a Reddit comment tree up to max_depth, filtering by min_score.
@@ -60,7 +59,6 @@ pub(super) fn collect_comments_recursive(
 /// Fetch comments for a thread permalink, recursively up to cfg.reddit_depth.
 pub(super) async fn fetch_thread_comments(
     cfg: &Config,
-    client: &Client,
     token: &str,
     permalink: &str,
 ) -> Result<Vec<CommentWithContext>, Box<dyn Error>> {
@@ -70,7 +68,7 @@ pub(super) async fn fetch_thread_comments(
         cfg.reddit_depth.max(1)
     );
 
-    let resp = fetch_reddit_json(client, &json_url, token).await?;
+    let resp = fetch_reddit_json(&json_url, token).await?;
 
     let mut comments = Vec::new();
     if let Some(data) = resp[1].get("data") {

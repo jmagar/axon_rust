@@ -8,21 +8,15 @@ pub use types::{RedditTarget, classify_target};
 use crate::crates::core::config::{Config, RedditSort};
 use crate::crates::core::logging::log_warn;
 use crate::crates::vector::ops::embed_text_with_metadata;
-use reqwest::Client;
 use std::error::Error;
 use std::time::Duration;
 
-use client::{build_client, fetch_reddit_json};
+use client::fetch_reddit_json;
 use comments::{collect_comments_recursive, fetch_thread_comments};
 use types::{CommentWithContext, validate_subreddit};
 
 /// Embed posts from a subreddit concurrently, including recursive comments per post.
-async fn ingest_subreddit(
-    cfg: &Config,
-    client: &Client,
-    token: &str,
-    name: &str,
-) -> Result<usize, Box<dyn Error>> {
+async fn ingest_subreddit(cfg: &Config, token: &str, name: &str) -> Result<usize, Box<dyn Error>> {
     validate_subreddit(name)?;
 
     use futures_util::StreamExt;
@@ -50,7 +44,7 @@ async fn ingest_subreddit(
             url.push_str(&format!("&after={after}"));
         }
 
-        let resp = fetch_reddit_json(client, &url, token).await?;
+        let resp = fetch_reddit_json(&url, token).await?;
         if let Some(msg) = resp["message"].as_str() {
             return Err(format!("Reddit API error for r/{name}: {msg}").into());
         }
@@ -87,7 +81,7 @@ async fn ingest_subreddit(
                         if cfg.delay_ms > 0 {
                             tokio::time::sleep(Duration::from_millis(cfg.delay_ms)).await;
                         }
-                        match fetch_thread_comments(cfg, client, token, permalink).await {
+                        match fetch_thread_comments(cfg, token, permalink).await {
                             Ok(comments) => {
                                 format_comments_into(&mut content, title, &comments);
                             }
@@ -125,16 +119,13 @@ async fn ingest_subreddit(
         }
     }
 
-    Ok(total_count.into_inner())
+    // Use load(SeqCst) rather than into_inner() — all concurrent tasks have completed
+    // at this point (for_each_concurrent.await), so this reads the final settled value.
+    Ok(total_count.load(Ordering::SeqCst))
 }
 
 /// Embed a single Reddit thread (post + full recursive comment tree) by its URL.
-async fn ingest_thread(
-    cfg: &Config,
-    client: &Client,
-    token: &str,
-    url: &str,
-) -> Result<usize, Box<dyn Error>> {
+async fn ingest_thread(cfg: &Config, token: &str, url: &str) -> Result<usize, Box<dyn Error>> {
     let permalink = url
         .strip_prefix("https://www.reddit.com")
         .or_else(|| url.strip_prefix("https://old.reddit.com"))
@@ -149,7 +140,7 @@ async fn ingest_thread(
         permalink.trim_end_matches('/'),
         cfg.reddit_depth
     );
-    let resp = fetch_reddit_json(client, &json_url, token).await?;
+    let resp = fetch_reddit_json(&json_url, token).await?;
 
     let post_data = &resp[0]["data"]["children"][0]["data"];
     let title = post_data["title"].as_str().unwrap_or("Reddit Thread");
@@ -213,10 +204,9 @@ pub async fn ingest_reddit(cfg: &Config, target: &str) -> Result<usize, Box<dyn 
         .ok_or("REDDIT_CLIENT_SECRET not configured (--reddit-client-secret or env var)")?;
 
     let token = get_access_token(client_id, client_secret).await?;
-    let client = build_client()?;
 
     match classify_target(target) {
-        RedditTarget::Subreddit(name) => ingest_subreddit(cfg, &client, &token, &name).await,
-        RedditTarget::Thread(url) => ingest_thread(cfg, &client, &token, &url).await,
+        RedditTarget::Subreddit(name) => ingest_subreddit(cfg, &token, &name).await,
+        RedditTarget::Thread(url) => ingest_thread(cfg, &token, &url).await,
     }
 }

@@ -63,6 +63,17 @@ pub(super) fn build_args(mode: &str, input: &str, flags: &serde_json::Value) -> 
                         args.push(n.to_string());
                     }
                     serde_json::Value::String(s) if !s.is_empty() => {
+                        // Guard output-dir values against path traversal attacks.
+                        // Any value containing a `..` component is rejected before it
+                        // reaches the subprocess, preventing a caller from redirecting
+                        // output outside the expected output root.
+                        if cli_flag.contains("output") && cli_flag.contains("dir") {
+                            let p = std::path::Path::new(s.as_str());
+                            if p.components().any(|c| c == std::path::Component::ParentDir) {
+                                log::warn!("rejecting output-dir with path traversal: {s}");
+                                continue;
+                            }
+                        }
                         args.push(cli_flag.to_string());
                         args.push(s.clone());
                     }

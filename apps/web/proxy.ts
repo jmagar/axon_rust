@@ -118,6 +118,9 @@ function extractToken(req: NextRequest): string {
 }
 
 function constantTimeEqual(a: string, b: string): boolean {
+  // Length check is intentional: timingSafeEqual requires equal-length buffers.
+  // Token length is not secret (fixed-length UUID/hex), so this short-circuit
+  // introduces no meaningful timing side-channel.
   if (a.length !== b.length) return false
   const bufA = Buffer.from(a, 'utf-8')
   const bufB = Buffer.from(b, 'utf-8')

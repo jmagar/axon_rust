@@ -266,9 +266,29 @@ export async function POST(request: Request) {
 
         emit({ type: 'status', phase: 'started' })
 
-        // Strip CLAUDECODE so the spawned claude CLI doesn't refuse to launch
-        // inside an existing Claude Code session.
-        const { CLAUDECODE: _cc, ...childEnv } = process.env
+        // Build an explicit environment allowlist for the claude CLI child process.
+        // The child must NOT inherit server secrets (AXON_PG_URL, OPENAI_API_KEY,
+        // TAVILY_API_KEY, REDDIT_CLIENT_SECRET, AXON_WEB_API_TOKEN, etc.).
+        // Only pass variables the CLI legitimately needs to operate.
+        const CLAUDE_CHILD_ENV_ALLOWLIST = new Set([
+          'PATH',
+          'HOME',
+          'USER',
+          'SHELL',
+          'TERM',
+          'LANG',
+          'LC_ALL',
+          'NODE_ENV',
+          'AXON_WORKSPACE',
+          'TMPDIR',
+          'TMP',
+          'TEMP',
+          'XDG_RUNTIME_DIR',
+          'DBUS_SESSION_BUS_ADDRESS',
+        ])
+        const childEnv = Object.fromEntries(
+          Object.entries(process.env).filter(([key]) => CLAUDE_CHILD_ENV_ALLOWLIST.has(key)),
+        ) as NodeJS.ProcessEnv
         const child = spawn('claude', args, {
           cwd: process.env.AXON_WORKSPACE ?? os.tmpdir(),
           env: childEnv,

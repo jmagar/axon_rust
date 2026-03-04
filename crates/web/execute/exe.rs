@@ -35,11 +35,20 @@ pub(super) fn resolve_exe() -> Result<PathBuf, String> {
     }
 
     let mut seen = HashSet::new();
+    let mut checked: Vec<PathBuf> = Vec::new();
     for candidate in candidates {
-        if seen.insert(candidate.clone()) && candidate.exists() {
-            return Ok(candidate);
+        if seen.insert(candidate.clone()) {
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+            checked.push(candidate);
         }
     }
 
-    Ok(PathBuf::from("axon"))
+    let msg = format!(
+        "axon binary not found at any candidate path; checked: {:?}",
+        checked
+    );
+    log::warn!("{msg}");
+    Err(msg)
 }
