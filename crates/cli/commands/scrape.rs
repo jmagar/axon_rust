@@ -80,6 +80,46 @@ fn build_scrape_website(cfg: &Config, url: &str) -> Result<Website, Box<dyn Erro
     Ok(website)
 }
 
+/// Fetch a single page from a configured Spider `Website`.
+///
+/// Uses explicit `subscribe()` + `crawl_raw()`/`crawl()` instead of Spider's
+/// `scrape_raw()`. This is the correct approach — not a workaround. Spider's
+/// `scrape_raw()` uses a biased-select internally: for fast single-page fetches
+/// the done channel fires before the page receiver gets a turn, so `get_pages()`
+/// comes back empty. Owning the subscription ourselves avoids this race entirely.
+async fn fetch_single_page(cfg: &Config, website: &mut Website) -> Result<Page, Box<dyn Error>> {
+    let mut rx = website
+        .subscribe(16)
+        .ok_or("failed to subscribe to spider broadcast")?;
+    // Spawn the collector BEFORE the crawl so it is ready to receive the broadcast.
+    let collect: tokio::task::JoinHandle<Option<Page>> =
+        tokio::spawn(async move { rx.recv().await.ok() });
+    match cfg.render_mode {
+        RenderMode::Http | RenderMode::AutoSwitch => website.crawl_raw().await,
+        RenderMode::Chrome => website.crawl().await,
+    }
+    website.unsubscribe();
+    collect
+        .await
+        .map_err(|e| format!("page collector panicked: {e}"))?
+        .ok_or_else(|| "spider returned no page for this URL".into())
+}
+
+/// Build the canonical 5-field JSON response for a scraped page.
+///
+/// Performs markdown conversion, title extraction, and description extraction
+/// in one place. All JSON-producing paths (`scrape_payload`, `scrape_one`'s
+/// `--json` branch, and `select_output`'s `Json` arm) delegate here.
+fn build_scrape_json(url: &str, html: &str, status_code: u16) -> serde_json::Value {
+    serde_json::json!({
+        "url": url,
+        "status_code": status_code,
+        "markdown": to_markdown(html),
+        "title": find_between(html, "<title>", "</title>").unwrap_or(""),
+        "description": extract_meta_description(html).unwrap_or_default(),
+    })
+}
+
 /// Select the output text from the page HTML based on the requested format.
 ///
 /// - `Markdown` / `Json`: convert HTML → markdown via our transform pipeline.
@@ -92,21 +132,14 @@ pub(crate) fn select_output(
     html: &str,
     status_code: u16,
 ) -> Result<String, Box<dyn Error>> {
-    let markdown = || to_markdown(html);
-
     match format {
-        ScrapeFormat::Markdown => Ok(markdown()),
+        ScrapeFormat::Markdown => Ok(to_markdown(html)),
         ScrapeFormat::Html | ScrapeFormat::RawHtml => Ok(html.to_string()),
-        ScrapeFormat::Json => {
-            let md = markdown();
-            Ok(serde_json::to_string_pretty(&serde_json::json!({
-                "url": url,
-                "status_code": status_code,
-                "markdown": md,
-                "title": find_between(html, "<title>", "</title>").unwrap_or(""),
-                "description": extract_meta_description(html).unwrap_or_default(),
-            }))?)
-        }
+        ScrapeFormat::Json => Ok(serde_json::to_string_pretty(&build_scrape_json(
+            url,
+            html,
+            status_code,
+        ))?),
     }
 }
 
@@ -115,20 +148,7 @@ pub async fn scrape_payload(cfg: &Config, url: &str) -> Result<serde_json::Value
     validate_url(&normalized)?;
 
     let mut website = build_scrape_website(cfg, &normalized)?;
-    let mut rx = website
-        .subscribe(16)
-        .ok_or("failed to subscribe to spider broadcast")?;
-    let collect: tokio::task::JoinHandle<Option<Page>> =
-        tokio::spawn(async move { rx.recv().await.ok() });
-    match cfg.render_mode {
-        RenderMode::Http | RenderMode::AutoSwitch => website.crawl_raw().await,
-        RenderMode::Chrome => website.crawl().await,
-    }
-    website.unsubscribe();
-    let page = collect
-        .await
-        .map_err(|e| format!("page collector panicked: {e}"))?
-        .ok_or("spider returned no page for this URL")?;
+    let page = fetch_single_page(cfg, &mut website).await?;
 
     let html = page.get_html();
     let status_code = page.status_code.as_u16();
@@ -136,19 +156,7 @@ pub async fn scrape_payload(cfg: &Config, url: &str) -> Result<serde_json::Value
         return Err(format!("scrape failed: HTTP {} for {}", status_code, normalized).into());
     }
 
-    let markdown = to_markdown(&html);
-    let title = find_between(&html, "<title>", "</title>")
-        .unwrap_or("")
-        .to_string();
-    let description = extract_meta_description(&html).unwrap_or_default();
-
-    Ok(serde_json::json!({
-        "url": normalized,
-        "status_code": status_code,
-        "title": title,
-        "description": description,
-        "markdown": markdown,
-    }))
+    Ok(build_scrape_json(&normalized, &html, status_code))
 }
 
 pub async fn run_scrape(cfg: &Config) -> Result<(), Box<dyn Error>> {
@@ -221,26 +229,7 @@ async fn scrape_one(cfg: &Config, url: &str) -> Result<Option<(String, String)>,
     validate_url(&normalized)?;
 
     let mut website = build_scrape_website(cfg, &normalized)?;
-
-    // Use explicit subscribe() + crawl_raw() instead of scrape_raw().
-    // scrape_raw() has a biased-select race: for fast single-page fetches, done_rx
-    // fires before rx2.recv() gets a turn, so get_pages() comes back empty.
-    // Owning the subscription ourselves avoids the race entirely.
-    let mut rx = website
-        .subscribe(16)
-        .ok_or("failed to subscribe to spider broadcast")?;
-    // Spawn the collector BEFORE the crawl so it is ready to receive the broadcast.
-    let collect: tokio::task::JoinHandle<Option<Page>> =
-        tokio::spawn(async move { rx.recv().await.ok() });
-    match cfg.render_mode {
-        RenderMode::Http | RenderMode::AutoSwitch => website.crawl_raw().await,
-        RenderMode::Chrome => website.crawl().await,
-    }
-    website.unsubscribe();
-    let page = collect
-        .await
-        .map_err(|e| format!("page collector panicked: {e}"))?
-        .ok_or("spider returned no page for this URL")?;
+    let page = fetch_single_page(cfg, &mut website).await?;
 
     let html = page.get_html();
     let status_code = page.status_code.as_u16();
@@ -257,20 +246,7 @@ async fn scrape_one(cfg: &Config, url: &str) -> Result<Option<(String, String)>,
         // Structured JSON output for web UI / machine consumers.
         // The markdown field lets the frontend display content directly
         // without going through the file-based embed pipeline.
-        let title = find_between(&html, "<title>", "</title>")
-            .unwrap_or("")
-            .to_string();
-        let description = extract_meta_description(&html).unwrap_or_default();
-        println!(
-            "{}",
-            serde_json::json!({
-                "url": normalized,
-                "status_code": status_code,
-                "title": title,
-                "description": description,
-                "markdown": markdown,
-            })
-        );
+        println!("{}", build_scrape_json(&normalized, &html, status_code));
     } else if let Some(path) = &cfg.output_path {
         tokio::fs::write(path, &output).await?;
         log_done(&format!("wrote output: {}", path.to_string_lossy()));
