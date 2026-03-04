@@ -264,6 +264,47 @@ async fn apply_page_outcome(
             if col.drop_thin {
                 return Ok(true);
             }
+            // drop_thin is false — still write the thin page to disk + manifest.
+            // Re-process to get a Write outcome with the actual content.
+            let input = TransformInput {
+                url: None,
+                content: html_bytes,
+                screenshot_bytes: None,
+                encoding: None,
+                selector_config: None,
+                ignore_tags: None,
+            };
+            let markdown = transform_content_input(input, col.transform_cfg);
+            let trimmed = markdown.trim().to_string();
+            if !trimmed.is_empty() {
+                let mut hasher = Sha256::new();
+                hasher.update(trimmed.as_bytes());
+                let content_hash = hex::encode(hasher.finalize());
+                let filename = url_to_filename(url, summary.markdown_files + 1);
+                let entry = ManifestEntry {
+                    url: url.to_string(),
+                    relative_path: format!("markdown/{filename}"),
+                    markdown_chars: trimmed.len(),
+                    content_hash: Some(content_hash),
+                    changed: true,
+                };
+                let thin_write = PageOutcome::Write {
+                    filename,
+                    trimmed,
+                    entry,
+                };
+                let wrote = write_page_to_manifest(
+                    manifest,
+                    &thin_write,
+                    &col.markdown_dir,
+                    &col.previous_manifest,
+                    url,
+                )
+                .await?;
+                if wrote {
+                    summary.markdown_files += 1;
+                }
+            }
         }
         PageOutcome::Empty => return Ok(true),
         ref w @ (PageOutcome::Reused { .. } | PageOutcome::Write { .. }) => {

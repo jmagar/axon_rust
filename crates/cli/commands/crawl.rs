@@ -8,8 +8,6 @@ mod runtime_migration_tests;
 #[cfg(test)]
 mod sync_backfill_migration_tests;
 
-pub(crate) use audit::discover_sitemap_urls_with_robots;
-
 use super::common::parse_urls;
 use crate::crates::core::config::Config;
 use crate::crates::core::http::validate_url;

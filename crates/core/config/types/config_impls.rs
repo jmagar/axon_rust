@@ -269,7 +269,17 @@ impl fmt::Debug for Config {
             .field("viewport_width", &self.viewport_width)
             .field("viewport_height", &self.viewport_height)
             .field("serve_port", &self.serve_port)
-            .field("custom_headers", &self.custom_headers)
+            .field(
+                "custom_headers",
+                &self
+                    .custom_headers
+                    .iter()
+                    .map(|h| match h.split_once(": ") {
+                        Some((name, _)) => format!("{name}: [REDACTED]"),
+                        None => "[MALFORMED]".to_string(),
+                    })
+                    .collect::<Vec<_>>(),
+            )
             .finish()
     }
 }

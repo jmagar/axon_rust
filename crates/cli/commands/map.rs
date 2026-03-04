@@ -1,9 +1,8 @@
-use crate::crates::cli::commands::crawl::discover_sitemap_urls_with_robots;
-use crate::crates::core::config::{Config, RenderMode};
+use crate::crates::core::config::Config;
 use crate::crates::core::http::validate_url;
 use crate::crates::core::logging::log_done;
 use crate::crates::core::ui::{Spinner, muted, primary, print_option, print_phase};
-use crate::crates::crawl::engine::crawl_and_collect_map;
+use crate::crates::crawl::engine::map_with_sitemap;
 use std::error::Error;
 
 pub async fn map_payload(
@@ -11,45 +10,15 @@ pub async fn map_payload(
     start_url: &str,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
     validate_url(start_url)?;
-
-    let initial_mode = match cfg.render_mode {
-        RenderMode::AutoSwitch => RenderMode::Http,
-        m => m,
-    };
-
-    let (mut final_summary, mut final_urls) =
-        crawl_and_collect_map(cfg, start_url, initial_mode).await?;
-
-    if matches!(cfg.render_mode, RenderMode::AutoSwitch) && final_summary.pages_seen == 0 {
-        if let Ok((chrome_summary, chrome_urls)) =
-            crawl_and_collect_map(cfg, start_url, RenderMode::Chrome).await
-        {
-            final_summary = chrome_summary;
-            final_urls = chrome_urls;
-        }
-    }
-
-    if cfg.discover_sitemaps {
-        let mut sitemap = discover_sitemap_urls_with_robots(cfg, start_url)
-            .await?
-            .urls;
-        final_urls.append(&mut sitemap);
-        final_urls.sort();
-        final_urls.dedup();
-    }
-
-    let sitemap_url_count = final_urls
-        .len()
-        .saturating_sub(final_summary.pages_seen as usize);
-
+    let result = map_with_sitemap(cfg, start_url).await?;
     Ok(serde_json::json!({
         "url": start_url,
-        "mapped_urls": final_urls.len(),
-        "sitemap_urls": sitemap_url_count,
-        "pages_seen": final_summary.pages_seen,
-        "thin_pages": final_summary.thin_pages,
-        "elapsed_ms": final_summary.elapsed_ms,
-        "urls": final_urls,
+        "mapped_urls": result.urls.len(),
+        "sitemap_urls": result.sitemap_urls,
+        "pages_seen": result.summary.pages_seen,
+        "thin_pages": result.summary.thin_pages,
+        "elapsed_ms": result.summary.elapsed_ms,
+        "urls": result.urls,
     }))
 }
 
@@ -63,108 +32,50 @@ pub async fn run_map(cfg: &Config, start_url: &str) -> Result<(), Box<dyn Error>
         println!();
     }
 
-    let initial_mode = match cfg.render_mode {
-        RenderMode::AutoSwitch => RenderMode::Http,
-        m => m,
-    };
-
-    let crawl_spinner = if cfg.json_output {
+    let map_spinner = if cfg.json_output {
         None
     } else {
-        Some(Spinner::new("mapping crawl in progress"))
+        Some(Spinner::new("mapping in progress"))
     };
-    let (mut final_summary, mut final_urls) =
-        crawl_and_collect_map(cfg, start_url, initial_mode).await?;
-    if let Some(s) = crawl_spinner {
+
+    let result = map_with_sitemap(cfg, start_url).await?;
+
+    if let Some(s) = map_spinner {
         s.finish(&format!(
-            "initial map crawl complete (pages={})",
-            final_summary.pages_seen
+            "map complete (pages={} sitemap_urls={})",
+            result.summary.pages_seen, result.sitemap_urls
         ));
     }
-
-    // For map (link discovery), Chrome is only needed if HTTP found zero pages.
-    // should_fallback_to_chrome() checks markdown_files which is never set by
-    // crawl_and_collect_map, so it would always return true — always triggering
-    // an expensive Chrome re-crawl even when HTTP discovered hundreds of URLs.
-    if matches!(cfg.render_mode, RenderMode::AutoSwitch) && final_summary.pages_seen == 0 {
-        let chrome_spinner = if cfg.json_output {
-            None
-        } else {
-            Some(Spinner::new(
-                "HTTP map looked thin; retrying in Chrome mode",
-            ))
-        };
-        match crawl_and_collect_map(cfg, start_url, RenderMode::Chrome).await {
-            Ok((chrome_summary, chrome_urls)) => {
-                final_summary = chrome_summary;
-                final_urls = chrome_urls;
-                if let Some(s) = chrome_spinner {
-                    s.finish(&format!(
-                        "chrome map fallback complete (pages={})",
-                        final_summary.pages_seen
-                    ));
-                }
-            }
-            Err(err) => {
-                if let Some(s) = chrome_spinner {
-                    s.finish(&format!(
-                        "chrome map fallback failed ({err}); using HTTP map result"
-                    ));
-                }
-            }
-        }
-    }
-
-    if cfg.discover_sitemaps {
-        let sitemap_spinner = if cfg.json_output {
-            None
-        } else {
-            Some(Spinner::new("discovering sitemap URLs"))
-        };
-        let mut sitemap = discover_sitemap_urls_with_robots(cfg, start_url)
-            .await?
-            .urls;
-        final_urls.append(&mut sitemap);
-        final_urls.sort();
-        final_urls.dedup();
-        if let Some(s) = sitemap_spinner {
-            s.finish("sitemap/robots discovery complete");
-        }
-    }
-
-    let sitemap_url_count = final_urls
-        .len()
-        .saturating_sub(final_summary.pages_seen as usize);
 
     if cfg.json_output {
         println!(
             "{}",
             serde_json::json!({
                 "url": start_url,
-                "mapped_urls": final_urls.len(),
-                "sitemap_urls": sitemap_url_count,
-                "pages_seen": final_summary.pages_seen,
-                "thin_pages": final_summary.thin_pages,
-                "elapsed_ms": final_summary.elapsed_ms,
-                "urls": final_urls,
+                "mapped_urls": result.urls.len(),
+                "sitemap_urls": result.sitemap_urls,
+                "pages_seen": result.summary.pages_seen,
+                "thin_pages": result.summary.thin_pages,
+                "elapsed_ms": result.summary.elapsed_ms,
+                "urls": result.urls,
             })
         );
     } else {
         println!("{}", primary(&format!("Map Results for {start_url}")));
-        println!("{} {}", muted("Showing"), final_urls.len());
+        println!("{} {}", muted("Showing"), result.urls.len());
         println!();
-        for url in &final_urls {
+        for url in &result.urls {
             println!("  • {url}");
         }
     }
 
     log_done(&format!(
         "command=map mapped_urls={} sitemap_urls={} pages_seen={} thin_pages={} elapsed_ms={}",
-        final_urls.len(),
-        sitemap_url_count,
-        final_summary.pages_seen,
-        final_summary.thin_pages,
-        final_summary.elapsed_ms
+        result.urls.len(),
+        result.sitemap_urls,
+        result.summary.pages_seen,
+        result.summary.thin_pages,
+        result.summary.elapsed_ms
     ));
 
     Ok(())

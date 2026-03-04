@@ -300,51 +300,44 @@ impl GoogleOAuthState {
 
     pub(crate) async fn cleanup_expired_in_memory(&self) {
         let now = unix_now_secs();
-        let pending_before = self.inner.pending_state.lock().await.len();
-        self.inner
-            .pending_state
-            .lock()
-            .await
-            .retain(|_, rec| rec.expires_at_unix > now);
-        let pending_after = self.inner.pending_state.lock().await.len();
 
-        let auth_before = self.inner.auth_codes.lock().await.len();
-        self.inner
-            .auth_codes
-            .lock()
-            .await
-            .retain(|_, rec| rec.expires_at_unix > now);
-        let auth_after = self.inner.auth_codes.lock().await.len();
+        let pending_evicted = {
+            let mut map = self.inner.pending_state.lock().await;
+            let before = map.len();
+            map.retain(|_, rec| rec.expires_at_unix > now);
+            before - map.len()
+        };
 
-        let access_before = self.inner.access_tokens.lock().await.len();
-        self.inner
-            .access_tokens
-            .lock()
-            .await
-            .retain(|_, rec| rec.expires_at_unix > now);
-        let access_after = self.inner.access_tokens.lock().await.len();
+        let auth_evicted = {
+            let mut map = self.inner.auth_codes.lock().await;
+            let before = map.len();
+            map.retain(|_, rec| rec.expires_at_unix > now);
+            before - map.len()
+        };
 
-        let refresh_before = self.inner.refresh_tokens.lock().await.len();
-        self.inner
-            .refresh_tokens
-            .lock()
-            .await
-            .retain(|_, rec| rec.expires_at_unix > now);
-        let refresh_after = self.inner.refresh_tokens.lock().await.len();
+        let access_evicted = {
+            let mut map = self.inner.access_tokens.lock().await;
+            let before = map.len();
+            map.retain(|_, rec| rec.expires_at_unix > now);
+            before - map.len()
+        };
 
-        let rl_before = self.inner.rate_limits.lock().await.len();
-        self.inner
-            .rate_limits
-            .lock()
-            .await
-            .retain(|_, rec| rec.reset_at_unix > now);
-        let rl_after = self.inner.rate_limits.lock().await.len();
+        let refresh_evicted = {
+            let mut map = self.inner.refresh_tokens.lock().await;
+            let before = map.len();
+            map.retain(|_, rec| rec.expires_at_unix > now);
+            before - map.len()
+        };
 
-        let evicted = (pending_before - pending_after)
-            + (auth_before - auth_after)
-            + (access_before - access_after)
-            + (refresh_before - refresh_after)
-            + (rl_before - rl_after);
+        let rl_evicted = {
+            let mut map = self.inner.rate_limits.lock().await;
+            let before = map.len();
+            map.retain(|_, rec| rec.reset_at_unix > now);
+            before - map.len()
+        };
+
+        let evicted =
+            pending_evicted + auth_evicted + access_evicted + refresh_evicted + rl_evicted;
         if evicted > 0 {
             info!(
                 target: "axon.mcp.oauth",
@@ -364,10 +357,21 @@ impl GoogleOAuthState {
         let key = self.key(&format!("ratelimit:{bucket}"));
 
         if let Some(mut conn) = self.redis_conn().await {
-            let count: u64 = conn.incr(&key, 1).await.unwrap_or(0);
-            if count == 1 {
-                let _: redis::RedisResult<bool> = conn.expire(&key, window_secs as i64).await;
-            }
+            let script = redis::Script::new(
+                r"
+                local c = redis.call('INCR', KEYS[1])
+                if c == 1 then
+                    redis.call('EXPIRE', KEYS[1], ARGV[1])
+                end
+                return c
+                ",
+            );
+            let count: u64 = script
+                .key(&key)
+                .arg(window_secs as i64)
+                .invoke_async(&mut conn)
+                .await
+                .unwrap_or(0);
             if count > limit {
                 warn!(target: "axon.mcp.oauth", bucket, count, limit, "rate limit exceeded (redis)");
                 return Err((

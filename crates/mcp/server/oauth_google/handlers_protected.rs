@@ -32,8 +32,6 @@ pub(crate) async fn oauth_token(
     {
         return resp;
     }
-    let cfg = state.config().ok();
-
     let grant = form.grant_type.as_str();
     if grant == "authorization_code" {
         let client_id = match form.client_id {
@@ -76,14 +74,24 @@ pub(crate) async fn oauth_token(
                 );
             }
         };
-        if let Some(cfg) = cfg
-            && !is_allowed_redirect_uri(&redirect_uri, cfg.redirect_policy)
-        {
-            return token_error_response(
-                "invalid_request",
-                "redirect_uri violates server redirect policy",
-                StatusCode::BAD_REQUEST,
-            );
+        let cfg = state.config().map_err(|_| {
+            token_error_response(
+                "server_error",
+                "oauth configuration unavailable",
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        });
+        match cfg {
+            Ok(cfg) => {
+                if !is_allowed_redirect_uri(&redirect_uri, cfg.redirect_policy) {
+                    return token_error_response(
+                        "invalid_request",
+                        "redirect_uri violates server redirect policy",
+                        StatusCode::BAD_REQUEST,
+                    );
+                }
+            }
+            Err(resp) => return resp,
         }
 
         let record = state.consume_auth_code(&code).await;

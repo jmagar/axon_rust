@@ -82,7 +82,7 @@ pub(super) fn build_exclude_blacklist_patterns(
                 format!("/{prefix}")
             };
             format!(
-                "^https?://{}{}(?:/|-|$|\\\\?|#)",
+                "^https?://{}{}(?:/|-|$|\\?|#)",
                 host_pattern,
                 regex_escape(&normalized)
             )
@@ -239,15 +239,14 @@ mod tests {
     }
 
     // 7. Pattern ends with the boundary alternation group.
-    //    The format! in build_exclude_blacklist_patterns uses `\\\\?` which in the
-    //    final string becomes `\\?` — i.e. a literal backslash followed by `?`.
+    //    The format! uses `\\?` which produces `\?` in the output — a regex-escaped
+    //    literal question mark matching the start of a query string.
     #[test]
     fn build_exclude_blacklist_patterns_pattern_ends_with_boundary_alternation() {
         let patterns = build_exclude_blacklist_patterns("https://example.com", &excludes(&["/fr"]));
         assert_eq!(patterns.len(), 1);
-        // `\\\\?` in the format string produces `\\?` in the output string.
         assert!(
-            patterns[0].ends_with("(?:/|-|$|\\\\?|#)"),
+            patterns[0].ends_with("(?:/|-|$|\\?|#)"),
             "pattern should end with boundary alternation group, got: {}",
             patterns[0]
         );

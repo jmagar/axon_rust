@@ -15,6 +15,11 @@ impl GoogleOAuthConfig {
             .unwrap_or_else(|_| "https://oauth2.googleapis.com/token".to_string());
         let redirect_path = std::env::var("GOOGLE_OAUTH_REDIRECT_PATH")
             .unwrap_or_else(|_| "/oauth/google/callback".to_string());
+        let redirect_path = if redirect_path.starts_with('/') {
+            redirect_path
+        } else {
+            format!("/{redirect_path}")
+        };
         let redirect_host = std::env::var("GOOGLE_OAUTH_REDIRECT_HOST").unwrap_or_else(|_| {
             if mcp_host == "0.0.0.0" {
                 "localhost".to_string()

@@ -70,7 +70,22 @@ pub(crate) fn request_identity_from_headers(headers: &axum::http::HeaderMap) -> 
     {
         return first.trim().to_string();
     }
-    "unknown".to_string()
+    if let Some(v) = headers.get("x-real-ip")
+        && let Ok(s) = v.to_str()
+    {
+        return s.to_string();
+    }
+    format!("anon-{:x}", {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::hash::DefaultHasher::new();
+        for (name, value) in headers.iter() {
+            if name == "user-agent" || name == "accept-language" || name == "accept-encoding" {
+                name.hash(&mut h);
+                value.hash(&mut h);
+            }
+        }
+        h.finish()
+    })
 }
 
 pub(crate) fn bearer_token_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {

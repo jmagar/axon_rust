@@ -40,7 +40,8 @@ fn positional_from_refresh_schedule(action: RefreshScheduleSubcommand) -> Vec<St
             if let Some(every_seconds) = every_seconds {
                 positional.push("--every-seconds".to_string());
                 positional.push(every_seconds.to_string());
-            } else if let Some(tier) = tier {
+            }
+            if let Some(tier) = tier {
                 positional.push("--tier".to_string());
                 positional.push(tier);
             }

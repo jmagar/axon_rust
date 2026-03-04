@@ -5,7 +5,6 @@ mod sitemap;
 mod sitemap_migration_tests;
 
 use manifest_audit::CrawlAuditSnapshot;
-pub(crate) use sitemap::discover_sitemap_urls_with_robots;
 
 use crate::crates::core::config::Config;
 use crate::crates::core::http::validate_url;

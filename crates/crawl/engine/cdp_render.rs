@@ -101,42 +101,29 @@ async fn open_chrome_session(
     ),
     String,
 > {
-    use tokio_tungstenite::tungstenite::handshake::client::generate_key;
-    use tokio_tungstenite::tungstenite::http;
-
     let parsed = reqwest::Url::parse(browser_ws_url)
         .map_err(|e| format!("invalid Chrome WS URL {browser_ws_url}: {e}"))?;
     let host = parsed.host_str().unwrap_or("127.0.0.1");
     let port = parsed.port().unwrap_or(9222);
     let addr = format!("{host}:{port}");
 
-    let tcp = tokio::time::timeout(
-        Duration::from_secs(5),
-        tokio::net::TcpStream::connect(&addr),
-    )
-    .await
-    .map_err(|_| format!("timeout connecting to Chrome at {addr}"))?
-    .map_err(|e| format!("TCP connect to Chrome {addr} failed: {e}"))?;
+    // Normalize wss:// to ws:// for loopback connections — Chrome on localhost
+    // never serves TLS on its CDP endpoint.
+    let is_loopback = host == "127.0.0.1" || host == "localhost" || host == "::1";
+    let effective_ws_url = if parsed.scheme() == "wss" && is_loopback {
+        browser_ws_url.replacen("wss://", "ws://", 1)
+    } else {
+        browser_ws_url.to_string()
+    };
 
-    let ws_key = generate_key();
-    let request = http::Request::builder()
-        .uri(browser_ws_url)
-        .header("Host", &addr)
-        .header("Upgrade", "websocket")
-        .header("Connection", "Upgrade")
-        .header("Sec-WebSocket-Key", &ws_key)
-        .header("Sec-WebSocket-Version", "13")
-        .body(())
-        .map_err(|e| format!("WS request build failed: {e}"))?;
-
-    let stream = tokio::time::timeout(
+    // connect_async handles both ws:// and wss:// (via rustls-tls-native-roots feature).
+    let (stream, _resp) = tokio::time::timeout(
         Duration::from_secs(5),
-        tokio_tungstenite::client_async(request, tcp),
+        tokio_tungstenite::connect_async(&effective_ws_url),
     )
     .await
     .map_err(|_| format!("timeout during WS handshake with Chrome at {addr}"))?
-    .map_err(|e| format!("WS handshake failed with Chrome at {addr}: {e}"))?
-    .0;
+    .map_err(|e| format!("WS handshake failed with Chrome at {addr}: {e}"))?;
 
     let (mut ws_tx, mut ws_rx) = stream.split();
 

@@ -106,6 +106,55 @@ pub async fn crawl_and_collect_map(
     Ok((summary, urls))
 }
 
+/// The unified result of a `map` operation: crawler-discovered URLs merged with
+/// sitemap-discovered URLs, deduplicated and sorted.
+#[derive(Debug, Default)]
+pub struct MapResult {
+    pub summary: CrawlSummary,
+    /// All discovered URLs (crawler + sitemap), sorted and deduplicated.
+    pub urls: Vec<String>,
+    /// Number of URLs that came exclusively from sitemap discovery
+    /// (i.e. `urls.len().saturating_sub(summary.pages_seen as usize)`).
+    pub sitemap_urls: usize,
+}
+
+/// Discover all URLs reachable from `start_url` and merge with sitemap
+/// discovery, returning a single deduplicated sorted list.
+///
+/// Handles the AutoSwitch fallback to Chrome when HTTP finds zero pages.
+/// Sitemap merge/sort/dedup happens here — callers receive a final unified set.
+pub async fn map_with_sitemap(cfg: &Config, start_url: &str) -> Result<MapResult, Box<dyn Error>> {
+    let initial_mode = match cfg.render_mode {
+        RenderMode::AutoSwitch => RenderMode::Http,
+        m => m,
+    };
+
+    let (mut summary, mut urls) = crawl_and_collect_map(cfg, start_url, initial_mode).await?;
+
+    if matches!(cfg.render_mode, RenderMode::AutoSwitch) && summary.pages_seen == 0 {
+        if let Ok((chrome_summary, chrome_urls)) =
+            crawl_and_collect_map(cfg, start_url, RenderMode::Chrome).await
+        {
+            summary = chrome_summary;
+            urls = chrome_urls;
+        }
+    }
+
+    if cfg.discover_sitemaps {
+        let mut sitemap_urls = discover_sitemap_urls(cfg, start_url).await?.urls;
+        urls.append(&mut sitemap_urls);
+        urls.sort();
+        urls.dedup();
+    }
+
+    let sitemap_urls = urls.len().saturating_sub(summary.pages_seen as usize);
+    Ok(MapResult {
+        summary,
+        urls,
+        sitemap_urls,
+    })
+}
+
 pub async fn update_latest_reflink(
     source_dir: &Path,
     latest_dir: &Path,

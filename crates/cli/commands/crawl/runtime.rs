@@ -40,8 +40,10 @@ pub(super) async fn bootstrap_chrome_runtime(cfg: &Config) -> ChromeBootstrapOut
         return outcome;
     };
 
+    let bootstrap_timeout = Duration::from_millis(cfg.chrome_bootstrap_timeout_ms);
     for attempt in 0..=cfg.chrome_bootstrap_retries {
-        if let Some(ws_url) = resolve_cdp_ws_url(remote_url).await {
+        let probe = tokio::time::timeout(bootstrap_timeout, resolve_cdp_ws_url(remote_url));
+        if let Ok(Some(ws_url)) = probe.await {
             outcome.remote_ready = true;
             outcome.resolved_ws_url = Some(ws_url);
             return outcome;

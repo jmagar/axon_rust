@@ -151,17 +151,8 @@ pub(crate) async fn oauth_authorize(
         return Redirect::temporary(&redirect).into_response();
     }
 
-    if params.response_type != "code" {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(AuthorizeErrorResponse {
-                error: "unsupported_response_type".to_string(),
-                error_description: "only response_type=code is supported".to_string(),
-            }),
-        )
-            .into_response();
-    }
-
+    // RFC 6749 §4.1.2.1: validate client_id and redirect_uri BEFORE any error
+    // redirects. Error responses must NOT be sent to an unvalidated redirect_uri.
     let registered = state.get_client(&params.client_id).await;
 
     let registered = match registered {
@@ -238,6 +229,18 @@ pub(crate) async fn oauth_authorize(
             .into_response();
     }
 
+    // redirect_uri is now validated — safe to use for error redirects below
+    if params.response_type != "code" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(AuthorizeErrorResponse {
+                error: "unsupported_response_type".to_string(),
+                error_description: "only response_type=code is supported".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
     if params.code_challenge.is_none() {
         return (
             StatusCode::BAD_REQUEST,
@@ -260,10 +263,24 @@ pub(crate) async fn oauth_authorize(
             .into_response();
     }
 
-    let auth_code = Uuid::new_v4().to_string();
+    let allowed_scopes = cfg.scopes.clone();
     let scope = params
         .scope
         .unwrap_or_else(|| "openid email profile".to_string());
+    let requested_scopes: Vec<&str> = scope.split_whitespace().collect();
+    for s in &requested_scopes {
+        if !allowed_scopes.iter().any(|a| a == s) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(AuthorizeErrorResponse {
+                    error: "invalid_scope".to_string(),
+                    error_description: format!("scope '{}' is not allowed", s),
+                }),
+            )
+                .into_response();
+        }
+    }
+    let auth_code = Uuid::new_v4().to_string();
     let record = AuthCodeRecord {
         client_id: params.client_id,
         redirect_uri: redirect_uri.clone(),

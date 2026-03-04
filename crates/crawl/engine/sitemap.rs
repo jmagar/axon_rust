@@ -393,48 +393,77 @@ pub async fn append_sitemap_backfill(
         ..BackfillStats::default()
     };
 
-    for url in candidates {
-        // validate_url is already called inside fetch_text_with_retry —
-        // no need to double-check here.
-        let Some(html) =
-            fetch_text_with_retry(&client, &url, cfg.fetch_retries, cfg.retry_backoff_ms).await
-        else {
-            stats.failed += 1;
-            continue;
-        };
-        stats.fetched_ok += 1;
-        let md = to_markdown(&html);
-        let trimmed = md.trim();
-        let markdown_chars = trimmed.len();
+    let backfill_concurrency = cfg
+        .backfill_concurrency_limit
+        .unwrap_or(cfg.batch_concurrency)
+        .clamp(1, 512);
 
-        let mut hasher = Sha256::new();
-        hasher.update(trimmed.as_bytes());
-        let content_hash = hex::encode(hasher.finalize());
-
-        if markdown_chars < cfg.min_markdown_chars {
-            summary.thin_pages += 1;
+    // Process backfill candidates concurrently using JoinSet, bounded by
+    // backfill_concurrency. Each task fetches + converts independently;
+    // results are collected and written to the manifest sequentially.
+    for chunk in candidates.chunks(backfill_concurrency) {
+        let mut joins = tokio::task::JoinSet::new();
+        for url in chunk.iter().cloned() {
+            let http = client.clone();
+            let retries = cfg.fetch_retries;
+            let backoff = cfg.retry_backoff_ms;
+            let min_chars = cfg.min_markdown_chars;
+            let drop_thin = cfg.drop_thin_markdown;
+            joins.spawn(async move {
+                let html = fetch_text_with_retry(&http, &url, retries, backoff).await;
+                let Some(html) = html else {
+                    return (url, None);
+                };
+                let md = to_markdown(&html);
+                let trimmed = md.trim().to_string();
+                let markdown_chars = trimmed.len();
+                let is_thin = markdown_chars < min_chars;
+                if is_thin && drop_thin {
+                    return (url, Some((trimmed, markdown_chars, is_thin, true)));
+                }
+                (url, Some((trimmed, markdown_chars, is_thin, false)))
+            });
         }
-        if markdown_chars < cfg.min_markdown_chars && cfg.drop_thin_markdown {
-            continue;
+
+        while let Some(joined) = joins.join_next().await {
+            let Ok((url, result)) = joined else {
+                stats.failed += 1;
+                continue;
+            };
+            let Some((trimmed, markdown_chars, is_thin, dropped)) = result else {
+                stats.failed += 1;
+                continue;
+            };
+            stats.fetched_ok += 1;
+            if is_thin {
+                summary.thin_pages += 1;
+            }
+            if dropped {
+                continue;
+            }
+
+            let mut hasher = Sha256::new();
+            hasher.update(trimmed.as_bytes());
+            let content_hash = hex::encode(hasher.finalize());
+
+            idx += 1;
+            let filename = url_to_filename(&url, idx);
+            let file = markdown_dir.join(&filename);
+            tokio::fs::write(&file, trimmed.as_bytes()).await?;
+
+            let entry = ManifestEntry {
+                url: url.clone(),
+                relative_path: format!("markdown/{}", filename),
+                markdown_chars,
+                content_hash: Some(content_hash),
+                changed: true,
+            };
+            let mut line = serde_json::to_string(&entry)?;
+            line.push('\n');
+            manifest.write_all(line.as_bytes()).await?;
+            summary.markdown_files += 1;
+            stats.written += 1;
         }
-
-        idx += 1;
-        let filename = url_to_filename(&url, idx);
-        let file = markdown_dir.join(&filename);
-        tokio::fs::write(&file, trimmed.as_bytes()).await?;
-
-        let entry = ManifestEntry {
-            url: url.clone(),
-            relative_path: format!("markdown/{}", filename),
-            markdown_chars,
-            content_hash: Some(content_hash),
-            changed: true,
-        };
-        let mut line = serde_json::to_string(&entry)?;
-        line.push('\n');
-        manifest.write_all(line.as_bytes()).await?;
-        summary.markdown_files += 1;
-        stats.written += 1;
     }
     manifest.flush().await?;
     Ok(stats)

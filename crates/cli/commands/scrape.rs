@@ -174,11 +174,15 @@ pub async fn run_scrape(cfg: &Config) -> Result<(), Box<dyn Error>> {
     // Phase 1: scrape all URLs concurrently — each prints its result as it lands.
     let tasks: Vec<_> = urls.iter().map(|url| scrape_one(cfg, url)).collect();
     let mut to_embed: Vec<(String, String)> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
     for result in join_all(tasks).await {
         match result {
             Ok(Some(pair)) => to_embed.push(pair),
             Ok(None) => {}
-            Err(e) => eprintln!("scrape error: {e}"),
+            Err(e) => {
+                eprintln!("scrape error: {e}");
+                errors.push(e.to_string());
+            }
         }
     }
 
@@ -193,6 +197,10 @@ pub async fn run_scrape(cfg: &Config) -> Result<(), Box<dyn Error>> {
             tokio::fs::write(embed_dir.join(url_to_filename(normalized, 1)), markdown).await?;
         }
         embed_path_native(cfg, &embed_dir.to_string_lossy()).await?;
+    }
+
+    if !errors.is_empty() {
+        return Err(format!("{} scrape(s) failed: {}", errors.len(), errors.join("; ")).into());
     }
 
     Ok(())
@@ -246,7 +254,16 @@ async fn scrape_one(cfg: &Config, url: &str) -> Result<Option<(String, String)>,
         // Structured JSON output for web UI / machine consumers.
         // The markdown field lets the frontend display content directly
         // without going through the file-based embed pipeline.
-        println!("{}", build_scrape_json(&normalized, &html, status_code));
+        // Reuse the `markdown` already computed above to avoid duplicate
+        // HTML→markdown conversion.
+        let json = serde_json::json!({
+            "url": normalized,
+            "status_code": status_code,
+            "markdown": &markdown,
+            "title": find_between(&html, "<title>", "</title>").unwrap_or(""),
+            "description": extract_meta_description(&html).unwrap_or_default(),
+        });
+        println!("{json}");
     } else if let Some(path) = &cfg.output_path {
         tokio::fs::write(path, &output).await?;
         log_done(&format!("wrote output: {}", path.to_string_lossy()));

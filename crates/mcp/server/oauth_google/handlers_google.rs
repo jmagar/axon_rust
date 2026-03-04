@@ -58,6 +58,11 @@ pub(crate) async fn oauth_google_login(
 
     let csrf_state = Uuid::new_v4().to_string();
     let return_to = query.return_to.unwrap_or_else(|| "/".to_string());
+    let return_to = if return_to.starts_with('/') && !return_to.starts_with("//") {
+        return_to
+    } else {
+        "/".to_string()
+    };
     state.put_pending_state(&csrf_state, &return_to).await;
 
     let mut auth_url = Url::parse(&cfg.auth_url).map_err(|_| {
