@@ -175,7 +175,18 @@ export function PulseChatPane({
 
   async function handleCopyError(content: string, messageId: string) {
     try {
-      await navigator.clipboard.writeText(content)
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(content)
+      } else {
+        const textarea = document.createElement('textarea')
+        textarea.value = content
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
       setCopyStatuses((prev) => new Map(prev).set(messageId, 'copied'))
       setTimeout(() => {
         setCopyStatuses((prev) => {

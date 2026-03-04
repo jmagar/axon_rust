@@ -126,8 +126,9 @@ export function MessageContent({ msg }: { msg: ChatMessage }) {
             // msg.content (the full response) would be repeated for each segment.
             // When group.content looks like raw Claude JSON, strip it to avoid
             // showing the JSON wrapper from streaming deltas.
+            const parsedText = parseClaudeAssistantPayload(group.content)?.text
             const rawGroupContent =
-              parseClaudeAssistantPayload(group.content)?.text ?? group.content
+              parsedText != null && parsedText !== '' ? parsedText : group.content
             const displayContent =
               msg.role === 'assistant' && msg.content && textGroupCount === 1
                 ? msg.content

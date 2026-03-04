@@ -33,7 +33,10 @@ export function PulseOpConfirmation({
         return
       }
       if (e.key === 'Escape') onReject()
-      if (e.key === 'Enter') onConfirm()
+      if (e.key === 'Enter') {
+        if (document.activeElement instanceof HTMLButtonElement) return
+        onConfirm()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

@@ -87,12 +87,14 @@ export function LogsViewer() {
     overscan: 30,
   })
 
-  // Auto-scroll when new lines arrive
+  // Auto-scroll when new lines arrive. Depend on filteredLines (array ref)
+  // instead of filteredLines.length so the effect fires even when length is
+  // constant (entries rotating at MAX_LINES — useMemo produces a new ref).
   useEffect(() => {
     if (autoScrollRef.current && filteredLines.length > 0) {
       rowVirtualizer.scrollToIndex(filteredLines.length - 1)
     }
-  }, [filteredLines.length, rowVirtualizer])
+  }, [filteredLines, rowVirtualizer])
 
   function handleServiceChange(s: ServiceName) {
     setService(s)

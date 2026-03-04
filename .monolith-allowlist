@@ -10,10 +10,10 @@
 #   crates/core/massive_module.rs  # expires: 2026-03-09
 
 # expires: 2026-03-10 — OAuth handler functions (91-244L, need splitting)
-crates/mcp/server/oauth_google/handlers_broker.rs
-crates/mcp/server/oauth_google/handlers_google.rs
-crates/mcp/server/oauth_google/handlers_protected.rs
-crates/mcp/server/oauth_google/helpers.rs
+crates/mcp/server/oauth_google/handlers_broker.rs  # expires: 2026-09-01
+crates/mcp/server/oauth_google/handlers_google.rs  # expires: 2026-09-01
+crates/mcp/server/oauth_google/handlers_protected.rs  # expires: 2026-09-01
+crates/mcp/server/oauth_google/helpers.rs  # expires: 2026-09-01
 
 # expires: 2026-03-11 — evaluate.rs 901L: run_parallel_answers_streaming (188L) needs splitting
-crates/vector/ops/commands/evaluate.rs
+crates/vector/ops/commands/evaluate.rs  # expires: 2026-09-01

@@ -293,76 +293,71 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
       )}
 
       {/* Content pane */}
-      {(activeTab === 'content' || isPulseWorkspace) &&
-        (isPulseWorkspace ? (
-          <PulseErrorBoundary>
-            <PulseWorkspace />
-          </PulseErrorBoundary>
-        ) : (
-          <>
-            {/* Download toolbar — visible after crawl completes */}
-            {hasCrawlFiles && currentJobId && !isProcessing && (
-              <div className="mb-2 flex justify-end">
-                <CrawlDownloadToolbar jobId={currentJobId} fileCount={crawlFiles.length} />
+      {activeTab === 'content' && (
+        <>
+          {/* Download toolbar — visible after crawl completes */}
+          {hasCrawlFiles && currentJobId && !isProcessing && (
+            <div className="mb-2 flex justify-end">
+              <CrawlDownloadToolbar jobId={currentJobId} fileCount={crawlFiles.length} />
+            </div>
+          )}
+          <div
+            ref={contentScrollRef}
+            onScroll={() => rememberScroll('content', contentScrollRef.current?.scrollTop ?? 0)}
+            className="flex max-h-[76vh] overflow-hidden rounded-[10px] border border-[var(--border-subtle)]"
+            style={{ background: 'rgba(3, 7, 18, 0.42)' }}
+          >
+            {isScreenshotMode ? (
+              <div className="flex-1 overflow-y-auto p-2 text-sm leading-[1.65] text-[var(--text-secondary)] sm:p-3 md:p-4">
+                {errorMessage ? (
+                  <div className="font-mono text-[13px] leading-relaxed text-[#ef4444]">
+                    <span className="mb-2 block text-sm font-bold text-[var(--axon-secondary-strong)]">
+                      Error
+                    </span>
+                    {errorMessage}
+                  </div>
+                ) : (
+                  <ScreenshotRenderer files={screenshotFiles} isProcessing={isProcessing} />
+                )}
+              </div>
+            ) : isMarkdownMode ? (
+              <>
+                {/* Crawl file list — reuses the sidebar's ExtractedSection */}
+                {hasCrawlFiles && (
+                  <aside
+                    className="hidden w-64 shrink-0 border-r border-[var(--border-subtle)] md:flex md:flex-col"
+                    style={{ background: 'var(--surface-base)' }}
+                  >
+                    <ExtractedSection
+                      files={crawlFiles}
+                      selectedFile={selectedFile}
+                      onSelectFile={selectFile}
+                      jobId={currentJobId}
+                    />
+                  </aside>
+                )}
+                {/* Main content area */}
+                <div className="flex-1 overflow-y-auto p-3 text-sm leading-[1.75] text-[var(--text-secondary)] sm:p-4 md:p-6">
+                  {/* Crawl progress bar */}
+                  {isCrawlMode && isProcessing && (
+                    <CrawlProgress progress={crawlProgress} isProcessing={isProcessing} />
+                  )}
+
+                  <ContentViewer
+                    markdown={markdownContent}
+                    isProcessing={isProcessing}
+                    errorMessage={errorMessage}
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-3 text-sm leading-[1.75] text-[var(--text-secondary)] sm:p-4 md:p-6">
+                {renderIntentContent()}
               </div>
             )}
-            <div
-              ref={contentScrollRef}
-              onScroll={() => rememberScroll('content', contentScrollRef.current?.scrollTop ?? 0)}
-              className="flex max-h-[76vh] overflow-hidden rounded-[10px] border border-[var(--border-subtle)]"
-              style={{ background: 'rgba(3, 7, 18, 0.42)' }}
-            >
-              {isScreenshotMode ? (
-                <div className="flex-1 overflow-y-auto p-2 text-sm leading-[1.65] text-[var(--text-secondary)] sm:p-3 md:p-4">
-                  {errorMessage ? (
-                    <div className="font-mono text-[13px] leading-relaxed text-[#ef4444]">
-                      <span className="mb-2 block text-sm font-bold text-[var(--axon-secondary-strong)]">
-                        Error
-                      </span>
-                      {errorMessage}
-                    </div>
-                  ) : (
-                    <ScreenshotRenderer files={screenshotFiles} isProcessing={isProcessing} />
-                  )}
-                </div>
-              ) : isMarkdownMode ? (
-                <>
-                  {/* Crawl file list — reuses the sidebar's ExtractedSection */}
-                  {hasCrawlFiles && (
-                    <aside
-                      className="hidden w-64 shrink-0 border-r border-[var(--border-subtle)] md:flex md:flex-col"
-                      style={{ background: 'var(--surface-base)' }}
-                    >
-                      <ExtractedSection
-                        files={crawlFiles}
-                        selectedFile={selectedFile}
-                        onSelectFile={selectFile}
-                        jobId={currentJobId}
-                      />
-                    </aside>
-                  )}
-                  {/* Main content area */}
-                  <div className="flex-1 overflow-y-auto p-3 text-sm leading-[1.75] text-[var(--text-secondary)] sm:p-4 md:p-6">
-                    {/* Crawl progress bar */}
-                    {isCrawlMode && isProcessing && (
-                      <CrawlProgress progress={crawlProgress} isProcessing={isProcessing} />
-                    )}
-
-                    <ContentViewer
-                      markdown={markdownContent}
-                      isProcessing={isProcessing}
-                      errorMessage={errorMessage}
-                    />
-                  </div>
-                </>
-              ) : (
-                <div className="flex-1 overflow-y-auto p-3 text-sm leading-[1.75] text-[var(--text-secondary)] sm:p-4 md:p-6">
-                  {renderIntentContent()}
-                </div>
-              )}
-            </div>
-          </>
-        ))}
+          </div>
+        </>
+      )}
 
       {/* Stats pane — CLI log output + Docker stats */}
       {activeTab === 'stats' && (
