@@ -55,7 +55,14 @@ impl AxonMcpServer {
         let result = query_svc::retrieve(self.cfg.as_ref(), &target, opts)
             .await
             .map_err(|e| internal_error(e.to_string()))?;
-        let chunk_count = result.chunks.len();
+        // chunks is a Vec<Value> of 0 or 1 items; the actual Qdrant point count
+        // lives inside result.chunks[0]["chunk_count"], not in Vec::len().
+        let chunk_count = result
+            .chunks
+            .first()
+            .and_then(|c| c.get("chunk_count"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
         let content = result
             .chunks
             .first()
@@ -183,7 +190,7 @@ impl AxonMcpServer {
 
         let result = search_svc::research(self.cfg.as_ref(), &query, opts)
             .await
-            .map_err(|e| invalid_params(e.to_string()))?;
+            .map_err(|e| internal_error(e.to_string()))?;
 
         respond_with_mode(
             "research",
