@@ -128,6 +128,21 @@ impl Default for Config {
     }
 }
 
+#[cfg(test)]
+impl Config {
+    /// Construct a minimal `Config` suitable for unit tests.
+    /// Uses `Config::default()` as the base so new non-Option fields
+    /// do not require manual updates across test helpers.
+    pub fn test_default() -> Self {
+        Self {
+            openai_base_url: "http://localhost:11434/v1".to_string(),
+            openai_model: "test-model".to_string(),
+            tavily_api_key: "test-key".to_string(),
+            ..Default::default()
+        }
+    }
+}
+
 impl fmt::Debug for Config {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Config")
