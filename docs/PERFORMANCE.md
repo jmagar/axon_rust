@@ -1,5 +1,5 @@
 # Performance Tuning Guide
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Version: 1.0.0
 Last Updated: 2026-02-25T01:26:53-05:00
@@ -54,7 +54,6 @@ Override at runtime:
 - `--batch-concurrency`
 - `--concurrency-limit`
 - `--crawl-concurrency-limit`
-- `--sitemap-concurrency-limit`
 - `--backfill-concurrency-limit`
 - `--request-timeout-ms`
 - `--fetch-retries`
@@ -69,7 +68,6 @@ Primary flags:
 - `--max-depth`
 - `--include-subdomains`
 - `--discover-sitemaps`
-- `--max-sitemaps`
 - `--min-markdown-chars`
 - `--drop-thin-markdown`
 - `--delay-ms`
@@ -79,6 +77,7 @@ Guidance:
 - Start with `http` when sites are static; use `auto-switch` for mixed sites.
 - Use `delay-ms` to reduce target pressure and avoid defensive throttling.
 - Keep `drop-thin-markdown=true` for higher-quality embedding corpus.
+- Sitemap backfill cap is currently fixed at `512` (not a user-exposed CLI flag).
 
 ## Worker and Queue Tuning
 
@@ -144,7 +143,7 @@ Pulse endpoints (`/api/pulse/chat`, `/api/ai/copilot`) enforce upstream timeouts
 
 For high-latency models:
 
-- use faster model in `OPENAI_MODEL`
+- use lower-latency request model (Pulse request `model` field: `haiku`/`sonnet`/`opus`)
 - reduce context or citation count at caller level
 - ensure TEI/Qdrant are local and low-latency
 

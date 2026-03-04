@@ -1,57 +1,72 @@
 # axon sessions
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
-Version: 1.0.0
-Last Updated: 01:26:53 | 02/25/2026 EST
-
-Ingest AI session exports into Qdrant. Reads local session history files from Claude, Codex, and Gemini in their standard export formats, chunks the conversation content, and embeds it into the configured Qdrant collection.
-
-**Incremental:** Files are tracked by path, mtime, and size. Re-running `sessions` only processes new or changed files — already-indexed sessions are skipped.
+Ingest local AI session history (Claude, Codex, Gemini) into Qdrant.
 
 ## Synopsis
 
 ```bash
 axon sessions [FLAGS]
+axon sessions <SUBCOMMAND> [ARGS]
 ```
 
-## Arguments
+## Provider Sources
 
-None. Session file paths are hardcoded per provider:
-
-| Provider | Scan path |
-|----------|-----------|
+| Provider | Path |
+|----------|------|
 | Claude | `~/.claude/projects/` |
 | Codex | `~/.codex/sessions/` |
 | Gemini | `~/.gemini/history/`, `~/.gemini/tmp/` |
 
 ## Flags
 
-All global flags apply. Key flags for this command:
+All global flags apply. Sessions-specific and key flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--collection <name>` | `cortex` | Qdrant collection to embed into. |
-| `--json` | `false` | Machine-readable JSON output. |
+| `--claude` | `false` | Include Claude sessions. |
+| `--codex` | `false` | Include Codex sessions. |
+| `--gemini` | `false` | Include Gemini sessions. |
+| `--project <name>` | — | Case-insensitive substring filter on project name. |
+| `--wait <bool>` | `false` | Block until ingestion completes; otherwise enqueue async ingest job. |
+| `--collection <name>` | `cortex` | Target Qdrant collection. |
+| `--json` | `false` | Machine-readable output. |
 
-Note: `sessions` runs **synchronously** and does not support `--wait`. It does not enqueue a job — it runs inline and returns when complete.
+Provider selection rule:
+- If none of `--claude/--codex/--gemini` is set, all providers are ingested.
+
+## Job Subcommands
+
+```bash
+axon sessions status <job_id>
+axon sessions cancel <job_id>
+axon sessions errors <job_id>
+axon sessions list
+axon sessions cleanup
+axon sessions clear
+axon sessions recover
+axon sessions worker
+```
+
+These subcommands operate on the shared ingest queue across source types.
 
 ## Examples
 
 ```bash
-# Ingest sessions (synchronous, incremental)
+# Async enqueue (default) for all providers
 axon sessions
 
-# Into a specific collection
-axon sessions --collection ai-history
+# Sync run for Codex only
+axon sessions --codex --wait true
 
-# JSON output
-axon sessions --json
+# Claude + Gemini filtered to project name match
+axon sessions --claude --gemini --project axon --wait true
+
+# Check job status
+axon sessions status 550e8400-e29b-41d4-a716-446655440000
 ```
-
-> For supported formats, state tracker details, and troubleshooting see [`docs/ingest/sessions.md`](../ingest/sessions.md).
 
 ## Notes
 
-- Unlike `github`, `reddit`, and `youtube`, the `sessions` command does not use the AMQP queue and does not create an `axon_ingest_jobs` record. It runs entirely in-process.
-- This is intentional: session files are local, the operation is fast, and async queuing adds no benefit for local I/O.
-- The state tracker table (`axon_session_ingest_state`) is auto-created in Postgres on first run.
+- Session ingest uses an incremental state tracker table: `axon_session_ingest_state`.
+- Job records for queued runs are stored in `axon_ingest_jobs` with `source_type='sessions'`.

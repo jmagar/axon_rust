@@ -9,13 +9,13 @@ Foundational crate. Owns configuration parsing, the `Config` struct, HTTP client
 core/
 ├── config.rs             # Re-export shim: parse_args, Config, CommandKind, all enums
 ├── config/
+│   ├── cli.rs            # Cli { command: CliCommand, global: GlobalArgs } — clap entry struct (module root)
 │   ├── types/
 │   │   ├── config.rs     # Config struct — ALL runtime state (100+ fields)
 │   │   ├── config_impls.rs  # Config::default() + fmt::Debug (secrets redacted)
 │   │   └── enums.rs      # CommandKind, RenderMode, PerformanceProfile, ScrapeFormat, RedditSort, RedditTime
 │   ├── cli/
-│   │   ├── mod.rs        # Cli { command: CliCommand, global: GlobalArgs } — clap entry struct
-│   │   └── global_args.rs  # All ~60 global flags (#[arg(global=true)])
+│   │   └── global_args.rs   # All ~60 global flags (#[arg(global=true)])
 │   ├── parse/
 │   │   ├── build_config.rs  # into_config(): CliArgs → Config (env vars, clamps, normalization)
 │   │   ├── performance.rs   # profile_settings(): PerformanceProfile → concrete concurrency values
@@ -23,8 +23,8 @@ core/
 │   │   ├── helpers.rs       # viewport parsing, flag helpers, env_usize_clamped, env_f64_clamped
 │   │   └── docker.rs        # normalize_local_service_url(): Docker-inside vs outside detection
 │   └── help.rs           # maybe_print_top_level_help_and_exit(): colored help text
+├── http.rs               # Module root + re-exports: validate_url, normalize_url, fetch_html, http_client, HttpError
 ├── http/
-│   ├── mod.rs            # Re-exports: validate_url, normalize_url, fetch_html, http_client, HttpError
 │   ├── ssrf.rs           # validate_url() SSRF guard + ssrf_blacklist_patterns()
 │   ├── client.rs         # HTTP_CLIENT singleton (LazyLock), http_client(), fetch_html()
 │   ├── normalize.rs      # normalize_url(): prepend https:// when scheme missing

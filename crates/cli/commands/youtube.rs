@@ -12,7 +12,7 @@ pub async fn run_youtube(cfg: &Config) -> Result<(), Box<dyn Error>> {
         .positional
         .first()
         .cloned()
-        .ok_or("youtube requires <URL> (video, playlist, or channel URL)")?;
+        .ok_or("youtube requires <URL> (video URL or bare video ID)")?;
 
     let source = IngestSource::Youtube { target: url };
 
@@ -35,4 +35,26 @@ async fn run_ingest_sync(cfg: &Config, source: IngestSource) -> Result<(), Box<d
     let chunks = ingest::youtube::ingest_youtube(cfg, target).await?;
     ingest_common::print_ingest_sync_result(cfg, "youtube", chunks, target);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crates::core::config::CommandKind;
+    use crate::crates::jobs::common::test_config;
+
+    #[tokio::test]
+    async fn run_youtube_requires_video_url_or_id() {
+        let mut cfg = test_config("");
+        cfg.command = CommandKind::Youtube;
+        cfg.positional = vec![];
+        let err = run_youtube(&cfg)
+            .await
+            .expect_err("expected missing URL error");
+        assert!(
+            err.to_string()
+                .contains("youtube requires <URL> (video URL or bare video ID)"),
+            "unexpected error: {err}"
+        );
+    }
 }

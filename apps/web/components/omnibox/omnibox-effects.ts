@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect } from 'react'
+import { apiFetch } from '@/lib/api-fetch'
 import {
   type LocalDocFile,
   type MentionKind,
@@ -181,7 +182,7 @@ export function useOmniboxEffects(params: OmniboxEffectsParams) {
   // Fetch local doc files
   useEffect(() => {
     let cancelled = false
-    fetch('/api/omnibox/files')
+    apiFetch('/api/omnibox/files')
       .then((res) => res.json())
       .then((data: { files?: LocalDocFile[] }) => {
         if (cancelled) return

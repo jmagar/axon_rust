@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-03-03 (session: MCP HTTP transport + OAuth; screenshot migration; engine sitemap backfill)
+Last Modified: 2026-03-04 (session: evaluate page; cortex suggest API; image SHA verification; CLI help contract; module consolidation; command docs; v0.3.0)
 
 ## [Unreleased] — feat/sidebar
 
@@ -7,6 +7,16 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 ### Highlights
 
+- **Evaluate page + cortex suggest API** — new `/app/evaluate/page.tsx` for RAG evaluation UI; new `/api/cortex/suggest/route.ts` server route; `apps/web/lib/api-fetch.ts` typed fetch utility; v0.3.0 (minor bump)
+- **Image SHA verification** — `docker/s6/cont-init.d/00-verify-image-sha` and `docker/web/cont-init.d/00-verify-image-sha` added to both worker and web containers; `scripts/check-container-revisions.sh` for CI; `scripts/rebuild-fresh.sh` and `scripts/test-mcp-oauth-protection.sh` added
+- **CLI help contract test** — `tests/cli_help_contract.rs` verifies `axon --help` exit code and output structure; `scripts/check_mcp_http_only.sh` ensures HTTP transport is correctly gated
+- **Sidebar simplification** — `SidebarSectionId` pruned to `'extracted' | 'workspace'`; `recents-section`, `starred-section`, `templates-section` removed; `workspace-section.tsx` and `file-tree.tsx` updated
+- **Docs reorganization** — `commands/axon/`, `commands/codex/`, `commands/gemini/` skill command stubs deleted; 20+ `docs/commands/*.md` reference files added covering all CLI subcommands; new `docs/CONTEXT-INJECTION.md`, `docs/schema.md` added; `scripts/check_no_mod_rs.sh` and `scripts/check_no_next_middleware.sh` added for CI
+- **Module consolidation** — `mod.rs` indirection pattern replaced with single-file modules across `crates/core/config/cli.rs`, `crates/core/config/types.rs`, `crates/core/http.rs`, `crates/jobs/common.rs`, `crates/jobs/ingest.rs`, `crates/jobs/refresh.rs`, `crates/jobs/worker_lane.rs`, `crates/web/execute.rs`, `crates/web/download.rs`, `crates/ingest/reddit.rs`; deleted corresponding `mod.rs` files
+- **Map migration tests** — `crates/cli/commands/map_migration_tests.rs` added (TDD red phase): `map_payload_returns_unique_urls_without_cli_side_dedup`, `map_payload_reports_sitemap_url_count_consistently`, `map_autoswitch_only_falls_back_when_no_pages_seen`; wired via `#[cfg(test)] mod map_migration_tests` in `map.rs`
+- **CLI/config refactor** — `crates/cli/commands/crawl.rs`, `map.rs`, `mcp.rs`, `research.rs`, `search.rs`, `youtube.rs` updated; `crates/core/config.rs`, `config/parse/build_config.rs`, `config/parse/helpers.rs`, `config/types/config.rs`, `config/types/config_impls.rs`, `config/types/enums.rs` updated; `crates/cli/commands/crawl/runtime.rs` updated
+- **Web/Docker updates** — `apps/web/lib/axon-ws-exec.ts` updated; `apps/web/middleware.ts` deleted; `docker-compose.yaml`, `docker/Dockerfile`, `docker/web/Dockerfile` updated; image SHA verification scripts added to s6 cont-init
+- **CI improvements** — `.github/workflows/ci.yml` updated; `lefthook.yml` refined; `Justfile` updated
 - **MCP HTTP transport + Google OAuth** — `rmcp` upgraded 0.16→0.17 with `transport-streamable-http-server` feature; `run_http_server()` added alongside existing `run_stdio_server()`; new `crates/mcp/server/oauth_google/` module (8 files: config, handlers_broker, handlers_google, handlers_protected, helpers, state, tests, types) implements Google OAuth2 flow with PKCE, session management, and MCP-native auth middleware; s6 `mcp-http` service for Docker; `crates/mcp.rs` replaces `crates/mcp/mod.rs` with `#[path]` attributes
 - **Screenshot CDP→Spider migration** — hand-rolled CDP WebSocket screenshot client deleted; replaced with Spider's `screenshot()` API; contract tests verify full-page capture behavior; scrape migration coverage added
 - **Engine-level sitemap backfill** — `append_sitemap_backfill()` moved from CLI robots loop into `engine.rs`; fires automatically after every crawl; `discover_sitemap_urls_with_robots()` characterization tests; SSRF-safe `build_client` enforced; CLI robots backfill loop removed
@@ -57,7 +67,8 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 | Commit | Type | Message |
 |---|---|---|
-| *(this commit)* | feat(mcp)+chore | MCP HTTP transport + Google OAuth; rmcp 0.17; screenshot CDP→Spider migration; engine sitemap backfill; cleanup |
+| *(this commit)* | feat+chore | v0.3.0; evaluate page; cortex/suggest API; image SHA verification cont-init; CLI help contract test; command docs expansion (20+ files); module consolidation; sidebar simplification; script additions |
+| 7fb1100d | feat(mcp)+chore | MCP HTTP transport + Google OAuth; rmcp 0.17; screenshot CDP→Spider migration; engine sitemap backfill; cleanup |
 | `62bdae5e` | test | add scrape migration contract coverage |
 | `2d004e27` | docs | record screenshot migration to spider api |
 | `426cac65` | test | verify full-page screenshot behavior after migration |

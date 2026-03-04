@@ -1,8 +1,5 @@
 # docs/ — Documentation Structure
-Last Modified: 2026-02-25
-
-Version: 1.0.0
-Last Updated: 01:26:53 | 02/25/2026 EST
+Last Modified: 2026-03-03
 
 All project documentation lives here. This file defines the layout and the rules for what goes where.
 

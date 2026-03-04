@@ -1,5 +1,5 @@
 # crates/vector
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Embedding, vector storage, retrieval, and RAG operations.
 
@@ -33,3 +33,8 @@ Embedding, vector storage, retrieval, and RAG operations.
 ## Notes
 - Retry/splitting behavior for TEI overload and payload limits is handled in embedding paths and should remain conservative for stability.
 - Keep retrieval/ranking logic deterministic where possible to reduce answer drift.
+
+## Related Docs
+- [Repository README](../../README.md)
+- [Architecture](../../docs/ARCHITECTURE.md)
+- [Docs Index](../../docs/README.md)

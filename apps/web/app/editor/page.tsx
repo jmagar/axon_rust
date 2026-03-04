@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation'
 import { memo, Suspense, useEffect, useRef, useState } from 'react'
 import { PulseEditorPane } from '@/components/pulse/pulse-editor-pane'
 import { usePulseAutosave } from '@/hooks/use-pulse-autosave'
+import { apiFetch } from '@/lib/api-fetch'
 
 const SaveStatusBadge = memo(function SaveStatusBadge({
   status,
@@ -47,7 +48,7 @@ function EditorPageInner() {
     loadedDocRef.current = docParam
     void (async () => {
       try {
-        const res = await fetch(`/api/pulse/doc?filename=${encodeURIComponent(docParam)}`)
+        const res = await apiFetch(`/api/pulse/doc?filename=${encodeURIComponent(docParam)}`)
         if (!res.ok) {
           // Do NOT set docFilename — prevents autosave from creating an orphan file.
           setLoadError(res.status === 404 ? 'Document not found' : 'Failed to load document')

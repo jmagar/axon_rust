@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useWsMessageActions } from '@/hooks/use-ws-messages'
+import { apiFetch } from '@/lib/api-fetch'
 
 export interface SessionSummary {
   id: string
@@ -39,10 +40,10 @@ export function useRecentSessions() {
 
   useEffect(() => {
     let cancelled = false
-    fetch('/api/sessions/list')
+    apiFetch('/api/sessions/list')
       .then((r) => r.json() as Promise<SessionSummary[]>)
       .then((data) => {
-        if (!cancelled) setSessions(data)
+        if (!cancelled) setSessions(Array.isArray(data) ? data : [])
       })
       .catch(() => {
         if (!cancelled) setSessions([])
@@ -57,7 +58,7 @@ export function useRecentSessions() {
 
   const loadSession = useCallback(
     async (id: string): Promise<boolean> => {
-      const r = await fetch(`/api/sessions/${id}`)
+      const r = await apiFetch(`/api/sessions/${id}`)
       if (!r.ok) return false
       const data = (await r.json()) as SessionContentResponse
       if (data.messages.length === 0) return false

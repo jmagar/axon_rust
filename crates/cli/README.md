@@ -1,5 +1,5 @@
 # crates/cli
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 CLI command routing and command handlers for the `axon` binary.
 
@@ -9,7 +9,7 @@ CLI command routing and command handlers for the `axon` binary.
 - Provide shared command helpers for URL parsing, job control, and status output.
 
 ## Responsibilities
-- Command entrypoint modules under `commands/` (`scrape`, `crawl`, `extract`, `embed`, `search`, `doctor`, `status`, ingest commands, and web serve command).
+- Command entrypoint modules under `commands/` (full command surface is documented in the repository [README Commands table](../../README.md#commands)).
 - Subcommand lifecycle actions for async jobs (`status`, `cancel`, `errors`, `list`, `cleanup`, `clear`, `recover`, `worker`) where applicable.
 - Shared parsing and command wiring helpers in `commands/common.rs` and `commands/job_contracts.rs`.
 
@@ -31,3 +31,8 @@ CLI command routing and command handlers for the `axon` binary.
 ## Notes
 - This module is orchestration-heavy; avoid embedding low-level business logic here.
 - Shared command behavior should be centralized in `common.rs`/`ingest_common.rs` to prevent drift across subcommands.
+
+## Related Docs
+- [Repository README](../../README.md)
+- [Architecture](../../docs/ARCHITECTURE.md)
+- [Docs Index](../../docs/README.md)

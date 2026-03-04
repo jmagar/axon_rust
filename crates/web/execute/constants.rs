@@ -57,6 +57,7 @@ pub(super) const ALLOWED_FLAGS: &[(&str, &str)] = &[
     ("performance_profile", "--performance-profile"),
     ("batch_concurrency", "--batch-concurrency"),
     ("depth", "--depth"),
+    ("responses_mode", "--responses-mode"),
 ];
 
 pub(super) const ASYNC_MODES: &[&str] =

@@ -5,7 +5,7 @@
 //! This codebase has two AMQP consumer reconnect loops with different semantics:
 //! - `crawl/runtime/worker/loops.rs::run_amqp_lane_with_reconnect()`: used by the crawl
 //!   worker. Backoff resets to INIT on every successful reconnect.
-//! - `worker_lane.rs::run_job_worker()`: used by embed/extract/refresh workers.
+//! - `worker_lane::run_job_worker()`: used by embed/extract/refresh workers.
 //!   Backoff resets to INIT only after the connection has been alive for ≥ 60s.
 //!
 //! The difference is intentional: crawl jobs are long-running so a short-lived
@@ -148,7 +148,7 @@ mod tests {
     }
 
     /// AMQP reconnect backoff constants must be self-consistent across the two
-    /// reconnect implementations (crawl loops.rs and worker_lane.rs).
+    /// reconnect implementations (crawl loops.rs and worker_lane.rs module).
     #[test]
     fn amqp_reconnect_constants_are_self_consistent() {
         // Crawl worker constants (loops.rs)

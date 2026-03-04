@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import type { Agent } from '@/app/api/agents/route'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
+import { apiFetch } from '@/lib/api-fetch'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -144,7 +145,7 @@ function AgentsPageInner() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/agents', { signal })
+      const res = await apiFetch('/api/agents', { signal })
       const data = (await res.json()) as AgentsResponse
       if (data.error) {
         setError(data.error)

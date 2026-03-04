@@ -5,6 +5,7 @@ import type { usePlateEditor } from 'platejs/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { AIAnchorElement, AILeaf } from '@/components/ui/ai-node'
+import { apiFetch } from '@/lib/api-fetch'
 
 type ChatStatus = 'idle' | 'submitted' | 'streaming' | 'error'
 
@@ -46,7 +47,7 @@ export function useAxonAIChat(): ChatHelpers {
       ])
 
       try {
-        const res = await fetch('/api/ai/chat', {
+        const res = await apiFetch('/api/ai/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ prompt: message.text, ...options?.body }),

@@ -1,5 +1,5 @@
 # Sessions Ingest
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Version: 1.0.0
 Last Updated: 01:26:53 | 02/25/2026 EST
@@ -46,14 +46,16 @@ On each run, a file is skipped if its mtime **and** size match the tracked value
 5. Chunks embedded via `embed_text_with_metadata()` → TEI → Qdrant
 6. State tracker updated with new mtime/size
 
-Sessions runs **synchronously** (no AMQP queue, no job ID) — same as `axon ask`/`axon query`.
+Sessions defaults to **async queued execution** when `--wait false` (default): it enqueues an ingest job and returns a job ID.
+
+Use `--wait true` for synchronous execution.
 
 ## Adding a New Session Format
 
-1. Create `crates/ingest/sessions/<provider>.rs`
+1. Create `crates/ingest/sessions/<provider>.rs` (or add provider parser logic under `crates/ingest/sessions.rs` if keeping a single module)
 2. Implement `ingest_<provider>_sessions(cfg, state, multi)` following the pattern in `claude.rs`
-3. Register it in `crates/ingest/sessions/mod.rs` dispatch (add a `cfg.sessions_<provider>` flag check)
-4. Add the `--sessions-<provider>` flag to `config/cli.rs` and `Config` struct
+3. Register it in sessions dispatch (`crates/ingest/sessions.rs`) with a `cfg.sessions_<provider>` flag check
+4. Add the `--sessions-<provider>` flag in `crates/core/config/cli.rs` and wire it in `crates/core/config/parse/build_config.rs`
 5. Add a unit test with a minimal sample file in `#[cfg(test)]`
 
 ## Troubleshooting

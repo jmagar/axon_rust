@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import { type FileEntry, FileTree } from '@/components/workspace/file-tree'
+import { apiFetch } from '@/lib/api-fetch'
 
 export function WorkspaceSection() {
   const router = useRouter()
@@ -13,7 +14,7 @@ export function WorkspaceSection() {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    fetch('/api/workspace?action=list&path=')
+    apiFetch('/api/workspace?action=list&path=')
       .then((res) => res.json())
       .then((data: { items?: FileEntry[] }) => {
         if (!cancelled) setEntries(data.items ?? [])

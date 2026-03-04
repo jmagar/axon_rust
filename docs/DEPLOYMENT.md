@@ -138,7 +138,8 @@ For code/config upgrades:
 ## Notes for Web UI Paths
 
 - Active UI: `apps/web` (Next.js)
-- Legacy/deprecated UI: `axon serve` static assets
+- Core runtime bridge: `axon serve` (`crates/web.rs` + `crates/web/*`) backing `/ws`, `/ws/shell`, `/download/*`, and `/output/*`
+- Deprecated piece: only the old standalone static serve page UX
 
 If deploying Next.js:
 

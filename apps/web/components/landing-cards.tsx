@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, Clock, FolderOpen, Network } from 'lucide-re
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { type SessionSummary, useRecentSessions } from '@/hooks/use-recent-sessions'
+import { apiFetch } from '@/lib/api-fetch'
 
 // ---------------------------------------------------------------------------
 // Shared card shell
@@ -192,7 +193,7 @@ function FilesContent() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetch('/api/workspace?action=list&path=')
+    apiFetch('/api/workspace?action=list&path=')
       .then((r) => r.json())
       .then((d: { items?: FileEntry[] }) => setEntries(d.items?.slice(0, 5) ?? []))
       .catch(() => setEntries([]))
@@ -242,10 +243,10 @@ function McpContent() {
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/mcp').then((r) => r.json()) as Promise<{
+      apiFetch('/api/mcp').then((r) => r.json()) as Promise<{
         mcpServers?: Record<string, { url?: string }>
       }>,
-      fetch('/api/mcp/status').then((r) => r.json()) as Promise<{
+      apiFetch('/api/mcp/status').then((r) => r.json()) as Promise<{
         servers?: Record<string, { status: 'online' | 'offline' | 'unknown' }>
       }>,
     ])

@@ -1,15 +1,12 @@
 # axon youtube
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
-Version: 1.0.0
-Last Updated: 01:26:53 | 02/25/2026 EST
-
-Ingest a YouTube video into Qdrant. Uses `yt-dlp` to download auto-generated or manual transcripts (VTT format), chunks the transcript text, and embeds it into the configured Qdrant collection.
+Ingest a YouTube transcript into Qdrant using `yt-dlp` subtitle extraction.
 
 ## Synopsis
 
 ```bash
-axon youtube <url> [FLAGS]
+axon youtube <url-or-id> [FLAGS]
 axon youtube <SUBCOMMAND> [ARGS]
 ```
 
@@ -17,15 +14,13 @@ axon youtube <SUBCOMMAND> [ARGS]
 
 | Argument | Description |
 |----------|-------------|
-| `<url>` | YouTube video URL (`watch?v=<ID>`, `youtu.be/<ID>`, or bare ID) |
+| `<url-or-id>` | YouTube video URL or bare 11-character video ID. |
 
-**Note:** Only single-video URLs are supported. The video ID is extracted from the `v=` query parameter; `list=` (playlist) parameters are stripped. Pure playlist/channel URLs (no `v=`) fail immediately.
+Accepted URL shapes include `watch?v=...`, `youtu.be/...`, `/embed/...`, `/shorts/...`, `/v/...`.
 
 ## Required External Dependency
 
-`yt-dlp` must be on `$PATH`. In Docker (axon-workers) it is installed automatically. For local dev install instructions see [`docs/ingest/youtube.md`](../ingest/youtube.md).
-
-If `yt-dlp` is not found, the command fails immediately with a clear error.
+`yt-dlp` must be installed and available on `$PATH`.
 
 ## Flags
 
@@ -33,49 +28,40 @@ All global flags apply. Key flags for this command:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--wait <bool>` | `false` | Block until the ingest job completes. |
-| `--collection <name>` | `cortex` | Qdrant collection to embed into. |
-| `--json` | `false` | Machine-readable JSON output. |
+| `--wait <bool>` | `false` | Block until ingestion completes; otherwise enqueue async job. |
+| `--collection <name>` | `cortex` | Target Qdrant collection. |
+| `--json` | `false` | Machine-readable output. |
 
 ## Job Subcommands
 
 ```bash
-axon youtube status <job_id>   # show job status
-axon youtube cancel <job_id>   # cancel a pending/running job
-axon youtube list              # list recent ingest jobs (last 50)
-axon youtube cleanup           # remove failed/canceled jobs older than 30 days
-axon youtube clear             # delete all ingest jobs and purge the queue
-axon youtube recover           # reclaim stale/interrupted jobs
-axon youtube worker            # run an ingest worker inline (blocking)
+axon youtube status <job_id>
+axon youtube cancel <job_id>
+axon youtube errors <job_id>
+axon youtube list
+axon youtube cleanup
+axon youtube clear
+axon youtube recover
+axon youtube worker
 ```
 
-Note: These subcommands operate on all ingest jobs (GitHub, Reddit, YouTube). The `list` output shows `source_type/target` to distinguish them.
+These subcommands operate on the shared ingest queue across source types.
 
 ## Examples
 
 ```bash
-# Async (default) — returns immediately with a job ID
+# Async enqueue (default)
 axon youtube "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
-# Synchronous — blocks until complete
-axon youtube "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --wait true
-
-# Short URL form
+# Sync run
 axon youtube "https://youtu.be/dQw4w9WgXcQ" --wait true
 
-# Video URL with playlist context (playlist param is stripped, only the video is ingested)
-axon youtube "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLxxxxxx" --wait true
-
-# Specific collection
-axon youtube "https://www.youtube.com/watch?v=rust_talk" --collection rust-talks
-
-# Check status
-axon youtube status 550e8400-e29b-41d4-a716-446655440000
+# Bare video ID
+axon youtube dQw4w9WgXcQ --wait true
 ```
 
 ## Notes
 
-- Videos without transcripts or subtitles (no auto-generated captions) will fail with a clear error.
-- Age-restricted or private videos may not be accessible without authentication. See `yt-dlp` documentation for cookie-based auth.
-- The ingest job record is stored in `axon_ingest_jobs` with `source_type='youtube'` and `target` set to the canonical `watch?v=<ID>` URL.
-- `yt-dlp` writes a temporary `.vtt` file; the pipeline cleans it up after processing.
+- Ingest currently resolves a single video ID and normalizes to `https://www.youtube.com/watch?v=<id>`.
+- If subtitles/captions are unavailable, ingestion fails with a clear error.
+- Job records are stored in `axon_ingest_jobs` with `source_type='youtube'`.

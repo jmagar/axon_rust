@@ -217,6 +217,20 @@ async fn count_stale_and_pending_jobs_with_pool_returns_zero_for_empty_tables() 
     .await?;
     tx.commit().await?;
 
+    // Isolate this assertion from data created by other integration tests that
+    // share the same test database.
+    sqlx::query(
+        r#"
+        TRUNCATE TABLE
+            axon_crawl_jobs,
+            axon_embed_jobs,
+            axon_extract_jobs,
+            axon_ingest_jobs
+        "#,
+    )
+    .execute(&pool)
+    .await?;
+
     let result = count_stale_and_pending_jobs_with_pool(&pool, 5).await;
 
     assert_eq!(

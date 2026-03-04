@@ -1,43 +1,63 @@
 # axon refresh
-Last Modified: 2026-02-26
+Last Modified: 2026-03-03
 
-Revalidate already-known URLs and keep indexed content fresh without full-site rediscovery crawls.
+Revalidate already-known URLs and keep indexed content fresh without full rediscovery crawls.
 
-## One-off Refresh
+## Synopsis
 
 ```bash
-# Refresh one URL (synchronous)
+axon refresh <url...> [FLAGS]
+axon refresh <SUBCOMMAND> [ARGS]
+```
+
+## One-Off Refresh
+
+```bash
+# Refresh one URL synchronously
 axon refresh https://docs.rs/spider --wait true
 
-# Refresh multiple URLs (async enqueue)
+# Refresh multiple URLs asynchronously (default)
 axon refresh https://docs.rs/spider https://qdrant.tech/documentation
 
-# Refresh from a seed/domain manifest
+# Refresh using manifest fallback from a seed domain
 axon refresh https://docs.rs --wait true
 ```
 
-## Schedule Operations
+URL resolution behavior:
+
+- Uses positional URLs when provided
+- If no URLs are provided and `--start-url` is set, reads seed manifest URLs
+- If a single positional URL looks like a bare domain seed, tries manifest fallback for that seed
+
+## Job Subcommands
 
 ```bash
-# Add schedule with explicit interval
-axon refresh schedule add docs-medium https://docs.rs --every-seconds 21600
-
-# Add schedule with tier preset
-axon refresh schedule add docs-high https://docs.rs --tier high
-
-# List schedules
-axon refresh schedule list
-
-# Enable / disable schedule
-axon refresh schedule enable docs-high
-axon refresh schedule disable docs-high
-
-# Delete schedule
-axon refresh schedule delete docs-high
-
-# Trigger one scheduler sweep immediately
-axon refresh schedule run-due --json
+axon refresh status <job_id>
+axon refresh cancel <job_id>
+axon refresh errors <job_id>
+axon refresh list
+axon refresh cleanup
+axon refresh clear
+axon refresh recover
+axon refresh worker
 ```
+
+## Schedule Subcommands
+
+```bash
+axon refresh schedule add <name> [seed_url] [--every-seconds N | --tier high|medium|low] [--urls "u1,u2"]
+axon refresh schedule list
+axon refresh schedule enable <name>
+axon refresh schedule disable <name>
+axon refresh schedule delete <name>
+axon refresh schedule worker
+axon refresh schedule run-due [--batch N]
+```
+
+`refresh schedule add` requires at least one of:
+
+- `[seed_url]`
+- `--urls <csv>`
 
 ## Tier Presets
 
@@ -47,21 +67,37 @@ axon refresh schedule run-due --json
 | `medium` | `21600` |
 | `low` | `86400` |
 
-Use `--every-seconds` for custom cadence. If omitted, `--tier medium` behavior maps to `21600`.
+## Flags
 
-## Workers: Scheduler vs Consumer
+All global flags apply. Key flags for this command:
 
-These are separate processes and should both run in production:
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--wait <bool>` | `false` | Run refresh inline and block until complete. |
+| `--json` | `false` | Machine-readable output. |
+| `--yes` | `false` | Skip destructive confirmation (for `clear`). |
 
-- `axon refresh schedule worker`: scheduler loop. It checks due schedules and enqueues refresh jobs.
-- `axon refresh worker`: refresh consumer. It dequeues and executes refresh jobs.
-
-Example split-runtime:
+## Examples
 
 ```bash
-# Terminal A: scheduler
-axon refresh schedule worker
+# Async enqueue
+axon refresh https://docs.rs/spider
 
-# Terminal B: refresh job consumer
-axon refresh worker
+# Sync refresh from manifest seed
+axon refresh https://docs.rs --wait true
+
+# Create schedule using tier preset
+axon refresh schedule add docs-high https://docs.rs --tier high
+
+# Create schedule using explicit URL list
+axon refresh schedule add docs-explicit --urls "https://docs.rs/spider,https://qdrant.tech/documentation"
+
+# Run one due-schedule sweep now
+axon refresh schedule run-due --batch 50 --json
 ```
+
+## Notes
+
+- `refresh worker` is the refresh job consumer lane.
+- `refresh schedule worker` is the scheduler loop that periodically runs due-schedule sweeps.
+- `schedule run-due` dispatches due schedules immediately and reports claimed/dispatched/skipped/failed counts.

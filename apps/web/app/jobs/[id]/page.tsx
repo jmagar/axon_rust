@@ -17,6 +17,7 @@ import {
 import Link from 'next/link'
 import { use, useCallback, useEffect, useState } from 'react'
 import type { JobDetail } from '@/app/api/jobs/[id]/route'
+import { apiFetch } from '@/lib/api-fetch'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -191,7 +192,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
 
   const fetchJob = useCallback(async () => {
     try {
-      const res = await fetch(`/api/jobs/${id}`)
+      const res = await apiFetch(`/api/jobs/${id}`)
       if (!res.ok) {
         const body = (await res.json()) as { error?: string }
         setError(body.error ?? `HTTP ${res.status}`)

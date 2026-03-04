@@ -1,5 +1,5 @@
 # crates/crawl
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Crawl engine and crawl artifact manifest logic for Axon.
 
@@ -29,3 +29,8 @@ Crawl engine and crawl artifact manifest logic for Axon.
 ## Notes
 - Keep crawl behavior and job lifecycle concerns separated: traversal belongs here; queue and persistence state belong in `crates/jobs`.
 - Manifest format changes should be validated against downstream consumers that read crawl artifacts.
+
+## Related Docs
+- [Repository README](../../README.md)
+- [Architecture](../../docs/ARCHITECTURE.md)
+- [Docs Index](../../docs/README.md)

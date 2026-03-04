@@ -13,7 +13,10 @@ Open `http://localhost:3000`.
 
 ## API + Shell Security
 
-All `app/api/*` routes are now protected by `apps/web/middleware.ts`.
+Canonical environment variable reference lives in the repository README section `Optional Web App Security (apps/web)`.
+This file documents behavior and runtime semantics; keep the full variable list in one place to prevent drift.
+
+All `app/api/*` routes are now protected by `apps/web/proxy.ts`.
 
 - Auth headers accepted:
   - `Authorization: Bearer <token>`
@@ -32,6 +35,7 @@ The terminal shell websocket (`/ws/shell`) now enforces auth and origin checks i
 - Client token wiring:
   - `NEXT_PUBLIC_SHELL_WS_TOKEN` (preferred)
   - `NEXT_PUBLIC_AXON_API_TOKEN` (fallback)
+- Pulse beta allowlist is controlled by `AXON_ALLOWED_CLAUDE_BETAS` (see root README env table).
 
 Next.js response hardening is configured in `next.config.ts` with CSP, `X-Frame-Options`, `Referrer-Policy`, and HSTS (non-dev).
 `/api/cortex/*` responses are cache-tuned with `s-maxage=30, stale-while-revalidate=60`.
@@ -135,7 +139,8 @@ Route safety:
 - `lib/omnibox.ts`: mention parsing, ranking, phase derivation helpers
 - `app/api/omnibox/files/route.ts`: local docs listing + content fetch for mentions
 - `hooks/use-ws-messages.ts`: split execution/workspace/action contexts + compatibility hook
-- `middleware.ts`: API authentication + origin enforcement
+- `proxy.ts`: API authentication + origin enforcement
 - `shell-server.mjs`: authenticated node-pty websocket bridge with restricted child env
 - `lib/command-options.ts`: shared omnibox command-option type (no component-layer coupling)
+- `app/evaluate/page.tsx`: side-by-side evaluate rendering showcase
 - `__tests__/omnibox.test.ts`: omnibox helper unit tests

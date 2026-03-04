@@ -2,6 +2,25 @@ use crate::crates::core::ui::{accent, metric, subtle, symbol_for_status};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
+fn format_duration(mut secs: u64) -> String {
+    let days = secs / 86_400;
+    secs %= 86_400;
+    let hours = secs / 3_600;
+    secs %= 3_600;
+    let minutes = secs / 60;
+    let seconds = secs % 60;
+
+    if days > 0 {
+        format!("{days}d{hours}h")
+    } else if hours > 0 {
+        format!("{hours}h{minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m{seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 /// Human-readable relative age: "3s ago", "12m ago", "2h ago", "4d ago".
 pub(super) fn format_age(ts: &DateTime<Utc>) -> String {
     let secs = (Utc::now() - *ts).num_seconds().max(0) as u64;
@@ -16,16 +35,34 @@ pub(super) fn format_age(ts: &DateTime<Utc>) -> String {
     }
 }
 
-/// Best timestamp to show: finished_at for terminal jobs, updated_at for active ones.
-pub(super) fn job_age(
+/// Human-readable run duration.
+///
+/// Terminal jobs show total runtime from `started_at` to `finished_at`.
+/// Active jobs show elapsed runtime from `started_at` to now.
+/// If runtime anchors are missing, falls back to relative age.
+pub(super) fn job_runtime_text(
     status: &str,
+    started_at: Option<&DateTime<Utc>>,
     finished_at: Option<&DateTime<Utc>>,
     updated_at: &DateTime<Utc>,
 ) -> String {
     match status {
-        "completed" | "failed" | "canceled" => finished_at
-            .map(format_age)
-            .unwrap_or_else(|| format_age(updated_at)),
+        "completed" | "failed" | "canceled" => {
+            if let (Some(started), Some(finished)) = (started_at, finished_at) {
+                let secs = (*finished - *started).num_seconds().max(0) as u64;
+                format_duration(secs)
+            } else {
+                format_age(finished_at.unwrap_or(updated_at))
+            }
+        }
+        "running" | "processing" | "scraping" => {
+            if let Some(started) = started_at {
+                let secs = (Utc::now() - *started).num_seconds().max(0) as u64;
+                format_duration(secs)
+            } else {
+                format_age(updated_at)
+            }
+        }
         _ => format_age(updated_at),
     }
 }
@@ -211,6 +248,7 @@ pub(super) fn display_embed_input<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
 
     #[test]
     fn collection_from_config_extracts_collection() {
@@ -234,5 +272,22 @@ mod tests {
     fn collection_from_config_handles_null() {
         let json = serde_json::json!(null);
         assert_eq!(collection_from_config(&json), None);
+    }
+
+    #[test]
+    fn job_runtime_text_reports_running_elapsed_from_started_at() {
+        let started = Utc::now() - Duration::seconds(125);
+        let updated = Utc::now();
+        let value = job_runtime_text("running", Some(&started), None, &updated);
+        assert_eq!(value, "2m5s");
+    }
+
+    #[test]
+    fn job_runtime_text_reports_completed_duration_from_start_finish() {
+        let started = Utc::now() - Duration::seconds(3700);
+        let finished = Utc::now();
+        let updated = finished;
+        let value = job_runtime_text("completed", Some(&started), Some(&finished), &updated);
+        assert_eq!(value, "1h1m");
     }
 }

@@ -1,5 +1,5 @@
 # Database Schema
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Version: 1.0.0
 Last Updated: 01:26:53 | 02/25/2026 EST
@@ -61,8 +61,8 @@ This table differs structurally from the other four: it uses `source_type` and `
 |--------|------|----------|---------|-------------|
 | `id` | UUID | NOT NULL | — | Primary key, job identifier |
 | `status` | TEXT | NOT NULL | — | `pending` / `running` / `completed` / `failed` / `canceled` |
-| `source_type` | TEXT | NOT NULL | — | Ingest backend discriminator: `github`, `reddit`, or `youtube` |
-| `target` | TEXT | NOT NULL | — | Ingest target: GitHub repo (`owner/repo`), subreddit name, or YouTube video/playlist/channel URL |
+| `source_type` | TEXT | NOT NULL | — | Ingest backend discriminator: `github`, `reddit`, `youtube`, or `sessions` |
+| `target` | TEXT | NOT NULL | — | Ingest target label: repo/subreddit/url for source-driven ingests, or provider selection label for sessions |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Job creation timestamp |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Last status change |
 | `started_at` | TIMESTAMPTZ | NULL | — | When worker began processing |
@@ -80,6 +80,7 @@ This table differs structurally from the other four: it uses `source_type` and `
 | `github` | `owner/repo` (e.g. `rust-lang/rust`) | `axon github <owner/repo>` |
 | `reddit` | subreddit name (e.g. `rust`) or thread URL | `axon reddit <target>` |
 | `youtube` | video, playlist, or channel URL | `axon youtube <url>` |
+| `sessions` | `all` or provider list label (for example `claude,codex[:project]`) | `axon sessions [--claude|--codex|--gemini] [--project <name>]` |
 
 ### Structural differences vs other job tables
 
@@ -111,7 +112,7 @@ Tracks refresh jobs that re-fetch previously crawled URLs to detect content chan
 
 **Notes:**
 - `result_json` is updated periodically during processing (every URL) with a `"phase": "refreshing"` progress snapshot, then finalized with `"phase": "completed"` on success.
-- Uses `CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled'))` — stricter than other job tables which have no CHECK constraint.
+- Uses `CHECK (status IN ('pending', 'running', 'completed', 'failed', 'canceled'))`. Other `axon_*_jobs` tables also enforce status CHECK constraints in current schema.
 
 ## axon_refresh_targets
 

@@ -127,7 +127,7 @@ Ship only after Definition of Done passes.
 ### Shared Service Layer (Required for all new features)
 
 1. Add module and exports:
-- `crates/services/mod.rs`
+- `crates/services.rs`
 - `crates/services/<feature>.rs`
 
 Also wire the module graph:
@@ -151,7 +151,7 @@ Also wire the module graph:
 - `lib.rs` (`run_once` match arm)
 
 4. Add command kind + parser wiring:
-- `crates/core/config/types.rs` (`CommandKind`)
+- `crates/core/config/types/config.rs` (`CommandKind`)
 - `crates/core/config/cli.rs` (clap spec)
 - `crates/core/config/parse.rs` (arg -> `Config` mapping)
 
@@ -181,7 +181,7 @@ Also wire the module graph:
 ### Web Integration (if selected)
 
 1. Route to service from web runtime:
-- legacy axum runtime: `crates/web.rs` and/or `crates/web/execute/*`
+- core axum websocket runtime bridge: `crates/web.rs` and/or `crates/web/execute/*`
 - Next.js app: `apps/web/app/api/**` or websocket flow hooks/components
 
 2. Stream progress events to UI in real-time.

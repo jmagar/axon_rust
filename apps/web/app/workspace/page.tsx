@@ -18,6 +18,7 @@ import { CodeViewer } from '@/components/workspace/code-viewer'
 import { DirBrowser } from '@/components/workspace/dir-browser'
 import { type FileEntry, FileTree } from '@/components/workspace/file-tree'
 import { WorkspaceBreadcrumb } from '@/components/workspace/workspace-breadcrumb'
+import { apiFetch } from '@/lib/api-fetch'
 
 const ContentViewer = dynamic(
   () => import('@/components/content-viewer').then((m) => ({ default: m.ContentViewer })),
@@ -154,7 +155,9 @@ export default function WorkspacePage() {
       setLoadingContent(true)
       try {
         const fetchPath = entry.apiPath ?? entry.path
-        const res = await fetch(`/api/workspace?action=list&path=${encodeURIComponent(fetchPath)}`)
+        const res = await apiFetch(
+          `/api/workspace?action=list&path=${encodeURIComponent(fetchPath)}`,
+        )
         if (!res.ok) {
           const err = await res.json()
           setContentError(err.error ?? 'Failed to load directory')
@@ -179,7 +182,9 @@ export default function WorkspacePage() {
 
     setLoadingContent(true)
     try {
-      const res = await fetch(`/api/workspace?action=read&path=${encodeURIComponent(entry.path)}`)
+      const res = await apiFetch(
+        `/api/workspace?action=read&path=${encodeURIComponent(entry.path)}`,
+      )
       if (!res.ok) {
         const err = await res.json()
         setContentError(err.error ?? 'Failed to load file')

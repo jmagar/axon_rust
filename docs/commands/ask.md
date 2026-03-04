@@ -1,8 +1,8 @@
 # axon ask
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Version: 1.0.0
-Last Updated: 01:26:53 | 02/25/2026 EST
+Last Updated: 20:30:18 | 03/03/2026 EST
 
 RAG-powered Q&A. Retrieves relevant chunks from the local Qdrant knowledge base, reranks them by relevance, builds a context window, and calls the configured LLM to generate a grounded answer.
 
@@ -23,6 +23,9 @@ axon ask --query "<question>" [FLAGS]
 
 | Variable | Description |
 |----------|-------------|
+| `AXON_PG_URL` | Required by global config parsing (all commands). |
+| `AXON_REDIS_URL` | Required by global config parsing (all commands). |
+| `AXON_AMQP_URL` | Required by global config parsing (all commands). |
 | `TEI_URL` | TEI embeddings base URL. Used to embed the question before Qdrant search. |
 | `QDRANT_URL` | Qdrant base URL. Searched for relevant chunks. |
 | `OPENAI_BASE_URL` | OpenAI-compatible API base URL (e.g. `http://host/v1`). **Do not append `/chat/completions`**. |
@@ -36,11 +39,12 @@ All global flags apply. Key flags:
 |------|---------|-------------|
 | `--query <text>` | — | Question text (alternative to positional argument). |
 | `--collection <name>` | `cortex` | Qdrant collection to search. |
-| `--limit <n>` | `10` | Initial chunk limit (overridden by `AXON_ASK_CHUNK_LIMIT` tuning). |
-| `--diagnostics` | `false` | Print retrieved chunks and scores for debugging. |
+| `--diagnostics` | `false` | Print retrieval diagnostics (candidate pools, scores, source list). |
 | `--json` | `false` | Machine-readable JSON output. |
 
 Note: `ask` runs synchronously and does not support `--wait`.
+
+`--limit` is a global flag but is not used by `ask` retrieval. Ask retrieval depth is controlled by `AXON_ASK_*` tuning env vars.
 
 ## Examples
 

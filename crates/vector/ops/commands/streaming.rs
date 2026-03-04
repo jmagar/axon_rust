@@ -3,6 +3,7 @@ use anyhow::{Result as AnyResult, anyhow};
 use futures_util::StreamExt;
 use std::error::Error;
 use std::io::Write;
+use tokio::sync::mpsc::UnboundedSender;
 
 pub(crate) const ASK_RAG_SYSTEM_PROMPT: &str = r###"You are a source-grounded technical assistant.
 
@@ -54,6 +55,12 @@ pub(crate) struct JudgeContext<'a> {
     pub baseline_elapsed_ms: u128,
     pub source_count: usize,
     pub context_chars: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TaggedToken {
+    pub stream: &'static str,
+    pub delta: String,
 }
 
 fn judge_system_prompt() -> &'static str {
@@ -128,6 +135,7 @@ fn process_sse_line(
     answer: &mut String,
     print_tokens: bool,
     saw_stream_payload: &mut bool,
+    tagged: Option<(&UnboundedSender<TaggedToken>, &'static str)>,
 ) -> Result<bool, Box<dyn Error>> {
     let trimmed = line.trim();
     if trimmed.is_empty() || !trimmed.starts_with("data: ") {
@@ -144,6 +152,12 @@ fn process_sse_line(
     if let Some(token) = extract_sse_token(data) {
         *saw_stream_payload = true;
         answer.push_str(&token);
+        if let Some((tx, stream)) = tagged {
+            let _ = tx.send(TaggedToken {
+                stream,
+                delta: token.clone(),
+            });
+        }
         if print_tokens {
             print!("{token}");
             std::io::stdout().flush()?;
@@ -179,6 +193,7 @@ fn check_sources_repetition(
 async fn run_sse_stream(
     req: reqwest::RequestBuilder,
     print_tokens: bool,
+    tagged: Option<(&UnboundedSender<TaggedToken>, &'static str)>,
 ) -> Result<String, Box<dyn Error>> {
     let response = req.send().await?;
     if !response.status().is_success() {
@@ -204,7 +219,13 @@ async fn run_sse_stream(
                 let _ = line.pop();
             }
             let len_before = answer.len();
-            let done = process_sse_line(&line, &mut answer, print_tokens, &mut saw_stream_payload)?;
+            let done = process_sse_line(
+                &line,
+                &mut answer,
+                print_tokens,
+                &mut saw_stream_payload,
+                tagged,
+            )?;
             if done {
                 return Ok(answer);
             }
@@ -224,7 +245,13 @@ async fn run_sse_stream(
     }
 
     if !pending.trim().is_empty() {
-        let _ = process_sse_line(&pending, &mut answer, print_tokens, &mut saw_stream_payload)?;
+        let _ = process_sse_line(
+            &pending,
+            &mut answer,
+            print_tokens,
+            &mut saw_stream_payload,
+            tagged,
+        )?;
     }
 
     if saw_stream_payload && !answer.trim().is_empty() {
@@ -251,7 +278,28 @@ pub(crate) async fn ask_llm_streaming(
         "stream": true
     }));
 
-    run_sse_stream(req, print_tokens).await
+    run_sse_stream(req, print_tokens, None).await
+}
+
+pub(crate) async fn ask_llm_streaming_tagged(
+    cfg: &Config,
+    client: &reqwest::Client,
+    query: &str,
+    context: &str,
+    stream: &'static str,
+    tx: &UnboundedSender<TaggedToken>,
+) -> Result<String, Box<dyn Error>> {
+    let req = build_openai_chat_request(client, cfg).json(&serde_json::json!({
+        "model": cfg.openai_model,
+        "messages": [
+            {"role": "system", "content": ASK_RAG_SYSTEM_PROMPT},
+            {"role": "user", "content": format!("Question: {}\n\nContext:\n{}", query, context)}
+        ],
+        "temperature": 0.1,
+        "stream": true
+    }));
+
+    run_sse_stream(req, false, Some((tx, stream))).await
 }
 
 pub(crate) async fn ask_llm_non_streaming(
@@ -298,7 +346,27 @@ pub(crate) async fn baseline_llm_streaming(
         "stream": true
     }));
 
-    run_sse_stream(req, print_tokens).await
+    run_sse_stream(req, print_tokens, None).await
+}
+
+pub(crate) async fn baseline_llm_streaming_tagged(
+    cfg: &Config,
+    client: &reqwest::Client,
+    query: &str,
+    stream: &'static str,
+    tx: &UnboundedSender<TaggedToken>,
+) -> Result<String, Box<dyn Error>> {
+    let req = build_openai_chat_request(client, cfg).json(&serde_json::json!({
+        "model": cfg.openai_model,
+        "messages": [
+            {"role": "system", "content": "You are a knowledgeable technical assistant. Answer the following question accurately and thoroughly, drawing on your full training knowledge. Where you are uncertain or your knowledge may be outdated, say so explicitly rather than presenting uncertain information as fact. For technical questions, be specific: include exact values, function names, and configuration details where you know them."},
+            {"role": "user", "content": query}
+        ],
+        "temperature": 0.1,
+        "stream": true
+    }));
+
+    run_sse_stream(req, false, Some((tx, stream))).await
 }
 
 pub(crate) async fn baseline_llm_non_streaming(
@@ -339,7 +407,7 @@ pub(crate) async fn judge_llm_streaming(
         "temperature": 0.3,
         "stream": true
     }));
-    run_sse_stream(req, print_tokens).await
+    run_sse_stream(req, print_tokens, None).await
 }
 
 pub(crate) async fn judge_llm_non_streaming(
@@ -367,6 +435,7 @@ pub(crate) async fn judge_llm_non_streaming(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::mpsc;
 
     #[test]
     fn test_sources_repetition_no_sources() {
@@ -422,5 +491,26 @@ mod tests {
             let r2 = check_sources_repetition(answer, first.unwrap() + 1, &mut first);
             assert!(r2.is_some(), "case-insensitive second detection failed");
         }
+    }
+
+    #[test]
+    fn test_process_sse_line_emits_tagged_token() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<TaggedToken>();
+        let mut answer = String::new();
+        let mut saw = false;
+        let done = process_sse_line(
+            r#"data: {"choices":[{"delta":{"content":"hello"}}]}"#,
+            &mut answer,
+            false,
+            &mut saw,
+            Some((&tx, "with_context")),
+        )
+        .expect("process_sse_line should succeed");
+        assert!(!done);
+        assert!(saw);
+        assert_eq!(answer, "hello");
+        let evt = rx.try_recv().expect("expected tagged token event");
+        assert_eq!(evt.stream, "with_context");
+        assert_eq!(evt.delta, "hello");
     }
 }

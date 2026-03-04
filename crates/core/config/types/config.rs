@@ -1,5 +1,6 @@
 use super::enums::{
-    CommandKind, PerformanceProfile, RedditSort, RedditTime, RenderMode, ScrapeFormat,
+    CommandKind, EvaluateResponsesMode, PerformanceProfile, RedditSort, RedditTime, RenderMode,
+    ScrapeFormat,
 };
 use std::path::PathBuf;
 
@@ -229,6 +230,9 @@ pub struct Config {
 
     /// Print verbose RAG diagnostics (retrieved chunks, scores) during `ask`/`evaluate`. Flag: `--diagnostics`.
     pub ask_diagnostics: bool,
+
+    /// Output mode for live `evaluate` answer rendering (`inline`, `side-by-side`, `events`).
+    pub evaluate_responses_mode: EvaluateResponsesMode,
 
     /// Maximum total characters of context passed to the LLM in a single `ask` request.
     /// Env: `AXON_ASK_MAX_CONTEXT_CHARS` (clamped 20_000–400_000). Default: 120_000.

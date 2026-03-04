@@ -1,6 +1,7 @@
 use super::config::Config;
 use super::enums::{
-    CommandKind, PerformanceProfile, RedditSort, RedditTime, RenderMode, ScrapeFormat,
+    CommandKind, EvaluateResponsesMode, PerformanceProfile, RedditSort, RedditTime, RenderMode,
+    ScrapeFormat,
 };
 use std::fmt;
 use std::path::PathBuf;
@@ -83,6 +84,7 @@ impl Default for Config {
             openai_model: String::new(),
             tavily_api_key: String::new(),
             ask_diagnostics: false,
+            evaluate_responses_mode: EvaluateResponsesMode::Inline,
             ask_max_context_chars: 120_000,
             ask_candidate_limit: 64,
             ask_chunk_limit: 10,
@@ -210,6 +212,7 @@ impl fmt::Debug for Config {
             .field("openai_model", &self.openai_model)
             .field("tavily_api_key", &"[REDACTED]")
             .field("ask_diagnostics", &self.ask_diagnostics)
+            .field("evaluate_responses_mode", &self.evaluate_responses_mode)
             .field("ask_max_context_chars", &self.ask_max_context_chars)
             .field("ask_candidate_limit", &self.ask_candidate_limit)
             .field("ask_chunk_limit", &self.ask_chunk_limit)

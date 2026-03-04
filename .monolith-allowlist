@@ -14,3 +14,6 @@ crates/mcp/server/oauth_google/handlers_broker.rs
 crates/mcp/server/oauth_google/handlers_google.rs
 crates/mcp/server/oauth_google/handlers_protected.rs
 crates/mcp/server/oauth_google/helpers.rs
+
+# expires: 2026-03-11 — evaluate.rs 901L: run_parallel_answers_streaming (188L) needs splitting
+crates/vector/ops/commands/evaluate.rs

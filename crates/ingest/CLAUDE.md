@@ -8,11 +8,10 @@ Ingests external sources (GitHub, Reddit, YouTube, AI sessions) into Qdrant.
 ```
 ingest/
 ├── github/      # GitHub repo ingestion (code, issues, PRs, wiki)
-│   ├── mod.rs   # orchestration via tokio::join! + pure logic + tests
 │   ├── files.rs # file tree fetch + raw content via reqwest
 │   ├── issues.rs# octocrab paginated issues + PRs
 │   └── wiki.rs  # git clone --depth=1 subprocess; no wiki = Ok(0)
-├── github.rs    # re-export shim — canonical logic is in github/; this file re-exports the public API
+├── github.rs    # module root + orchestration; delegates to github/files.rs, github/issues.rs, github/wiki.rs
 ├── reddit.rs    # Subreddit post/comment ingestion via Reddit OAuth2 API
 ├── youtube.rs   # YouTube transcript ingestion via yt-dlp subprocess
 └── sessions/    # AI session export parsers
@@ -62,7 +61,7 @@ cargo test -- --nocapture # show parsed output
 All ingest unit tests run without live services (pure logic: parsing, classification, ID extraction). Tests for `ingest_github`, `ingest_reddit`, `ingest_youtube` that hit real APIs require credentials set in env.
 
 ## Embedding Pattern
-All ingest handlers call `embed_text_with_metadata()` from `crates/vector/ops/tei.rs` (re-exported from `vector/ops/mod.rs`). This function:
+All ingest handlers call `embed_text_with_metadata()` from `crates/vector/ops/tei.rs` (re-exported from `vector/ops.rs`). This function:
 1. Chunks the text
 2. Attaches source metadata (URL/source_type, title, etc.)
 3. Calls `tei_embed()` with auto-split on 413

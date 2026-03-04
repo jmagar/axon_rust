@@ -2,6 +2,7 @@
 
 import { AlertCircle, CheckCircle2, RefreshCw, Stethoscope, XCircle } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { apiFetch } from '@/lib/api-fetch'
 import type { DoctorResult, DoctorServiceStatus } from '@/lib/result-types'
 
 // ── Service card ──────────────────────────────────────────────────────────────
@@ -57,7 +58,7 @@ export function DoctorDashboard() {
     if (isManual) setSpinning(true)
     setError(null)
     try {
-      const res = await fetch('/api/cortex/doctor', { signal: controller.signal })
+      const res = await apiFetch('/api/cortex/doctor', { signal: controller.signal })
       const json = (await res.json()) as ApiResponse
       if (!json.ok) throw new Error(json.error ?? 'Unknown error')
       if (abortRef.current !== controller) return

@@ -17,6 +17,7 @@ import {
   Tag,
 } from 'lucide-react'
 import { useCallback, useState } from 'react'
+import { apiFetch } from '@/lib/api-fetch'
 
 export interface FileEntry {
   name: string
@@ -98,7 +99,9 @@ function TreeNode({
       setLoading(true)
       try {
         const fetchPath = entry.apiPath ?? entry.path
-        const res = await fetch(`/api/workspace?action=list&path=${encodeURIComponent(fetchPath)}`)
+        const res = await apiFetch(
+          `/api/workspace?action=list&path=${encodeURIComponent(fetchPath)}`,
+        )
         const data = await res.json()
         setChildren(data.items ?? [])
       } catch {

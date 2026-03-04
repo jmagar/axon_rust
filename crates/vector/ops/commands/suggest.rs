@@ -80,6 +80,60 @@ fn already_indexed(url: &str, indexed_lookup: &HashSet<String>) -> bool {
     false
 }
 
+fn suggestion_score(url: &str) -> i32 {
+    let parsed = Url::parse(url).ok();
+    let Some(parsed) = parsed else {
+        return 0;
+    };
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    let path = parsed.path().to_ascii_lowercase();
+    let full = format!("{host}{path}");
+    let mut score = 0i32;
+
+    let high_value = [
+        "docs",
+        "reference",
+        "api",
+        "guide",
+        "manual",
+        "changelog",
+        "release",
+        "help",
+        "kb",
+    ];
+    if high_value.iter().any(|k| full.contains(k)) {
+        score += 4;
+    }
+    if path == "/" || path.is_empty() {
+        score += 1;
+    }
+    let depth = path.split('/').filter(|s| !s.is_empty()).count();
+    if (1..=4).contains(&depth) {
+        score += 2;
+    }
+    if parsed.query().is_some() {
+        score -= 2;
+    }
+    let low_value = [
+        "privacy", "terms", "careers", "press", "blog", "news", "about",
+    ];
+    if low_value.iter().any(|k| path.contains(k)) {
+        score -= 3;
+    }
+    let binary_suffixes = [".zip", ".gz", ".tar", ".exe", ".dmg"];
+    if binary_suffixes.iter().any(|s| path.ends_with(s)) {
+        score -= 6;
+    }
+    score
+}
+
+fn host_of(url: &str) -> String {
+    Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
 struct SuggestPromptContext {
     desired: usize,
     indexed_urls: Vec<String>,
@@ -96,6 +150,7 @@ fn suggestion_focus(cfg: &Config) -> String {
 
 async fn build_suggest_prompt_context(
     cfg: &Config,
+    focus: &str,
     desired: usize,
 ) -> Result<SuggestPromptContext, Box<dyn Error>> {
     let base_url_context_limit =
@@ -142,7 +197,7 @@ async fn build_suggest_prompt_context(
         indexed_urls,
         indexed_lookup,
         ranked_base_urls,
-        focus: suggestion_focus(cfg),
+        focus: focus.to_string(),
         base_context,
         existing_url_context,
     })
@@ -207,11 +262,42 @@ fn filter_new_suggestions(
         if accepted_seen.insert(suggestion.url.clone()) {
             accepted.push(suggestion);
         }
-        if accepted.len() >= desired {
-            break;
+    }
+
+    accepted.sort_by(|a, b| {
+        suggestion_score(&b.url)
+            .cmp(&suggestion_score(&a.url))
+            .then_with(|| a.url.cmp(&b.url))
+    });
+    let mut diversified = Vec::new();
+    let mut used_hosts = HashSet::new();
+    for suggestion in &accepted {
+        let host = host_of(&suggestion.url);
+        if host.is_empty() {
+            continue;
+        }
+        if used_hosts.insert(host) {
+            diversified.push(suggestion.clone());
+            if diversified.len() >= desired {
+                break;
+            }
         }
     }
-    (accepted, rejected_existing)
+    if diversified.len() < desired {
+        let mut seen_urls = diversified
+            .iter()
+            .map(|s| s.url.clone())
+            .collect::<HashSet<_>>();
+        for suggestion in &accepted {
+            if seen_urls.insert(suggestion.url.clone()) {
+                diversified.push(suggestion.clone());
+            }
+            if diversified.len() >= desired {
+                break;
+            }
+        }
+    }
+    (diversified, rejected_existing)
 }
 
 fn emit_suggest_output(
@@ -265,17 +351,41 @@ pub async fn run_suggest_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
         return Err("OPENAI_BASE_URL and OPENAI_MODEL required for suggest".into());
     }
     let desired = cfg.search_limit.clamp(1, 100);
-    let ctx = build_suggest_prompt_context(cfg, desired).await?;
+    let focus = suggestion_focus(cfg);
+    let (accepted, rejected_existing, content, ctx) =
+        discover_suggestions_with_context(cfg, &focus, desired).await?;
+    emit_suggest_output(cfg, &ctx, &accepted, &rejected_existing, &content)
+}
+
+async fn discover_suggestions_with_context(
+    cfg: &Config,
+    focus: &str,
+    desired: usize,
+) -> Result<(Vec<Suggestion>, Vec<String>, String, SuggestPromptContext), Box<dyn Error>> {
+    let ctx = build_suggest_prompt_context(cfg, focus, desired).await?;
     let user_prompt = build_suggest_user_prompt(&ctx);
     let content = request_suggestions_from_llm(cfg, &user_prompt).await?;
     let (accepted, rejected_existing) =
         filter_new_suggestions(&content, &ctx.indexed_lookup, desired);
-    emit_suggest_output(cfg, &ctx, &accepted, &rejected_existing, &content)
+    Ok((accepted, rejected_existing, content, ctx))
+}
+
+pub(crate) async fn discover_crawl_suggestions(
+    cfg: &Config,
+    focus: &str,
+    desired: usize,
+) -> Result<Vec<(String, String)>, Box<dyn Error>> {
+    let desired = desired.clamp(1, 100);
+    let (accepted, _, _, _) = discover_suggestions_with_context(cfg, focus, desired).await?;
+    Ok(accepted
+        .into_iter()
+        .map(|s| (s.url, s.reason))
+        .collect::<Vec<_>>())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{already_indexed, parse_suggestions_from_llm};
+    use super::{already_indexed, filter_new_suggestions, parse_suggestions_from_llm};
     use std::collections::HashSet;
 
     #[test]
@@ -310,5 +420,23 @@ mod tests {
             "https://docs.example.com/changelog",
             &indexed
         ));
+    }
+
+    #[test]
+    fn filter_prefers_high_value_urls_and_diversifies_hosts() {
+        let mut indexed = HashSet::new();
+        indexed.insert("https://docs.a.com/old".to_string());
+        let content = r#"{
+          "suggestions": [
+            {"url":"https://a.com/privacy","reason":"low value"},
+            {"url":"https://docs.a.com/reference/api","reason":"high value"},
+            {"url":"https://docs.b.com/guide","reason":"high value"},
+            {"url":"https://a.com/news","reason":"low value"}
+          ]
+        }"#;
+        let (accepted, _rejected) = filter_new_suggestions(content, &indexed, 2);
+        assert_eq!(accepted.len(), 2);
+        assert_eq!(accepted[0].url, "https://docs.a.com/reference/api");
+        assert_eq!(accepted[1].url, "https://docs.b.com/guide");
     }
 }

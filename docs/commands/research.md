@@ -1,10 +1,10 @@
 # axon research
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Version: 1.0.0
-Last Updated: 01:26:53 | 02/25/2026 EST
+Last Updated: 20:29:46 | 03/03/2026 EST
 
-Deep web research powered by Tavily AI search and an OpenAI-compatible LLM. The command searches the web for the query, scrapes and extracts key information from top results, then uses the LLM to synthesize a comprehensive answer with citations.
+Web research pipeline: Tavily search plus one synthesis LLM call over returned snippets. Runs synchronously and prints extracted source previews plus a synthesized summary.
 
 ## Synopsis
 
@@ -17,82 +17,49 @@ axon research --query "<query>" [FLAGS]
 
 | Argument | Description |
 |----------|-------------|
-| `<query>` | Research question or topic (positional, or via `--query`) |
+| `<query>` | Research query text (or use `--query`) |
 
 ## Required Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `TAVILY_API_KEY` | Tavily AI Search API key. Get one at `https://tavily.com`. |
-| `OPENAI_BASE_URL` | OpenAI-compatible API base URL (e.g. `http://host/v1`). **Do not include `/chat/completions`** — the command appends that path automatically. |
-| `OPENAI_MODEL` | Model name for LLM synthesis (e.g. `gemini-2-flash`, `gpt-4o-mini`). |
-
-Set in `.env`:
-
-```bash
-TAVILY_API_KEY=tvly-yourkey
-OPENAI_BASE_URL=http://your-llm-host/v1
-OPENAI_API_KEY=your-api-key-or-empty
-OPENAI_MODEL=your-model-name
-```
+| `TAVILY_API_KEY` | Tavily API key for source discovery. |
+| `OPENAI_BASE_URL` | OpenAI-compatible base URL (for example `http://host/v1`). Must not include `/chat/completions`. |
+| `OPENAI_MODEL` | Model name used for synthesis. |
 
 ## Flags
 
-All global flags apply. Key flags for this command:
+All global flags apply. Key flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--query <text>` | — | Query text (alternative to positional argument). |
-| `--limit <n>` | `10` | Maximum search results to retrieve and process. |
-| `--json` | `false` | Machine-readable JSON output. |
-
-Note: `research` runs synchronously and does not support `--wait`. It does not use the AMQP queue.
+| `--query <text>` | — | Query text (alternative to positional words). |
+| `--limit <n>` | `10` | Maximum Tavily results processed. |
+| `--openai-base-url <url>` | env/default | Override LLM base URL. |
+| `--openai-model <name>` | env/default | Override LLM model. |
 
 ## Examples
 
 ```bash
 # Basic research
-axon research "Rust async runtime internals"
+axon research "Rust async cancellation patterns"
 
-# Using --query flag
-axon research --query "best practices for Qdrant collection design"
+# Use --query and limit
+axon research --query "Qdrant HNSW tuning" --limit 5
 
-# Limit search results
-axon research "tokio task spawning overhead" --limit 5
-
-# JSON output for programmatic use
-axon research "spider.rs crawl architecture" --json
+# Override LLM endpoint
+axon research "Spider.rs rendering tradeoffs" --openai-base-url http://localhost:11434/v1 --openai-model llama3
 ```
-
-## Output
-
-The command prints:
-
-1. **Search Results** — count of Tavily results retrieved
-2. **Pages Extracted** — count of pages successfully scraped and extracted
-3. Per-extraction: title, URL, and a 200-character preview of extracted data
-4. **Summary** — LLM-synthesized answer grounded in the extracted content
-5. **Token usage** — prompt, completion, and total token counts (if the LLM returns them)
 
 ## Pipeline
 
-1. Sends the query to Tavily's search API, receiving ranked URLs with snippets
-2. For each result, scrapes the page and extracts key facts using the LLM (`spider_agent`)
-3. Synthesizes all extractions into a single grounded summary using the LLM
+1. Tavily search fetches ranked results.
+2. Each result contributes URL, title, and snippet as extracted evidence.
+3. A single LLM completion synthesizes those snippets into a summary.
 
-This is distinct from `axon ask`, which searches the local Qdrant knowledge base. `research` searches the live web.
+## Behavior Notes
 
-## Notes
-
-- `OPENAI_BASE_URL` must be the base URL only: `http://host/v1` — **not** `http://host/v1/chat/completions`. The command validates this and returns a clear error if the path is wrong.
-- The Tavily API has rate limits based on your plan. Check `https://docs.tavily.com` for details.
-- Results are not automatically embedded into Qdrant. To index research results for future `ask` queries, pipe the output through `axon embed` or use `axon search` (which auto-queues crawl jobs for result URLs).
-- `research` uses `spider_agent`'s `ResearchOptions` with `synthesize: true`. The synthesis step calls the LLM once with all extracted content, so token cost scales with `--limit`.
-
-## Comparison: research vs search vs ask
-
-| Command | Data source | LLM synthesis | Embeds results? |
-|---------|-------------|--------------|----------------|
-| `ask` | Local Qdrant knowledge base | Yes | No |
-| `search` | Tavily web search | No | Auto-queues crawl jobs |
-| `research` | Tavily web search + page extraction | Yes | No |
+- `OPENAI_BASE_URL` is validated and must not end with `/chat/completions`.
+- `--search-time-range` is applied to the Tavily search step before synthesis.
+- With `--json`, output is strict JSON on stdout.
+- `research` does not enqueue jobs and does not auto-embed results into Qdrant.

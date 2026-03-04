@@ -1,19 +1,38 @@
 # crates/mcp — Axon MCP Server Guide
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 ## Purpose
 `crates/mcp` implements the Axon Model Context Protocol server (`axon mcp`) that exposes crawler/RAG capabilities through a single MCP tool.
 
 - CLI entrypoint: `main.rs` subcommand `mcp`
-- Transport: stdio
+- Transport: RMCP streamable HTTP on `/mcp` (CLI entrypoint uses HTTP)
 - MCP tool: `axon`
 - Routing model: consolidated `action` + `subaction`
+
+## Module Layout
+
+```
+mcp/
+├── ../mcp.rs           # Crate root module file, re-exports
+├── schema.rs           # AxonRequest/AxonToolResponse types, action/subaction enums
+├── config.rs           # load_mcp_config(): reuses Axon env vars
+├── server.rs           # AxonMcpServer: tool registration + action dispatch router
+└── server/
+    ├── common.rs                   # Shared handler utilities
+    ├── handlers_crawl_extract.rs   # crawl + extract action handlers
+    ├── handlers_embed_ingest.rs    # embed + ingest action handlers
+    ├── handlers_query.rs           # query, retrieve, search, map, scrape, ask, research, screenshot
+    ├── handlers_refresh_status.rs  # refresh + status action handlers
+    ├── handlers_system.rs          # doctor, domains, sources, stats, artifacts, help
+    └── oauth_google/               # Google OAuth2 integration
+```
 
 ## Source-of-Truth References
 - Wire contract schema doc: `docs/MCP-TOOL-SCHEMA.md`
 - MCP runtime/design doc: `docs/MCP.md`
 - Tool request/response types: `crates/mcp/schema.rs`
-- Tool router and handlers: `crates/mcp/server.rs`
+- Tool router and dispatch: `crates/mcp/server.rs`
+- Handler implementations: `crates/mcp/server/handlers_*.rs`
 - Env/config loader: `crates/mcp/config.rs`
 
 If documentation and code diverge, update both in the same change.
@@ -31,16 +50,20 @@ The single `axon` tool is the only public MCP tool. All operations route through
 
 Domains (`action`):
 - `help`
+- `status`
 - `crawl`
 - `extract`
 - `embed`
 - `ingest`
+- `refresh`
 - `query`
 - `retrieve`
 - `search`
 - `map`
 - `scrape`
 - `ask`
+- `research`
+- `screenshot`
 - `doctor`
 - `domains`
 - `sources`
@@ -66,6 +89,26 @@ This pattern is mandatory. Do not add separate MCP tools for each operation.
 ### `ingest`
 - `start`, `status`, `cancel`, `list`, `cleanup`, `clear`, `recover`
 - Integration: `crates/jobs/ingest.rs`
+
+### `refresh`
+- `start`, `status`, `cancel`, `list`, `cleanup`, `clear`, `recover`
+- Integration: `crates/jobs/refresh/`
+
+### `ask`
+- Direct action (no subaction)
+- Integration: `crates/vector/ops/commands/ask/`
+
+### `research`
+- Direct action (no subaction)
+- Integration: `spider_agent` Tavily AI search + LLM synthesis
+
+### `screenshot`
+- Direct action (no subaction)
+- Integration: `crates/cli/commands/screenshot/`
+
+### `status`
+- Direct action (no subaction)
+- Integration: job queue status across all job types
 
 ### `query` / `retrieve`
 - Integration: `crates/vector/ops/tei.rs`, `crates/vector/ops/qdrant/*`
@@ -137,6 +180,12 @@ Build:
 cargo run --bin axon -- mcp
 ```
 
+Primary MCP smoke path:
+
+```bash
+./scripts/test-mcp-tools-mcporter.sh
+```
+
 Schema/introspection:
 
 ```bash
@@ -149,6 +198,7 @@ Smoke calls:
 mcporter call axon.axon action:doctor
 mcporter call axon.axon action:sources limit:5
 mcporter call axon.axon action:crawl subaction:list limit:5
+mcporter call axon.axon action:refresh subaction:list limit:5
 ```
 
 When adding a new subaction, add at least one smoke example here.

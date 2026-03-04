@@ -1,5 +1,5 @@
 # Security Model
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Version: 1.0.0
 Last Updated: 01:26:53 | 02/25/2026 EST
@@ -75,7 +75,7 @@ Implemented in `crates/core/http.rs`:
 
 ### Command Surface Hardening
 
-WebSocket command execution (`crates/web/execute/mod.rs`):
+WebSocket command execution (`crates/web/execute.rs`):
 
 - explicit `ALLOWED_MODES` list
 - explicit `ALLOWED_FLAGS` list
@@ -98,7 +98,7 @@ Do not:
 
 ## Network Exposure
 
-Compose ports bind to loopback (`127.0.0.1`) by default:
+Most infra services bind to loopback (`127.0.0.1`) in compose:
 
 - Postgres
 - Redis
@@ -106,14 +106,19 @@ Compose ports bind to loopback (`127.0.0.1`) by default:
 - Qdrant
 - Chrome management/CDP endpoints
 
-This limits exposure to local host unless additional reverse proxy/network routing is configured.
+`axon-web` is published as `49010:49010` by default (host-accessible unless firewall/reverse-proxy constrained).
+
+Hardening guidance:
+- For local-only web UI, publish `127.0.0.1:49010:49010`.
+- If exposed externally, enforce TLS + auth at reverse proxy.
+- Keep worker/internal service ports loopback-bound unless explicitly required.
 
 ## API and Command Surface Hardening
 
 Pulse/Copilot API routes:
 
 - schema validation with Zod
-- explicit error mapping (`400`, `502`, `503`, `500`)
+- explicit error mapping (for example `400`, `401`, `408`, `500`)
 - timeout on upstream LLM calls
 
 Worker startup:
@@ -167,7 +172,7 @@ After deploy:
 - `crates/core/http.rs`
 - `crates/web.rs`
 - `crates/web/download.rs`
-- `crates/web/execute/mod.rs`
+- `crates/web/execute.rs`
 - `apps/web/app/api/omnibox/files/route.ts`
 - `apps/web/app/api/pulse/chat/route.ts`
 - `apps/web/app/api/ai/copilot/route.ts`

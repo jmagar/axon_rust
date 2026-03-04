@@ -63,6 +63,7 @@ fn positional_from_refresh_schedule(action: RefreshScheduleSubcommand) -> Vec<St
         RefreshScheduleSubcommand::Delete { name } => {
             vec!["schedule".to_string(), "delete".to_string(), name]
         }
+        RefreshScheduleSubcommand::Worker => vec!["schedule".to_string(), "worker".to_string()],
         RefreshScheduleSubcommand::RunDue { batch } => vec![
             "schedule".to_string(),
             "run-due".to_string(),
@@ -82,5 +83,18 @@ pub(super) fn parse_viewport(s: &str) -> (u32, u32) {
     match (w.trim().parse::<u32>(), h.trim().parse::<u32>()) {
         (Ok(w), Ok(h)) if w > 0 && h > 0 => (w, h),
         _ => DEFAULT,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_schedule_worker_maps_to_positional_worker() {
+        let positional = positional_from_refresh_subcommand(RefreshSubcommand::Schedule {
+            action: RefreshScheduleSubcommand::Worker,
+        });
+        assert_eq!(positional, vec!["schedule", "worker"]);
     }
 }

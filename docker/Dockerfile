@@ -90,6 +90,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:12.9-slim
 
 ARG S6_OVERLAY_VERSION=3.2.1.0
+ARG AXON_GIT_SHA=dev
+
+LABEL org.opencontainers.image.revision="${AXON_GIT_SHA}"
+LABEL io.axon.git_sha="${AXON_GIT_SHA}"
+ENV AXON_IMAGE_GIT_SHA="${AXON_GIT_SHA}"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

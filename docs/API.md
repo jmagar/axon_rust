@@ -1,5 +1,5 @@
 # API Reference
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Version: 1.0.0
 Last Updated: 16:51:32 | 02/25/2026 EST
@@ -30,6 +30,7 @@ It does not document internal Rust function signatures.
 | Surface | Path | Producer | Consumer |
 |---|---|---|---|
 | WebSocket | `/ws` | `crates/web.rs` + `crates/web/execute/*` | `apps/web/hooks/*` |
+| WebSocket | `/ws/shell` | `crates/web.rs` + `crates/web/shell.rs` | terminal UI (`apps/web/app/terminal/*`) |
 | HTTP GET | `/output/{*path}` | `crates/web.rs` | browser UI |
 | HTTP GET | `/download/{job_id}/...` | `crates/web/download.rs` | browser UI |
 | HTTP REST | `/api/*` | Next.js route handlers | browser UI |
@@ -46,7 +47,7 @@ Defined in `apps/web/lib/ws-protocol.ts` as `WsClientMsg`.
 | `cancel` | `{ type, id, mode?, job_id? }` | Cancel async job (legacy id + v2 context fields) |
 | `read_file` | `{ type, path }` | Read a generated file from crawl output context |
 
-`mode` is allowlisted by server-side `ALLOWED_MODES` in `crates/web/execute/mod.rs`.
+`mode` is allowlisted by server-side `ALLOWED_MODES` in `crates/web/execute.rs`.
 
 ### Server -> Client Messages
 
@@ -78,6 +79,20 @@ Defined in `apps/web/lib/ws-protocol.ts` as `WsServerMsg`.
 - For async modes, server strips client `--wait` and does fire-and-poll behavior.
 - `--json` is injected for most modes, except allowlisted exceptions (`search`, `research`).
 - Flags are passed through a server allowlist (`ALLOWED_FLAGS`), not blindly forwarded.
+
+## WebSocket API (`/ws/shell`)
+
+Dedicated PTY shell websocket (not multiplexed with `/ws`).
+
+Access constraints:
+- loopback-only: non-localhost clients are rejected with `403`
+
+Client -> server messages:
+- `{ "type": "input", "data": "ls -la\\n" }`
+- `{ "type": "resize", "cols": 120, "rows": 40 }`
+
+Server -> client messages:
+- `{ "type": "output", "data": "<pty chunk>" }`
 
 ## HTTP API (`apps/web` routes)
 
@@ -130,30 +145,24 @@ Handler: `apps/web/app/api/pulse/chat/route.ts`
 Request schema from `PulseChatRequestSchema` (`apps/web/lib/pulse/types.ts`):
 
 - `prompt` string
+- `sessionId?` string (resume prior Claude session)
 - `documentMarkdown` string (default `""`)
-- `selectedCollections` string[] (default `["pulse"]`)
-- `conversationHistory` array of `{role: "user"|"assistant", content: string}`
-- `permissionLevel`: `plan | training-wheels | full-access`
+- `selectedCollections` string[] (default `["cortex"]`)
+- `threadSources` string[] (default `[]`)
+- `scrapedContext?` object
+- `conversationHistory` array of `{ role: "user"|"assistant", content: string }`
+- `permissionLevel`: `plan | accept-edits | bypass-permissions` (default `bypass-permissions`)
+- `model`: `sonnet | opus | haiku` (default `sonnet`)
+- `effort`: `low | medium | high` (default `medium`)
+- additional CLI control fields (for example: `maxTurns`, `maxBudgetUsd`, `disableSlashCommands`, `allowedTools`, `disallowedTools`, `addDir`, `betas`, `toolsRestrict`)
 
-Response (`PulseChatResponse`):
-
-```json
-{
-  "text": "...",
-  "citations": [
-    { "url": "...", "title": "...", "snippet": "...", "collection": "pulse", "score": 0.91 }
-  ],
-  "operations": [
-    { "type": "append_markdown", "markdown": "..." }
-  ]
-}
-```
+Response:
+- streaming NDJSON (`content-type: application/x-ndjson`)
+- event types: `status`, `delta`, `heartbeat`, `done`, `error`
 
 Errors:
 
-- `503` missing `OPENAI_BASE_URL` or `OPENAI_API_KEY`
 - `400` invalid request schema
-- `502` upstream LLM error
 - `500` runtime failure
 
 ### `GET /api/pulse/doc`
@@ -206,16 +215,17 @@ Handler: `apps/web/app/api/ai/copilot/route.ts`
 Request:
 
 - `{ prompt, system?, model? }` validated by `CopilotRequestSchema`
+- header `x-copilot-stream: 1` enables NDJSON stream mode
 
-Response:
-
-- `{ completion }`
+Response modes:
+- default JSON: raw `generateText(...)` result object
+- NDJSON stream: `start` then `done` event (payload includes `completion`)
 
 Errors:
 
-- `503` missing `OPENAI_BASE_URL` or `OPENAI_API_KEY`
 - `400` invalid schema
-- `502` upstream LLM error
+- `401` missing `AI_GATEWAY_API_KEY`
+- `408` abort/timeout
 - `500` runtime failure
 
 ## Error Model
@@ -228,10 +238,10 @@ WebSocket:
 HTTP:
 
 - `400` client payload invalid
+- `401` missing/invalid auth for protected routes
 - `404` resource not found
+- `408` request timeout/abort path
 - `500` internal runtime error
-- `502` upstream dependency error
-- `503` service not configured (missing env)
 
 ## Security Constraints
 
@@ -243,7 +253,8 @@ HTTP:
 ## Compatibility Notes
 
 - Active UI runtime is `apps/web`.
-- Legacy static UI served by `axon serve` remains available but is deprecated.
+- `axon serve` (`crates/web.rs` + `crates/web/*`) is the core websocket/output/download bridge runtime for the web app.
+- Only the old standalone static serve page UX is deprecated.
 - `/ws` v2 event names are canonical (`command.*`, `job.*`, `artifact.*`).
 - `crawl_progress`, `crawl_files`, and `file_content` remain as compatibility channels.
 - Keep `apps/web/lib/ws-protocol.ts` and Rust websocket payloads in sync.
@@ -251,7 +262,8 @@ HTTP:
 ## Source Map
 
 - `crates/web.rs`
-- `crates/web/execute/mod.rs`
+- `crates/web/shell.rs`
+- `crates/web/execute.rs`
 - `crates/web/execute/polling.rs`
 - `crates/web/execute/files.rs`
 - `crates/web/download.rs`

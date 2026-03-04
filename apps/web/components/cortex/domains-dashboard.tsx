@@ -2,6 +2,7 @@
 
 import { AlertCircle, Globe, RefreshCw } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { apiFetch } from '@/lib/api-fetch'
 import type { DomainsResult } from '@/lib/result-types'
 
 interface ApiResponse {
@@ -26,7 +27,7 @@ export function DomainsDashboard() {
     if (isManual) setSpinning(true)
     setError(null)
     try {
-      const res = await fetch('/api/cortex/domains')
+      const res = await apiFetch('/api/cortex/domains')
       const json = (await res.json()) as ApiResponse
       if (!json.ok) throw new Error(json.error ?? 'Unknown error')
       setData(json.data ?? null)

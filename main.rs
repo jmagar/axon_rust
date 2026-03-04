@@ -27,6 +27,7 @@ fn load_dotenv() {
     if let Some(explicit) = std::env::var_os("AXON_ENV_FILE").map(PathBuf::from) {
         match dotenvy::from_path(&explicit) {
             Ok(_) => return,
+            Err(dotenvy::Error::Io(ref e)) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
                 eprintln!(
                     "warning: failed to load AXON_ENV_FILE ({}): {e}",

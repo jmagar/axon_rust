@@ -15,7 +15,7 @@ For branding, theme, layout, and frontend UX decisions: `apps/web`.
 ## Directory Intent
 
 - `crates/web.rs`: Axum server wiring and routes
-- `crates/web/execute/mod.rs`: subprocess launch + WS output pump entry point
+- `crates/web/execute.rs`: subprocess launch + WS output pump entry point
 - `crates/web/execute/events.rs`: WS event type definitions
 - `crates/web/execute/files.rs`: output file serving for completed jobs
 - `crates/web/execute/polling.rs`: job-completion polling loop
@@ -44,7 +44,7 @@ ANSI codes are stripped from log output via `console::strip_ansi_codes()`.
 
 ## Security Model
 
-`execute/mod.rs` enforces strict whitelists before spawning any subprocess:
+`execute.rs` enforces strict whitelists before spawning any subprocess:
 - **`ALLOWED_MODES`**: list of valid CLI subcommands (e.g. `scrape`, `crawl`, `ask`) — rejects anything not in this list
 - **`ALLOWED_FLAGS`**: set of permitted CLI flags — rejects unknown flags
 

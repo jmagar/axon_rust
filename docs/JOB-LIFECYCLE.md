@@ -243,7 +243,7 @@ will remain in `running` state until the watchdog reclaims it.
 - `crates/jobs/extract.rs`
 - `crates/jobs/embed.rs`
 - `crates/jobs/ingest.rs`
-- `crates/jobs/refresh/mod.rs`
+- `crates/jobs/refresh.rs`
 - `crates/jobs/refresh/processor.rs`
 - `crates/jobs/refresh/schedule.rs`
 - `crates/jobs/refresh/state.rs`

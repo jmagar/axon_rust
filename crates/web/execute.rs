@@ -13,11 +13,11 @@ mod sync_mode;
 mod ws_send;
 
 #[cfg(test)]
-#[path = "tests/ws_event_v2_tests.rs"]
+#[path = "execute/tests/ws_event_v2_tests.rs"]
 mod ws_event_v2_tests;
 
 #[cfg(test)]
-#[path = "tests/ws_protocol_tests.rs"]
+#[path = "execute/tests/ws_protocol_tests.rs"]
 mod ws_protocol_tests;
 
 pub(crate) use files::handle_read_file;

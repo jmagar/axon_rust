@@ -4,7 +4,8 @@ mod enums;
 
 pub use config::Config;
 pub use enums::{
-    CommandKind, PerformanceProfile, RedditSort, RedditTime, RenderMode, ScrapeFormat,
+    CommandKind, EvaluateResponsesMode, PerformanceProfile, RedditSort, RedditTime, RenderMode,
+    ScrapeFormat,
 };
 
 #[cfg(test)]
@@ -86,6 +87,7 @@ mod tests {
         let cfg = Config::default();
         assert!(!cfg.wait);
         assert!(!cfg.json_output);
+        assert_eq!(cfg.evaluate_responses_mode, EvaluateResponsesMode::Inline);
         assert!(!cfg.reclaimed_status_only);
     }
 

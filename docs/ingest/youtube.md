@@ -1,5 +1,5 @@
 # YouTube Ingest
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Version: 1.0.0
 Last Updated: 01:26:53 | 02/25/2026 EST
@@ -10,7 +10,7 @@ Ingests a single YouTube video transcript into Qdrant via `yt-dlp`. No API key r
 
 ## What Gets Indexed
 
-- Auto-generated English subtitles (VTT format), falling back to manual captions if available
+- Auto-generated English subtitles (VTT format)
 - Transcript stripped of timestamps, position cues, HTML tags, and deduplicated overlapping lines
 - Embedded with the canonical `https://www.youtube.com/watch?v=<ID>` URL as source metadata
 
@@ -63,6 +63,8 @@ The exact yt-dlp invocation:
 yt-dlp --write-auto-sub --skip-download --sub-format vtt --convert-subs vtt \
   --sub-langs en --no-exec -o "<tmp>/<%(id)s>" -- https://www.youtube.com/watch?v=<ID>
 ```
+
+Note: manual-caption fallback (`--write-subs`) is not currently implemented.
 
 1. URL is SSRF-validated (private IP ranges blocked)
 2. Video ID extracted and URL reconstructed as canonical `watch?v=<ID>`

@@ -161,9 +161,11 @@ pub async fn run_research(cfg: &Config) -> Result<(), Box<dyn Error>> {
         return Err("research requires a query (positional or --query)".into());
     };
 
-    print_phase("◐", "Researching", &query);
-    println!("  {} {}", muted("provider=tavily model="), cfg.openai_model);
-    println!();
+    if !cfg.json_output {
+        print_phase("◐", "Researching", &query);
+        println!("  {} {}", muted("provider=tavily model="), cfg.openai_model);
+        println!();
+    }
 
     let started = Instant::now();
     let running = Arc::new(AtomicBool::new(true));
@@ -187,12 +189,19 @@ pub async fn run_research(cfg: &Config) -> Result<(), Box<dyn Error>> {
         None
     };
 
-    let payload = research_payload(cfg, &query, cfg.search_limit, 0, None).await;
+    let time_range = parse_search_time_range(cfg.search_time_range.as_deref());
+    let payload = research_payload(cfg, &query, cfg.search_limit, 0, time_range).await;
     running.store(false, Ordering::Relaxed);
     if let Some(t) = ticker {
         let _ = t.await;
     }
     let payload = payload?;
+
+    if cfg.json_output {
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+        log_done("command=research complete");
+        return Ok(());
+    }
 
     let search_results = payload["search_results"]
         .as_array()
@@ -252,6 +261,20 @@ pub async fn run_research(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
     log_done("command=research complete");
     Ok(())
+}
+
+fn parse_search_time_range(value: Option<&str>) -> Option<TimeRange> {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        Some("day") => Some(TimeRange::Day),
+        Some("week") => Some(TimeRange::Week),
+        Some("month") => Some(TimeRange::Month),
+        Some("year") => Some(TimeRange::Year),
+        Some(other) => {
+            log_warn(&format!("Unknown search_time_range '{other}'; ignoring"));
+            None
+        }
+        None => None,
+    }
 }
 
 #[cfg(test)]
@@ -345,5 +368,32 @@ mod tests {
             cfg.research_depth.is_none(),
             "research_depth should default to None"
         );
+    }
+
+    #[test]
+    fn parse_search_time_range_supports_known_values() {
+        assert!(matches!(
+            parse_search_time_range(Some("day")),
+            Some(TimeRange::Day)
+        ));
+        assert!(matches!(
+            parse_search_time_range(Some("week")),
+            Some(TimeRange::Week)
+        ));
+        assert!(matches!(
+            parse_search_time_range(Some("month")),
+            Some(TimeRange::Month)
+        ));
+        assert!(matches!(
+            parse_search_time_range(Some("year")),
+            Some(TimeRange::Year)
+        ));
+    }
+
+    #[test]
+    fn parse_search_time_range_rejects_unknown_values() {
+        assert!(parse_search_time_range(Some("decade")).is_none());
+        assert!(parse_search_time_range(Some("")).is_none());
+        assert!(parse_search_time_range(None).is_none());
     }
 }

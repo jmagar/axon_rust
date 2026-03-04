@@ -1,5 +1,14 @@
 use super::constants::{ALLOWED_FLAGS, ASYNC_MODES, NO_JSON_MODES};
 
+fn evaluate_events_mode(flags: &serde_json::Value) -> bool {
+    flags
+        .as_object()
+        .and_then(|obj| obj.get("responses_mode"))
+        .and_then(serde_json::Value::as_str)
+        .map(|value| value.eq_ignore_ascii_case("events"))
+        .unwrap_or(false)
+}
+
 pub(super) fn build_args(mode: &str, input: &str, flags: &serde_json::Value) -> Vec<String> {
     let is_async = ASYNC_MODES.contains(&mode);
     let mut args: Vec<String> = vec![mode.to_string()];
@@ -26,7 +35,8 @@ pub(super) fn build_args(mode: &str, input: &str, flags: &serde_json::Value) -> 
         }
     }
 
-    if !NO_JSON_MODES.contains(&mode) {
+    let disable_json_for_evaluate_events = mode == "evaluate" && evaluate_events_mode(flags);
+    if !NO_JSON_MODES.contains(&mode) && !disable_json_for_evaluate_events {
         args.push("--json".to_string());
     }
     if mode == "scrape" {

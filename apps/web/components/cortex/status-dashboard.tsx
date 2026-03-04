@@ -2,6 +2,7 @@
 
 import { Activity, AlertCircle, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { apiFetch } from '@/lib/api-fetch'
 import type { JobEntry, StatusResult } from '@/lib/result-types'
 
 // ── Status badge ──────────────────────────────────────────────────────────────
@@ -184,7 +185,7 @@ export function StatusDashboard() {
     if (isManual) setSpinning(true)
     setError(null)
     try {
-      const res = await fetch('/api/cortex/status', { signal: controller.signal })
+      const res = await apiFetch('/api/cortex/status', { signal: controller.signal })
       const json = (await res.json()) as ApiResponse
       if (!json.ok) throw new Error(json.error ?? 'Unknown error')
       if (abortRef.current !== controller) return

@@ -1,10 +1,10 @@
 # axon search
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Version: 1.0.0
-Last Updated: 01:26:53 | 02/25/2026 EST
+Last Updated: 20:29:46 | 03/03/2026 EST
 
-Web search via Tavily AI. Displays ranked search results with snippets and automatically enqueues crawl jobs for the result URLs, building the local knowledge base in the background.
+Web search via Tavily. Returns ranked results (title, URL, snippet) and runs synchronously.
 
 ## Synopsis
 
@@ -17,13 +17,13 @@ axon search --query "<query>" [FLAGS]
 
 | Argument | Description |
 |----------|-------------|
-| `<query>` | Search query (positional, or via `--query`) |
+| `<query>` | Search query text (or use `--query`) |
 
 ## Required Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `TAVILY_API_KEY` | Tavily AI Search API key. Get one at `https://tavily.com`. |
+| `TAVILY_API_KEY` | Tavily API key used by `spider_agent` search client. |
 
 ## Flags
 
@@ -31,46 +31,34 @@ All global flags apply. Key flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--query <text>` | — | Search query (alternative to positional argument). |
-| `--limit <n>` | `10` | Maximum number of search results to retrieve. |
-| `--json` | `false` | Machine-readable JSON output. |
-
-Note: `search` runs synchronously and does not support `--wait`. Crawl jobs for the result URLs are enqueued asynchronously regardless.
+| `--query <text>` | — | Query text (alternative to positional words). |
+| `--limit <n>` | `10` | Number of results to print. |
+| `--search-time-range <range>` | — | Optional Tavily time filter: `day`, `week`, `month`, `year`. Unknown values are ignored with a warning. |
 
 ## Examples
 
 ```bash
-# Basic search
-axon search "rust async web framework"
+# Positional query
+axon search "rust async channels"
 
-# Using --query flag
-axon search --query "qdrant vector database tutorial"
+# --query form
+axon search --query "qdrant indexing best practices"
 
-# Limit results
-axon search "tokio channel" --limit 5
-
-# JSON output
-axon search "spider.rs docs" --json
+# Limit results + time range
+axon search "tokio task cancellation" --limit 5 --search-time-range month
 ```
 
 ## Output
 
-The command prints ranked results with:
-- Position and title
+`search` prints:
+- Numbered result position
+- Title
 - URL
-- Snippet (if provided by Tavily)
+- Snippet (if present)
 
-After printing results, it enqueues crawl jobs for each unique origin domain (or exact URL if `--crawl-from-result` is set). The crawl jobs run in the background via the AMQP worker.
+## Behavior Notes
 
-## Auto-crawl Behavior
-
-By default, `search` strips each result URL to its scheme+host origin and enqueues one crawl job per unique origin. This means three results from `docs.example.com` produce one crawl job for `https://docs.example.com`, not three.
-
-URLs that fail SSRF validation (private IPs, localhost, reserved ranges) are silently skipped before enqueue.
-
-## Notes
-
-- `search` does not perform LLM synthesis. For AI-synthesized research answers, use `axon research`.
-- To search the local Qdrant knowledge base (not the web), use `axon query`.
-- Crawl jobs are enqueued but not awaited. Check `axon status` or `axon crawl list` to monitor them.
-- If `axon-workers` is not running, enqueued crawl jobs will pend until workers are started.
+- `search` is synchronous and does not use the AMQP job queue.
+- `--wait` has no effect for this command.
+- With `--json`, output is strict JSON on stdout.
+- `search` does not enqueue crawl jobs.

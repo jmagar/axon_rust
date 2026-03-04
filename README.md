@@ -1,5 +1,5 @@
 # ⚡ **Axon**
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Self-hosted web crawling and RAG pipeline powered by Spider.rs. Single binary (`axon`) backed by a local Docker stack.
 
@@ -16,14 +16,14 @@ Axon is a single CLI for crawl/scrape/extract plus local vector retrieval and Q&
 
 ## Features
 
-- Commands: `scrape`, `crawl`, `map`, `search`, `extract`, `embed`, `query`, `retrieve`, `ask`, `evaluate`, `suggest`, `github`, `ingest`, `reddit`, `youtube`, `sessions`, `sources`, `domains`, `stats`, `status`, `doctor`, `dedupe`, `debug`, `mcp`, `serve`
-- Async queue-backed jobs for `crawl`/`extract`/`embed`
+- Commands: `scrape`, `crawl`, `refresh`, `map`, `search`, `research`, `extract`, `embed`, `query`, `retrieve`, `ask`, `evaluate`, `suggest`, `github`, `ingest`, `reddit`, `youtube`, `sessions`, `screenshot`, `sources`, `domains`, `stats`, `status`, `doctor`, `dedupe`, `debug`, `mcp`, `serve`
+- Async queue-backed jobs for `crawl`/`extract`/`embed`/`refresh`/ingest
 - **Surgical Incremental Crawling**: SHA-256 content hashing, Reflink/Hardlink storage reuse, and smart embedding skips for unchanged pages.
 - TEI embeddings + Qdrant vector storage
 - OpenAI-compatible extraction and answer generation
 - Chrome CDP rendering for dynamic sites
 - Automation-friendly JSON mode via `--json`
-- Legacy static web UI via `axon serve` (deprecated) — see `docs/serve.md`
+- `axon serve` hosts the core Axon WebSocket/download/output bridge used by `apps/web`; only the old static page UX is deprecated — see `docs/SERVE.md`
 - Next.js web app (`apps/web`) with keyboard-first omnibox (`/` focus, `@mode` switching, `@file` context mentions)
 - MCP server via `axon mcp` exposing a single `axon` tool (`action`/`subaction`) for crawler/RAG integration
 
@@ -37,7 +37,7 @@ Axon is a single CLI for crawl/scrape/extract plus local vector retrieval and Q&
   - `crates/crawl`: crawl engine and sitemap backfill
   - `crates/jobs`: queue-backed workers and job lifecycle
   - `crates/vector`: TEI embedding + Qdrant RAG operations
-  - `crates/web.rs` + `crates/web/*`: axum `/ws` runtime + legacy static UI
+  - `crates/web.rs` + `crates/web/*`: axum `/ws` runtime, shell bridge, and artifact download/output routes used by `apps/web`
   - `apps/web`: active Next.js UI (omnibox, pulse workspace, API routes)
 
 For infra topology (Docker services, ports, persistence), see the Infrastructure and Environment sections below.
@@ -53,6 +53,7 @@ For infra topology (Docker services, ports, persistence), see the Infrastructure
 - [crates/mcp](crates/mcp/README.md)
 - [crates/vector](crates/vector/README.md)
 - [crates/web](crates/web/README.md)
+- [apps/web](apps/web/README.md)
 - [docker](docker/README.md)
 - [docs index](docs/README.md)
 - [testing guide](docs/TESTING.md)
@@ -70,10 +71,15 @@ Documentation:
 - Design/runtime guide: `docs/MCP.md`
 - Wire contract/schema source of truth: `docs/MCP-TOOL-SCHEMA.md`
 
+Transport status:
+- `axon mcp` is intentionally HTTP-only via container/s6-managed `mcp-http`.
+- Stdio transport is not exposed.
+
 MCP defaults are context-safe:
 - Artifact-first responses (`response_mode=path`) written to `.cache/axon-mcp/`
 - Inline responses are optional (`response_mode=inline|both`) and capped
 - Resource: `axon://schema/mcp-tool`
+- Primary MCP test path: `./scripts/test-mcp-tools-mcporter.sh`
 
 ## Quick Start
 
@@ -130,6 +136,7 @@ Copy `.env.example` to `.env`. At minimum set the `[REQUIRED]` vars:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AXON_CRAWL_QUEUE` | `axon.crawl.jobs` | Crawl job queue name |
+| `AXON_REFRESH_QUEUE` | `axon.refresh.jobs` | Refresh job queue name |
 | `AXON_EXTRACT_QUEUE` | `axon.extract.jobs` | Extract job queue name |
 | `AXON_EMBED_QUEUE` | `axon.embed.jobs` | Embed job queue name |
 | `AXON_INGEST_QUEUE` | `axon.ingest.jobs` | Ingest job queue name (github/reddit/youtube) |
@@ -179,16 +186,18 @@ Copy `.env.example` to `.env`. At minimum set the `[REQUIRED]` vars:
 | `AXON_LOG_MAX_BYTES` | `10485760` | Max bytes per log file before rotation (10MB) |
 | `AXON_LOG_MAX_FILES` | `3` | Total log files to keep (`axon.log`, `.1`, `.2`) |
 
-### Optional Web App Security (`apps/web`)
+### Web App Security (`apps/web`)
+
+Auth is enforced by `apps/web/proxy.ts` on all `/api/*` routes. Token required in `Authorization: Bearer <token>` or `x-api-key` header.
 
 | Variable | Description |
 |----------|-------------|
-| `AXON_WEB_API_TOKEN` | Required API bearer/x-api-key token for `apps/web` middleware auth |
+| `AXON_WEB_API_TOKEN` | **Required.** API bearer/x-api-key token enforced by `apps/web/proxy.ts` |
+| `NEXT_PUBLIC_AXON_API_TOKEN` | **Required when `AXON_WEB_API_TOKEN` is set.** Must match — used by `apiFetch()` to attach `x-api-key` to all client-side `/api/*` calls |
 | `AXON_WEB_ALLOWED_ORIGINS` | Comma-separated origin allowlist for `app/api/*` and shell websocket fallback |
-| `AXON_WEB_ALLOW_INSECURE_DEV` | Localhost-only development bypass (`true` only for local dev) |
+| `AXON_WEB_ALLOW_INSECURE_DEV` | Localhost-only development bypass (`true` only for local dev — skips token check) |
 | `AXON_SHELL_WS_TOKEN` | Optional token specifically for `/ws/shell` auth (falls back to `AXON_WEB_API_TOKEN`) |
 | `AXON_SHELL_ALLOWED_ORIGINS` | Optional shell websocket origin allowlist |
-| `NEXT_PUBLIC_AXON_API_TOKEN` | Optional client token for API calls from the web app |
 | `NEXT_PUBLIC_SHELL_WS_TOKEN` | Optional client token for shell websocket auth |
 | `AXON_ALLOWED_CLAUDE_BETAS` | Comma-separated allowlist for Pulse chat `--betas` values |
 
@@ -214,7 +223,8 @@ The `ask` command retrieves chunks from Qdrant, reranks them, and builds a conte
 Notes:
 - Container runtime uses service DNS names (`axon-postgres`, `axon-redis`, etc.).
 - Local runtime rewrites those to mapped localhost ports automatically.
-- `./scripts/axon` sources `.env`; running `cargo run --bin axon -- ...` directly does not.
+- Both `./scripts/axon` and `cargo run --bin axon -- ...` load `.env` (the binary calls `dotenvy` at startup).
+- The wrapper additionally pre-exports `.env` in shell before invoking Cargo.
 - `ask` now enforces citation-quality gates:
   - Non-trivial responses require multiple unique citations.
   - Procedural queries require at least one official-docs citation.
@@ -267,7 +277,8 @@ Axon implements a multi-layered incremental crawl mechanism to minimize network 
 | `ingest <subcommand>` | Shared ingest worker/job control (`worker`, `status`, `list`, etc.) | No |
 | `reddit <target>` | Ingest subreddit posts/comments into Qdrant | Yes (default) |
 | `youtube <url>` | Ingest YouTube video transcript via yt-dlp into Qdrant | Yes (default) |
-| `sessions [format]` | Ingest AI session exports (Claude/Codex/Gemini) into Qdrant | No |
+| `sessions [--claude] [--codex] [--gemini] [--project <name>]` | Ingest AI session exports (Claude/Codex/Gemini) into Qdrant | No |
+| `screenshot <url>...` | Capture page screenshot(s) via Chrome | No |
 | `sources` | List all indexed URLs + chunk counts | No |
 | `domains` | List indexed domains + stats | No |
 | `stats` | Qdrant collection stats | No |
@@ -275,6 +286,7 @@ Axon implements a multi-layered incremental crawl mechanism to minimize network 
 | `doctor` | Diagnose service connectivity | No |
 | `debug` | Run doctor + LLM-assisted troubleshooting | No |
 | `dedupe` | Remove duplicate vectors from Qdrant collection | No |
+| `mcp` | Start MCP HTTP server runtime (`mcp-http`, no stdio transport) | No |
 | `serve` | Start web UI server (axum + WebSocket + Docker stats) | No |
 
 ### Freshness Strategy (Tiered Refresh + Discovery Crawl)
@@ -306,6 +318,27 @@ axon crawl cleanup
 axon crawl clear
 axon crawl recover    # reclaim stale/interrupted jobs
 axon crawl worker     # run a worker inline
+```
+
+### Job Subcommands (for refresh)
+
+```bash
+axon refresh status <job_id>
+axon refresh cancel <job_id>
+axon refresh errors <job_id>
+axon refresh list
+axon refresh cleanup
+axon refresh clear
+axon refresh recover
+axon refresh worker
+
+# schedule management
+axon refresh schedule add <name> [seed_url] [--every-seconds <n>|--tier <high|medium|low>] [--urls <csv>]
+axon refresh schedule list
+axon refresh schedule enable <name>
+axon refresh schedule disable <name>
+axon refresh schedule delete <name>
+axon refresh schedule run-due [--batch <n>]
 ```
 
 ### Job Subcommands (for github / reddit / youtube)
@@ -356,10 +389,9 @@ All flags are global (usable with any subcommand).
 | `--max-depth <n>` | usize | `5` | Maximum crawl depth from start URL. |
 | `--render-mode <mode>` | enum | `auto-switch` | `http`, `chrome`, or `auto-switch`. Auto-switch tries HTTP first, falls back to Chrome if >60% thin pages. |
 | `--format <fmt>` | enum | `markdown` | Output format: `markdown`, `html`, `rawHtml`, `json`. |
-| `--include-subdomains <bool>` | bool | `true` | Include subdomains during crawl. **Note:** defaults `true` — may crawl more than expected. |
+| `--include-subdomains <bool>` | bool | `false` | Crawl subdomains of the start URL's parent domain. Disabled by default because spider root-domain scoping can widen traversal (for example, `code.claude.com` -> `*.claude.com`) and cause crawl drift. Enable explicitly with `--include-subdomains true` when intended. |
 | `--respect-robots <bool>` | bool | `false` | Respect `robots.txt` directives. **Note:** defaults `false` — consider legal/ethical implications. |
 | `--discover-sitemaps <bool>` | bool | `true` | Discover and backfill URLs from sitemap.xml after crawl. |
-| `--max-sitemaps <n>` | usize | `512` | Maximum sitemap URLs to backfill per crawl. |
 | `--sitemap-since-days <n>` | u32 | `0` | Only backfill sitemap URLs with `<lastmod>` within the last N days (0 = no filter). URLs without `<lastmod>` are always included. |
 | `--min-markdown-chars <n>` | usize | `200` | Minimum markdown character count; pages below this are flagged as "thin". |
 | `--drop-thin-markdown <bool>` | bool | `true` | Skip thin pages — do not save or embed them. |
@@ -413,9 +445,8 @@ All flags are global (usable with any subcommand).
 |------|------|---------|-------------|
 | `--performance-profile <p>` | enum | `high-stable` | `high-stable`, `extreme`, `balanced`, `max`. Sets defaults for concurrency, timeouts, retries. |
 | `--batch-concurrency <n>` | usize | `16` | Concurrent connections for batch operations (clamped 1–512). |
-| `--concurrency-limit <n>` | usize | — | Override all three concurrency limits (crawl, sitemap, backfill) at once. |
+| `--concurrency-limit <n>` | usize | — | Override both crawl and backfill concurrency limits at once. |
 | `--crawl-concurrency-limit <n>` | usize | *profile* | Override crawl concurrency. |
-| `--sitemap-concurrency-limit <n>` | usize | *profile* | Override sitemap backfill concurrency. |
 | `--backfill-concurrency-limit <n>` | usize | *profile* | Override backfill concurrency. |
 | `--request-timeout-ms <ms>` | u64 | *profile* | Per-request timeout in milliseconds. |
 | `--fetch-retries <n>` | usize | *profile* | Number of retries on failed fetches. |
@@ -454,8 +485,10 @@ All flags are global (usable with any subcommand).
 |------|---------|---------|
 | `--shared-queue <bool>` | — | `true` |
 | `--crawl-queue <name>` | `AXON_CRAWL_QUEUE` | `axon.crawl.jobs` |
+| `--refresh-queue <name>` | `AXON_REFRESH_QUEUE` | `axon.refresh.jobs` |
 | `--extract-queue <name>` | `AXON_EXTRACT_QUEUE` | `axon.extract.jobs` |
 | `--embed-queue <name>` | `AXON_EMBED_QUEUE` | `axon.embed.jobs` |
+| `--ingest-queue <name>` | `AXON_INGEST_QUEUE` | `axon.ingest.jobs` |
 
 ## Performance Profiles
 
@@ -508,7 +541,7 @@ cargo install --locked lefthook
 
 The same policy runs in CI on pull requests and pushes.
 
-Detailed policy and exception workflow: `docs/monolith-policy.md`.
+Detailed policy and exception workflow: `docs/LIVE-TEST-SCRIPTS.md`.
 
 ## Database Schema
 
@@ -563,7 +596,7 @@ Tables are auto-created on first worker/command start via `CREATE TABLE IF NOT E
 
 ### axon_ingest_jobs
 
-Differs from the other four tables: uses `source_type` + `target` instead of `url` or `urls_json` to identify the ingest target, and has no `urls_json` or `input_text` column.
+Differs from the other three tables: uses `source_type` + `target` instead of `url` or `urls_json` to identify the ingest target, and has no `urls_json` or `input_text` column.
 
 | Column | Type | Nullable | Default | Description |
 |--------|------|----------|---------|-------------|
@@ -584,7 +617,7 @@ Differs from the other four tables: uses `source_type` + `target` instead of `ur
 ## Gotchas
 
 ### `--wait false` (default) = fire-and-forget
-By default, `crawl`, `extract`, `embed`, `github`, `reddit`, and `youtube` enqueue jobs and return immediately. Use `--wait true` to block until completion. Without workers running, enqueued jobs will pend forever.
+By default, `crawl`, `refresh`, `extract`, `embed`, and ingest commands (`github`, `reddit`, `youtube`) enqueue jobs and return immediately. Use `--wait true` to block until completion. Without workers running, enqueued jobs will pend forever.
 
 ### Armory Structure: Domain-Grouped
 Axon now organizes its spoils by domain to make the armory more browseable.
@@ -627,7 +660,7 @@ Pages with fewer than `--min-markdown-chars` (default: 200) are flagged as thin.
 The default Qdrant collection is `cortex` (set via `AXON_COLLECTION` or `--collection`). If you previously used an older build that defaulted to `spider_rust`, pass `--collection spider_rust` explicitly.
 
 ### Sitemap backfill
-After a crawl, `append_sitemap_backfill()` discovers URLs via sitemap.xml that the crawler missed and fetches them individually. Respects `--max-sitemaps` (default: 512) and `--include-subdomains`. Use `--sitemap-since-days N` to restrict backfill to URLs whose `<lastmod>` falls within the last N days; URLs without `<lastmod>` are always included.
+After a crawl, `append_sitemap_backfill()` discovers URLs via sitemap.xml that the crawler missed and fetches them individually. It currently uses an internal cap of 512 parsed sitemap entries and respects `--include-subdomains`. Use `--sitemap-since-days N` to restrict backfill to URLs whose `<lastmod>` falls within the last N days; URLs without `<lastmod>` are always included.
 
 ### Docker build context
 The `Dockerfile` is at `docker/Dockerfile`. Run `docker compose build` from this directory (not a parent workspace). The binary built inside the container is `axon`.

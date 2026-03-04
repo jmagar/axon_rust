@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 
 from mcp_schema_models import (
     CRAWL_FIELD_DESCRIPTIONS,
+    MCP_TRANSPORT_ENV_VARS,
+    OAUTH_BROKER_ENV_VARS,
     RUNTIME_ENV_VARS,
     STRUCT_TO_ACTION,
     EnumDef,
@@ -309,8 +311,16 @@ def _emit_mcp_resources(emit) -> None:
 
 def _emit_runtime_dependencies(emit) -> None:
     emit("## Runtime Dependencies")
-    emit("No MCP-specific env namespace. Server reads existing Axon stack vars:")
+    emit("Server reads existing Axon stack vars:")
     for var in RUNTIME_ENV_VARS:
+        emit(f"- `{var}`")
+    emit()
+    emit("MCP transport env vars:")
+    for var in MCP_TRANSPORT_ENV_VARS:
+        emit(f"- `{var}`")
+    emit()
+    emit("Optional OAuth broker env vars:")
+    for var in OAUTH_BROKER_ENV_VARS:
         emit(f"- `{var}`")
     emit()
 

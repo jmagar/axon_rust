@@ -1,5 +1,5 @@
 # Axon Architecture
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Version: 1.0.0
 Last Updated: 01:26:53 | 02/25/2026 EST
@@ -29,7 +29,7 @@ This document defines the current architecture of `axon_rust` across:
 - CLI command execution and dispatch
 - Crawl/extract/embed/ingest asynchronous pipelines
 - Vector storage and retrieval (Qdrant + TEI)
-- Web runtimes (`serve` static UI and `apps/web` Next.js UI)
+- Web runtimes (`serve` websocket/download bridge and `apps/web` Next.js UI)
 - Omnibox/pulse interaction and data flow
 
 It supersedes the previous omnibox-only architecture note.
@@ -40,7 +40,7 @@ It supersedes the previous omnibox-only architecture note.
 flowchart LR
   U[User or API client]
   CLI[axon CLI binary]
-  WEB[Axum /ws + static server]
+  WEB[Axum /ws + /ws/shell + output/download bridge]
   NX[Next.js apps/web]
 
   PG[(Postgres)]
@@ -90,7 +90,7 @@ flowchart LR
 | `crates/crawl/*` | Crawl engine, render mode strategy, sitemap backfill |
 | `crates/jobs/*` | Queue-backed worker runtime + job state transitions |
 | `crates/vector/*` | Embed/query/retrieve/ask/evaluate/suggest operations |
-| `crates/web.rs` + `crates/web/*` | Axum web server, websocket execution bridge, static UI |
+| `crates/web.rs` + `crates/web/*` | Axum web server, websocket execution bridge, output/download endpoints |
 | `apps/web/*` | Next.js UI with omnibox, results rendering, pulse workspace |
 | `docker-compose.yaml` | Self-hosted runtime services |
 
@@ -131,9 +131,9 @@ sequenceDiagram
 
 Key points:
 
-- Argument schema is defined in `crates/core/config/cli.rs`.
+- Argument schema is defined in `crates/core/config/cli.rs` and `crates/core/config/cli/global_args.rs`.
 - Parsing/normalization is in `crates/core/config/parse.rs`.
-- Effective runtime settings are stored in `crates/core/config/types.rs::Config`.
+- Effective runtime settings are stored in `crates/core/config/types/config.rs::Config`.
 - URL seed handling is consolidated in `crates/cli/commands/common.rs` (`parse_urls`, `start_url_from_cfg`).
 
 ## Crawl and Content Pipeline
@@ -269,7 +269,7 @@ flowchart TD
 
 Capabilities:
 
-- Serves static assets and output downloads.
+- Serves websocket bridge endpoints plus output/download artifact routes.
 - Maintains per-connection command/crawl state.
 - Streams command output/events over websocket.
 - Broadcasts Docker stats via `crates/web/docker_stats.rs`.
@@ -402,7 +402,9 @@ Core runtime:
 - `main.rs`
 - `lib.rs`
 - `crates/core/config/cli.rs`
+- `crates/core/config/cli/global_args.rs`
 - `crates/core/config/parse.rs`
+- `crates/core/config/types/config.rs`
 - `crates/core/config/types.rs`
 - `crates/core/http.rs`
 - `crates/core/content.rs`
@@ -417,7 +419,7 @@ Crawl/jobs/vector:
 - `crates/jobs/extract/worker.rs`
 - `crates/jobs/embed/worker.rs`
 - `crates/jobs/ingest.rs`
-- `crates/jobs/refresh/mod.rs`
+- `crates/jobs/refresh.rs`
 - `crates/jobs/refresh/processor.rs`
 - `crates/jobs/refresh/schedule.rs`
 - `crates/jobs/refresh/state.rs`
@@ -428,8 +430,10 @@ Crawl/jobs/vector:
 Web + UI:
 
 - `crates/web.rs`
-- `crates/web/execute/mod.rs`
+- `crates/web/shell.rs`
+- `crates/web/execute.rs`
 - `crates/web/docker_stats.rs`
+- `crates/web/download.rs`
 - `apps/web/app/page.tsx`
 - `apps/web/hooks/use-axon-ws.ts`
 - `apps/web/hooks/use-ws-messages.ts`

@@ -28,15 +28,14 @@ cli/
     │       └── sitemap.rs        # Sitemap + robots.txt URL discovery (adapter over engine)
     ├── refresh.rs                # Refresh command entry point
     ├── refresh/
-    │   ├── mod.rs                # Subcommand routing + schedule/status/cancel/list/...
     │   ├── resolve.rs            # URL resolution from manifest or CLI args
     │   └── schedule.rs           # Scheduled refresh job management
     ├── extract.rs                # LLM-powered structured data extraction
     ├── embed.rs                  # Embed files/dirs/URLs into Qdrant
     ├── search.rs                 # Web search via Tavily API
     ├── research.rs               # Tavily AI research + LLM synthesis
+    ├── screenshot.rs             # Screenshot entry: URL loop, Chrome requirement check
     ├── screenshot/
-    │   ├── mod.rs                # Screenshot entry: URL loop, Chrome requirement check
     │   ├── spider_capture.rs     # Spider-based screenshot capture (replaced raw CDP client)
     │   └── util.rs               # Filename generation, require_chrome(), JSON formatting
     ├── github.rs                 # Ingest GitHub repos (code, issues, PRs, wiki)
@@ -51,7 +50,7 @@ cli/
     ├── doctor/
     │   └── render.rs             # Doctor report rendering (human + JSON)
     ├── debug.rs                  # doctor + LLM-assisted troubleshooting
-    ├── mcp.rs                    # MCP stdio server entry point
+    ├── mcp.rs                    # MCP HTTP server entry point
     └── serve.rs                  # axum web UI + WebSocket server entry point
 ```
 
@@ -179,10 +178,9 @@ if !confirm_destructive(cfg, "This will delete all jobs. Continue?")? {
 
 ## `crawl/runtime.rs` — Chrome Bootstrap
 
-Pre-resolves the CDP WebSocket URL before starting the crawl:
-- Probes `/json/version` on `AXON_CHROME_REMOTE_URL`
-- Rewrites container hostname to `127.0.0.1` when running outside Docker
-- Passes resolved URL into crawl config to avoid a second probe mid-crawl
+Pre-resolves the CDP WebSocket URL before starting the crawl by delegating to the shared engine resolver (`crates/crawl/engine::resolve_cdp_ws_url`). The CLI runtime no longer owns a CDP probe implementation — all resolution logic (Docker host rewrite, `/json/version` discovery, ws:// shortcut) lives in the crawl engine.
+
+The bootstrap function retries resolution with configurable backoff (`chrome_bootstrap_retries`) and passes the resolved URL into the crawl config to avoid a redundant `/json/version` fetch mid-crawl.
 
 Always call `bootstrap_chrome_runtime(cfg)` before Chrome-mode crawls; do not let each worker probe independently.
 

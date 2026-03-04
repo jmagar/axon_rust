@@ -4,6 +4,7 @@ import { AlertCircle, BookOpen, ChevronRight, Globe, Search } from 'lucide-react
 import dynamic from 'next/dynamic'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { DocEntry } from '@/app/api/docs/route'
+import { apiFetch } from '@/lib/api-fetch'
 
 const ContentViewer = dynamic(
   () => import('@/components/content-viewer').then((m) => ({ default: m.ContentViewer })),
@@ -48,7 +49,7 @@ export default function DocsPage() {
   const [expandedDomains, setExpandedDomains] = useState<Set<string>>(new Set())
 
   useEffect(() => {
-    fetch('/api/docs?action=list')
+    apiFetch('/api/docs?action=list')
       .then((r) => r.json())
       .then((data: { docs?: DocEntry[]; error?: string }) => {
         if (data.error) {
@@ -69,7 +70,7 @@ export default function DocsPage() {
     setContentError(null)
     setLoadingContent(true)
     try {
-      const res = await fetch(`/api/docs?action=read&path=${encodeURIComponent(doc.relPath)}`)
+      const res = await apiFetch(`/api/docs?action=read&path=${encodeURIComponent(doc.relPath)}`)
       const data: { content?: string; error?: string } = await res.json()
       if (data.error) {
         setContentError(data.error)

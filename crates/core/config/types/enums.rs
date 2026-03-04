@@ -74,7 +74,7 @@ impl fmt::Display for CommandKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RenderMode {
     Http,
@@ -159,4 +159,24 @@ pub enum PerformanceProfile {
     Extreme,
     Balanced,
     Max,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvaluateResponsesMode {
+    Inline,
+    #[value(name = "side-by-side")]
+    SideBySide,
+    Events,
+}
+
+impl fmt::Display for EvaluateResponsesMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Inline => "inline",
+            Self::SideBySide => "side-by-side",
+            Self::Events => "events",
+        };
+        f.write_str(value)
+    }
 }

@@ -18,6 +18,50 @@ env:
   RUSTC_WRAPPER: ""
 
 jobs:
+  mcp-http-only:
+    name: mcp-http-only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce MCP CLI HTTP transport (no stdio regression)
+        run: ./scripts/check_mcp_http_only.sh
+
+  no-mod-rs:
+    name: no-mod-rs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce modern Rust module style (no mod.rs)
+        run: ./scripts/check_no_mod_rs.sh
+
+  no-next-middleware:
+    name: no-next-middleware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce Next.js proxy-only entrypoint (middleware.ts deprecated)
+        run: ./scripts/check_no_next_middleware.sh
+
+  mcp-schema-doc-sync:
+    name: mcp-schema-doc-sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce generated MCP schema docs are in sync
+        run: python3 scripts/generate_mcp_schema_doc.py --check
+
+  mcp-oauth-smoke:
+    name: mcp-oauth-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@v2
+      - name: OAuth protection smoke test (/mcp requires auth)
+        run: ./scripts/test-mcp-oauth-protection.sh
+
   advisory-lock-policy:
     name: advisory-lock-policy
     runs-on: ubuntu-latest

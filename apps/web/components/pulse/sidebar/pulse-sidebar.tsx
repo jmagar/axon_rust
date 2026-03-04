@@ -4,6 +4,7 @@ import {
   Brain,
   ChevronLeft,
   ChevronRight,
+  Columns2,
   FileText,
   FolderOpen,
   Layers,
@@ -37,6 +38,7 @@ const PAGE_LINKS = [
   { href: '/jobs', label: 'Jobs', icon: <Layers className="size-4" /> },
   { href: '/logs', label: 'Logs', icon: <ScrollText className="size-4" /> },
   { href: '/terminal', label: 'Terminal', icon: <TerminalSquare className="size-4" /> },
+  { href: '/evaluate', label: 'Evaluate', icon: <Columns2 className="size-4" /> },
   { href: '/cortex/status', label: 'Cortex', icon: <Brain className="size-4" /> },
 ]
 

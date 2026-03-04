@@ -1,6 +1,6 @@
 mod global_args;
 
-use super::types::{RedditSort, RedditTime};
+use super::types::{EvaluateResponsesMode, RedditSort, RedditTime};
 use clap::{ArgAction, Args, Parser, Subcommand};
 
 pub(super) use global_args::GlobalArgs;
@@ -84,6 +84,8 @@ pub(super) struct AskArgs {
 pub(super) struct EvaluateArgs {
     #[arg(long, action = ArgAction::SetTrue)]
     pub(super) diagnostics: bool,
+    #[arg(long = "responses-mode", value_enum, default_value_t = EvaluateResponsesMode::SideBySide)]
+    pub(super) responses_mode: EvaluateResponsesMode,
     #[arg(value_name = "TEXT")]
     pub(super) value: Vec<String>,
 }
@@ -150,6 +152,7 @@ pub(super) enum RefreshScheduleSubcommand {
     Delete {
         name: String,
     },
+    Worker,
     #[command(name = "run-due")]
     RunDue {
         #[arg(long, default_value_t = 25)]
@@ -227,7 +230,7 @@ pub(super) struct RedditArgs {
 pub(super) struct YoutubeArgs {
     #[command(subcommand)]
     pub(super) job: Option<JobSubcommand>,
-    /// Video URL, playlist URL, or channel URL
+    /// YouTube video URL or bare video ID
     #[arg(value_name = "URL")]
     pub(super) url: Option<String>,
 }

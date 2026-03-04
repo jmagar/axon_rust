@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { apiFetch } from '@/lib/api-fetch'
 
 interface DocMeta {
   createdAt: string
@@ -70,7 +71,7 @@ export function usePulseAutosave(
               body.collections = docMetaRef.current.collections
             }
           }
-          const response = await fetch('/api/pulse/save', {
+          const response = await apiFetch('/api/pulse/save', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             signal: controller.signal,

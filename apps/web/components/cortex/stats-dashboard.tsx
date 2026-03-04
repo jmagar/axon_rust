@@ -2,6 +2,7 @@
 
 import { AlertCircle, BarChart2, RefreshCw } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { apiFetch } from '@/lib/api-fetch'
 import type { StatsResult } from '@/lib/result-types'
 
 interface ApiResponse {
@@ -42,7 +43,7 @@ export function StatsDashboard() {
     if (isManual) setSpinning(true)
     setError(null)
     try {
-      const res = await fetch('/api/cortex/stats', { signal: controller.signal })
+      const res = await apiFetch('/api/cortex/stats', { signal: controller.signal })
       const json = (await res.json()) as ApiResponse
       if (!json.ok) throw new Error(json.error ?? 'Unknown error')
       if (abortRef.current !== controller) return

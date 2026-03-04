@@ -1,5 +1,5 @@
 # crates/core
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Shared runtime primitives used across CLI, jobs, crawl, vector, and web modules.
 
@@ -34,3 +34,8 @@ Shared runtime primitives used across CLI, jobs, crawl, vector, and web modules.
 ## Notes
 - Config changes should be coordinated with command handlers and test config builders that construct `Config` literals.
 - Keep environment and flag precedence rules centralized in `config/parse.rs`.
+
+## Related Docs
+- [Repository README](../../README.md)
+- [Architecture](../../docs/ARCHITECTURE.md)
+- [Docs Index](../../docs/README.md)

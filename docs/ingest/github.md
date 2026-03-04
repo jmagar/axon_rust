@@ -1,5 +1,5 @@
 # GitHub Ingest
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Version: 1.0.0
 Last Updated: 01:26:53 | 02/25/2026 EST
@@ -18,7 +18,7 @@ Ingests a GitHub repository — source code, documentation, issues, pull request
 | Pull requests | Open and closed, title + body |
 | Wiki pages | When the repo has a public wiki |
 
-**Excluded** regardless of flag: `target/`, `node_modules/`, `dist/`, `__pycache__/`, `.lock` files, `-lock.json` files. See `is_indexable_source_path()` in `crates/ingest/github/mod.rs` for the full list.
+**Excluded** regardless of flag: `target/`, `node_modules/`, `dist/`, `__pycache__/`, `.lock` files, `-lock.json` files. See `is_indexable_source_path()` in `crates/ingest/github.rs` for the full list.
 
 ## Prerequisites
 

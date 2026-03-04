@@ -143,6 +143,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args:
+        AXON_GIT_SHA: ${AXON_GIT_SHA:?set AXON_GIT_SHA=$(git rev-parse HEAD)}
       # Inject spider_agent and its transitive path deps as named BuildKit
       # contexts so they are available without widening the build context
       # to the whole workspace.
@@ -155,6 +157,7 @@ services:
       HOME: /home/axon
       AXON_OUTPUT_DIR: /app/.cache/axon-rust/output
       AXON_CHROME_DIAGNOSTICS_DIR: /app/.cache/chrome-diagnostics
+      AXON_ENFORCE_IMAGE_SHA: ${AXON_ENFORCE_IMAGE_SHA:-true}
     depends_on:
       axon-postgres:
         condition: service_healthy
@@ -180,13 +183,14 @@ services:
       test:
         [
           "CMD-SHELL",
-          "/command/s6-svstat -u /run/service/crawl-worker >/dev/null && /command/s6-svstat -u /run/service/extract-worker >/dev/null && /command/s6-svstat -u /run/service/embed-worker >/dev/null && /command/s6-svstat -u /run/service/ingest-worker >/dev/null && /command/s6-svstat -u /run/service/web-server >/dev/null",
+          "[ ! -f /run/sha-guard-failed ] && /command/s6-svstat -u /run/service/crawl-worker >/dev/null && /command/s6-svstat -u /run/service/extract-worker >/dev/null && /command/s6-svstat -u /run/service/embed-worker >/dev/null && /command/s6-svstat -u /run/service/ingest-worker >/dev/null && /command/s6-svstat -u /run/service/web-server >/dev/null",
         ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
     volumes:
+      - ./:/repo:ro
       - ${AXON_DATA_DIR:-./data}/axon/worker:/app/.cache/axon-rust/output
       - ${AXON_DATA_DIR:-./data}/axon/logs:/app/logs
       - ${AXON_DATA_DIR:-./data}/axon/chrome-diagnostics:/app/.cache/chrome-diagnostics
@@ -202,6 +206,8 @@ services:
     build:
       context: apps/web
       dockerfile: ../../docker/web/Dockerfile
+      args:
+        AXON_GIT_SHA: ${AXON_GIT_SHA:?set AXON_GIT_SHA=$(git rev-parse HEAD)}
       additional_contexts:
         web-s6: docker/web/s6-rc.d
         web-cont-init: docker/web/cont-init.d
@@ -211,6 +217,7 @@ services:
       HOST: "0.0.0.0"
       HOME: /home/node
       PORT: "49010"
+      AXON_ENFORCE_IMAGE_SHA: ${AXON_ENFORCE_IMAGE_SHA:-true}
       AXON_BACKEND_URL: "http://axon-workers:49000"
       NEXT_PUBLIC_AXON_PORT: "49000"
       AXON_WORKSPACE: /workspace
@@ -218,6 +225,7 @@ services:
       AXON_BIN: ${AXON_BIN:-}        # override binary path for /api/cortex/* routes (see .env.example)
       # Set WATCHPACK_POLLING=true in .env if file-watch events don't propagate
     volumes:
+      - ./:/repo:ro
       - ./apps/web:/app               # bind-mount source for hot reload
       - /app/node_modules             # anonymous vol: preserves container's node_modules
       - /app/.next                    # anonymous vol: preserves Next.js build cache
@@ -233,6 +241,16 @@ services:
     depends_on:
       axon-workers:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "[ ! -f /run/sha-guard-failed ] && curl -fsSL --max-time 4 http://127.0.0.1:49010/evaluate > /dev/null",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 networks:
   axon:

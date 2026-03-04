@@ -8,6 +8,11 @@
 FROM node:24-slim
 
 ARG S6_OVERLAY_VERSION=3.2.1.0
+ARG AXON_GIT_SHA=dev
+
+LABEL org.opencontainers.image.revision="${AXON_GIT_SHA}"
+LABEL io.axon.git_sha="${AXON_GIT_SHA}"
+ENV AXON_IMAGE_GIT_SHA="${AXON_GIT_SHA}"
 
 # Install system deps + AI CLIs as root into system paths
 RUN apt-get update && apt-get install -y --no-install-recommends \

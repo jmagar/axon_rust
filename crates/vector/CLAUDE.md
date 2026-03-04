@@ -10,7 +10,8 @@ vector/ops/
 ├── commands/        # ask/, ask.rs, evaluate.rs, query.rs, streaming.rs, suggest.rs
 ├── input.rs         # chunking, URL→metadata extraction
 ├── qdrant/          # client.rs, commands.rs, types.rs, utils.rs
-├── ranking/         # mod.rs, snippet.rs, ranking_test.rs (BM25-style reranking)
+├── ranking.rs       # BM25-style reranking module root
+├── ranking/         # snippet.rs (helpers used by ranking.rs)
 ├── stats/           # display.rs, pg.rs, qdrant_fetch.rs
 ├── tei.rs           # tei_embed(), tei_embed_batch(), embed_text_with_metadata()
 ├── tei/             # tei_manifest.rs
@@ -41,7 +42,7 @@ On 429 or 503, `tei_embed()` retries up to **10 times** with exponential backoff
 Any new command that needs URL counts/dedup **must** use `qdrant_url_facets`. A full scroll on a 2M+ point collection takes 60-80 seconds.
 
 ### Ranking Pipeline
-`ranking/mod.rs` applies BM25-style scoring on top of Qdrant cosine results. `snippet.rs` extracts and highlights matching text fragments. Used by `ask` and `query` commands. Do not bypass ranking in new retrieval commands — it significantly improves answer quality.
+`ranking.rs` applies BM25-style scoring on top of Qdrant cosine results. `ranking/snippet.rs` extracts and highlights matching text fragments. Used by `ask` and `query` commands. Do not bypass ranking in new retrieval commands — it significantly improves answer quality.
 
 ### Collection Naming
 Default collection: `cortex` (set via `AXON_COLLECTION` or `--collection`). The legacy `firecrawl` alias resolves to `cortex` — GET returns 200, `ensure_collection()` exits early. Do not hardcode `cortex` in new code; always read from `cfg.collection`.
@@ -98,7 +99,7 @@ This prefix is prepended to **all** embedding requests by TEI automatically. The
 
 ## Adding a New Vector Command
 1. Add to `vector/ops/commands/` (one file per command)
-2. Re-export from `ops/commands/mod.rs`
+2. Re-export from `ops/commands.rs`
 3. Add `CommandKind::*` variant to `crates/core/config.rs`
 4. Call `ensure_collection(&cfg).await?` before any Qdrant write
 5. Prefer `tei_embed_batch()` over `tei_embed()` for multiple texts

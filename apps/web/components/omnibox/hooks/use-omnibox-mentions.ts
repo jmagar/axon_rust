@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useMemo, useState } from 'react'
+import { apiFetch } from '@/lib/api-fetch'
 import type { LocalDocFile, MentionKind } from '@/lib/omnibox'
 import {
   extractActiveMention,
@@ -46,7 +47,7 @@ export function useOmniboxMentions({ input, setInput }: UseOmniboxMentionsInput)
       const contextBlocks = await Promise.all(
         matchingFiles.map(async (file) => {
           try {
-            const res = await fetch(`/api/omnibox/files?id=${encodeURIComponent(file.id)}`)
+            const res = await apiFetch(`/api/omnibox/files?id=${encodeURIComponent(file.id)}`)
             if (!res.ok) return null
             const data = (await res.json()) as { file?: { content?: string; label?: string } }
             const content = data.file?.content?.trim()

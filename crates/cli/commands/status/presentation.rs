@@ -1,6 +1,6 @@
 use super::metrics::{
     collection_from_config, display_embed_input, embed_metrics_suffix, extract_metrics_suffix,
-    format_error, ingest_metrics_suffix, job_age, section_symbol, summarize_urls,
+    format_error, ingest_metrics_suffix, job_runtime_text, section_symbol, summarize_urls,
 };
 use crate::crates::core::ui::{
     accent, error, metric, muted, primary, status_label, subtle, symbol_for_status,
@@ -150,7 +150,12 @@ fn print_crawls(crawl_jobs: &[CrawlJob]) {
             .as_ref()
             .map(|metrics| crawl_metrics_suffix(&job.status, metrics))
             .unwrap_or_default();
-        let age_text = job_age(&job.status, job.finished_at.as_ref(), &job.updated_at);
+        let age_text = job_runtime_text(
+            &job.status,
+            job.started_at.as_ref(),
+            job.finished_at.as_ref(),
+            &job.updated_at,
+        );
         let age = format!("{}{}", subtle(" | "), accent(&age_text));
         let label = status_label(&job.status);
         let prefix = if label.is_empty() {
@@ -233,6 +238,7 @@ struct JobRow<'a> {
     target: &'a str,
     metrics_suffix: &'a str,
     collection: Option<&'a str>,
+    started_at: Option<&'a DateTime<Utc>>,
     finished_at: Option<&'a DateTime<Utc>>,
     updated_at: &'a DateTime<Utc>,
     error_text: Option<&'a str>,
@@ -243,7 +249,7 @@ fn print_job_row(row: &JobRow<'_>) {
         .collection
         .map(|c| format!("{}{}", subtle(" | "), accent(c)))
         .unwrap_or_default();
-    let age_text = job_age(row.status, row.finished_at, row.updated_at);
+    let age_text = job_runtime_text(row.status, row.started_at, row.finished_at, row.updated_at);
     let age = format!("{}{}", subtle(" | "), accent(&age_text));
     let label = status_label(row.status);
     let prefix = if label.is_empty() {
@@ -288,6 +294,7 @@ fn print_extracts(extract_jobs: &[ExtractJob]) {
             target: &target,
             metrics_suffix: &metrics_suffix,
             collection: None,
+            started_at: job.started_at.as_ref(),
             finished_at: job.finished_at.as_ref(),
             updated_at: &job.updated_at,
             error_text: job.error_text.as_deref(),
@@ -317,6 +324,7 @@ fn print_refreshes(refresh_jobs: &[RefreshJob]) {
             target: &target,
             metrics_suffix: "",
             collection: None,
+            started_at: job.started_at.as_ref(),
             finished_at: job.finished_at.as_ref(),
             updated_at: &job.updated_at,
             error_text: job.error_text.as_deref(),
@@ -348,6 +356,7 @@ fn print_ingests(ingest_jobs: &[IngestJob]) {
             target: &target,
             metrics_suffix: &metrics_suffix,
             collection,
+            started_at: job.started_at.as_ref(),
             finished_at: job.finished_at.as_ref(),
             updated_at: &job.updated_at,
             error_text: job.error_text.as_deref(),
@@ -382,6 +391,7 @@ fn print_embeds(embed_jobs: &[EmbedJob], crawl_jobs: &[CrawlJob]) {
             target: &target,
             metrics_suffix: &metrics_suffix,
             collection,
+            started_at: job.started_at.as_ref(),
             finished_at: job.finished_at.as_ref(),
             updated_at: &job.updated_at,
             error_text: job.error_text.as_deref(),

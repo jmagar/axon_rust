@@ -1,8 +1,8 @@
 //! Crawl worker loop orchestration.
 //!
-//! # Why crawl doesn't use worker_lane.rs
+//! # Why crawl doesn't use the generic worker_lane module
 //!
-//! `worker_lane.rs` is the generic AMQP/polling lane runtime shared by embed,
+//! `worker_lane.rs` (module root file) is the generic AMQP/polling lane runtime shared by embed,
 //! extract, and refresh workers. The crawl worker uses its own loop because
 //! `spider.rs` futures are `!Send` — they cannot be spawned with `tokio::spawn`
 //! or moved across thread boundaries. Instead, crawl pins futures via `tokio::pin!`

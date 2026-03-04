@@ -4,6 +4,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { AlertCircle, Library, RefreshCw, Search } from 'lucide-react'
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { apiFetch } from '@/lib/api-fetch'
 import type { SourcesResult } from '@/lib/result-types'
 
 interface ApiResponse {
@@ -30,7 +31,7 @@ export function SourcesDashboard() {
     if (isManual) setSpinning(true)
     setError(null)
     try {
-      const res = await fetch('/api/cortex/sources')
+      const res = await apiFetch('/api/cortex/sources')
       const json = (await res.json()) as ApiResponse
       if (!json.ok) throw new Error(json.error ?? 'Unknown error')
       setData(json.data ?? null)

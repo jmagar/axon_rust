@@ -1,5 +1,5 @@
 # crates/ingest
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Source-specific ingestion pipelines for non-crawl content.
 
@@ -27,3 +27,8 @@ Source-specific ingestion pipelines for non-crawl content.
 ## Notes
 - Keep source adapters isolated by provider to avoid cross-provider coupling.
 - Changes to extracted metadata shape should be coordinated with downstream vector payload consumers.
+
+## Related Docs
+- [Repository README](../../README.md)
+- [Architecture](../../docs/ARCHITECTURE.md)
+- [Docs Index](../../docs/README.md)

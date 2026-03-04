@@ -114,7 +114,7 @@ pub fn extract_video_id(input: &str) -> Option<String> {
     None
 }
 
-/// Ingest a YouTube video, playlist, or channel URL by:
+/// Ingest a YouTube video URL (or bare video ID) by:
 /// 1. Running yt-dlp to download VTT subtitle files into a temp directory
 /// 2. Parsing each VTT file into clean text via parse_vtt_to_text
 /// 3. Embedding each transcript into Qdrant via embed_text_with_metadata

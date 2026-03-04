@@ -5,5 +5,6 @@ mod types;
 
 pub use parse::parse_args;
 pub use types::{
-    CommandKind, Config, PerformanceProfile, RedditSort, RedditTime, RenderMode, ScrapeFormat,
+    CommandKind, Config, EvaluateResponsesMode, PerformanceProfile, RedditSort, RedditTime,
+    RenderMode, ScrapeFormat,
 };

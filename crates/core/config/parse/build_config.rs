@@ -1,5 +1,5 @@
 use super::super::cli::{Cli, CliCommand, RefreshScheduleSubcommand, RefreshSubcommand};
-use super::super::types::{CommandKind, Config, RedditSort, RedditTime};
+use super::super::types::{CommandKind, Config, EvaluateResponsesMode, RedditSort, RedditTime};
 use super::docker::normalize_local_service_url;
 use super::excludes;
 use super::helpers::{parse_viewport, positional_from_job, positional_from_refresh_subcommand};
@@ -12,6 +12,7 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
     let retry_backoff_was_set = global.retry_backoff_ms.is_some();
 
     let mut ask_diagnostics = false;
+    let mut evaluate_responses_mode = EvaluateResponsesMode::Inline;
     let mut github_include_source = false;
     let mut reddit_sort = RedditSort::Hot;
     let mut reddit_time = RedditTime::Day;
@@ -105,6 +106,7 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
         }
         CliCommand::Evaluate(args) => {
             ask_diagnostics = args.diagnostics;
+            evaluate_responses_mode = args.responses_mode;
             (CommandKind::Evaluate, args.value)
         }
         CliCommand::Suggest(args) => (CommandKind::Suggest, args.value),
@@ -329,6 +331,7 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
             .unwrap_or_default(),
         tavily_api_key: env::var("TAVILY_API_KEY").ok().unwrap_or_default(),
         ask_diagnostics,
+        evaluate_responses_mode,
         ask_max_context_chars: performance::env_usize_clamped(
             "AXON_ASK_MAX_CONTEXT_CHARS",
             120_000,

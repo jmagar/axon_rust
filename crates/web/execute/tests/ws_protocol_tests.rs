@@ -263,6 +263,24 @@ fn build_args_omits_json_flag_for_search_and_research() {
 }
 
 #[test]
+fn build_args_omits_json_flag_for_evaluate_events_mode() {
+    let flags = json!({"responses_mode": "events"});
+    let args = super::build_args("evaluate", "What changed?", &flags);
+    assert!(
+        !args.contains(&"--json".to_string()),
+        "evaluate events mode must NOT include '--json'"
+    );
+    assert!(
+        args.contains(&"--responses-mode".to_string()),
+        "evaluate events mode must include '--responses-mode'"
+    );
+    assert!(
+        args.contains(&"events".to_string()),
+        "evaluate events mode must pass the 'events' value"
+    );
+}
+
+#[test]
 fn build_args_scrape_always_appends_embed_false() {
     let flags = json!({});
     let args = super::build_args("scrape", "https://example.com", &flags);

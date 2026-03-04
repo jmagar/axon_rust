@@ -66,9 +66,10 @@ MCP docs:
 | `doctor` | Diagnose service connectivity | No |
 | `debug` | Run doctor + LLM-assisted troubleshooting | No |
 | `mcp` | Start MCP stdio server | No |
+| `refresh <url>` | Periodic URL re-indexing (schedule, status, cancel, list) | Yes (default) |
 | `serve` | Start web UI server (axum + WebSocket + Docker stats) | No |
 
-### Job Subcommands (for crawl / extract / embed)
+### Job Subcommands (for crawl / extract / embed / refresh)
 
 ```bash
 axon crawl status <job_id>
@@ -186,6 +187,9 @@ High-level subsystem map:
   - job states in `crates/jobs/status.rs`
 - Vector + RAG:
   - `crates/vector/ops/*` (TEI embedding, Qdrant upsert/search, ask/evaluate/query)
+- MCP server:
+  - `crates/mcp/` (schema, server routing, handler modules, config)
+  - Single `axon` tool with `action`/`subaction` routing
 - Web runtimes:
   - WebSocket execution bridge: `crates/web.rs`
   - Active UI: `apps/web/` (Next.js — omnibox, Pulse workspace, port 49010)
@@ -284,9 +288,17 @@ AXON_JOB_STALE_CONFIRM_SECS=60     # additional grace period before stale reclai
 
 ### Web App Security Env (`apps/web`)
 
+Auth enforced by `apps/web/proxy.ts` on all `/api/*` routes. Both server and client vars must be set and must match.
+
 ```bash
-# API middleware auth + origin controls
+# Required: server-side token enforced by apps/web/proxy.ts
+# Accept via: Authorization: Bearer <token>  or  x-api-key: <token>
 AXON_WEB_API_TOKEN=CHANGE_ME
+
+# Required when AXON_WEB_API_TOKEN is set: client-side copy
+# Must match AXON_WEB_API_TOKEN — apiFetch() attaches this as x-api-key on all /api/* calls
+NEXT_PUBLIC_AXON_API_TOKEN=
+
 AXON_WEB_ALLOWED_ORIGINS=
 AXON_WEB_ALLOW_INSECURE_DEV=false
 
@@ -294,8 +306,7 @@ AXON_WEB_ALLOW_INSECURE_DEV=false
 AXON_SHELL_WS_TOKEN=
 AXON_SHELL_ALLOWED_ORIGINS=
 
-# Optional client-side token wiring
-NEXT_PUBLIC_AXON_API_TOKEN=
+# Optional client-side shell websocket token
 NEXT_PUBLIC_SHELL_WS_TOKEN=
 
 # Optional allowlist for Pulse chat --betas values

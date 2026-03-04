@@ -1,5 +1,5 @@
 # Reddit Ingest
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Version: 1.0.0
 Last Updated: 01:26:53 | 02/25/2026 EST
@@ -42,7 +42,7 @@ REDDIT_CLIENT_SECRET=your_client_secret
 
 ## Rate Limits
 
-Reddit OAuth2 script apps are allowed 100 requests/minute. The ingest worker respects `Retry-After` headers on 429 responses automatically — no manual intervention needed.
+Reddit OAuth2 script apps are allowed 100 requests/minute. On 429 responses, the ingest worker currently retries with fixed exponential backoff (2s, 4s, 8s; max 3 retries). `Retry-After` headers are not currently parsed.
 
 ## Known Limitations
 
@@ -70,4 +70,4 @@ Subreddit is private or quarantined — not accessible with client credentials.
 
 **Rate limit / 429 errors**
 
-Handled automatically via Retry-After backoff. If errors persist, your app may be suspended by Reddit.
+Handled automatically with exponential backoff retries. If errors persist, reduce request rate and verify app health on Reddit.

@@ -48,7 +48,12 @@ async function resolveWebSocketConstructor(): Promise<WebSocketConstructor> {
  * the parsed JSON result. Rejects on timeout, connection error, or if the
  * command itself fails.
  */
-export async function runAxonCommandWs(mode: string, timeoutMs = 30_000): Promise<unknown> {
+export async function runAxonCommandWs(
+  mode: string,
+  timeoutMs = 30_000,
+  input = '',
+  flags: Record<string, string | boolean> = {},
+): Promise<unknown> {
   const WebSocketImpl = await resolveWebSocketConstructor()
 
   return new Promise((resolve, reject) => {
@@ -75,7 +80,7 @@ export async function runAxonCommandWs(mode: string, timeoutMs = 30_000): Promis
     )
 
     ws.addEventListener('open', () => {
-      ws.send(JSON.stringify({ type: 'execute', mode, input: '', flags: {} }))
+      ws.send(JSON.stringify({ type: 'execute', mode, input, flags }))
     })
 
     ws.addEventListener('message', (event) => {

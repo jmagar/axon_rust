@@ -1,5 +1,5 @@
 # crates/
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Module index for Axon’s Rust crate directories.
 
@@ -11,7 +11,7 @@ Module index for Axon’s Rust crate directories.
 - [jobs](./jobs/README.md): async queue workers and job lifecycle management.
 - [mcp](./mcp/README.md): MCP server crate for `axon mcp`.
 - [vector](./vector/README.md): embeddings, Qdrant operations, retrieval, and RAG.
-- [web](./web/README.md): `axon serve` web runtime and websocket bridge.
+- [web](./web/README.md): core `axon serve` runtime providing `/ws`, `/ws/shell`, `/download/*`, and `/output/*` for `apps/web`.
 
 ## Re-export Shims
 These top-level Rust files re-export module roots used by the workspace crate graph:

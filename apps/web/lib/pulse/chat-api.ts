@@ -3,6 +3,7 @@
  * No React imports — safe to use from hooks and server utilities.
  */
 
+import { apiFetch } from '@/lib/api-fetch'
 import { parsePulseChatStreamChunk } from '@/lib/pulse/chat-stream'
 import type {
   PulseChatResponse,
@@ -141,7 +142,7 @@ export async function runChatPrompt(opts: RunChatPromptOptions): Promise<PulseCh
     toolsRestrict,
   } = opts
 
-  const response = await fetch('/api/pulse/chat', {
+  const response = await apiFetch('/api/pulse/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
@@ -205,7 +206,7 @@ export async function runSourcePrompt(
   urls: string[],
   signal: AbortSignal,
 ): Promise<PulseSourceResponse> {
-  const response = await fetch('/api/pulse/source', {
+  const response = await apiFetch('/api/pulse/source', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,

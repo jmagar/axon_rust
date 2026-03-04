@@ -1,5 +1,5 @@
 # crates/jobs
-Last Modified: 2026-02-25
+Last Modified: 2026-03-03
 
 Asynchronous job runtime, queue integration, and lifecycle management.
 
@@ -16,7 +16,7 @@ Asynchronous job runtime, queue integration, and lifecycle management.
 
 ## Key Files
 - `status.rs`: shared job status model.
-- `worker_lane.rs`: worker lane runtime orchestration.
+- `worker_lane.rs`: worker lane runtime orchestration (module root file).
 - `common/amqp.rs`: queue transport helpers.
 - `common/job_ops.rs`: atomic DB lifecycle operations.
 - `common/watchdog.rs`: stale-job reclaim logic.
@@ -34,3 +34,8 @@ Asynchronous job runtime, queue integration, and lifecycle management.
 ## Notes
 - Postgres is the source of truth for job state; queue delivery alone is not sufficient for lifecycle integrity.
 - Recovery behavior should stay aligned with stale timeout and confirmation config.
+
+## Related Docs
+- [Repository README](../../README.md)
+- [Architecture](../../docs/ARCHITECTURE.md)
+- [Docs Index](../../docs/README.md)

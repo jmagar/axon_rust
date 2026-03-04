@@ -93,16 +93,22 @@ docker-build tag="axon:local":
     docker build -f docker/Dockerfile -t {{tag}} .
 
 up:
-    docker compose up -d --build
+    ./scripts/rebuild-fresh.sh
 
 down:
     docker compose down
 
 docker-up:
-    docker compose up -d --build
+    ./scripts/rebuild-fresh.sh
 
 docker-down:
     docker compose down
+
+rebuild-fresh:
+    ./scripts/rebuild-fresh.sh
+
+check-container-revisions:
+    ./scripts/check-container-revisions.sh
 
 watch-check:
     cargo watch -x 'check -q --locked' -x 'check -q --tests --locked' -x 'test -q --lib --locked -- --skip worker_e2e'

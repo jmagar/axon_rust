@@ -3,6 +3,7 @@
 import { AlertCircle, Loader2, RefreshCw, Zap } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Job, JobStatus, JobType, StatusCounts } from '@/app/api/jobs/route'
+import { apiFetch } from '@/lib/api-fetch'
 import {
   JobRow,
   SkeletonRow,
@@ -151,7 +152,7 @@ export function JobsDashboard() {
       setError(null)
       try {
         const params = new URLSearchParams({ type, status, limit: String(PAGE_SIZE), offset: '0' })
-        const res = await fetch(`/api/jobs?${params}`, { signal: controller.signal })
+        const res = await apiFetch(`/api/jobs?${params}`, { signal: controller.signal })
         const data = (await res.json()) as JobsApiResponse
         if (data.error) {
           setError(data.error)
@@ -201,7 +202,7 @@ export function JobsDashboard() {
       limit: String(PAGE_SIZE),
       offset: String(next),
     })
-    fetch(`/api/jobs?${params}`)
+    apiFetch(`/api/jobs?${params}`)
       .then((r) => r.json())
       .then((data: JobsApiResponse) => {
         if (data.error) {

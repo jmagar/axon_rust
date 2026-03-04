@@ -4,6 +4,7 @@ import { ArrowLeft, Network, Plus, Trash2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
+import { apiFetch } from '@/lib/api-fetch'
 import {
   configToForm,
   EMPTY_FORM,
@@ -29,7 +30,7 @@ function McpPageInner() {
 
   const loadStatus = useCallback(async (signal?: AbortSignal) => {
     try {
-      const res = await fetch('/api/mcp/status', { signal })
+      const res = await apiFetch('/api/mcp/status', { signal })
       if (!res.ok) return
       const data = (await res.json()) as { servers: Record<string, McpServerStatus> }
       setStatusMap(data.servers)
@@ -43,7 +44,7 @@ function McpPageInner() {
   const loadConfig = useCallback(
     async (signal?: AbortSignal) => {
       try {
-        const res = await fetch('/api/mcp', { signal })
+        const res = await apiFetch('/api/mcp', { signal })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data = (await res.json()) as McpConfig
         setConfig(data)
@@ -86,7 +87,7 @@ function McpPageInner() {
     setEditTarget(null)
     // mergedConfig is synchronously assigned inside the setter before this line runs
     // because React batches state updates but calls the updater synchronously.
-    const res = await fetch('/api/mcp', {
+    const res = await apiFetch('/api/mcp', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'X-Pulse-Request': '1' },
       body: JSON.stringify(mergedConfig),
@@ -100,7 +101,7 @@ function McpPageInner() {
   }
 
   async function deleteServer(name: string) {
-    const res = await fetch('/api/mcp', {
+    const res = await apiFetch('/api/mcp', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json', 'X-Pulse-Request': '1' },
       body: JSON.stringify({ name }),

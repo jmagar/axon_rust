@@ -1,7 +1,7 @@
 # Spider.rs Feature Flags
 
-**Total flags in spider.rs: 78**
-**Flags enabled in axon_rust: 19 (spider) + 2 (spider_agent) + spider_transformations (no flags)**
+**Total feature entries tracked in this inventory: 79 (includes `basic` meta-feature)**
+**Flags enabled in axon_rust: 20 (spider) + 2 (spider_agent) + spider_transformations (no flags)**
 
 ---
 
@@ -33,7 +33,7 @@ spider_transformations = "2"  # no feature flags — full crate used as-is
 |------|----------|----------------------|
 | `basic` | Core | Meta-feature — enables core crawl engine. Used everywhere spider is imported (`crates/crawl/engine/`, `crates/crawl/engine/collector.rs`, etc.) |
 | `regex` | Core | URL blacklist/whitelist pattern matching. Powers `--exclude-path-prefix` and `--url-whitelist` flags in crawl config |
-| `sitemap` | Core | `append_sitemap_backfill()` in `crates/crawl/engine/`. Drives `--discover-sitemaps`, `--max-sitemaps`, `--sitemap-since-days` flags |
+| `sitemap` | Core | `append_sitemap_backfill()` in `crates/crawl/engine/`. Drives `--discover-sitemaps` and `--sitemap-since-days` flags; max sitemap cap is currently fixed at 512 in runtime |
 | `simd` | Core | SIMD-accelerated JSON/text parsing. Performance optimization — no direct call site; implicit via spider internals |
 | `chrome` | Chrome / Browser | `RenderMode::Chrome` and `RenderMode::AutoSwitch` paths in `crates/crawl/engine/runtime.rs`. Imports `spider::features::chrome_common::{RequestInterceptConfiguration, ScreenShotConfig, ScreenshotParams, WaitForSelector}` |
 | `chrome_stealth` | Chrome / Browser | Passed to `spider::website::Website` in `configure_website()` in `crates/crawl/engine/`. Enables headless detection evasion |
@@ -56,7 +56,7 @@ Used in two files for HTML→Markdown content transformation:
 
 ---
 
-## Full Flag Inventory (all 78)
+## Full Flag Inventory (all 79)
 
 `✅` = enabled in axon_rust · `—` = not used
 
@@ -195,7 +195,7 @@ Used in two files for HTML→Markdown content transformation:
 
 | Category | Total | Enabled |
 |----------|-------|---------|
-| Core | 25 | 8 (`basic`, `regex`, `sitemap`, `simd`, `inline-more`, `ua_generator`, `headers`, `glob`, `time`, `control`) |
+| Core | 25 | 10 (`basic`, `regex`, `sitemap`, `simd`, `inline-more`, `ua_generator`, `headers`, `glob`, `time`, `control`) |
 | Storage | 3 | 0 |
 | Caching | 6 | 1 (`cache_mem`) |
 | Chrome / Browser | 17 | 7 (`chrome`, `chrome_stealth`, `chrome_screenshot`, `chrome_store_page`, `chrome_headless_new`, `chrome_simd`, `adblock`) |
@@ -205,6 +205,6 @@ Used in two files for HTML→Markdown content transformation:
 | Spider Cloud | 1 | 0 |
 | Agent | 12 | 1 via spider_agent (`search_tavily`) |
 | Search | 5 | 0 |
-| **Total** | **79** | **19 spider + 2 spider_agent = 21** |
+| **Total** | **79** | **20 spider + 2 spider_agent = 22** |
 
-> `basic` is an additional meta-feature enabled on the `spider` crate (not in the 78-flag list above) that bundles the core crawl engine. The project uses `default-features = false` on all spider crates, so only explicitly listed features are compiled in.
+> `basic` is a meta-feature enabled on the `spider` crate that bundles core crawl behavior. The project uses `default-features = false` on all spider crates, so only explicitly listed features are compiled in.
