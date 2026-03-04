@@ -16,6 +16,12 @@ use super::types::{
     RefreshTokenRecord, RegisteredClient,
 };
 
+/// Maximum number of entries allowed in each in-memory OAuth state map.
+/// If a map reaches this size, a cleanup is triggered; if it is still over
+/// capacity after cleanup, new insertions are rejected to prevent DoS via
+/// unbounded memory growth.
+const MAX_OAUTH_STATE_ENTRIES: usize = 10_000;
+
 impl GoogleOAuthState {
     pub(crate) fn from_env(mcp_host: &str, mcp_port: u16) -> Self {
         let config = GoogleOAuthConfig::from_env(mcp_host, mcp_port);
@@ -24,7 +30,7 @@ impl GoogleOAuthState {
             .or_else(|| std::env::var("AXON_REDIS_URL").ok())
             .and_then(|url| redis::Client::open(url).ok());
 
-        Self {
+        let state = Self {
             inner: std::sync::Arc::new(GoogleOAuthInner {
                 config,
                 http_client: reqwest::Client::new(),
@@ -37,7 +43,19 @@ impl GoogleOAuthState {
                 refresh_tokens: Mutex::new(HashMap::new()),
                 rate_limits: Mutex::new(HashMap::new()),
             }),
-        }
+        };
+
+        // M-02: spawn background cleanup instead of calling on every hot-path request
+        let cleanup_state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                cleanup_state.cleanup_expired_in_memory().await;
+            }
+        });
+
+        state
     }
 
     pub(crate) fn configured(&self) -> bool {
@@ -190,14 +208,36 @@ impl GoogleOAuthState {
         Some(record.return_to)
     }
 
-    pub(crate) async fn put_client(&self, client_id: &str, client: &RegisteredClient) {
-        self.inner
-            .oauth_clients
-            .lock()
-            .await
-            .insert(client_id.to_string(), client.clone());
+    pub(crate) async fn put_client(
+        &self,
+        client_id: &str,
+        client: &RegisteredClient,
+    ) -> Result<(), Response> {
+        {
+            let mut map = self.inner.oauth_clients.lock().await;
+            if map.len() >= MAX_OAUTH_STATE_ENTRIES {
+                drop(map);
+                self.cleanup_expired_in_memory().await;
+                let mut map = self.inner.oauth_clients.lock().await;
+                if map.len() >= MAX_OAUTH_STATE_ENTRIES {
+                    warn!(target: "axon.mcp.oauth", "oauth_clients at capacity; rejecting registration");
+                    return Err((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(serde_json::json!({
+                            "error": "server_error",
+                            "error_description": "oauth state store at capacity"
+                        })),
+                    )
+                        .into_response());
+                }
+                map.insert(client_id.to_string(), client.clone());
+            } else {
+                map.insert(client_id.to_string(), client.clone());
+            }
+        }
         self.redis_set_json(&self.key(&format!("client:{client_id}")), client, None)
             .await;
+        Ok(())
     }
 
     pub(crate) async fn get_client(&self, client_id: &str) -> Option<RegisteredClient> {
@@ -215,14 +255,36 @@ impl GoogleOAuthState {
             .cloned()
     }
 
-    pub(crate) async fn put_auth_code(&self, code: &str, record: &AuthCodeRecord) {
-        self.inner
-            .auth_codes
-            .lock()
-            .await
-            .insert(code.to_string(), record.clone());
+    pub(crate) async fn put_auth_code(
+        &self,
+        code: &str,
+        record: &AuthCodeRecord,
+    ) -> Result<(), Response> {
+        {
+            let mut map = self.inner.auth_codes.lock().await;
+            if map.len() >= MAX_OAUTH_STATE_ENTRIES {
+                drop(map);
+                self.cleanup_expired_in_memory().await;
+                let mut map = self.inner.auth_codes.lock().await;
+                if map.len() >= MAX_OAUTH_STATE_ENTRIES {
+                    warn!(target: "axon.mcp.oauth", "auth_codes at capacity; rejecting authorization request");
+                    return Err((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(serde_json::json!({
+                            "error": "server_error",
+                            "error_description": "oauth state store at capacity"
+                        })),
+                    )
+                        .into_response());
+                }
+                map.insert(code.to_string(), record.clone());
+            } else {
+                map.insert(code.to_string(), record.clone());
+            }
+        }
         self.redis_set_json(&self.key(&format!("auth_code:{code}")), record, Some(600))
             .await;
+        Ok(())
     }
 
     pub(crate) async fn consume_auth_code(&self, code: &str) -> Option<AuthCodeRecord> {
@@ -239,18 +301,36 @@ impl GoogleOAuthState {
         token: &str,
         record: &AccessTokenRecord,
         ttl_secs: u64,
-    ) {
-        self.inner
-            .access_tokens
-            .lock()
-            .await
-            .insert(token.to_string(), record.clone());
+    ) -> Result<(), Response> {
+        {
+            let mut map = self.inner.access_tokens.lock().await;
+            if map.len() >= MAX_OAUTH_STATE_ENTRIES {
+                drop(map);
+                self.cleanup_expired_in_memory().await;
+                let mut map = self.inner.access_tokens.lock().await;
+                if map.len() >= MAX_OAUTH_STATE_ENTRIES {
+                    warn!(target: "axon.mcp.oauth", "access_tokens at capacity; rejecting token issuance");
+                    return Err((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(serde_json::json!({
+                            "error": "server_error",
+                            "error_description": "oauth state store at capacity"
+                        })),
+                    )
+                        .into_response());
+                }
+                map.insert(token.to_string(), record.clone());
+            } else {
+                map.insert(token.to_string(), record.clone());
+            }
+        }
         self.redis_set_json(
             &self.key(&format!("access_token:{token}")),
             record,
             Some(ttl_secs),
         )
         .await;
+        Ok(())
     }
 
     pub(crate) async fn get_access_token(&self, token: &str) -> Option<AccessTokenRecord> {
@@ -268,18 +348,36 @@ impl GoogleOAuthState {
         token: &str,
         record: &RefreshTokenRecord,
         ttl_secs: u64,
-    ) {
-        self.inner
-            .refresh_tokens
-            .lock()
-            .await
-            .insert(token.to_string(), record.clone());
+    ) -> Result<(), Response> {
+        {
+            let mut map = self.inner.refresh_tokens.lock().await;
+            if map.len() >= MAX_OAUTH_STATE_ENTRIES {
+                drop(map);
+                self.cleanup_expired_in_memory().await;
+                let mut map = self.inner.refresh_tokens.lock().await;
+                if map.len() >= MAX_OAUTH_STATE_ENTRIES {
+                    warn!(target: "axon.mcp.oauth", "refresh_tokens at capacity; rejecting token issuance");
+                    return Err((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(serde_json::json!({
+                            "error": "server_error",
+                            "error_description": "oauth state store at capacity"
+                        })),
+                    )
+                        .into_response());
+                }
+                map.insert(token.to_string(), record.clone());
+            } else {
+                map.insert(token.to_string(), record.clone());
+            }
+        }
         self.redis_set_json(
             &self.key(&format!("refresh_token:{token}")),
             record,
             Some(ttl_secs),
         )
         .await;
+        Ok(())
     }
 
     pub(crate) async fn get_refresh_token(&self, token: &str) -> Option<RefreshTokenRecord> {

@@ -19,12 +19,254 @@ use super::types::{
     RefreshTokenRecord, TokenRequest,
 };
 
+async fn handle_auth_code_grant(
+    state: &GoogleOAuthState,
+    identity: &str,
+    form: TokenRequest,
+) -> Response {
+    let client_id = match form.client_id {
+        Some(v) => v,
+        None => {
+            return token_error_response(
+                "invalid_request",
+                "client_id is required",
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+    let code = match form.code {
+        Some(v) => v,
+        None => {
+            return token_error_response(
+                "invalid_request",
+                "code is required",
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+    let redirect_uri = match form.redirect_uri {
+        Some(v) => v,
+        None => {
+            return token_error_response(
+                "invalid_request",
+                "redirect_uri is required",
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+    let redirect_uri = match normalize_loopback_redirect_uri(&redirect_uri) {
+        Some(uri) => uri,
+        None => {
+            return token_error_response(
+                "invalid_request",
+                "redirect_uri is invalid",
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+    let cfg = match state.config() {
+        Ok(cfg) => cfg,
+        Err(_) => {
+            return token_error_response(
+                "server_error",
+                "oauth configuration unavailable",
+                StatusCode::INTERNAL_SERVER_ERROR,
+            );
+        }
+    };
+    if !is_allowed_redirect_uri(&redirect_uri, cfg.redirect_policy) {
+        return token_error_response(
+            "invalid_request",
+            "redirect_uri violates server redirect policy",
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    let record = match state.consume_auth_code(&code).await {
+        Some(v) => v,
+        None => {
+            return token_error_response(
+                "invalid_grant",
+                "invalid or expired authorization code",
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+    if unix_now_secs() > record.expires_at_unix {
+        return token_error_response(
+            "invalid_grant",
+            "authorization code expired",
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    if record.client_id != client_id || record.redirect_uri != redirect_uri {
+        return token_error_response(
+            "invalid_grant",
+            "authorization code does not match client_id/redirect_uri",
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    if let Some(challenge) = record.code_challenge {
+        let verifier = match form.code_verifier {
+            Some(v) => v,
+            None => {
+                return token_error_response(
+                    "invalid_request",
+                    "code_verifier is required for PKCE",
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        };
+        let method = record
+            .code_challenge_method
+            .unwrap_or_else(|| "S256".to_string());
+        if method != "S256" {
+            return token_error_response(
+                "invalid_request",
+                "code_challenge_method must be S256",
+                StatusCode::BAD_REQUEST,
+            );
+        }
+        let digest = Sha256::digest(verifier.as_bytes());
+        let computed = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
+        if computed != challenge {
+            return token_error_response(
+                "invalid_grant",
+                "invalid code_verifier",
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    }
+    let access_token = format!("atk_{}", Uuid::new_v4());
+    let refresh_token = format!("rtk_{}", Uuid::new_v4());
+    let expires_in = 3600_u64;
+    let access_record = AccessTokenRecord {
+        scope: record.scope.clone(),
+        expires_at_unix: unix_now_secs() + expires_in,
+    };
+    if let Err(resp) = state
+        .put_access_token(&access_token, &access_record, expires_in)
+        .await
+    {
+        return resp;
+    }
+    let refresh_record = RefreshTokenRecord {
+        client_id,
+        scope: record.scope.clone(),
+        expires_at_unix: unix_now_secs() + OAUTH_REFRESH_TTL_SECS,
+    };
+    if let Err(resp) = state
+        .put_refresh_token(&refresh_token, &refresh_record, OAUTH_REFRESH_TTL_SECS)
+        .await
+    {
+        return resp;
+    }
+    info!(target: "axon.mcp.oauth", identity, "token exchange succeeded (authorization_code)");
+    (
+        StatusCode::OK,
+        Json(OAuthTokenResponse {
+            access_token,
+            token_type: "Bearer".to_string(),
+            expires_in,
+            refresh_token: Some(refresh_token),
+            scope: record.scope,
+        }),
+    )
+        .into_response()
+}
+
+async fn handle_refresh_token_grant(
+    state: &GoogleOAuthState,
+    identity: &str,
+    form: TokenRequest,
+) -> Response {
+    let client_id = match form.client_id {
+        Some(v) => v,
+        None => {
+            return token_error_response(
+                "invalid_request",
+                "client_id is required",
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+    let refresh = match form.refresh_token {
+        Some(v) => v,
+        None => {
+            return token_error_response(
+                "invalid_request",
+                "refresh_token is required",
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+    let refresh_record = match state.get_refresh_token(&refresh).await {
+        Some(v) => v,
+        None => {
+            return token_error_response(
+                "invalid_grant",
+                "invalid refresh_token",
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+    if refresh_record.client_id != client_id {
+        return token_error_response(
+            "invalid_grant",
+            "refresh_token does not belong to this client",
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    if unix_now_secs() > refresh_record.expires_at_unix {
+        return token_error_response(
+            "invalid_grant",
+            "refresh_token expired",
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    let access_token = format!("atk_{}", Uuid::new_v4());
+    let new_refresh_token = format!("rtk_{}", Uuid::new_v4());
+    let expires_in = 3600_u64;
+    let access_record = AccessTokenRecord {
+        scope: refresh_record.scope.clone(),
+        expires_at_unix: unix_now_secs() + expires_in,
+    };
+    if let Err(resp) = state
+        .put_access_token(&access_token, &access_record, expires_in)
+        .await
+    {
+        return resp;
+    }
+    state.delete_refresh_token(&refresh).await;
+    let rotated_refresh = RefreshTokenRecord {
+        client_id,
+        scope: refresh_record.scope.clone(),
+        expires_at_unix: unix_now_secs() + OAUTH_REFRESH_TTL_SECS,
+    };
+    if let Err(resp) = state
+        .put_refresh_token(&new_refresh_token, &rotated_refresh, OAUTH_REFRESH_TTL_SECS)
+        .await
+    {
+        return resp;
+    }
+    info!(target: "axon.mcp.oauth", identity, "token exchange succeeded (refresh_token)");
+    (
+        StatusCode::OK,
+        Json(OAuthTokenResponse {
+            access_token,
+            token_type: "Bearer".to_string(),
+            expires_in,
+            refresh_token: Some(new_refresh_token),
+            scope: refresh_record.scope,
+        }),
+    )
+        .into_response()
+}
+
 pub(crate) async fn oauth_token(
     State(state): State<GoogleOAuthState>,
     headers: axum::http::HeaderMap,
     Form(form): Form<TokenRequest>,
 ) -> Response {
-    state.cleanup_expired_in_memory().await;
     let identity = request_identity_from_headers(&headers);
     if let Err(resp) = state
         .check_rate_limit(&format!("token:{identity}"), 120, 60)
@@ -32,264 +274,16 @@ pub(crate) async fn oauth_token(
     {
         return resp;
     }
-    let grant = form.grant_type.as_str();
-    if grant == "authorization_code" {
-        let client_id = match form.client_id {
-            Some(value) => value,
-            None => {
-                return token_error_response(
-                    "invalid_request",
-                    "client_id is required",
-                    StatusCode::BAD_REQUEST,
-                );
-            }
-        };
-        let code = match form.code {
-            Some(value) => value,
-            None => {
-                return token_error_response(
-                    "invalid_request",
-                    "code is required",
-                    StatusCode::BAD_REQUEST,
-                );
-            }
-        };
-        let redirect_uri = match form.redirect_uri {
-            Some(value) => value,
-            None => {
-                return token_error_response(
-                    "invalid_request",
-                    "redirect_uri is required",
-                    StatusCode::BAD_REQUEST,
-                );
-            }
-        };
-        let redirect_uri = match normalize_loopback_redirect_uri(&redirect_uri) {
-            Some(uri) => uri,
-            None => {
-                return token_error_response(
-                    "invalid_request",
-                    "redirect_uri is invalid",
-                    StatusCode::BAD_REQUEST,
-                );
-            }
-        };
-        let cfg = state.config().map_err(|_| {
-            token_error_response(
-                "server_error",
-                "oauth configuration unavailable",
-                StatusCode::INTERNAL_SERVER_ERROR,
-            )
-        });
-        match cfg {
-            Ok(cfg) => {
-                if !is_allowed_redirect_uri(&redirect_uri, cfg.redirect_policy) {
-                    return token_error_response(
-                        "invalid_request",
-                        "redirect_uri violates server redirect policy",
-                        StatusCode::BAD_REQUEST,
-                    );
-                }
-            }
-            Err(resp) => return resp,
-        }
-
-        let record = state.consume_auth_code(&code).await;
-
-        let record = match record {
-            Some(value) => value,
-            None => {
-                return token_error_response(
-                    "invalid_grant",
-                    "invalid or expired authorization code",
-                    StatusCode::BAD_REQUEST,
-                );
-            }
-        };
-
-        if unix_now_secs() > record.expires_at_unix {
-            return token_error_response(
-                "invalid_grant",
-                "authorization code expired",
-                StatusCode::BAD_REQUEST,
-            );
-        }
-
-        if record.client_id != client_id || record.redirect_uri != redirect_uri {
-            return token_error_response(
-                "invalid_grant",
-                "authorization code does not match client_id/redirect_uri",
-                StatusCode::BAD_REQUEST,
-            );
-        }
-
-        if let Some(challenge) = record.code_challenge {
-            let verifier = match form.code_verifier {
-                Some(value) => value,
-                None => {
-                    return token_error_response(
-                        "invalid_request",
-                        "code_verifier is required for PKCE",
-                        StatusCode::BAD_REQUEST,
-                    );
-                }
-            };
-
-            let method = record
-                .code_challenge_method
-                .unwrap_or_else(|| "S256".to_string());
-            if method != "S256" {
-                return token_error_response(
-                    "invalid_request",
-                    "code_challenge_method must be S256",
-                    StatusCode::BAD_REQUEST,
-                );
-            }
-            let digest = Sha256::digest(verifier.as_bytes());
-            let computed = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
-
-            if computed != challenge {
-                return token_error_response(
-                    "invalid_grant",
-                    "invalid code_verifier",
-                    StatusCode::BAD_REQUEST,
-                );
-            }
-        }
-
-        let access_token = format!("atk_{}", Uuid::new_v4());
-        let refresh_token = format!("rtk_{}", Uuid::new_v4());
-        let expires_in = 3600_u64;
-
-        let access_record = AccessTokenRecord {
-            scope: record.scope.clone(),
-            expires_at_unix: unix_now_secs() + expires_in,
-        };
-        state
-            .put_access_token(&access_token, &access_record, expires_in)
-            .await;
-
-        let refresh_record = RefreshTokenRecord {
-            client_id,
-            scope: record.scope.clone(),
-            expires_at_unix: unix_now_secs() + OAUTH_REFRESH_TTL_SECS,
-        };
-        state
-            .put_refresh_token(&refresh_token, &refresh_record, OAUTH_REFRESH_TTL_SECS)
-            .await;
-        info!(
-            target: "axon.mcp.oauth",
-            identity,
-            "token exchange succeeded (authorization_code)"
-        );
-
-        return (
-            StatusCode::OK,
-            Json(OAuthTokenResponse {
-                access_token,
-                token_type: "Bearer".to_string(),
-                expires_in,
-                refresh_token: Some(refresh_token),
-                scope: record.scope,
-            }),
-        )
-            .into_response();
+    let grant = form.grant_type.clone();
+    match grant.as_str() {
+        "authorization_code" => handle_auth_code_grant(&state, &identity, form).await,
+        "refresh_token" => handle_refresh_token_grant(&state, &identity, form).await,
+        _ => token_error_response(
+            "unsupported_grant_type",
+            "supported grant_type values are authorization_code and refresh_token",
+            StatusCode::BAD_REQUEST,
+        ),
     }
-
-    if grant == "refresh_token" {
-        let client_id = match form.client_id {
-            Some(value) => value,
-            None => {
-                return token_error_response(
-                    "invalid_request",
-                    "client_id is required",
-                    StatusCode::BAD_REQUEST,
-                );
-            }
-        };
-
-        let refresh = match form.refresh_token {
-            Some(value) => value,
-            None => {
-                return token_error_response(
-                    "invalid_request",
-                    "refresh_token is required",
-                    StatusCode::BAD_REQUEST,
-                );
-            }
-        };
-
-        let refresh_record = state.get_refresh_token(&refresh).await;
-
-        let refresh_record = match refresh_record {
-            Some(value) => value,
-            None => {
-                return token_error_response(
-                    "invalid_grant",
-                    "invalid refresh_token",
-                    StatusCode::BAD_REQUEST,
-                );
-            }
-        };
-
-        if refresh_record.client_id != client_id {
-            return token_error_response(
-                "invalid_grant",
-                "refresh_token does not belong to this client",
-                StatusCode::BAD_REQUEST,
-            );
-        }
-        if unix_now_secs() > refresh_record.expires_at_unix {
-            return token_error_response(
-                "invalid_grant",
-                "refresh_token expired",
-                StatusCode::BAD_REQUEST,
-            );
-        }
-
-        let access_token = format!("atk_{}", Uuid::new_v4());
-        let new_refresh_token = format!("rtk_{}", Uuid::new_v4());
-        let expires_in = 3600_u64;
-        let access_record = AccessTokenRecord {
-            scope: refresh_record.scope.clone(),
-            expires_at_unix: unix_now_secs() + expires_in,
-        };
-        state
-            .put_access_token(&access_token, &access_record, expires_in)
-            .await;
-        state.delete_refresh_token(&refresh).await;
-        let rotated_refresh = RefreshTokenRecord {
-            client_id,
-            scope: refresh_record.scope.clone(),
-            expires_at_unix: unix_now_secs() + OAUTH_REFRESH_TTL_SECS,
-        };
-        state
-            .put_refresh_token(&new_refresh_token, &rotated_refresh, OAUTH_REFRESH_TTL_SECS)
-            .await;
-        info!(
-            target: "axon.mcp.oauth",
-            identity,
-            "token exchange succeeded (refresh_token)"
-        );
-
-        return (
-            StatusCode::OK,
-            Json(OAuthTokenResponse {
-                access_token,
-                token_type: "Bearer".to_string(),
-                expires_in,
-                refresh_token: Some(new_refresh_token),
-                scope: refresh_record.scope,
-            }),
-        )
-            .into_response();
-    }
-
-    token_error_response(
-        "unsupported_grant_type",
-        "supported grant_type values are authorization_code and refresh_token",
-        StatusCode::BAD_REQUEST,
-    )
 }
 
 pub(crate) async fn require_google_auth(

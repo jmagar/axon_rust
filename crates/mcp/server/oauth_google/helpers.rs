@@ -46,7 +46,11 @@ pub(crate) fn is_allowed_redirect_uri(uri: &str, policy: RedirectPolicy) -> bool
     };
 
     match policy {
-        RedirectPolicy::Any => true,
+        RedirectPolicy::Any => {
+            // M-07: reject non-HTTP/HTTPS schemes (javascript:, data:, etc.)
+            let scheme = parsed.scheme();
+            scheme == "http" || scheme == "https"
+        }
         RedirectPolicy::LoopbackOnly => {
             let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
             parsed.scheme() == "http" && (host == "localhost" || host == "127.0.0.1")
@@ -58,6 +62,14 @@ pub(crate) fn request_identity(req: &axum::extract::Request) -> String {
     request_identity_from_headers(req.headers())
 }
 
+// SECURITY: X-Forwarded-For is spoofable without trusted proxy configuration.
+// To properly validate the source, deploy behind a known reverse proxy and
+// check for a trusted proxy header (e.g., X-Forwarded-Host or a custom
+// shared secret) before trusting X-Forwarded-For. Without this validation,
+// a malicious client can inject an arbitrary IP by sending the header directly.
+// Fix path: add ConnectInfo<SocketAddr> extractor support in axum handler
+// signatures and only trust X-Forwarded-For when the socket peer IP matches
+// a configured trusted-proxy allowlist.
 pub(crate) fn request_identity_from_headers(headers: &axum::http::HeaderMap) -> String {
     if let Some(v) = headers.get("cf-connecting-ip")
         && let Ok(s) = v.to_str()
@@ -185,42 +197,23 @@ pub(crate) fn token_error_response(error: &str, description: &str, status: Statu
         .into_response()
 }
 
-pub(crate) fn escape_html(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
+// L-04: single-pass with pre-allocated capacity to avoid 5 intermediate allocations
+pub(crate) fn escape_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 16);
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn oauth_html_page(
-    status: StatusCode,
-    title: &str,
-    subtitle: &str,
-    detail: &str,
-    primary_href: &str,
-    primary_label: &str,
-    secondary_href: &str,
-    secondary_label: &str,
-) -> Response {
-    let title = escape_html(title);
-    let subtitle = escape_html(subtitle);
-    let detail = escape_html(detail);
-    let primary_href = escape_html(primary_href);
-    let primary_label = escape_html(primary_label);
-    let secondary_href = escape_html(secondary_href);
-    let secondary_label = escape_html(secondary_label);
-    let html = format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{title}</title>
-  <style>
-    :root {{
+const OAUTH_HTML_CSS: &str = r#":root {
       --bg: #090e1a;
       --panel: rgba(16, 26, 46, 0.88);
       --text: #e8f0ff;
@@ -228,9 +221,9 @@ pub(crate) fn oauth_html_page(
       --accent: #67c7ff;
       --accent-2: #2f7ee8;
       --border: rgba(141, 180, 255, 0.24);
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
+    }
+    * { box-sizing: border-box; }
+    body {
       margin: 0;
       min-height: 100vh;
       display: grid;
@@ -243,8 +236,8 @@ pub(crate) fn oauth_html_page(
         radial-gradient(700px 360px at 65% 8%, rgba(71, 164, 255, 0.2) 0%, transparent 60%),
         var(--bg);
       font-family: "Avenir Next", "Segoe UI", -apple-system, system-ui, sans-serif;
-    }}
-    .card {{
+    }
+    .card {
       width: min(720px, 100%);
       position: relative;
       overflow: hidden;
@@ -254,8 +247,8 @@ pub(crate) fn oauth_html_page(
       box-shadow: 0 28px 90px rgba(0, 0, 0, 0.5);
       backdrop-filter: blur(10px);
       padding: 30px;
-    }}
-    .card::before {{
+    }
+    .card::before {
       content: "";
       position: absolute;
       inset: -120px auto auto -140px;
@@ -264,26 +257,26 @@ pub(crate) fn oauth_html_page(
       border-radius: 999px;
       background: radial-gradient(circle, rgba(103, 199, 255, 0.36) 0%, transparent 72%);
       pointer-events: none;
-    }}
-    .eyebrow {{
+    }
+    .eyebrow {
       font-size: 12px;
       letter-spacing: 0.09em;
       text-transform: uppercase;
       color: var(--muted);
       margin: 0 0 10px;
-    }}
-    h1 {{
+    }
+    h1 {
       margin: 0 0 10px;
       font-size: clamp(26px, 4vw, 34px);
       line-height: 1.15;
       max-width: 18ch;
-    }}
-    p {{
+    }
+    p {
       margin: 0;
       color: var(--muted);
       line-height: 1.55;
-    }}
-    .detail {{
+    }
+    .detail {
       margin-top: 14px;
       padding: 12px 14px;
       border: 1px solid var(--border);
@@ -294,14 +287,14 @@ pub(crate) fn oauth_html_page(
       color: #d7e3ff;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
-    }}
-    .actions {{
+    }
+    .actions {
       display: flex;
       gap: 12px;
       flex-wrap: wrap;
       margin-top: 20px;
-    }}
-    a.btn {{
+    }
+    a.btn {
       text-decoration: none;
       border-radius: 11px;
       padding: 10px 14px;
@@ -309,14 +302,45 @@ pub(crate) fn oauth_html_page(
       color: var(--text);
       background: rgba(255, 255, 255, 0.04);
       transition: transform .15s ease, background .15s ease;
-    }}
-    a.btn:hover {{ transform: translateY(-1px); }}
-    a.btn.primary {{
+    }
+    a.btn:hover { transform: translateY(-1px); }
+    a.btn.primary {
       background: linear-gradient(180deg, var(--accent), var(--accent-2));
       border-color: transparent;
       color: #fff;
       font-weight: 700;
-    }}
+    }"#;
+
+/// Configuration for rendering an OAuth HTML status/error page.
+pub(crate) struct OAuthHtmlPageConfig<'a> {
+    pub status: StatusCode,
+    pub title: &'a str,
+    pub subtitle: &'a str,
+    pub detail: &'a str,
+    /// Primary action button: (href, label)
+    pub primary: (&'a str, &'a str),
+    /// Secondary action button: (href, label)
+    pub secondary: (&'a str, &'a str),
+}
+
+pub(crate) fn oauth_html_page(cfg: OAuthHtmlPageConfig<'_>) -> Response {
+    let title = escape_html(cfg.title);
+    let subtitle = escape_html(cfg.subtitle);
+    let detail = escape_html(cfg.detail);
+    let primary_href = escape_html(cfg.primary.0);
+    let primary_label = escape_html(cfg.primary.1);
+    let secondary_href = escape_html(cfg.secondary.0);
+    let secondary_label = escape_html(cfg.secondary.1);
+    let css = OAUTH_HTML_CSS;
+    let html = format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title}</title>
+  <style>
+    {css}
   </style>
 </head>
 <body>
@@ -333,7 +357,7 @@ pub(crate) fn oauth_html_page(
 </body>
 </html>"#
     );
-    let mut response = (status, html).into_response();
+    let mut response = (cfg.status, html).into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/html; charset=utf-8"),

@@ -94,7 +94,7 @@ pub(crate) async fn oauth_register_client(
     let client = RegisteredClient {
         redirect_uris: redirect_uris.clone(),
     };
-    state.put_client(&client_id, &client).await;
+    state.put_client(&client_id, &client).await?;
     info!(
         target: "axon.mcp.oauth",
         identity,
@@ -116,12 +116,124 @@ pub(crate) async fn oauth_register_client(
     }))
 }
 
+// RFC 6749 §4.1.2.1: validate client_id and redirect_uri BEFORE any error
+// redirects. Error responses must NOT be sent to an unvalidated redirect_uri.
+fn validate_authorize_redirect_uri(
+    state: &GoogleOAuthState,
+    params: &AuthorizeParams,
+    registered: &RegisteredClient,
+) -> Result<String, Response> {
+    let redirect_uri = match params.redirect_uri.clone() {
+        Some(uri) => uri,
+        None => {
+            if registered.redirect_uris.len() == 1 {
+                registered.redirect_uris[0].clone()
+            } else {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(AuthorizeErrorResponse {
+                        error: "invalid_request".to_string(),
+                        error_description: "redirect_uri is required".to_string(),
+                    }),
+                )
+                    .into_response());
+            }
+        }
+    };
+    let redirect_uri = match normalize_loopback_redirect_uri(&redirect_uri) {
+        Some(uri) => uri,
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(AuthorizeErrorResponse {
+                    error: "invalid_request".to_string(),
+                    error_description: "redirect_uri is invalid".to_string(),
+                }),
+            )
+                .into_response());
+        }
+    };
+    let cfg = match state.config() {
+        Ok(cfg) => cfg,
+        Err(resp) => return Err(resp),
+    };
+    if !is_allowed_redirect_uri(&redirect_uri, cfg.redirect_policy) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(AuthorizeErrorResponse {
+                error: "invalid_request".to_string(),
+                error_description: "redirect_uri violates server redirect policy".to_string(),
+            }),
+        )
+            .into_response());
+    }
+    if !registered
+        .redirect_uris
+        .iter()
+        .any(|uri| uri == &redirect_uri)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(AuthorizeErrorResponse {
+                error: "invalid_request".to_string(),
+                error_description: "redirect_uri is not registered for this client".to_string(),
+            }),
+        )
+            .into_response());
+    }
+    Ok(redirect_uri)
+}
+
+fn validate_pkce_params(params: &AuthorizeParams) -> Result<(), Response> {
+    if params.code_challenge.is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(AuthorizeErrorResponse {
+                error: "invalid_request".to_string(),
+                error_description: "code_challenge is required".to_string(),
+            }),
+        )
+            .into_response());
+    }
+    if params.code_challenge_method.as_deref() != Some("S256") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(AuthorizeErrorResponse {
+                error: "invalid_request".to_string(),
+                error_description: "code_challenge_method must be S256".to_string(),
+            }),
+        )
+            .into_response());
+    }
+    Ok(())
+}
+
+fn validate_scope(
+    scope_opt: Option<String>,
+    allowed_scopes: &[String],
+) -> Result<String, Response> {
+    let scope = scope_opt.unwrap_or_else(|| "openid email profile".to_string());
+    let requested: Vec<&str> = scope.split_whitespace().collect();
+    for s in &requested {
+        if !allowed_scopes.iter().any(|a| a == s) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(AuthorizeErrorResponse {
+                    error: "invalid_scope".to_string(),
+                    error_description: format!("scope '{s}' is not allowed"),
+                }),
+            )
+                .into_response());
+        }
+    }
+    Ok(scope)
+}
+
 pub(crate) async fn oauth_authorize(
     State(state): State<GoogleOAuthState>,
     Query(params): Query<AuthorizeParams>,
     req: axum::extract::Request,
 ) -> Response {
-    state.cleanup_expired_in_memory().await;
     let identity = request_identity(&req);
     if let Err(resp) = state
         .check_rate_limit(&format!("authorize:{identity}"), 60, 60)
@@ -151,11 +263,7 @@ pub(crate) async fn oauth_authorize(
         return Redirect::temporary(&redirect).into_response();
     }
 
-    // RFC 6749 §4.1.2.1: validate client_id and redirect_uri BEFORE any error
-    // redirects. Error responses must NOT be sent to an unvalidated redirect_uri.
-    let registered = state.get_client(&params.client_id).await;
-
-    let registered = match registered {
+    let registered = match state.get_client(&params.client_id).await {
         Some(client) => client,
         None => {
             return (
@@ -169,65 +277,10 @@ pub(crate) async fn oauth_authorize(
         }
     };
 
-    let redirect_uri = match params.redirect_uri.clone() {
-        Some(uri) => uri,
-        None => {
-            if registered.redirect_uris.len() == 1 {
-                registered.redirect_uris[0].clone()
-            } else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(AuthorizeErrorResponse {
-                        error: "invalid_request".to_string(),
-                        error_description: "redirect_uri is required".to_string(),
-                    }),
-                )
-                    .into_response();
-            }
-        }
-    };
-    let redirect_uri = match normalize_loopback_redirect_uri(&redirect_uri) {
-        Some(uri) => uri,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(AuthorizeErrorResponse {
-                    error: "invalid_request".to_string(),
-                    error_description: "redirect_uri is invalid".to_string(),
-                }),
-            )
-                .into_response();
-        }
-    };
-    let cfg = match state.config() {
-        Ok(cfg) => cfg,
+    let redirect_uri = match validate_authorize_redirect_uri(&state, &params, &registered) {
+        Ok(uri) => uri,
         Err(resp) => return resp,
     };
-    if !is_allowed_redirect_uri(&redirect_uri, cfg.redirect_policy) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(AuthorizeErrorResponse {
-                error: "invalid_request".to_string(),
-                error_description: "redirect_uri violates server redirect policy".to_string(),
-            }),
-        )
-            .into_response();
-    }
-
-    if !registered
-        .redirect_uris
-        .iter()
-        .any(|uri| uri == &redirect_uri)
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(AuthorizeErrorResponse {
-                error: "invalid_request".to_string(),
-                error_description: "redirect_uri is not registered for this client".to_string(),
-            }),
-        )
-            .into_response();
-    }
 
     // redirect_uri is now validated — safe to use for error redirects below
     if params.response_type != "code" {
@@ -241,45 +294,19 @@ pub(crate) async fn oauth_authorize(
             .into_response();
     }
 
-    if params.code_challenge.is_none() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(AuthorizeErrorResponse {
-                error: "invalid_request".to_string(),
-                error_description: "code_challenge is required".to_string(),
-            }),
-        )
-            .into_response();
+    if let Err(resp) = validate_pkce_params(&params) {
+        return resp;
     }
 
-    if params.code_challenge_method.as_deref() != Some("S256") {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(AuthorizeErrorResponse {
-                error: "invalid_request".to_string(),
-                error_description: "code_challenge_method must be S256".to_string(),
-            }),
-        )
-            .into_response();
-    }
+    let cfg = match state.config() {
+        Ok(cfg) => cfg,
+        Err(resp) => return resp,
+    };
+    let scope = match validate_scope(params.scope, &cfg.scopes) {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
 
-    let allowed_scopes = cfg.scopes.clone();
-    let scope = params
-        .scope
-        .unwrap_or_else(|| "openid email profile".to_string());
-    let requested_scopes: Vec<&str> = scope.split_whitespace().collect();
-    for s in &requested_scopes {
-        if !allowed_scopes.iter().any(|a| a == s) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(AuthorizeErrorResponse {
-                    error: "invalid_scope".to_string(),
-                    error_description: format!("scope '{}' is not allowed", s),
-                }),
-            )
-                .into_response();
-        }
-    }
     let auth_code = Uuid::new_v4().to_string();
     let record = AuthCodeRecord {
         client_id: params.client_id,
@@ -289,7 +316,9 @@ pub(crate) async fn oauth_authorize(
         code_challenge_method: Some("S256".to_string()),
         expires_at_unix: unix_now_secs() + 600,
     };
-    state.put_auth_code(&auth_code, &record).await;
+    if let Err(resp) = state.put_auth_code(&auth_code, &record).await {
+        return resp;
+    }
     info!(
         target: "axon.mcp.oauth",
         identity,
