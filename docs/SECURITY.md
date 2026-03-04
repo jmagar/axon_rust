@@ -1,5 +1,5 @@
 # Security Model
-Last Modified: 2026-03-03
+Last Modified: 2026-03-04
 
 Version: 1.0.0
 Last Updated: 01:26:53 | 02/25/2026 EST
@@ -73,6 +73,17 @@ Implemented in `crates/core/http.rs`:
 - rejects unsafe ids and `..`
 - resolves within source root only
 
+### WebSocket Authentication Gate
+
+`/ws` upgrade path (`crates/web.rs`):
+
+- Gate is active when `AXON_WEB_API_TOKEN` is set; disabled (open) when unset
+- One token type: `AXON_WEB_API_TOKEN` — the same static secret used by `proxy.ts` for `/api/*` routes
+- Browser sends it as `?token=` query param (appended by `hooks/use-axon-ws.ts`)
+- MCP OAuth clients (`atk_` tokens) do not have access to `/ws` — they use the MCP tool API instead
+- Non-loopback connections to `/ws/shell` rejected with 403; IPv4-mapped loopback (`::ffff:127.0.0.1`) accepted correctly
+- Rejected upgrades return 401 before the WebSocket handshake completes
+
 ### Command Surface Hardening
 
 WebSocket command execution (`crates/web/execute.rs`):
@@ -131,9 +142,9 @@ Worker startup:
 - URL is validated before request, but resolver behavior at connect time can still change.
 - Mitigation options: resolver pinning or additional network egress controls.
 
-2. No built-in auth for local websocket/UI surfaces:
-- intended for trusted local/homelab network.
-- if exposed externally, add authn/authz at edge proxy.
+2. WebSocket auth requires explicit env config:
+- Gate is disabled if `AXON_WEB_API_TOKEN` is not set — any client can connect to `/ws`.
+- For production / externally-exposed deployments, always set `AXON_WEB_API_TOKEN` to activate the gate.
 
 3. Upstream model endpoints:
 - security posture depends on TEI/LLM deployment hardening outside this repo.
@@ -169,10 +180,14 @@ After deploy:
 
 ## Source Map
 
-- `crates/core/http.rs`
-- `crates/web.rs`
-- `crates/web/download.rs`
-- `crates/web/execute.rs`
+- `crates/core/http.rs` — SSRF / URL validation
+- `crates/web.rs` — WS OAuth gate, shell WS loopback restriction, output file path safety
+- `crates/web/download.rs` — download path safety
+- `crates/web/execute.rs` — ALLOWED_MODES / ALLOWED_FLAGS command surface
+- `crates/web/execute/cancel.rs` — cancel mode guard (H-04)
+- `crates/mcp/server/oauth_google/` — MCP OAuth server (issues `atk_` tokens; separate from WS auth)
+- `apps/web/hooks/use-axon-ws.ts` — WS URL construction with `?token=` passthrough
+- `apps/web/proxy.ts` — `/api/*` origin check + API token validation helpers
 - `apps/web/app/api/omnibox/files/route.ts`
 - `apps/web/app/api/pulse/chat/route.ts`
 - `apps/web/app/api/ai/copilot/route.ts`

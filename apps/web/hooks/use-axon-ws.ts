@@ -53,7 +53,9 @@ export function useAxonWsProvider() {
 
     const proto = globalThis.location?.protocol === 'https:' ? 'wss:' : 'ws:'
     const envUrl = process.env.NEXT_PUBLIC_AXON_WS_URL
-    const wsUrl = envUrl || `${proto}//${globalThis.location?.host}/ws`
+    const apiToken = process.env.NEXT_PUBLIC_AXON_API_TOKEN
+    const base = envUrl || `${proto}//${globalThis.location?.host}/ws`
+    const wsUrl = apiToken ? `${base}?token=${encodeURIComponent(apiToken)}` : base
 
     try {
       const ws = new WebSocket(wsUrl)

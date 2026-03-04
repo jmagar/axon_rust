@@ -1,5 +1,5 @@
 # `axon serve` — WebSocket Execution Bridge
-Last Modified: 2026-03-03
+Last Modified: 2026-03-04
 
 Version: 1.2.0
 Last Updated: 03/03/2026
@@ -51,6 +51,49 @@ apps/web ──────▶ axum (single port, single binary)
                  └── WS /ws/shell                 → PTY bridge for terminal UI
                      └── localhost-only (non-loopback rejected with 403)
 ```
+
+## WebSocket Authentication
+
+### `/ws` — command bridge
+
+The `/ws` path is a raw Next.js rewrite (not a proxy through Next.js API routes), so Next.js middleware does **not** run on WS upgrade requests. Authentication is enforced at the Rust layer in `crates/web.rs`.
+
+**Gate activation** — the gate is active when `AXON_WEB_API_TOKEN` is set. If unset, the gate is disabled (open — trusted-network deployments only).
+
+**Token validation:** the `?token=` query param is compared against `AXON_WEB_API_TOKEN` using a direct string equality check. This is the same secret used by the Next.js proxy for `/api/*` routes — one token for the whole frontend.
+
+MCP OAuth clients (`atk_` tokens) do **not** have access to `/ws`. MCP clients use the MCP tool API (`/mcp`) instead.
+
+**Token flow for the browser:**
+
+```
+AXON_WEB_API_TOKEN (server env)
+         ↕ must match
+NEXT_PUBLIC_AXON_API_TOKEN (client env, embedded in browser bundle)
+         ↓
+use-axon-ws.ts appends ?token=<value> to the WS URL
+         ↓
+crates/web.rs ws_upgrade() checks ?token= against AXON_WEB_API_TOKEN
+```
+
+**Environment variables:**
+
+| Variable | Purpose |
+|----------|---------|
+| `AXON_WEB_API_TOKEN` | WS gate token (server-side). Also used by `proxy.ts` for `/api/*` auth. |
+| `NEXT_PUBLIC_AXON_API_TOKEN` | Client-side copy — must equal `AXON_WEB_API_TOKEN`. Sent as `?token=` on WS and `x-api-key` on `/api/*`. |
+
+**Rejected connections** return HTTP 401 before the WebSocket upgrade completes, with the source IP logged at `warn`.
+
+### `/ws/shell` — PTY bridge
+
+Loopback-only restriction enforced in `shell_ws_upgrade()`. Non-loopback connections receive HTTP 403 before upgrade.
+
+IPv4-mapped loopback (`::ffff:127.0.0.1`) is explicitly accepted — Rust's `IpAddr::is_loopback()` returns `false` for this address form.
+
+Auth is handled by the shell server (`shell-server.mjs`) separately from the Rust WS gate. See `apps/web/CLAUDE.md → Shell Server`.
+
+---
 
 ## Key Design Decisions
 

@@ -288,15 +288,19 @@ AXON_JOB_STALE_CONFIRM_SECS=60     # additional grace period before stale reclai
 
 ### Web App Security Env (`apps/web`)
 
-Auth enforced by `apps/web/proxy.ts` on all `/api/*` routes. Both server and client vars must be set and must match.
+One token covers both surfaces: `AXON_WEB_API_TOKEN` (server) and `NEXT_PUBLIC_AXON_API_TOKEN` (client) must be set to the same value.
+
+- `/api/*` routes — `proxy.ts` validates via `Authorization: Bearer <token>` or `x-api-key` header
+- `/ws` — Rust gate (`crates/web.rs`) validates via `?token=` query param, appended by `hooks/use-axon-ws.ts`
+
+MCP OAuth (`atk_` tokens) is a separate auth system for MCP clients only — it does not touch `/ws` or `/api/*`.
 
 ```bash
-# Required: server-side token enforced by apps/web/proxy.ts
-# Accept via: Authorization: Bearer <token>  or  x-api-key: <token>
+# Server-side token — activates both the /api/* proxy gate and the /ws Rust gate
 AXON_WEB_API_TOKEN=CHANGE_ME
 
-# Required when AXON_WEB_API_TOKEN is set: client-side copy
-# Must match AXON_WEB_API_TOKEN — apiFetch() attaches this as x-api-key on all /api/* calls
+# Client-side copy — must equal AXON_WEB_API_TOKEN
+# apiFetch() sends it as x-api-key on /api/*; use-axon-ws.ts sends it as ?token= on /ws
 NEXT_PUBLIC_AXON_API_TOKEN=
 
 AXON_WEB_ALLOWED_ORIGINS=

@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-03-04 (session: full codebase review — 40 findings fixed; 17 CodeRabbit findings fixed; WS OAuth gating; SQL parameterization; Secret<T>; ConfigOverrides; env allowlist hardening; v0.4.0)
+Last Modified: 2026-03-04 (session: post-v0.4.0 stabilization + release prep; CI/test hardening; WS/API token docs and compose/docker updates; services-layer execution plan hardening; v0.4.1)
 
 ## [Unreleased] — feat/sidebar
 
@@ -7,6 +7,8 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 ### Highlights
 
+- **Post-v0.4.0 stabilization** — fixed MCP OAuth smoke env handling and serialized crawl DB tests to reduce flakes; fixed 4 failing CI checks; pinned Vitest timezone (`TZ=UTC`) and refreshed snapshots for deterministic test output
+- **Release prep + execution hardening (v0.4.1)** — updated web/container/docs env wiring and token guidance (`AXON_WEB_API_TOKEN`/`NEXT_PUBLIC_AXON_API_TOKEN`), refreshed Docker/compose defaults, and fully hardened the services-layer refactor execution plan with strict preflight, safety rails, and parallel-worker dispatch protocol
 - **Full codebase security & quality review (v0.4.0)** — comprehensive 5-phase review covering 244 Rust + 424 TypeScript files; 40 Phase 1 findings (3 Critical, 7 High, 17 Medium, 13 Low) + 17 CodeRabbit findings all addressed; WS OAuth bearer token gating added; all `format!` SQL → parameterized queries (H-03); `Secret<T>` wrapper with `[REDACTED]` debug; `ConfigOverrides` + sub-config scaffolding (A-H-01); `Config::test_default()` (CR-Q); ANTHROPIC_API_KEY + CLAUDE_* passthrough in child env allowlist (H-02/CR-D); `spawn_blocking` replaces `block_in_place` in MCP ask handler (CR-E); token rotation race fixed (CR-F); OAuth state capacity caps (H-05/CR-K); `apply_overrides` returns new `Config` (CR-M); `ServiceUrls` Debug redacts secrets (CR-L); migration table for `axon_session_ingest_state` (CR-B); arch docs for A-H-01/A-M-01/A-M-04/A-M-08
 - **Evaluate page + cortex suggest API** — new `/app/evaluate/page.tsx` for RAG evaluation UI; new `/api/cortex/suggest/route.ts` server route; `apps/web/lib/api-fetch.ts` typed fetch utility; v0.3.0 (minor bump)
 - **Image SHA verification** — `docker/s6/cont-init.d/00-verify-image-sha` and `docker/web/cont-init.d/00-verify-image-sha` added to both worker and web containers; `scripts/check-container-revisions.sh` for CI; `scripts/rebuild-fresh.sh` and `scripts/test-mcp-oauth-protection.sh` added
@@ -68,6 +70,11 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 | Commit | Type | Message |
 |---|---|---|
+| *(this commit)* | chore(release) | v0.4.1; stage pending web/docker/docs updates; harden services-layer refactor execution plan and dispatch safety |
+| `b71fd7fd` | test | fix mcp-oauth-smoke missing env vars and serialize crawl DB tests |
+| `25e2287f` | fix(ci) | fix 4 failing CI checks |
+| `05238113` | fix(web) | set TZ=UTC in vitest config and update snapshot timestamps |
+| `9eddd039` | chore(release) | v0.4.0 — full codebase review complete; 40+17 findings fixed; changelog updated |
 | *(this commit)* | feat+chore | v0.4.0; full codebase review — 40 + 17 CR findings fixed; WS OAuth gating; SQL parameterization; Secret<T>; ConfigOverrides; env allowlist hardening |
 | `18c6e6ae` | fix(test) | add #[serial] to extract DB tests to eliminate race condition |
 | `54ced213` | fix(jobs) | fix doctest annotation in status.rs |

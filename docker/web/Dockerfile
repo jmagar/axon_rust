@@ -63,11 +63,11 @@ RUN curl -fsSL https://claude.ai/install.sh | bash && \
     chmod 755 /usr/local/bin/claude
 
 # Codex + Gemini CLI
-RUN npm install -g @openai/codex@0.105.0 --no-fund --no-audit
-RUN npm install -g @google/gemini-cli@latest --no-fund --no-audit
+RUN npm install -g @openai/codex@0.105.0 @google/gemini-cli@0.32.1 --no-fund --no-audit
 
 # corepack ships with Node 24 — use it to install pnpm without a separate npm call
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Pin to the version recorded in pnpm-lock.yaml (lockfileVersion: 9.0 → pnpm 10.x)
+RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
 
 WORKDIR /app
 
@@ -79,7 +79,11 @@ RUN mkdir -p /app/.next /app/node_modules
 COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # Run pnpm install as node so the anonymous volume inherits node-owned files.
 # pnpm-dev and Next.js auto-install both run as node; ownership must match.
-RUN chown -R node:node /app && su node -s /bin/sh -c "pnpm install --frozen-lockfile"
+# Cache the pnpm content-addressable store so re-installs after lockfile changes
+# don't re-download already-fetched tarballs.
+# uid=1000,gid=1000 matches the node user so pnpm (running as node) can write to the mount.
+RUN --mount=type=cache,target=/home/node/.local/share/pnpm/store,uid=1000,gid=1000 \
+    chown -R node:node /app && su node -s /bin/sh -c "pnpm install --frozen-lockfile"
 
 # s6 service definitions injected via additional_contexts (web-s6: docker/web/s6-rc.d)
 COPY --from=web-s6 . /etc/s6-overlay/s6-rc.d/

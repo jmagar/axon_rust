@@ -12,7 +12,6 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
-use redis::AsyncCommands;
 use serde::Deserialize;
 use std::error::Error;
 use std::net::{IpAddr, SocketAddr};
@@ -26,52 +25,10 @@ pub(crate) struct AppState {
     stats_tx: broadcast::Sender<String>,
     /// Registry of completed job IDs → output directories for download routes.
     job_dirs: Arc<DashMap<String, PathBuf>>,
-    /// Redis connection manager for OAuth token validation (None = gate disabled).
-    oauth_redis: Option<redis::aio::ConnectionManager>,
-    /// Redis key prefix for OAuth tokens (e.g. `axon:mcp:oauth`).
-    oauth_prefix: String,
-}
-
-// ── OAuth bearer-token gate ───────────────────────────────────────────────────
-
-/// Minimal shape of the access-token record stored by the MCP OAuth server.
-/// We only need `expires_at_unix`; other fields are intentionally ignored.
-#[derive(Deserialize)]
-struct BearerTokenRecord {
-    expires_at_unix: u64,
-}
-
-fn unix_now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        // L-02: return u64::MAX on clock error so all tokens appear expired (fail-closed)
-        .unwrap_or(u64::MAX)
-}
-
-async fn validate_bearer_token(
-    conn_mgr: &redis::aio::ConnectionManager,
-    prefix: &str,
-    token: &str,
-) -> bool {
-    // H-06: reject tokens that don't match the atk_ prefix before hitting Redis
-    if !token.starts_with("atk_") {
-        return false;
-    }
-    let key = format!("{prefix}:access_token:{token}");
-    let mut conn = conn_mgr.clone();
-    let raw: Option<String> = match conn.get(&key).await {
-        Ok(v) => v,
-        Err(e) => {
-            log::warn!("ws oauth: redis GET failed for token validation: {e}");
-            return false;
-        }
-    };
-    let Some(json) = raw else { return false };
-    let Ok(rec) = serde_json::from_str::<BearerTokenRecord>(&json) else {
-        return false;
-    };
-    unix_now_secs() <= rec.expires_at_unix
+    /// Static API token for the WS gate. Set from AXON_WEB_API_TOKEN.
+    /// Same token used by the Next.js proxy for /api/* routes.
+    /// None = gate disabled (open WS, trusted-network deployments only).
+    api_token: Option<String>,
 }
 
 /// Query parameters for the `/ws` upgrade request.
@@ -87,40 +44,18 @@ pub async fn start_server(port: u16) -> Result<(), Box<dyn Error>> {
     let (stats_tx, _) = broadcast::channel::<String>(64);
     let job_dirs: Arc<DashMap<String, PathBuf>> = Arc::new(DashMap::new());
 
-    // Initialise Redis connection for OAuth gate (optional — gate disabled if absent)
-    let redis_url = std::env::var("GOOGLE_OAUTH_REDIS_URL")
-        .or_else(|_| std::env::var("AXON_REDIS_URL"))
-        .ok();
-    let oauth_prefix =
-        std::env::var("GOOGLE_OAUTH_REDIS_PREFIX").unwrap_or_else(|_| "axon:mcp:oauth".to_string());
-
-    let oauth_redis = if let Some(url) = redis_url {
-        match redis::Client::open(url) {
-            Ok(client) => match redis::aio::ConnectionManager::new(client).await {
-                Ok(mgr) => {
-                    log_info(&format!("WS OAuth gate: active (prefix={})", oauth_prefix));
-                    Some(mgr)
-                }
-                Err(e) => {
-                    log::warn!("WS OAuth gate: Redis connection failed ({e}); gate disabled");
-                    None
-                }
-            },
-            Err(e) => {
-                log::warn!("WS OAuth gate: invalid Redis URL ({e}); gate disabled");
-                None
-            }
-        }
-    } else {
-        log_info("WS OAuth gate: disabled (no Redis URL configured)");
-        None
-    };
+    let api_token = std::env::var("AXON_WEB_API_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty());
+    match &api_token {
+        Some(_) => log_info("WS gate: active (AXON_WEB_API_TOKEN)"),
+        None => log_info("WS gate: disabled (set AXON_WEB_API_TOKEN to enable)"),
+    }
 
     let state = Arc::new(AppState {
         stats_tx: stats_tx.clone(),
         job_dirs: job_dirs.clone(),
-        oauth_redis,
-        oauth_prefix,
+        api_token,
     });
 
     // Spawn Docker stats poller in background
@@ -233,29 +168,15 @@ async fn ws_upgrade(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
 ) -> Response {
-    if let Some(ref conn_mgr) = state.oauth_redis {
-        match params.token.as_deref().filter(|t| !t.is_empty()) {
-            None => {
-                log::warn!("ws upgrade rejected: no bearer token from {}", addr.ip());
-                return (
-                    axum::http::StatusCode::UNAUTHORIZED,
-                    "bearer token required",
-                )
-                    .into_response();
-            }
-            Some(token) => {
-                if !validate_bearer_token(conn_mgr, &state.oauth_prefix, token).await {
-                    log::warn!(
-                        "ws upgrade rejected: invalid or expired token from {}",
-                        addr.ip()
-                    );
-                    return (
-                        axum::http::StatusCode::UNAUTHORIZED,
-                        "invalid or expired bearer token",
-                    )
-                        .into_response();
-                }
-            }
+    if let Some(ref expected) = state.api_token {
+        let token = params.token.as_deref().unwrap_or("").trim();
+        if token.is_empty() {
+            log::warn!("ws upgrade rejected: no token from {}", addr.ip());
+            return (axum::http::StatusCode::UNAUTHORIZED, "token required").into_response();
+        }
+        if token != expected.as_str() {
+            log::warn!("ws upgrade rejected: invalid token from {}", addr.ip());
+            return (axum::http::StatusCode::UNAUTHORIZED, "invalid token").into_response();
         }
     }
     ws.on_upgrade(move |socket| handle_ws(socket, state))

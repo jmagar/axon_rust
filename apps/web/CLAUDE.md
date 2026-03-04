@@ -67,7 +67,7 @@ App-level navigation buttons (`/mcp`, `/agents`, `/settings`) are hosted in `App
 `next.config.ts` also applies global security headers: CSP, `X-Frame-Options`, `Referrer-Policy`, `X-Content-Type-Options`, and HSTS outside development.
 It also sets cache headers for `/api/cortex/*`: `s-maxage=30, stale-while-revalidate=60`.
 
-WS client: `hooks/use-axon-ws.ts` — exponential backoff reconnect (1s → 30s), pending message queue. Reconnects on `online`, `pageshow`, and `visibilitychange`.
+WS client: `hooks/use-axon-ws.ts` — exponential backoff reconnect (1s → 30s), pending message queue. Reconnects on `online`, `pageshow`, and `visibilitychange`. Appends `?token=${NEXT_PUBLIC_AXON_API_TOKEN}` to the WS URL when the env var is set — this satisfies the Rust WS gate in `crates/web.rs`.
 
 WS protocol types: `lib/ws-protocol.ts` — all message shapes for client↔server. **Modes must match `ALLOWED_MODES` in `crates/web/execute.rs`.**
 
@@ -244,6 +244,13 @@ The `axon-web` container runs a `pnpm-watcher` s6 service that polls `pnpm-lock.
 
 ### WS Modes Must Match Rust Allow-List
 `lib/ws-protocol.ts` defines `MODES`. Any mode added here must also be added to `ALLOWED_MODES` in `crates/web/execute.rs`, or the backend will reject the request.
+
+### WS Auth Gate
+`/ws` is a Next.js rewrite (raw TCP proxy) — Next.js middleware never runs for WS upgrade requests. Auth is enforced at the Rust layer (`crates/web.rs`).
+
+One token, one gate: `AXON_WEB_API_TOKEN` (server) and `NEXT_PUBLIC_AXON_API_TOKEN` (client) must be set to the same value. The browser sends it as `?token=` on the WS URL. The same secret is used by `proxy.ts` for `/api/*` — no separate WS token.
+
+MCP OAuth `atk_` tokens do **not** work for `/ws`. MCP clients use the MCP tool API.
 
 ### Pulse Autosave — Phantom Re-Save Guard
 `use-pulse-autosave.ts`: `docMetaRef` is only reset when `incoming !== filenameRef.current`. Do NOT reset it on every render or prop change — this causes ghost re-saves on first-save filename sync.

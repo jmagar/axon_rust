@@ -13,19 +13,15 @@
 # ../spider/spider_agent resolves correctly without widening the build context
 # to the whole workspace.
 
-# ── Stage 0: chef — compile cargo-chef once with cache mounts ─────────────────
-FROM rust:1.93-bookworm AS chef
-
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    cargo install cargo-chef --locked
+# ── Stage 0: chef — pre-built cargo-chef image (no compilation needed) ────────
+# lukemathwalker/cargo-chef has cargo-chef pre-installed on top of the official
+# rust image, eliminating the `cargo install cargo-chef` step entirely.
+FROM lukemathwalker/cargo-chef:0.1.77-rust-1.93-bookworm AS chef
 
 # ── Stage 1: planner ──────────────────────────────────────────────────────────
-FROM rust:1.93-bookworm AS planner
+FROM chef AS planner
 
 WORKDIR /src
-
-COPY --from=chef /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/cargo-chef
 
 COPY . ./axon_rust/
 COPY --from=spider-agent . ./spider/spider_agent/
@@ -37,14 +33,13 @@ WORKDIR /src/axon_rust
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ── Stage 2: builder ──────────────────────────────────────────────────────────
-FROM rust:1.93-bookworm AS builder
+FROM chef AS builder
 
 WORKDIR /src
 
-COPY --from=chef /usr/local/cargo/bin/cargo-chef /usr/local/cargo/bin/cargo-chef
-
-# sccache: compiler cache used by .cargo/config.toml (rustc-wrapper = "sccache").
-# Prebuilt binary is much faster than cargo install.
+# sccache: compiler cache. Prebuilt binary is much faster than cargo install.
+# RUSTC_WRAPPER activates it (mirrors host ~/.cargo/config.toml which is not
+# copied into the build context).
 ARG SCCACHE_VERSION=0.9.1
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
@@ -59,6 +54,16 @@ RUN set -eux; \
       --strip-components=1 "sccache-v${SCCACHE_VERSION}-${sccache_arch}/sccache"; \
     rm /tmp/sccache.tar.gz
 
+ENV RUSTC_WRAPPER=sccache
+
+# mold: fast linker (5-10x faster than GNU ld for the link step).
+# Mirrors the host ~/.cargo/config.toml linker setting which isn't in the build context.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends mold \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+
 # Cook dependencies first — this layer is cached as long as recipe.json is
 # unchanged (i.e., Cargo.toml / Cargo.lock have not changed).
 COPY --from=planner /src/axon_rust/recipe.json recipe.json
@@ -71,6 +76,7 @@ WORKDIR /src/axon_rust
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/src/axon_rust/target \
+    --mount=type=cache,target=/root/.cache/sccache \
     cargo chef cook --release --recipe-path /src/recipe.json
 
 # Now copy the actual source. Only this layer re-runs on source changes.
@@ -83,6 +89,7 @@ WORKDIR /src/axon_rust
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/src/axon_rust/target \
+    --mount=type=cache,target=/root/.cache/sccache \
     cargo build --release --locked --bin axon \
     && cp target/release/axon /usr/local/bin/axon-release
 
@@ -102,7 +109,6 @@ RUN apt-get update \
         ca-certificates \
         curl \
         git \
-        inotify-tools \
         libssl3 \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
@@ -154,9 +160,8 @@ COPY docker/s6/cont-init.d/ /etc/cont-init.d/
 COPY docker/s6/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
 COPY docker/scripts/healthcheck-workers.sh /usr/local/bin/healthcheck-workers.sh
 
-RUN groupadd -r axon && useradd -r -g axon -u 1001 -d /home/axon -m axon
-
-RUN chmod +x /etc/cont-init.d/* \
+RUN groupadd -r axon && useradd -r -g axon -u 1001 -d /home/axon -m axon \
+    && chmod +x /etc/cont-init.d/* \
     && find /etc/s6-overlay/s6-rc.d -type f -name run -exec chmod +x {} + \
     && find /etc/s6-overlay/s6-rc.d -type f -name finish -exec chmod +x {} + \
     && chmod +x /usr/local/bin/healthcheck-workers.sh \
@@ -180,8 +185,7 @@ ENV AXON_ENV_FILE=/app/.env
 # Healthcheck: verify workers are running AND can reach Postgres (liveness + connectivity)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD /usr/local/bin/healthcheck-workers.sh \
-        && curl -fsS "http://${AXON_PG_HOST:-axon-postgres}:${AXON_PG_PORT:-5432}/" >/dev/null 2>&1 \
-        || /usr/local/bin/healthcheck-workers.sh
+        && bash -c "echo >/dev/tcp/${AXON_PG_HOST:-axon-postgres}/${AXON_PG_PORT:-5432}" 2>/dev/null
 
 # ===========================================================================
 # OPERATIONAL RUNBOOKS

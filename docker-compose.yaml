@@ -144,7 +144,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       args:
-        AXON_GIT_SHA: ${AXON_GIT_SHA:?set AXON_GIT_SHA=$(git rev-parse HEAD)}
+        AXON_GIT_SHA: ${AXON_GIT_SHA:-dev}
       # Inject spider_agent and its transitive path deps as named BuildKit
       # contexts so they are available without widening the build context
       # to the whole workspace.
@@ -207,7 +207,7 @@ services:
       context: apps/web
       dockerfile: ../../docker/web/Dockerfile
       args:
-        AXON_GIT_SHA: ${AXON_GIT_SHA:?set AXON_GIT_SHA=$(git rev-parse HEAD)}
+        AXON_GIT_SHA: ${AXON_GIT_SHA:-dev}
       additional_contexts:
         web-s6: docker/web/s6-rc.d
         web-cont-init: docker/web/cont-init.d
