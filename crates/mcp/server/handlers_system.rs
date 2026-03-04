@@ -2,7 +2,7 @@ use super::AxonMcpServer;
 use super::common::{
     MCP_TOOL_SCHEMA_URI, ensure_artifact_root, internal_error, invalid_params, line_count,
     parse_limit_usize, parse_offset, parse_response_mode, resolve_artifact_output_path,
-    respond_with_mode, sha256_hex, validate_artifact_path,
+    respond_with_mode, sha256_hex, to_pagination, validate_artifact_path,
 };
 use crate::crates::cli::commands::screenshot::{
     spider_screenshot_with_options, url_to_screenshot_filename,
@@ -213,10 +213,7 @@ impl AxonMcpServer {
         &self,
         req: DomainsRequest,
     ) -> Result<AxonToolResponse, ErrorData> {
-        let pagination = crate::crates::services::types::Pagination {
-            limit: req.limit.unwrap_or(25).clamp(1, 500),
-            offset: req.offset.unwrap_or(0),
-        };
+        let pagination = to_pagination(req.limit.or(Some(25)), req.offset);
         let response_mode = parse_response_mode(req.response_mode);
         let result = system::domains(self.cfg.as_ref(), pagination)
             .await
@@ -236,10 +233,7 @@ impl AxonMcpServer {
         &self,
         req: SourcesRequest,
     ) -> Result<AxonToolResponse, ErrorData> {
-        let pagination = crate::crates::services::types::Pagination {
-            limit: req.limit.unwrap_or(25).clamp(1, 500),
-            offset: req.offset.unwrap_or(0),
-        };
+        let pagination = to_pagination(req.limit.or(Some(25)), req.offset);
         let response_mode = parse_response_mode(req.response_mode);
         let result = system::sources(self.cfg.as_ref(), pagination)
             .await

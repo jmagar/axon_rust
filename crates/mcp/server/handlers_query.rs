@@ -1,7 +1,7 @@
 use super::AxonMcpServer;
 use super::common::{
-    internal_error, invalid_params, paginate_vec, parse_limit_usize, parse_offset,
-    parse_response_mode, respond_with_mode, slugify, to_pagination, to_retrieve_options,
+    internal_error, invalid_params, paginate_vec, parse_offset, parse_response_mode,
+    respond_with_mode, slugify, to_map_options, to_pagination, to_retrieve_options,
     to_search_options,
 };
 use crate::crates::mcp::schema::{
@@ -82,9 +82,8 @@ impl AxonMcpServer {
             .url
             .ok_or_else(|| invalid_params("url is required for map"))?;
         let response_mode = parse_response_mode(req.response_mode);
-        let limit = parse_limit_usize(req.limit, 25, 500);
-        let offset = parse_offset(req.offset);
-        let map_opts = crate::crates::services::types::MapOptions { limit, offset };
+        let map_opts = to_map_options(req.limit.or(Some(25)), req.offset);
+        let (limit, offset) = (map_opts.limit, map_opts.offset);
         let result = map_svc::discover(self.cfg.as_ref(), &url, map_opts, None)
             .await
             .map_err(|e| internal_error(e.to_string()))?;
