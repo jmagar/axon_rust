@@ -5,8 +5,9 @@ use crate::crates::core::ui::{
 };
 use crate::crates::jobs::embed::{
     cancel_embed_job, cleanup_embed_jobs, clear_embed_jobs, get_embed_job, list_embed_jobs,
-    recover_stale_embed_jobs, run_embed_worker, start_embed_job,
+    recover_stale_embed_jobs, run_embed_worker,
 };
+use crate::crates::services::embed as embed_service;
 use crate::crates::vector::ops::embed_path_native;
 use std::error::Error;
 use std::path::Path;
@@ -243,14 +244,19 @@ fn resolve_embed_input(cfg: &Config) -> String {
 }
 
 async fn enqueue_embed_job(cfg: &Config, input: &str) -> Result<(), Box<dyn Error>> {
-    let job_id = start_embed_job(cfg, input).await?;
+    // Route through the services layer; the service resolves input from cfg.positional
+    // using the same fallback logic, so we temporarily set positional to the resolved input.
+    let mut derived = cfg.clone();
+    derived.positional = vec![input.to_string()];
+    let result = embed_service::embed_start(&derived, None).await?;
+    let job_id = result.job_id;
     if cfg.json_output {
         println!(
             "{}",
             serde_json::json!({"job_id": job_id, "status": "pending", "source": "rust"})
         );
     } else {
-        println!("  {} {}", primary("Embed Job"), accent(&job_id.to_string()));
+        println!("  {} {}", primary("Embed Job"), accent(&job_id));
         println!("  {}", muted(&format!("Input: {input}")));
         println!("Job ID: {job_id}");
     }

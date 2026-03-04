@@ -10,8 +10,9 @@ use crate::crates::core::logging::log_done;
 use crate::crates::core::ui::{accent, confirm_destructive, muted, primary, symbol_for_status};
 use crate::crates::jobs::extract::{
     cancel_extract_job, cleanup_extract_jobs, clear_extract_jobs, get_extract_job,
-    list_extract_jobs, recover_stale_extract_jobs, run_extract_worker, start_extract_job,
+    list_extract_jobs, recover_stale_extract_jobs, run_extract_worker,
 };
+use crate::crates::services::extract as extract_service;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use std::error::Error;
@@ -111,18 +112,18 @@ async fn enqueue_extract_job(
     urls: &[String],
     prompt: String,
 ) -> Result<(), Box<dyn Error>> {
-    let job_id = start_extract_job(cfg, urls, Some(prompt)).await?;
+    // Route through the services layer; set cfg.query to the prompt so the service picks it up.
+    let mut derived = cfg.clone();
+    derived.query = Some(prompt);
+    let result = extract_service::extract_start(&derived, urls, None).await?;
+    let job_id = result.job_id;
     if cfg.json_output {
         println!(
             "{}",
             serde_json::json!({"job_id": job_id, "status": "pending", "source": "rust"})
         );
     } else {
-        println!(
-            "  {} {}",
-            primary("Extract Job"),
-            accent(&job_id.to_string())
-        );
+        println!("  {} {}", primary("Extract Job"), accent(&job_id));
         println!("  {}", muted("Status: pending"));
         println!("Job ID: {job_id}");
     }

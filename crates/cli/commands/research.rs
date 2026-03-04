@@ -1,6 +1,8 @@
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::{log_done, log_warn};
 use crate::crates::core::ui::{muted, primary, print_phase};
+use crate::crates::services::search as search_service;
+use crate::crates::services::types::{SearchOptions as ServiceSearchOptions, ServiceTimeRange};
 use spider_agent::{Agent, Message, SearchOptions, TimeRange, TokenUsage};
 use std::error::Error;
 use std::sync::{
@@ -189,8 +191,15 @@ pub async fn run_research(cfg: &Config) -> Result<(), Box<dyn Error>> {
         None
     };
 
-    let time_range = parse_search_time_range(cfg.search_time_range.as_deref());
-    let payload = research_payload(cfg, &query, cfg.search_limit, 0, time_range).await;
+    // Route data-fetch through the services layer.
+    let opts = ServiceSearchOptions {
+        limit: cfg.search_limit,
+        offset: 0,
+        time_range: parse_service_time_range(cfg.search_time_range.as_deref()),
+    };
+    let payload = search_service::research(cfg, &query, opts)
+        .await
+        .map(|r| r.payload);
     running.store(false, Ordering::Relaxed);
     if let Some(t) = ticker {
         let _ = t.await;
@@ -263,7 +272,21 @@ pub async fn run_research(cfg: &Config) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Convert a CLI time-range string to the services-layer [`ServiceTimeRange`] enum.
+/// Used by `run_research` when routing through the services layer.
+fn parse_service_time_range(value: Option<&str>) -> Option<ServiceTimeRange> {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        Some("day") => Some(ServiceTimeRange::Day),
+        Some("week") => Some(ServiceTimeRange::Week),
+        Some("month") => Some(ServiceTimeRange::Month),
+        Some("year") => Some(ServiceTimeRange::Year),
+        _ => None,
+    }
+}
+
 // TODO: This function is duplicated in search.rs. Extract to commands/common.rs as a shared helper.
+// Only used in tests via `use super::*` in the test module.
+#[cfg(test)]
 fn parse_search_time_range(value: Option<&str>) -> Option<TimeRange> {
     match value.map(str::trim).filter(|v| !v.is_empty()) {
         Some("day") => Some(TimeRange::Day),

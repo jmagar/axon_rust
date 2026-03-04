@@ -1,6 +1,7 @@
 use crate::crates::cli::commands::ingest_common;
 use crate::crates::core::config::Config;
 use crate::crates::jobs::ingest::IngestSource;
+use crate::crates::services::ingest as ingest_service;
 use std::error::Error;
 
 pub async fn run_github(cfg: &Config) -> Result<(), Box<dyn Error>> {
@@ -27,11 +28,9 @@ pub async fn run_github(cfg: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 async fn run_ingest_sync(cfg: &Config, source: IngestSource) -> Result<(), Box<dyn Error>> {
-    use crate::crates::ingest;
-
     let IngestSource::Github {
         ref repo,
-        include_source,
+        include_source: _,
     } = source
     else {
         // NOTE: This branch is unreachable for current callers but guards against
@@ -39,7 +38,14 @@ async fn run_ingest_sync(cfg: &Config, source: IngestSource) -> Result<(), Box<d
         return Err(format!("github: expected Github source, got {:?}", source).into());
     };
 
-    let chunks = ingest::github::ingest_github(cfg, repo, include_source).await?;
+    // Split "owner/repo" slug into owner and repo parts for the service layer.
+    // The service recombines them as "{owner}/{repo}" internally.
+    let (owner, repo_name) = repo
+        .split_once('/')
+        .ok_or_else(|| format!("github: repo must be in 'owner/repo' format, got '{repo}'"))?;
+
+    let result = ingest_service::ingest_github(cfg, owner, repo_name, None).await?;
+    let chunks = result.payload["chunks"].as_u64().unwrap_or(0) as usize;
     ingest_common::print_ingest_sync_result(cfg, "github", chunks, repo);
     Ok(())
 }

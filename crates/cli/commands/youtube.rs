@@ -1,6 +1,7 @@
 use crate::crates::cli::commands::ingest_common;
 use crate::crates::core::config::Config;
 use crate::crates::jobs::ingest::IngestSource;
+use crate::crates::services::ingest as ingest_service;
 use std::error::Error;
 
 pub async fn run_youtube(cfg: &Config) -> Result<(), Box<dyn Error>> {
@@ -24,15 +25,14 @@ pub async fn run_youtube(cfg: &Config) -> Result<(), Box<dyn Error>> {
 }
 
 async fn run_ingest_sync(cfg: &Config, source: IngestSource) -> Result<(), Box<dyn Error>> {
-    use crate::crates::ingest;
-
     let IngestSource::Youtube { ref target } = source else {
         // NOTE: This branch is unreachable for current callers but guards against
         // future callers passing the wrong IngestSource variant.
         return Err(format!("youtube: expected Youtube source, got {:?}", source).into());
     };
 
-    let chunks = ingest::youtube::ingest_youtube(cfg, target).await?;
+    let result = ingest_service::ingest_youtube(cfg, target, None).await?;
+    let chunks = result.payload["chunks"].as_u64().unwrap_or(0) as usize;
     ingest_common::print_ingest_sync_result(cfg, "youtube", chunks, target);
     Ok(())
 }
