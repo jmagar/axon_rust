@@ -9,6 +9,7 @@ use axon::crates::mcp::schema::SearchTimeRange;
 use axon::crates::mcp::server::common::{
     to_map_options, to_pagination, to_retrieve_options, to_search_options, to_service_time_range,
 };
+use axon::crates::services::query::map_retrieve_result;
 use axon::crates::services::types::{
     AskResult, DoctorResult, DomainFacet, DomainsResult, MapOptions, Pagination, QueryResult,
     RetrieveOptions, RetrieveResult, SearchOptions, SearchResult, ServiceTimeRange, SourcesResult,
@@ -181,9 +182,22 @@ fn query_result_has_results_vec() {
 
 #[test]
 fn retrieve_result_chunks_are_empty_for_zero_count() {
-    // Mirrors the logic in services/query.rs::map_retrieve_result
     let r = RetrieveResult { chunks: Vec::new() };
     assert!(r.chunks.is_empty());
+}
+
+#[test]
+fn map_retrieve_result_stores_chunk_count_inside_chunks_element() {
+    // Pins the data contract that handlers_query.rs::handle_retrieve relies on:
+    // chunk_count lives at chunks[0]["chunk_count"], not in chunks.len().
+    let r = map_retrieve_result(7, "hello world".to_string());
+    assert_eq!(
+        r.chunks.len(),
+        1,
+        "one wrapper element regardless of chunk count"
+    );
+    assert_eq!(r.chunks[0]["chunk_count"], 7);
+    assert_eq!(r.chunks[0]["content"], "hello world");
 }
 
 #[test]
