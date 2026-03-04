@@ -242,10 +242,8 @@ impl AxonMcpServer {
             "count": result.count,
             "limit": result.limit,
             "offset": result.offset,
-            "urls": result.urls.iter().map(|(url, chunks)| serde_json::json!({
-                "url": url,
-                "chunks": chunks,
-            })).collect::<Vec<_>>(),
+            // Wire contract: urls is string[] (chunk counts are service-layer internal)
+            "urls": result.urls.iter().map(|(url, _chunks)| url).collect::<Vec<_>>(),
         });
         respond_with_mode("sources", "sources", response_mode, "sources", payload)
     }
