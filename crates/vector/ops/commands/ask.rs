@@ -11,6 +11,15 @@ mod tests;
 
 pub(crate) use context::{AskContext, build_ask_context};
 
+pub(super) fn validate_ask_llm_config(cfg: &Config) -> Result<(), String> {
+    if cfg.openai_base_url.trim().is_empty() || cfg.openai_model.trim().is_empty() {
+        return Err(
+            "OPENAI_BASE_URL and OPENAI_MODEL are required for ask/evaluate commands".to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn ask_query(cfg: &Config) -> Result<String, Box<dyn Error>> {
     super::resolve_query_text(cfg).ok_or_else(|| "ask requires query".into())
 }
@@ -18,9 +27,7 @@ fn ask_query(cfg: &Config) -> Result<String, Box<dyn Error>> {
 pub async fn ask_payload(cfg: &Config, query: &str) -> Result<serde_json::Value, String> {
     let ask_started = std::time::Instant::now();
 
-    if cfg.openai_base_url.trim().is_empty() || cfg.openai_model.trim().is_empty() {
-        return Err("OPENAI_BASE_URL and OPENAI_MODEL required for ask".to_string());
-    }
+    validate_ask_llm_config(cfg)?;
 
     let ctx = build_ask_context(cfg, query)
         .await
@@ -64,9 +71,7 @@ pub async fn run_ask_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let ask_started = std::time::Instant::now();
     let query = ask_query(cfg)?;
 
-    if cfg.openai_base_url.trim().is_empty() || cfg.openai_model.trim().is_empty() {
-        return Err("OPENAI_BASE_URL and OPENAI_MODEL required for ask".into());
-    }
+    validate_ask_llm_config(cfg).map_err(|e| -> Box<dyn Error> { e.into() })?;
 
     let ctx = build_ask_context(cfg, &query).await?;
     output::emit_ask_diagnostics(cfg, &ctx);

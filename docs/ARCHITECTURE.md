@@ -167,6 +167,13 @@ Key responsibilities:
 - Auto-switch mode evaluates crawl quality and can rerun with Chrome.
 - Sitemap backfill extends coverage beyond direct traversal.
 
+### Map Command
+
+`map` consumes a unified URL set from the crawl engine (`map_with_sitemap` in `crates/crawl/engine.rs`).
+The CLI no longer merges or deduplicates sitemap URLs itself — the engine owns the full URL set with
+deterministic sort+dedup before returning `MapResult`. This keeps the CLI handler as a thin
+delegation layer and ensures the output contract is tested at the engine level.
+
 ## Async Job Architecture
 
 Jobs are persisted in Postgres and queued through RabbitMQ. Workers consume from queues but Postgres is the source of truth for state.
