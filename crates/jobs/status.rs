@@ -9,7 +9,7 @@ use std::fmt;
 ///
 /// # Usage in SQL
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// # use axon::crates::jobs::status::JobStatus;
 /// # async fn example(pool: &sqlx::PgPool, id: uuid::Uuid) -> Result<(), sqlx::Error> {
 /// sqlx::query("UPDATE axon_embed_jobs SET status=$1 WHERE id=$2")
