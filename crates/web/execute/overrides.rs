@@ -46,9 +46,7 @@ pub fn ws_request_to_overrides(
         Some("http") => Some(RenderMode::Http),
         Some("chrome") => Some(RenderMode::Chrome),
         Some("auto-switch") => Some(RenderMode::AutoSwitch),
-        Some(other) => {
-            return Err(format!("render_mode: unhandled value '{other}'"));
-        }
+        Some(_) => unreachable!("render_mode validated against VALID_RENDER_MODES above"),
     };
 
     let mapped_response_mode = match response_mode {
