@@ -11,6 +11,31 @@ const ALLOWED_ORIGINS = (process.env.AXON_WEB_ALLOWED_ORIGINS ?? '')
 const ALLOW_INSECURE_LOCAL_DEV = process.env.AXON_WEB_ALLOW_INSECURE_DEV === 'true'
 const IS_DEV = process.env.NODE_ENV !== 'production'
 
+function buildConnectSrc(): string {
+  const sources = [
+    "'self'",
+    'ws://localhost:*',
+    'wss://localhost:*',
+    'ws://127.0.0.1:*',
+    'wss://127.0.0.1:*',
+    'http://localhost:*',
+    'http://127.0.0.1:*',
+  ]
+  // Allow connections to the configured backend URL (may be non-localhost in Docker/Tailscale)
+  const backendUrl = process.env.AXON_BACKEND_URL
+  if (backendUrl) {
+    try {
+      const parsed = new URL(backendUrl)
+      sources.push(`${parsed.origin}`)
+      const wsScheme = parsed.protocol === 'https:' ? 'wss:' : 'ws:'
+      sources.push(`${wsScheme}//${parsed.host}`)
+    } catch {
+      // ignore malformed AXON_BACKEND_URL
+    }
+  }
+  return `connect-src ${sources.join(' ')}`
+}
+
 const SECURITY_HEADERS: ReadonlyArray<readonly [string, string]> = [
   ['X-Frame-Options', 'DENY'],
   ['X-Content-Type-Options', 'nosniff'],
@@ -29,7 +54,7 @@ const SECURITY_HEADERS: ReadonlyArray<readonly [string, string]> = [
         ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
         : "script-src 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
-      "connect-src 'self' ws://localhost:* wss://localhost:* ws://127.0.0.1:* wss://127.0.0.1:*",
+      buildConnectSrc(),
     ].join('; '),
   ],
 ]
@@ -45,13 +70,7 @@ function withSecurityHeaders(response: NextResponse): NextResponse {
 }
 
 function isLoopbackHost(host: string): boolean {
-  return (
-    host === 'localhost' ||
-    host === '127.0.0.1' ||
-    host === '::1' ||
-    host === '[::1]' ||
-    host === '0.0.0.0'
-  )
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
 }
 
 function isLocalhostRequest(req: NextRequest): boolean {

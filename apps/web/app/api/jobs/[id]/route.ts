@@ -1,12 +1,7 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import { apiError } from '@/lib/server/api-error'
+import { type JobStatus, type JobType, safeStatus } from '@/lib/server/job-types'
 import { getJobsPgPool } from '@/lib/server/pg-pool'
-import type { JobStatus, JobType } from '../route'
-
-function safeStatus(s: string): JobStatus {
-  const valid: JobStatus[] = ['pending', 'running', 'completed', 'failed', 'canceled']
-  return valid.includes(s as JobStatus) ? (s as JobStatus) : 'pending'
-}
 
 export interface JobDetail {
   id: string

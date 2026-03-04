@@ -1,11 +1,11 @@
 import { type NextRequest, NextResponse } from 'next/server'
 import { apiError } from '@/lib/server/api-error'
+import { type JobStatus, type JobType, safeStatus } from '@/lib/server/job-types'
 import { getJobsPgPool } from '@/lib/server/pg-pool'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export type JobType = 'crawl' | 'extract' | 'embed' | 'ingest'
-export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'canceled'
+export type { JobType, JobStatus }
 
 export interface Job {
   id: string
@@ -34,11 +34,6 @@ interface JobsResponse {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-
-function safeStatus(s: string): JobStatus {
-  const valid: JobStatus[] = ['pending', 'running', 'completed', 'failed', 'canceled']
-  return valid.includes(s as JobStatus) ? (s as JobStatus) : 'pending'
-}
 
 function truncate(s: string | null | undefined, max = 120): string {
   if (!s) return '—'
@@ -260,7 +255,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       const where = statusWhere(safeStatusFilter)
       const unionResult = await getJobsPgPool().query(
         `WITH combined AS (
-          SELECT id, 'crawl' AS type, url AS target, NULL AS collection_val, status, created_at, started_at, finished_at, error_text
+          SELECT id, 'crawl' AS type, url AS target, config_json->>'collection' AS collection_val, status, created_at, started_at, finished_at, error_text
             FROM axon_crawl_jobs WHERE ${where}
           UNION ALL
           SELECT id, 'extract', urls_json::text, NULL, status, created_at, started_at, finished_at, error_text

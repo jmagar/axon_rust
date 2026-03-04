@@ -51,7 +51,7 @@ export const PulseChatRequestSchema = z.object({
     )
     .max(50)
     .default([]),
-  permissionLevel: PulsePermissionLevel.default('bypass-permissions'),
+  permissionLevel: PulsePermissionLevel.default('accept-edits'),
   model: PulseModel.default('sonnet'),
   effort: z.enum(['low', 'medium', 'high']).default('medium'),
   maxTurns: z.number().int().min(0).max(100).default(0),

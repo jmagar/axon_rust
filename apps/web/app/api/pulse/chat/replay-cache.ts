@@ -61,7 +61,11 @@ export function upsertReplayEntry(
   now = Date.now(),
 ): void {
   const existing = replayCache.get(key)
-  if (existing) runningTotalBytes -= existing.sizeBytes
+  if (existing) {
+    runningTotalBytes -= existing.sizeBytes
+    // Delete and re-insert to refresh Map insertion order (most recently used)
+    replayCache.delete(key)
+  }
   const sizeBytes = estimateBufferBytes(events)
   runningTotalBytes += sizeBytes
   replayCache.set(key, { events, sizeBytes, updatedAt: now })
