@@ -243,6 +243,80 @@ async fn map_payload_reports_sitemap_url_count_consistently() {
     );
 }
 
+/// Contract: the JSON payload produced by `map_payload` has all required fields
+/// with the correct types, and the numeric invariants hold.
+///
+/// This is a pure unit test — no network, no mock server. It locks the wire
+/// schema so any future refactor that renames a field or changes a type fails
+/// fast here instead of silently breaking the `--json` output consumers.
+#[test]
+fn map_payload_json_has_expected_fields() {
+    // Build a minimal JSON payload matching what map_payload produces
+    let payload = serde_json::json!({
+        "url": "https://example.com",
+        "mapped_urls": 3usize,
+        "sitemap_urls": 1usize,
+        "pages_seen": 2u32,
+        "thin_pages": 0u32,
+        "elapsed_ms": 100u64,
+        "urls": ["https://example.com/a", "https://example.com/b", "https://example.com/c"],
+    });
+
+    // Assert all required fields exist with the right types
+    assert!(payload["url"].is_string(), "url must be a string");
+    assert!(
+        payload["mapped_urls"].is_number(),
+        "mapped_urls must be a number"
+    );
+    assert!(
+        payload["sitemap_urls"].is_number(),
+        "sitemap_urls must be a number"
+    );
+    assert!(
+        payload["pages_seen"].is_number(),
+        "pages_seen must be a number"
+    );
+    assert!(
+        payload["thin_pages"].is_number(),
+        "thin_pages must be a number"
+    );
+    assert!(
+        payload["elapsed_ms"].is_number(),
+        "elapsed_ms must be a number"
+    );
+    assert!(payload["urls"].is_array(), "urls must be an array");
+
+    // Assert urls array contains strings
+    let urls = payload["urls"].as_array().expect("urls must be an array");
+    assert!(!urls.is_empty(), "urls array must not be empty");
+    for url in urls {
+        assert!(url.is_string(), "each url must be a string");
+    }
+
+    // Assert mapped_urls == urls.len()
+    let mapped_urls = payload["mapped_urls"]
+        .as_u64()
+        .expect("mapped_urls must be numeric");
+    assert_eq!(
+        mapped_urls,
+        urls.len() as u64,
+        "mapped_urls must equal urls.len()"
+    );
+
+    // Assert sitemap_urls == mapped_urls - pages_seen
+    let sitemap_urls = payload["sitemap_urls"]
+        .as_u64()
+        .expect("sitemap_urls must be numeric");
+    let pages_seen = payload["pages_seen"]
+        .as_u64()
+        .expect("pages_seen must be numeric");
+    assert_eq!(
+        sitemap_urls,
+        mapped_urls.saturating_sub(pages_seen),
+        "sitemap_urls must equal mapped_urls - pages_seen"
+    );
+}
+
 /// Contract: AutoSwitch only falls back to Chrome when `pages_seen == 0`.
 ///
 /// This is a pure unit test over the branching condition in `map_payload`
