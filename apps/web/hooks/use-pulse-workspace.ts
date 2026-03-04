@@ -194,7 +194,7 @@ export function usePulseWorkspaceBehavior() {
 
   // File selection effect
   useEffect(() => {
-    if (!selectedFile || !markdownContent) return
+    if (!selectedFile || markdownContent == null) return
     setDocumentMarkdown(markdownContent)
     const parts = selectedFile.split('/')
     setDocumentTitle(parts[parts.length - 1] ?? selectedFile)

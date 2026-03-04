@@ -4,114 +4,23 @@ import { Activity, Clock3, Hash, Sparkles, WandSparkles, Zap } from 'lucide-reac
 import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useAxonWs } from '@/hooks/use-axon-ws'
 import { apiFetch } from '@/lib/api-fetch'
-import type { WsServerMsg } from '@/lib/ws-protocol'
-
-type EvaluateTokenStream = 'with_context' | 'without_context'
-
-interface EvaluateStreamDoneEvent {
-  type: 'stream_done'
-  stream: EvaluateTokenStream
-  elapsed_ms?: number
-  chars?: number
-}
-
-interface EvaluateTokenEvent {
-  type: 'token'
-  stream: EvaluateTokenStream
-  delta: string
-}
-
-interface EvaluateCompleteEvent {
-  type: 'evaluate_complete'
-  query: string
-  rag_answer: string
-  baseline_answer: string
-  analysis_answer: string
-  source_urls?: string[]
-  timing_ms?: {
-    retrieval?: number
-    context_build?: number
-    rag_llm?: number
-    baseline_llm?: number
-    research_elapsed_ms?: number
-    analysis_llm_ms?: number
-    total?: number
-  }
-}
-
-interface SuggestApiResult {
-  suggestions?: Array<{ url?: string; reason?: string }>
-}
-
-interface EvaluateStartEvent {
-  type: 'evaluate_start'
-  query: string
-  stage?: string
-  context?: {
-    source_count?: number
-    source_urls?: string[]
-  }
-}
-
-type EvaluateEvent =
-  | EvaluateTokenEvent
-  | EvaluateStreamDoneEvent
-  | EvaluateCompleteEvent
-  | EvaluateStartEvent
-  | { type: 'analysis_start' }
-  | Record<string, unknown>
-
-type DetailTab = 'event' | 'analysis' | 'suggest' | 'timing'
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
-}
-
-function formatMs(value?: number): string {
-  if (typeof value !== 'number' || Number.isNaN(value)) return '-'
-  return `${Math.round(value)}ms`
-}
-
-function estimateTokens(chars?: number): number | null {
-  if (typeof chars !== 'number' || Number.isNaN(chars) || chars <= 0) return null
-  return Math.max(1, Math.round(chars / 4))
-}
-
-function prettifySlug(slug: string): string {
-  const cleaned = slug
-    .replace(/\.[a-z0-9]+$/i, '')
-    .replace(/[-_]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!cleaned) return 'Untitled Document'
-  return cleaned.replace(/\b\w/g, (ch) => ch.toUpperCase())
-}
-
-function sourceDocLabel(url: string): string {
-  try {
-    const parsed = new URL(url)
-    const segments = parsed.pathname.split('/').filter(Boolean)
-    if (segments.length === 0) return parsed.hostname
-    return prettifySlug(segments[segments.length - 1] ?? parsed.hostname)
-  } catch {
-    return prettifySlug(url)
-  }
-}
-
-function commandExecId(msg: WsServerMsg): string | null {
-  if (
-    msg.type === 'command.start' ||
-    msg.type === 'command.output.json' ||
-    msg.type === 'command.output.line' ||
-    msg.type === 'command.done' ||
-    msg.type === 'command.error'
-  ) {
-    return msg.data.ctx.exec_id
-  }
-  return null
-}
+import type {
+  DetailTab,
+  EvaluateCompleteEvent,
+  EvaluateEvent,
+  EvaluateStartEvent,
+  EvaluateStreamDoneEvent,
+  EvaluateTokenEvent,
+  EvaluateTokenStream,
+  SuggestApiResult,
+} from './evaluate-helpers'
+import {
+  asRecord,
+  commandExecId,
+  estimateTokens,
+  formatMs,
+  sourceDocLabel,
+} from './evaluate-helpers'
 
 export default function EvaluatePage() {
   const { send, subscribe, status } = useAxonWs()
@@ -136,6 +45,8 @@ export default function EvaluatePage() {
 
   const activeExecIdRef = useRef<string | null>(null)
   const unsubscribeRef = useRef<(() => void) | null>(null)
+  const runIdRef = useRef(0)
+  const subscribeTimeRef = useRef(0)
 
   useEffect(() => {
     return () => {
@@ -152,6 +63,9 @@ export default function EvaluatePage() {
     unsubscribeRef.current?.()
     unsubscribeRef.current = null
     activeExecIdRef.current = null
+    runIdRef.current += 1
+    const currentRunId = runIdRef.current
+    subscribeTimeRef.current = Date.now()
     setRunning(true)
     setError(null)
     setEvents([])
@@ -176,10 +90,14 @@ export default function EvaluatePage() {
 
       const expectedExecId = activeExecIdRef.current
       const msgExecId = commandExecId(msg)
-      const isFallbackTerminal =
-        !expectedExecId && (msg.type === 'command.error' || msg.type === 'command.done')
-      if (!isFallbackTerminal) {
-        if (!expectedExecId || msgExecId !== expectedExecId) return
+      if (!expectedExecId) {
+        // Only allow terminal messages as fallback after enough time for command.start to arrive
+        const elapsed = Date.now() - subscribeTimeRef.current
+        const isFallbackTerminal =
+          elapsed > 500 && (msg.type === 'command.error' || msg.type === 'command.done')
+        if (!isFallbackTerminal) return
+      } else if (msgExecId !== expectedExecId) {
+        return
       }
 
       if (msg.type === 'command.output.json') {
@@ -240,6 +158,7 @@ export default function EvaluatePage() {
           const suggestHeaders: HeadersInit = {}
           const apiToken = process.env.NEXT_PUBLIC_AXON_API_TOKEN
           if (apiToken) suggestHeaders['x-api-key'] = apiToken
+          const suggestRunId = currentRunId
           void apiFetch(`/api/cortex/suggest?q=${encodeURIComponent(complete.query)}`, {
             headers: suggestHeaders,
           })
@@ -248,6 +167,7 @@ export default function EvaluatePage() {
               return res.json() as Promise<{ ok?: boolean; data?: SuggestApiResult }>
             })
             .then((payload) => {
+              if (runIdRef.current !== suggestRunId) return
               const raw = payload?.data?.suggestions ?? []
               const next = raw
                 .filter(
@@ -260,10 +180,12 @@ export default function EvaluatePage() {
               setSuggestions(next)
             })
             .catch((err: unknown) => {
+              if (runIdRef.current !== suggestRunId) return
               const message = err instanceof Error ? err.message : 'Failed to load suggestions'
               setSuggestError(message)
             })
             .finally(() => {
+              if (runIdRef.current !== suggestRunId) return
               setSuggestLoading(false)
             })
         }

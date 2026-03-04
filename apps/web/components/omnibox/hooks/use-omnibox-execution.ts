@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useAxonWs } from '@/hooks/use-axon-ws'
 import {
   useWsExecutionState,
@@ -54,9 +54,7 @@ export function useOmniboxExecution({
   const startTimeRef = useRef(0)
   const execIdRef = useRef(0)
 
-  useEffect(() => {
-    isProcessingRef.current = isProcessing
-  }, [isProcessing])
+  // isProcessingRef is set synchronously in executeCommand/cancel — no useEffect sync needed
 
   const executeCommand = useCallback(
     async (execMode: ModeId, execInput: string) => {
@@ -74,32 +72,41 @@ export function useOmniboxExecution({
       }
 
       const normalizedInput = normalizeUrlInput(trimmedInput)
+      isProcessingRef.current = true
       setIsProcessing(true)
       execIdRef.current += 1
       startTimeRef.current = Date.now()
       setStatusText('processing...')
       setStatusType('processing')
 
-      const { enrichedInput, contextFileLabels } = await buildInputWithFileContext(normalizedInput)
+      try {
+        const { enrichedInput, contextFileLabels } =
+          await buildInputWithFileContext(normalizedInput)
 
-      const flags: Record<string, string> = {}
-      for (const [key, val] of Object.entries(optionValues)) {
-        if (val === '' || val === false) continue
-        flags[key] = String(val)
+        const flags: Record<string, string> = {}
+        for (const [key, val] of Object.entries(optionValues)) {
+          if (val === '' || val === false) continue
+          flags[key] = String(val)
+        }
+        if (contextFileLabels.length > 0) {
+          flags.context_files = contextFileLabels.join(',')
+        }
+
+        send({
+          type: 'execute',
+          mode: execMode,
+          input: enrichedInput,
+          flags,
+        })
+
+        const preservePulseWorkspace = shouldPreservePulseWorkspaceForMode(workspaceMode, execMode)
+        startExecution(execMode, enrichedInput, { preserveWorkspace: preservePulseWorkspace })
+      } catch {
+        isProcessingRef.current = false
+        setIsProcessing(false)
+        setStatusText('failed to execute')
+        setStatusType('error')
       }
-      if (contextFileLabels.length > 0) {
-        flags.context_files = contextFileLabels.join(',')
-      }
-
-      send({
-        type: 'execute',
-        mode: execMode,
-        input: enrichedInput,
-        flags,
-      })
-
-      const preservePulseWorkspace = shouldPreservePulseWorkspaceForMode(workspaceMode, execMode)
-      startExecution(execMode, enrichedInput, { preserveWorkspace: preservePulseWorkspace })
     },
     [
       buildInputWithFileContext,
@@ -128,6 +135,7 @@ export function useOmniboxExecution({
       mode,
       job_id: currentJobId ?? undefined,
     })
+    isProcessingRef.current = false
     setIsProcessing(false)
     const elapsed = Date.now() - startTimeRef.current
     const secs = (elapsed / 1000).toFixed(1)

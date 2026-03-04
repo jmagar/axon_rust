@@ -69,7 +69,15 @@ export function useOmniboxState() {
         inputRef.current?.focus()
       }
     },
-    [execution, mentions],
+    [
+      execution.setOptionValues,
+      execution.executeCommand,
+      mentions.mentionKind,
+      mentions.setMentionSuggestions,
+      mentions.setFileSuggestions,
+      mentions.setMentionSelectionIndex,
+      mentions.setModeAppliedLabel,
+    ],
   )
 
   const applyModeMentionCandidate = useCallback(
@@ -82,7 +90,13 @@ export function useOmniboxState() {
       mentions.setModeAppliedLabel(candidate.label)
       return true
     },
-    [selectMode, mentions],
+    [
+      selectMode,
+      mentions.setMentionSuggestions,
+      mentions.setFileSuggestions,
+      mentions.setMentionSelectionIndex,
+      mentions.setModeAppliedLabel,
+    ],
   )
 
   const applyActiveSuggestion = useCallback(() => {
