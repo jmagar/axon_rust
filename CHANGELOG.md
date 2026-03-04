@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-03-03 (session: API middleware + server-side extraction; module splits; 10 new test suites)
+Last Modified: 2026-03-03 (session: MCP HTTP transport + OAuth; screenshot migration; engine sitemap backfill)
 
 ## [Unreleased] — feat/sidebar
 
@@ -7,6 +7,9 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 ### Highlights
 
+- **MCP HTTP transport + Google OAuth** — `rmcp` upgraded 0.16→0.17 with `transport-streamable-http-server` feature; `run_http_server()` added alongside existing `run_stdio_server()`; new `crates/mcp/server/oauth_google/` module (8 files: config, handlers_broker, handlers_google, handlers_protected, helpers, state, tests, types) implements Google OAuth2 flow with PKCE, session management, and MCP-native auth middleware; s6 `mcp-http` service for Docker; `crates/mcp.rs` replaces `crates/mcp/mod.rs` with `#[path]` attributes
+- **Screenshot CDP→Spider migration** — hand-rolled CDP WebSocket screenshot client deleted; replaced with Spider's `screenshot()` API; contract tests verify full-page capture behavior; scrape migration coverage added
+- **Engine-level sitemap backfill** — `append_sitemap_backfill()` moved from CLI robots loop into `engine.rs`; fires automatically after every crawl; `discover_sitemap_urls_with_robots()` characterization tests; SSRF-safe `build_client` enforced; CLI robots backfill loop removed
 - **API middleware + server-side extraction** — new Next.js `middleware.ts` (125L) with Bearer token auth (`AXON_WEB_API_TOKEN`), origin allowlist (`AXON_WEB_ALLOWED_ORIGINS`), and insecure dev bypass; `lib/server/url-validation.ts` (212L) extracts SSRF guards + URL sanitization from inline route code; `lib/server/api-error.ts` standardizes error responses; `lib/server/pg-pool.ts` centralizes Postgres pool creation; all API routes refactored to use shared server utilities
 - **Omnibox hook extraction** — monolithic `omnibox-hooks.ts` (506→~200L) split into 3 focused hooks: `use-omnibox-execution.ts` (command dispatch), `use-omnibox-keyboard.ts` (key handlers), `use-omnibox-mentions.ts` (@ mentions); `omnibox-types.ts` relocated from component dir to `lib/`
 - **Pulse workspace hook** — new `use-pulse-workspace.ts` (336L) consolidates workspace state management from `pulse-workspace.tsx`; `pulse-error-boundary.tsx` adds React error boundary; `use-timed-notice.ts` hook for auto-dismissing UI notices
@@ -54,7 +57,21 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 | Commit | Type | Message |
 |---|---|---|
-| *(this commit)* | refactor(web)+test | API middleware + server-side extraction; omnibox/pulse module splits; 10 new test suites; utility extractions |
+| *(this commit)* | feat(mcp)+chore | MCP HTTP transport + Google OAuth; rmcp 0.17; screenshot CDP→Spider migration; engine sitemap backfill; cleanup |
+| `62bdae5e` | test | add scrape migration contract coverage |
+| `2d004e27` | docs | record screenshot migration to spider api |
+| `426cac65` | test | verify full-page screenshot behavior after migration |
+| `0e45780c` | chore | delete hand-rolled screenshot cdp client |
+| `e6ca9ddf` | feat(screenshot) | replace CDP client with Spider screenshot capture |
+| `22310087` | test(screenshot) | add migration contract tests for CDP→Spider transition |
+| `370ee1af` | docs | record engine-only backfill architecture |
+| `147b9ca5` | chore | remove cli robots backfill loop |
+| `c38dfb5f` | refactor | remove double validate_url + add TODO for http_client singleton |
+| `209b86a1` | feat(crawl) | add engine-level append_sitemap_backfill and wire into sync_crawl |
+| `2862eb9d` | test(crawl) | add failing contract tests for engine-delegated sitemap backfill |
+| `c9ebd58b` | fix | use SSRF-safe build_client + add max_sitemaps TODO in engine sitemap |
+| `817160bd` | test(sitemap) | characterization tests for discover_sitemap_urls_with_robots |
+| `04559aed` | refactor(web)+test | API middleware + server-side extraction; omnibox/pulse module splits; 10 new test suites; utility extractions |
 | `84cd8d2b` | feat(crawl)+refactor | inline Chrome thin-page recovery; CDP render module; custom headers; streaming sources dedup; spider feature flags docs |
 | `129eb1fa` | test(rust)+refactor(web) | integration/proptest test suite; MCP typed schema; ask context heuristics; sidebar cleanup; CI service containers |
 | `9428156c` | fix(ci) | remove invalid cargo-audit --deny flag; add Qdrant keyword indexes on collection init |

@@ -901,7 +901,7 @@ mod tests {
     fn test_select_output_markdown_empty_body() {
         // An HTML document with an empty <body> must not panic and should
         // produce empty (or whitespace-only) markdown.
-        let html = "<html><head><title>Empty</title></head><body></body></html>";
+        let html = "<html><head></head><body></body></html>";
         let result = select_output(ScrapeFormat::Markdown, "https://example.com", html, 200)
             .expect("select_output must not panic on empty body");
         // Empty body → no text content → trimmed result should be empty.

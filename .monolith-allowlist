@@ -8,3 +8,9 @@
 #
 # Format:
 #   crates/core/massive_module.rs  # expires: 2026-03-09
+
+# expires: 2026-03-10 — OAuth handler functions (91-244L, need splitting)
+crates/mcp/server/oauth_google/handlers_broker.rs
+crates/mcp/server/oauth_google/handlers_google.rs
+crates/mcp/server/oauth_google/handlers_protected.rs
+crates/mcp/server/oauth_google/helpers.rs

@@ -61,7 +61,7 @@ sha2 = "0.10"
 hex = "0.4"
 reflink-copy = "0.1"
 dotenvy = "0.15"
-rmcp = { version = "0.16.0", features = ["server", "macros", "transport-io", "schemars"] }
+rmcp = { version = "0.17.0", features = ["server", "macros", "transport-io", "transport-streamable-http-server", "schemars"] }
 html5gum = "0.5"
 
 [profile.release]

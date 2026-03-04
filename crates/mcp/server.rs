@@ -1,14 +1,31 @@
+#[path = "server/common.rs"]
 mod common;
+#[path = "server/handlers_crawl_extract.rs"]
 mod handlers_crawl_extract;
+#[path = "server/handlers_embed_ingest.rs"]
 mod handlers_embed_ingest;
+#[path = "server/handlers_query.rs"]
 mod handlers_query;
+#[path = "server/handlers_refresh_status.rs"]
 mod handlers_refresh_status;
+#[path = "server/handlers_system.rs"]
 mod handlers_system;
+#[path = "server/oauth_google.rs"]
+mod oauth_google;
 
 use super::config::load_mcp_config;
 use super::schema::{AxonRequest, parse_axon_request};
 use crate::crates::core::config::Config;
+use axum::{
+    Router, middleware,
+    routing::{get, post},
+};
 use common::{MCP_TOOL_SCHEMA_URI, internal_error, invalid_params};
+use oauth_google::{
+    GoogleOAuthState, oauth_authorization_server_metadata, oauth_authorize, oauth_google_callback,
+    oauth_google_login, oauth_google_logout, oauth_google_status, oauth_google_token,
+    oauth_protected_resource_metadata, oauth_register_client, oauth_token, require_google_auth,
+};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
     handler::server::wrapper::Parameters,
@@ -19,7 +36,12 @@ use rmcp::{
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
-    transport::stdio,
+    transport::{
+        stdio,
+        streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        },
+    },
 };
 use std::sync::Arc;
 
@@ -151,5 +173,52 @@ pub async fn run_stdio_server() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = load_mcp_config();
     let service = AxonMcpServer::new(cfg).serve(stdio()).await?;
     service.waiting().await?;
+    Ok(())
+}
+
+pub async fn run_http_server(host: &str, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    let oauth_state = GoogleOAuthState::from_env(host, port);
+    let oauth_state_for_layer = oauth_state.clone();
+
+    let mcp_service: StreamableHttpService<AxonMcpServer, LocalSessionManager> =
+        StreamableHttpService::new(
+            || Ok(AxonMcpServer::new(load_mcp_config())),
+            Default::default(),
+            StreamableHttpServerConfig {
+                stateful_mode: true,
+                sse_keep_alive: None,
+                ..Default::default()
+            },
+        );
+
+    let app = Router::new()
+        .nest_service("/mcp", mcp_service)
+        .route("/oauth/google/status", get(oauth_google_status))
+        .route("/oauth/google/login", get(oauth_google_login))
+        .route("/oauth/google/callback", get(oauth_google_callback))
+        .route("/oauth/google/token", get(oauth_google_token))
+        .route(
+            "/oauth/google/logout",
+            get(oauth_google_logout).post(oauth_google_logout),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(oauth_protected_resource_metadata),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(oauth_authorization_server_metadata),
+        )
+        .route("/oauth/register", post(oauth_register_client))
+        .route("/oauth/authorize", get(oauth_authorize))
+        .route("/oauth/token", post(oauth_token))
+        .with_state(oauth_state)
+        .layer(middleware::from_fn_with_state(
+            oauth_state_for_layer,
+            require_google_auth,
+        ));
+
+    let listener = tokio::net::TcpListener::bind((host, port)).await?;
+    axum::serve(listener, app).await?;
     Ok(())
 }
