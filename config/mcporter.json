@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "axon": {
-      "command": "../target/debug/axon",
-      "args": ["mcp"]
+      "type": "http",
+      "url": "https://axon.tootie.tv"
     },
     "plate": {
       "description": "Plate editors, plugins and components",
