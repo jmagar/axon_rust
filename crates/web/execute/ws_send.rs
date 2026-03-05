@@ -10,6 +10,7 @@ pub(super) async fn send_command_start(tx: &mpsc::Sender<String>, context: &Exec
     }
 }
 
+#[allow(dead_code)]
 pub(super) async fn send_command_output_json(
     tx: &mpsc::Sender<String>,
     context: &super::events::CommandContext,

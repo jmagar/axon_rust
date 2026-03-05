@@ -310,14 +310,16 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                     let tx = exec_tx.clone();
                     let job_id = crawl_job_id.clone();
                     let cmd_cfg = conn_cfg.clone();
+                    // Move owned Strings into the spawned future.  handle_command
+                    // takes owned String/Value so no &str borrow escapes the spawn
+                    // boundary, satisfying the `Send + 'static` bound for
+                    // tokio::spawn.
+                    let exec_mode = client_msg.mode.clone();
+                    let exec_input = client_msg.input.clone();
+                    let exec_flags = client_msg.flags.clone();
                     tokio::spawn(async move {
                         execute::handle_command(
-                            &client_msg.mode,
-                            &client_msg.input,
-                            &client_msg.flags,
-                            tx,
-                            job_id,
-                            cmd_cfg,
+                            exec_mode, exec_input, exec_flags, tx, job_id, cmd_cfg,
                         )
                         .await;
                     });

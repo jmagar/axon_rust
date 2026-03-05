@@ -63,12 +63,17 @@ async fn newest_md_file(dir: &Path) -> Option<PathBuf> {
 }
 
 /// Send a single scraped markdown file to the frontend.
-pub(super) async fn send_scrape_file(tx: &mpsc::Sender<String>, ctx: &CommandContext) {
+///
+/// Takes `tx` and `ctx` by owned value so callers can pass them without
+/// creating borrows that cross `.await` points in the async state machine.
+/// Both types are cheap to clone — `mpsc::Sender` is a reference-counted
+/// handle and `CommandContext` contains three short `String` fields.
+pub(super) async fn send_scrape_file(tx: mpsc::Sender<String>, ctx: CommandContext) {
     let md_dir = output_dir().join("scrape-markdown");
     match newest_md_file(&md_dir).await {
         Some(path) => match tokio::fs::read_to_string(&path).await {
             Ok(content) => {
-                send_artifact_content_dual(tx, ctx, path.to_string_lossy().into_owned(), content)
+                send_artifact_content_dual(&tx, &ctx, path.to_string_lossy().into_owned(), content)
                     .await;
             }
             Err(e) => {
