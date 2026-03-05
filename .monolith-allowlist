@@ -17,3 +17,9 @@ crates/mcp/server/oauth_google/helpers.rs  # expires: 2026-03-11
 
 # expires: 2026-03-11 — evaluate.rs 901L: run_parallel_answers_streaming (188L) needs splitting
 crates/vector/ops/commands/evaluate.rs  # expires: 2026-03-11
+
+# expires: 2026-03-12 — ACP rollout; split pending in follow-up.
+crates/services/acp.rs  # expires: 2026-03-12
+crates/web/execute/sync_mode.rs  # expires: 2026-03-12
+crates/services/acp.rs
+crates/web/execute/sync_mode.rs

@@ -13,6 +13,18 @@ export interface SessionFile {
   preview?: string
 }
 
+function selectPreferredSession(current: SessionFile, next: SessionFile): SessionFile {
+  if (next.mtimeMs !== current.mtimeMs) {
+    return next.mtimeMs > current.mtimeMs ? next : current
+  }
+  if (current.project === 'tmp' && next.project !== 'tmp') return next
+  if (next.project === 'tmp' && current.project !== 'tmp') return current
+  if (next.sizeBytes !== current.sizeBytes) {
+    return next.sizeBytes > current.sizeBytes ? next : current
+  }
+  return current
+}
+
 /** Patterns that indicate a message is a system/handoff prompt, not real user input. */
 const SKIP_PATTERNS = [/^Respond as JSON/, /^I'm loading a previous/, /^## Context/]
 const PREVIEW_TRUNCATE_PATTERNS = [
@@ -179,5 +191,14 @@ export async function scanSessions(limit = 20): Promise<SessionFile[]> {
     }
   }
 
-  return results.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, limit)
+  const deduped = new Map<string, SessionFile>()
+  for (const session of results) {
+    const key = session.filename
+    const existing = deduped.get(key)
+    deduped.set(key, existing ? selectPreferredSession(existing, session) : session)
+  }
+
+  return Array.from(deduped.values())
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .slice(0, limit)
 }

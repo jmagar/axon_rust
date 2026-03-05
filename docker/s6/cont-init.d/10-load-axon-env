@@ -73,6 +73,21 @@ mkdir -p "$resolved_dir"
 chown -R axon:axon "$resolved_dir"
 chmod -R u+rwX,g+rwX "$resolved_dir"
 
+artifact_dir="${AXON_MCP_ARTIFACT_DIR:-/app/.cache/axon-mcp}"
+
+resolved_artifact="$(realpath -m "$artifact_dir")"
+case "$resolved_artifact" in
+  /app/*|/home/*|/data/*|/tmp/*) ;;
+  *)
+    echo "[cont-init] ERROR: AXON_MCP_ARTIFACT_DIR '$resolved_artifact' is not under a safe prefix" >&2
+    exit 1
+    ;;
+esac
+
+mkdir -p "$resolved_artifact"
+chown -R axon:axon "$resolved_artifact"
+chmod -R u+rwX,g+rwX "$resolved_artifact"
+
 diag_dir="${AXON_CHROME_DIAGNOSTICS_DIR:-/app/.cache/chrome-diagnostics}"
 
 resolved_diag="$(realpath -m "$diag_dir")"

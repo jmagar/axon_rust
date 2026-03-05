@@ -102,6 +102,30 @@ describe('scanSessions', () => {
     expect(sessions).toHaveLength(1)
     expect(sessions[0]!.filename).toBe('legit')
   })
+
+  it('deduplicates sessions by filename and keeps the newest entry', async () => {
+    const projectsDir = path.join(tmpRoot, '.claude', 'projects')
+    const olderProject = path.join(projectsDir, '-home-user-workspace-old-project')
+    const newerProject = path.join(projectsDir, '-home-user-workspace-new-project')
+    await fs.mkdir(olderProject, { recursive: true })
+    await fs.mkdir(newerProject, { recursive: true })
+
+    const sharedFilename = 'shared-session.jsonl'
+    const olderFile = path.join(olderProject, sharedFilename)
+    const newerFile = path.join(newerProject, sharedFilename)
+    await fs.writeFile(olderFile, `${makeUserLine('old session')}\n`, 'utf8')
+    await fs.writeFile(newerFile, `${makeUserLine('new session')}\n`, 'utf8')
+
+    const olderTime = new Date('2026-03-01T00:00:00.000Z')
+    const newerTime = new Date('2026-03-01T00:01:00.000Z')
+    await fs.utimes(olderFile, olderTime, olderTime)
+    await fs.utimes(newerFile, newerTime, newerTime)
+
+    const sessions = await scanSessions()
+    const matching = sessions.filter((s) => s.filename === 'shared-session')
+    expect(matching).toHaveLength(1)
+    expect(matching[0]!.absolutePath).toBe(newerFile)
+  })
 })
 
 // ---------------------------------------------------------------------------

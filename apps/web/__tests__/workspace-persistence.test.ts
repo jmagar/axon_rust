@@ -34,6 +34,7 @@ describe('clampSplit', () => {
 describe('parsePersistedWorkspaceState', () => {
   const validState = {
     permissionLevel: 'accept-edits',
+    agent: 'claude',
     model: 'sonnet',
     documentMarkdown: '# Hello',
     chatHistory: [{ role: 'user', content: 'hi' }],
@@ -84,6 +85,7 @@ describe('parsePersistedWorkspaceState', () => {
     expect(result).not.toBeNull()
     expect(result!.model).toBe('sonnet')
     expect(result!.permissionLevel).toBe('accept-edits')
+    expect(result!.agent).toBe('claude')
     expect(result!.documentMarkdown).toBe('# Hello')
     expect(result!.documentTitle).toBe('Test Doc')
     expect(result!.showChat).toBe(true)
@@ -100,6 +102,12 @@ describe('parsePersistedWorkspaceState', () => {
     const state = { ...validState, permissionLevel: 'unknown' }
     const result = parsePersistedWorkspaceState(JSON.stringify(state))
     expect(result!.permissionLevel).toBe('bypass-permissions')
+  })
+
+  it('defaults agent to claude for unknown value', () => {
+    const state = { ...validState, agent: 'unknown' }
+    const result = parsePersistedWorkspaceState(JSON.stringify(state))
+    expect(result!.agent).toBe('claude')
   })
 
   it('accepts all valid models', () => {
@@ -226,6 +234,7 @@ describe('parsePersistedWorkspaceState', () => {
 describe('buildPersistedPayload', () => {
   const baseInput = {
     permissionLevel: 'accept-edits' as const,
+    agent: 'claude' as const,
     model: 'sonnet' as const,
     documentMarkdown: '# Hello',
     chatHistory: [{ role: 'user' as const, content: 'hi' }],
@@ -273,6 +282,7 @@ describe('buildPersistedPayload', () => {
   it('preserves all fields from input', () => {
     const result = buildPersistedPayload(baseInput)
     expect(result.permissionLevel).toBe('accept-edits')
+    expect(result.agent).toBe('claude')
     expect(result.model).toBe('sonnet')
     expect(result.documentMarkdown).toBe('# Hello')
     expect(result.documentTitle).toBe('Test Doc')

@@ -264,6 +264,12 @@ export function StatusDashboard() {
           </div>
         </>
       )}
+
+      {!loading && !error && !data && (
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-base)] px-4 py-3 text-[12px] text-[var(--text-dim)]">
+          Waiting for status payload. Try Refresh if this persists.
+        </div>
+      )}
     </div>
   )
 }

@@ -73,6 +73,62 @@ pub struct DedupeResult {
     pub completed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpAdapterCommand {
+    pub program: String,
+    pub args: Vec<String>,
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpPromptTurnRequest {
+    pub session_id: Option<String>,
+    pub prompt: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AcpSessionUpdateKind {
+    UserDelta,
+    AssistantDelta,
+    ThinkingDelta,
+    ToolCallStarted,
+    ToolCallUpdated,
+    Plan,
+    AvailableCommandsUpdate,
+    CurrentModeUpdate,
+    ConfigOptionUpdate,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpSessionUpdateEvent {
+    pub session_id: String,
+    pub kind: AcpSessionUpdateKind,
+    pub text_delta: Option<String>,
+    pub tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpPermissionRequestEvent {
+    pub session_id: String,
+    pub tool_call_id: String,
+    pub option_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpTurnResultEvent {
+    pub session_id: String,
+    pub stop_reason: String,
+    pub result: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AcpBridgeEvent {
+    SessionUpdate(AcpSessionUpdateEvent),
+    PermissionRequest(AcpPermissionRequestEvent),
+    TurnResult(AcpTurnResultEvent),
+}
+
 // Query / retrieve / ask / evaluate / suggest
 
 #[derive(Debug, Clone, PartialEq)]

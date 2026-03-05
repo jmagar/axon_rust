@@ -1,26 +1,24 @@
 ---
 description: Extract structured data with lifecycle job controls
-argument-hint: <url1> <url2> ... [options] | status <job-id> | cancel <job-id> | list | cleanup | clear | recover
-allowed-tools: mcp__axon__axon
+argument-hint: <url1> [url2] | status <job-id> | list | cleanup | clear | recover
+allowed-tools: mcp__axon__axon, Bash
 ---
 
-# Extract Structured Data
+Use `mcp__axon__axon` directly.
 
-Call the Axon MCP tool (`axon`) with:
-- `action: "extract"`
-- `subaction: "start|status|cancel|list|cleanup|clear|recover"` from `$ARGUMENTS`
-- map remaining `$ARGUMENTS` to schema fields
+**Start:**
+```json
+{ "action": "extract", "urls": ["<url1>", "<url2>"] }
+```
 
-## Instructions
+**Lifecycle:**
+```json
+{ "action": "extract", "subaction": "status", "job_id": "<uuid>" }
+{ "action": "extract", "subaction": "cancel", "job_id": "<uuid>" }
+{ "action": "extract", "subaction": "list", "limit": 10 }
+{ "action": "extract", "subaction": "cleanup" }
+{ "action": "extract", "subaction": "clear" }
+{ "action": "extract", "subaction": "recover" }
+```
 
-1. Execute using the Axon MCP tool (`axon`) with action/subaction routing and mapped arguments.
-2. Handle both start and lifecycle operations (`status|cancel|list|cleanup|clear|recover`).
-3. Parse extraction outputs, progress, and failures.
-4. Present extracted fields and per-URL quality issues.
-
-## Expected Output
-
-The command returns:
-- extract job identifiers
-- lifecycle status/progress
-- structured extraction results and errors
+Parse `$ARGUMENTS`: URLs → start, lifecycle keyword + UUID → management.

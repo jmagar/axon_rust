@@ -2,6 +2,10 @@ use super::events::{
     ArtifactEntry, CommandContext, JobProgressPayload, JobStatusPayload, WsEventV2,
 };
 use crate::crates::core::config::Config;
+use crate::crates::services::types::{
+    AcpBridgeEvent, AcpPermissionRequestEvent, AcpSessionUpdateEvent, AcpSessionUpdateKind,
+    AcpTurnResultEvent,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -440,4 +444,118 @@ fn cancel_job_id_validation_accepts_only_uuid() {
     ));
     assert!(!super::is_valid_cancel_job_id("not-a-uuid"));
     assert!(!super::is_valid_cancel_job_id(""));
+}
+
+#[test]
+fn acp_session_update_maps_to_stream_friendly_output_json_payload() {
+    let payload = super::events::acp_bridge_event_payload(&AcpBridgeEvent::SessionUpdate(
+        AcpSessionUpdateEvent {
+            session_id: "session-123".to_string(),
+            kind: AcpSessionUpdateKind::AssistantDelta,
+            text_delta: Some("hello".to_string()),
+            tool_call_id: None,
+        },
+    ));
+
+    let event = WsEventV2::CommandOutputJson {
+        ctx: sample_ctx(),
+        data: payload,
+    };
+    let serialized = serde_json::to_value(event).expect("event should serialize");
+
+    assert_eq!(
+        serialized.get("type").and_then(Value::as_str),
+        Some("command.output.json")
+    );
+    assert_eq!(
+        serialized
+            .get("data")
+            .and_then(|data| data.get("data"))
+            .and_then(|data| data.get("type"))
+            .and_then(Value::as_str),
+        Some("assistant_delta")
+    );
+    assert_eq!(
+        serialized
+            .get("data")
+            .and_then(|data| data.get("data"))
+            .and_then(|data| data.get("delta"))
+            .and_then(Value::as_str),
+        Some("hello")
+    );
+}
+
+#[test]
+fn acp_permission_request_maps_to_stream_friendly_output_json_payload() {
+    let payload = super::events::acp_bridge_event_payload(&AcpBridgeEvent::PermissionRequest(
+        AcpPermissionRequestEvent {
+            session_id: "session-123".to_string(),
+            tool_call_id: "tool-9".to_string(),
+            option_ids: vec!["allow_once".to_string(), "deny".to_string()],
+        },
+    ));
+
+    let event = WsEventV2::CommandOutputJson {
+        ctx: sample_ctx(),
+        data: payload,
+    };
+    let serialized = serde_json::to_value(event).expect("event should serialize");
+
+    assert_eq!(
+        serialized.get("type").and_then(Value::as_str),
+        Some("command.output.json")
+    );
+    assert_eq!(
+        serialized
+            .get("data")
+            .and_then(|data| data.get("data"))
+            .and_then(|data| data.get("type"))
+            .and_then(Value::as_str),
+        Some("permission_request")
+    );
+    assert_eq!(
+        serialized
+            .get("data")
+            .and_then(|data| data.get("data"))
+            .and_then(|data| data.get("tool_call_id"))
+            .and_then(Value::as_str),
+        Some("tool-9")
+    );
+}
+
+#[test]
+fn acp_turn_result_maps_to_stream_friendly_output_json_payload() {
+    let payload =
+        super::events::acp_bridge_event_payload(&AcpBridgeEvent::TurnResult(AcpTurnResultEvent {
+            session_id: "session-xyz".to_string(),
+            stop_reason: "end_turn".to_string(),
+            result: "{\"text\":\"hello\",\"operations\":[]}".to_string(),
+        }));
+
+    let event = WsEventV2::CommandOutputJson {
+        ctx: sample_ctx(),
+        data: payload,
+    };
+    let serialized = serde_json::to_value(event).expect("event should serialize");
+
+    assert_eq!(
+        serialized.get("type").and_then(Value::as_str),
+        Some("command.output.json")
+    );
+    assert_eq!(
+        serialized
+            .get("data")
+            .and_then(|data| data.get("data"))
+            .and_then(|data| data.get("type"))
+            .and_then(Value::as_str),
+        Some("result")
+    );
+    assert_eq!(
+        serialized
+            .get("data")
+            .and_then(|data| data.get("data"))
+            .and_then(|data| data.get("session_id"))
+            .and_then(Value::as_str),
+        Some("session-xyz")
+    );
 }

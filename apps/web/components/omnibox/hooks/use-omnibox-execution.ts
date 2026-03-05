@@ -38,6 +38,7 @@ export function useOmniboxExecution({
     workspaceMode,
     workspaceContext,
     workspaceResumeSessionId,
+    pulseAgent,
     pulseModel,
     pulsePermissionLevel,
   } = useWsWorkspaceState()
@@ -45,6 +46,7 @@ export function useOmniboxExecution({
     startExecution,
     activateWorkspace,
     submitWorkspacePrompt,
+    setPulseAgent,
     setPulseModel,
     setPulsePermissionLevel,
   } = useWsMessageActions()
@@ -157,6 +159,7 @@ export function useOmniboxExecution({
     workspaceMode,
     workspaceContext,
     workspaceResumeSessionId,
+    pulseAgent,
     pulseModel,
     pulsePermissionLevel,
     currentMode,
@@ -166,6 +169,7 @@ export function useOmniboxExecution({
     setStatusType,
     setOptionValues,
     setCompletionStatus,
+    setPulseAgent,
     setPulseModel,
     setPulsePermissionLevel,
     execute,

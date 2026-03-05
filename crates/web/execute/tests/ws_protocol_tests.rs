@@ -93,7 +93,16 @@ fn malformed_json_fails_to_parse() {
 #[test]
 fn allowed_modes_contains_expected_safe_subcommands() {
     let modes = super::allowed_modes();
-    for expected in &["scrape", "crawl", "map", "query", "ask", "stats", "sources"] {
+    for expected in &[
+        "scrape",
+        "crawl",
+        "map",
+        "query",
+        "ask",
+        "stats",
+        "sources",
+        "pulse_chat",
+    ] {
         assert!(
             modes.contains(expected),
             "ALLOWED_MODES must contain '{expected}'"
@@ -392,8 +401,19 @@ fn async_modes_all_present_in_allowed_modes() {
 fn direct_sync_modes_contains_core_service_modes() {
     let direct = super::direct_sync_modes();
     for expected in &[
-        "scrape", "map", "query", "retrieve", "ask", "search", "research", "stats", "sources",
-        "domains", "doctor", "status",
+        "scrape",
+        "map",
+        "query",
+        "retrieve",
+        "ask",
+        "search",
+        "research",
+        "stats",
+        "sources",
+        "domains",
+        "doctor",
+        "status",
+        "pulse_chat",
     ] {
         assert!(
             direct.contains(expected),

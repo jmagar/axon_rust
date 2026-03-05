@@ -16,6 +16,7 @@ function makeReplayInput(overrides: Partial<Parameters<typeof computeReplayKey>[
     scrapedContext: null,
     conversationHistory: [],
     permissionLevel: 'accept-edits',
+    agent: 'claude',
     model: 'sonnet',
     ...overrides,
   }

@@ -6,6 +6,7 @@
 import { apiFetch } from '@/lib/api-fetch'
 import { parsePulseChatStreamChunk } from '@/lib/pulse/chat-stream'
 import type {
+  PulseAgent,
   PulseChatResponse,
   PulseModel,
   PulsePermissionLevel,
@@ -31,6 +32,7 @@ export interface RunChatPromptOptions {
   activeThreadSources: string[]
   scrapedContext: { url: string; markdown: string } | null
   permissionLevel: PulsePermissionLevel
+  agent: PulseAgent
   model: PulseModel
   effort?: string
   maxTurns?: number
@@ -127,6 +129,7 @@ export async function runChatPrompt(opts: RunChatPromptOptions): Promise<PulseCh
     activeThreadSources,
     scrapedContext,
     permissionLevel,
+    agent,
     model,
     effort,
     maxTurns,
@@ -155,6 +158,7 @@ export async function runChatPrompt(opts: RunChatPromptOptions): Promise<PulseCh
       scrapedContext: scrapedContext ?? undefined,
       conversationHistory,
       permissionLevel,
+      agent,
       model,
       effort,
       maxTurns,

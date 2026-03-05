@@ -512,7 +512,7 @@ export function PulseChatPane({
         {showJumpToLatest && (
           <button
             type="button"
-            onClick={scrollToBottom}
+            onClick={() => scrollToBottom()}
             className="ui-chip sticky bottom-2 ml-auto inline-flex items-center rounded-full border border-[rgba(175,215,255,0.28)] bg-[rgba(10,18,35,0.72)] px-2 py-1 text-[var(--text-dim)] shadow-[0_4px_12px_rgba(3,7,18,0.32)]"
           >
             Jump to latest

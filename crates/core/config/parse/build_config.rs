@@ -329,6 +329,14 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
             .openai_model
             .or_else(|| env::var("OPENAI_MODEL").ok())
             .unwrap_or_default(),
+        acp_adapter_cmd: env::var("AXON_ACP_ADAPTER_CMD")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
+        acp_adapter_args: env::var("AXON_ACP_ADAPTER_ARGS")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
         tavily_api_key: env::var("TAVILY_API_KEY").ok().unwrap_or_default(),
         ask_diagnostics,
         evaluate_responses_mode,

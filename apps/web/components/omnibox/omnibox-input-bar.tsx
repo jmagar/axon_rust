@@ -12,7 +12,11 @@ import {
   XCircle,
 } from 'lucide-react'
 import Link from 'next/link'
-import type { PulseWorkspaceModel, PulseWorkspacePermission } from '@/hooks/ws-messages/types'
+import type {
+  PulseWorkspaceAgent,
+  PulseWorkspaceModel,
+  PulseWorkspacePermission,
+} from '@/hooks/ws-messages/types'
 import type { CompletionStatus } from '@/lib/omnibox-types'
 import type { ModeDefinition, ModeId } from '@/lib/ws-protocol'
 import { NO_INPUT_MODES } from '@/lib/ws-protocol'
@@ -46,6 +50,7 @@ interface OmniboxInputBarProps {
   workspaceMode: string | null
   workspaceContext: { contextBudgetChars: number; contextCharsTotal: number; turns: number } | null
   workspaceResumeSessionId: string | null
+  pulseAgent: PulseWorkspaceAgent
   pulseModel: PulseWorkspaceModel
   pulsePermissionLevel: PulseWorkspacePermission
   currentMode: string | null
@@ -62,6 +67,7 @@ interface OmniboxInputBarProps {
   setToolsOpen: (value: boolean | ((prev: boolean) => boolean)) => void
   setIsFocused: (value: boolean) => void
   setMentionTipSeen: (value: boolean) => void
+  setPulseAgent: (value: PulseWorkspaceAgent) => void
   setPulseModel: (value: PulseWorkspaceModel) => void
   setPulsePermissionLevel: (value: PulseWorkspacePermission) => void
   execute: () => void
@@ -94,6 +100,7 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
     workspaceMode,
     workspaceContext,
     workspaceResumeSessionId,
+    pulseAgent,
     pulseModel,
     pulsePermissionLevel,
     currentMode: _currentMode,
@@ -106,6 +113,7 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
     setToolsOpen,
     setIsFocused,
     setMentionTipSeen,
+    setPulseAgent,
     setPulseModel,
     setPulsePermissionLevel,
     execute,
@@ -320,7 +328,7 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
               className={`relative flex items-center justify-center bg-transparent px-2 py-1.5 text-[var(--axon-secondary)] transition-colors duration-150 hover:text-white ${
                 toolsOpen ? 'text-white' : ''
               }`}
-              title={`Pulse tools · ${pulseModel} · ${pulsePermissionLevel}`}
+              title={`Pulse tools · ${pulseAgent} · ${pulseModel} · ${pulsePermissionLevel}`}
               aria-label="Pulse tools"
             >
               {pulsePermissionLevel === 'plan' ? (
@@ -344,6 +352,20 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
                   <Wrench className="size-3" />
                   <span className="ui-label">Tools</span>
                 </div>
+                <label className="block space-y-1">
+                  <span className="ui-label">Agent</span>
+                  <select
+                    id="omnibox-pulse-agent-selector"
+                    name="omnibox_pulse_agent_selector"
+                    value={pulseAgent}
+                    onChange={(e) => setPulseAgent(e.target.value as PulseWorkspaceAgent)}
+                    className="h-7 w-full rounded border border-[rgba(95,135,175,0.24)] bg-[rgba(10,18,35,0.72)] px-2 text-[length:var(--text-xs)] font-semibold uppercase tracking-[0.04em] text-[var(--text-primary)] outline-none"
+                    aria-label="Agent selector"
+                  >
+                    <option value="claude">Claude</option>
+                    <option value="codex">Codex</option>
+                  </select>
+                </label>
                 <label className="block space-y-1">
                   <span className="ui-label">Model</span>
                   <select

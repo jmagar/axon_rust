@@ -56,6 +56,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-client-protocol"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "499b7ff5c6c842e43fb188f6da7c99a258ae89a9df8c896d6e9784da9b4b23e7"
+dependencies = [
+ "agent-client-protocol-schema",
+ "anyhow",
+ "async-broadcast",
+ "async-trait",
+ "derive_more 2.1.1",
+ "futures",
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "agent-client-protocol-schema"
+version = "0.10.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44bc1fef9c32f03bce2ab44af35b6f483bfd169bf55cc59beeb2e3b1a00ae4d1"
+dependencies = [
+ "anyhow",
+ "derive_more 2.1.1",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "strum",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -319,6 +350,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-broadcast"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "435a87a52755b8f27fcf321ac4f04b2802e337c8c4872923137471ec39c37532"
+dependencies = [
+ "event-listener",
+ "event-listener-strategy",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "async-channel"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -560,9 +603,11 @@ dependencies = [
 
 [[package]]
 name = "axon"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
+ "agent-client-protocol",
  "anyhow",
+ "async-trait",
  "axum",
  "base64",
  "bollard",
@@ -573,6 +618,7 @@ dependencies = [
  "dashmap",
  "dialoguer",
  "dotenvy",
+ "futures",
  "futures-util",
  "hex",
  "html5gum",
@@ -604,6 +650,7 @@ dependencies = [
  "tokio-executor-trait 3.1.0",
  "tokio-reactor-trait",
  "tokio-tungstenite 0.26.2",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -1290,6 +1337,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "convert_case"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "cookie"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1766,10 +1822,12 @@ version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
 dependencies = [
+ "convert_case 0.10.0",
  "proc-macro2",
  "quote",
  "rustc_version",
  "syn 2.0.117",
+ "unicode-xid",
 ]
 
 [[package]]
@@ -5767,7 +5825,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -6010,7 +6068,7 @@ version = "0.0.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19cf37feaf9b5f9202d060f8cebc213c2833aecd462841749ab3d4d39d1db3ba"
 dependencies = [
- "convert_case",
+ "convert_case 0.8.0",
  "hashbrown 0.15.5",
  "phf 0.11.3",
  "phf_codegen 0.11.3",

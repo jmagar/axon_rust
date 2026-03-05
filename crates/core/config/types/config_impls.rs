@@ -82,6 +82,8 @@ impl Default for Config {
             openai_base_url: String::new(),
             openai_api_key: String::new(),
             openai_model: String::new(),
+            acp_adapter_cmd: None,
+            acp_adapter_args: None,
             tavily_api_key: String::new(),
             ask_diagnostics: false,
             evaluate_responses_mode: EvaluateResponsesMode::Inline,
@@ -225,6 +227,8 @@ impl fmt::Debug for Config {
             .field("openai_base_url", &self.openai_base_url)
             .field("openai_api_key", &"[REDACTED]")
             .field("openai_model", &self.openai_model)
+            .field("acp_adapter_cmd", &self.acp_adapter_cmd)
+            .field("acp_adapter_args", &self.acp_adapter_args)
             .field("tavily_api_key", &"[REDACTED]")
             .field("ask_diagnostics", &self.ask_diagnostics)
             .field("evaluate_responses_mode", &self.evaluate_responses_mode)

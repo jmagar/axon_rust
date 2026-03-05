@@ -3,12 +3,25 @@
 import { AlertCircle, Globe, RefreshCw } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/api-fetch'
-import type { DomainsResult } from '@/lib/result-types'
+import type { DomainsPagedResult, DomainsResult } from '@/lib/result-types'
 
 interface ApiResponse {
   ok: boolean
   data?: DomainsResult
   error?: string
+}
+
+function isDomainsPagedResult(data: DomainsResult): data is DomainsPagedResult {
+  if (!('domains' in data)) return false
+  if (!Array.isArray(data.domains)) return false
+  return data.domains.every(
+    (row) =>
+      !!row &&
+      typeof row === 'object' &&
+      'domain' in row &&
+      typeof row.domain === 'string' &&
+      'vectors' in row,
+  )
 }
 
 function parseCount(v: number | [number, number]): { urls: number; vectors: number } {
@@ -21,7 +34,7 @@ function normalizeDomains(
 ): Array<{ domain: string; urls: number; vectors: number }> {
   if (!data) return []
 
-  if ('domains' in data && Array.isArray(data.domains)) {
+  if (isDomainsPagedResult(data)) {
     return data.domains
       .map((row) => ({
         domain: row.domain,
@@ -165,6 +178,12 @@ export function DomainsDashboard() {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {!loading && !error && !data && (
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-base)] px-4 py-3 text-[12px] text-[var(--text-dim)]">
+          Domain stats are not available yet. Try Refresh.
         </div>
       )}
     </div>

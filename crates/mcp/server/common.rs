@@ -89,23 +89,44 @@ fn ensure_dir(path: &Path) -> Result<(), std::io::Error> {
     fs::create_dir_all(path)
 }
 
+fn is_writable(path: &Path) -> bool {
+    let probe = path.join(".axon-write-probe");
+    match fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 pub(super) fn ensure_artifact_root() -> Result<PathBuf, ErrorData> {
     let root = artifact_root();
-    if let Err(primary_err) = ensure_dir(&root) {
-        let fallback = fallback_artifact_root();
-        if fallback != root {
-            if let Err(fallback_err) = ensure_dir(&fallback) {
-                return Err(internal_error(format!(
-                    "failed to create artifact dir '{}' ({primary_err}); fallback '{}' also failed ({fallback_err})",
-                    root.display(),
-                    fallback.display()
-                )));
-            }
-            return Ok(fallback);
-        }
-        return Err(internal_error(primary_err.to_string()));
+    if ensure_dir(&root).is_ok() && is_writable(&root) {
+        return Ok(root);
     }
-    Ok(root)
+    let fallback = fallback_artifact_root();
+    if fallback != root {
+        if let Err(fallback_err) = ensure_dir(&fallback) {
+            return Err(internal_error(format!(
+                "artifact dir '{}' is not writable; fallback '{}' also failed ({fallback_err})",
+                root.display(),
+                fallback.display()
+            )));
+        }
+        if !is_writable(&fallback) {
+            return Err(internal_error(format!(
+                "artifact dir '{}' and fallback '{}' are both not writable",
+                root.display(),
+                fallback.display()
+            )));
+        }
+        return Ok(fallback);
+    }
+    Err(internal_error(format!(
+        "artifact dir '{}' is not writable",
+        root.display()
+    )))
 }
 
 pub(super) fn slugify(value: &str, max_len: usize) -> String {

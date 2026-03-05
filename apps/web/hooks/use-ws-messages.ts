@@ -10,6 +10,7 @@ import type {
   CancelResponseState,
   CrawlProgress,
   LogLine,
+  PulseWorkspaceAgent,
   PulseWorkspaceModel,
   PulseWorkspacePermission,
   RecentRun,
@@ -72,6 +73,7 @@ export type {
   CancelResponseState,
   CrawlProgress,
   LogLine,
+  PulseWorkspaceAgent,
   PulseWorkspaceModel,
   PulseWorkspacePermission,
   RecentRun,
@@ -112,6 +114,7 @@ export function useWsMessagesProvider() {
   const [workspaceResumeSessionId, setWorkspaceResumeSessionId] = useState<string | null>(null)
   const [workspaceResumeVersion, setWorkspaceResumeVersion] = useState(0)
   const [workspaceContext, setWorkspaceContext] = useState<WorkspaceContextState | null>(null)
+  const [pulseAgent, setPulseAgent] = useState<PulseWorkspaceAgent>('claude')
   const [pulseModel, setPulseModel] = useState<PulseWorkspaceModel>('sonnet')
   const [pulsePermissionLevel, setPulsePermissionLevel] =
     useState<PulseWorkspacePermission>('accept-edits')
@@ -213,6 +216,8 @@ export function useWsMessagesProvider() {
 
   useEffect(() => {
     try {
+      const a = localStorage.getItem('axon.web.pulse-agent') as PulseWorkspaceAgent
+      if (a && ['claude', 'codex'].includes(a)) setPulseAgent(a)
       const m = localStorage.getItem('axon.web.pulse-model') as PulseWorkspaceModel
       if (m && ['sonnet', 'opus', 'haiku'].includes(m)) setPulseModel(m)
       const p = localStorage.getItem('axon.web.pulse-permission') as PulseWorkspacePermission
@@ -223,6 +228,14 @@ export function useWsMessagesProvider() {
       /* ignore */
     }
   }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('axon.web.pulse-agent', pulseAgent)
+    } catch {
+      /* ignore */
+    }
+  }, [pulseAgent])
 
   useEffect(() => {
     try {
@@ -459,6 +472,7 @@ export function useWsMessagesProvider() {
       workspaceResumeSessionId,
       workspaceResumeVersion,
       workspaceContext,
+      pulseAgent,
       pulseModel,
       pulsePermissionLevel,
     }),
@@ -469,6 +483,7 @@ export function useWsMessagesProvider() {
       workspaceResumeSessionId,
       workspaceResumeVersion,
       workspaceContext,
+      pulseAgent,
       pulseModel,
       pulsePermissionLevel,
     ],
@@ -477,6 +492,7 @@ export function useWsMessagesProvider() {
   const actions = useMemo<WsMessagesActions>(
     () => ({
       selectFile,
+      setPulseAgent,
       setPulseModel,
       setPulsePermissionLevel,
       activateWorkspace,
@@ -489,6 +505,7 @@ export function useWsMessagesProvider() {
     }),
     [
       selectFile,
+      setPulseAgent,
       activateWorkspace,
       submitWorkspacePrompt,
       resumeWorkspaceSession,

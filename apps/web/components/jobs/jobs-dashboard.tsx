@@ -126,7 +126,6 @@ export function JobsDashboard() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [spinning, setSpinning] = useState(false)
-  const [cancelMsg, setCancelMsg] = useState<string | null>(null)
   const [counts, setCounts] = useState<StatusCounts | undefined>(undefined)
   const [sort, setSort] = useState<{ column: SortColumn; dir: SortDir }>({
     column: 'started',
@@ -219,11 +218,6 @@ export function JobsDashboard() {
       .finally(() => setLoadingMore(false))
   }
 
-  function handleCancel(_id: string, _type: JobType) {
-    setCancelMsg('Cancel not yet supported from UI')
-    setTimeout(() => setCancelMsg(null), 3000)
-  }
-
   function handleSort(column: SortColumn) {
     setSort((prev) =>
       prev.column === column
@@ -314,13 +308,6 @@ export function JobsDashboard() {
       {/* 6. STATS BAR */}
       <StatsBar counts={counts} />
 
-      {/* Cancel message toast */}
-      {cancelMsg && (
-        <div className="mb-3 rounded-lg border border-[var(--border-accent)] bg-[var(--axon-danger-bg)] px-4 py-2 text-[11px] text-[var(--axon-secondary)]">
-          {cancelMsg}
-        </div>
-      )}
-
       {/* Table */}
       <div
         className="overflow-hidden rounded-xl border"
@@ -353,7 +340,6 @@ export function JobsDashboard() {
               <th className="ui-table-head w-28 px-3 py-2.5">
                 <SortableHeader column="started" label="Started" sort={sort} onSort={handleSort} />
               </th>
-              <th className="ui-table-head w-20 px-3 py-2.5" />
             </tr>
           </thead>
           <tbody>
@@ -361,7 +347,7 @@ export function JobsDashboard() {
 
             {!loading && error && (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center">
+                <td colSpan={5} className="px-4 py-10 text-center">
                   <AlertCircle className="mx-auto mb-2 size-6 text-[var(--text-dim)]" />
                   <p className="text-[12px] text-[var(--text-secondary)]">Failed to load jobs</p>
                   <p className="mt-1 text-[10px] text-[var(--text-dim)]">{error}</p>
@@ -371,7 +357,7 @@ export function JobsDashboard() {
 
             {!loading && !error && jobs.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-12 text-center">
+                <td colSpan={5} className="px-4 py-12 text-center">
                   <Zap className="mx-auto mb-2 size-6 text-[var(--text-dim)]" />
                   <p className="text-[12px] text-[var(--text-secondary)]">No jobs found</p>
                   <p className="mt-1 text-[10px] text-[var(--text-dim)]">
@@ -383,9 +369,7 @@ export function JobsDashboard() {
 
             {!loading &&
               !error &&
-              sortedJobs.map((job) => (
-                <JobRow key={`${job.type}-${job.id}`} job={job} onCancel={handleCancel} />
-              ))}
+              sortedJobs.map((job) => <JobRow key={`${job.type}-${job.id}`} job={job} />)}
 
             {loadingMore &&
               Array.from({ length: 4 }).map((_, i) => <SkeletonRow key={`more-${i}`} />)}

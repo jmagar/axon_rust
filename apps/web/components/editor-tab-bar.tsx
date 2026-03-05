@@ -68,6 +68,7 @@ export function EditorTabBar({
             <button
               type="button"
               aria-label={`Close ${tab.title || 'Untitled'}`}
+              title={`Close ${tab.title || 'Untitled'}`}
               onClick={(e) => {
                 e.stopPropagation()
                 onClose(tab.id)
@@ -88,6 +89,7 @@ export function EditorTabBar({
       <button
         type="button"
         aria-label="New tab"
+        title="New tab"
         onClick={onNewTab}
         className="flex shrink-0 items-center justify-center px-2.5 py-2 text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-float)] hover:text-[var(--text-muted)]"
       >

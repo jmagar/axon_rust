@@ -1,24 +1,15 @@
 ---
 description: List indexed domains and document stats
-argument-hint: [--limit N] [--offset N]
-allowed-tools: mcp__axon__axon
+argument-hint: [--limit N]
+allowed-tools: mcp__axon__axon, Bash
 ---
 
-# List Indexed Domains
+Use `mcp__axon__axon` directly:
 
-Call the Axon MCP tool (`axon`) with:
-- `action: "domains"`
-- map `$ARGUMENTS` to schema fields
+```json
+{ "action": "domains", "limit": 20 }
+```
 
-## Instructions
+Optional: `limit` (int), `offset` (int), `response_mode`.
 
-1. Execute using the Axon MCP tool (`axon`) with action/subaction routing and mapped arguments.
-2. Parse domain-level counts and totals.
-3. Present highest-volume domains first.
-
-## Expected Output
-
-The command returns domain statistics including:
-- domain
-- indexed URL count
-- chunk/document totals
+Present domains sorted by indexed URL count, highest first.

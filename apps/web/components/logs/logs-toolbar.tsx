@@ -1,6 +1,6 @@
 'use client'
 
-import { Pause, Play } from 'lucide-react'
+import { Pause, Play, Trash2, WrapText } from 'lucide-react'
 
 export const SERVICES = [
   'axon-workers',
@@ -23,11 +23,16 @@ interface LogsToolbarProps {
   tailLines: TailLines
   filter: string
   autoScroll: boolean
+  compact: boolean
+  wrapLines: boolean
   isConnected: boolean
   onServiceChange: (s: ServiceName) => void
   onTailChange: (t: TailLines) => void
   onFilterChange: (f: string) => void
   onAutoScrollToggle: () => void
+  onCompactToggle: () => void
+  onWrapToggle: () => void
+  onClear: () => void
 }
 
 const SELECT_CLASS =
@@ -43,11 +48,16 @@ export function LogsToolbar({
   tailLines,
   filter,
   autoScroll,
+  compact,
+  wrapLines,
   isConnected,
   onServiceChange,
   onTailChange,
   onFilterChange,
   onAutoScrollToggle,
+  onCompactToggle,
+  onWrapToggle,
+  onClear,
 }: LogsToolbarProps) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -122,6 +132,47 @@ export function LogsToolbar({
       >
         {autoScroll ? <Pause className="size-3" /> : <Play className="size-3" />}
         Auto-scroll
+      </button>
+
+      <button
+        type="button"
+        onClick={onCompactToggle}
+        className="rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors hover:border-[var(--border-standard)] hover:text-[var(--text-primary)]"
+        style={{
+          background: compact ? 'rgba(135,175,255,0.12)' : 'rgba(10,18,35,0.7)',
+          borderColor: compact ? 'var(--border-standard)' : 'var(--border-subtle)',
+          color: compact ? 'var(--axon-primary)' : 'var(--text-dim)',
+        }}
+        aria-pressed={compact}
+        title={compact ? 'Switch to comfortable spacing' : 'Switch to compact spacing'}
+      >
+        Compact
+      </button>
+
+      <button
+        type="button"
+        onClick={onWrapToggle}
+        className="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors hover:border-[var(--border-standard)] hover:text-[var(--text-primary)]"
+        style={{
+          background: wrapLines ? 'rgba(135,175,255,0.12)' : 'rgba(10,18,35,0.7)',
+          borderColor: wrapLines ? 'var(--border-standard)' : 'var(--border-subtle)',
+          color: wrapLines ? 'var(--axon-primary)' : 'var(--text-dim)',
+        }}
+        aria-pressed={wrapLines}
+        title={wrapLines ? 'Disable line wrapping' : 'Enable line wrapping'}
+      >
+        <WrapText className="size-3" />
+        Wrap
+      </button>
+
+      <button
+        type="button"
+        onClick={onClear}
+        className="flex items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.7)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-dim)] transition-colors hover:border-[var(--border-standard)] hover:text-[var(--text-primary)]"
+        title="Clear visible log buffer"
+      >
+        <Trash2 className="size-3" />
+        Clear
       </button>
 
       {/* Connection status */}

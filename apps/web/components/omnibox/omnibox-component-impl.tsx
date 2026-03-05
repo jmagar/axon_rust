@@ -40,6 +40,7 @@ export function Omnibox() {
           workspaceMode={state.workspaceMode}
           workspaceContext={state.workspaceContext}
           workspaceResumeSessionId={state.workspaceResumeSessionId}
+          pulseAgent={state.pulseAgent}
           pulseModel={state.pulseModel}
           pulsePermissionLevel={state.pulsePermissionLevel}
           currentMode={state.currentMode}
@@ -52,6 +53,7 @@ export function Omnibox() {
           setToolsOpen={state.setToolsOpen}
           setIsFocused={state.setIsFocused}
           setMentionTipSeen={state.setMentionTipSeen}
+          setPulseAgent={state.setPulseAgent}
           setPulseModel={state.setPulseModel}
           setPulsePermissionLevel={state.setPulsePermissionLevel}
           execute={state.execute}

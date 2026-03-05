@@ -1,24 +1,15 @@
 ---
 description: Discover URLs on a site without scraping content
 argument-hint: <url> [--limit N]
-allowed-tools: mcp__axon__axon
+allowed-tools: mcp__axon__axon, Bash
 ---
 
-# Map Website URLs
+Use `mcp__axon__axon` directly:
 
-Call the Axon MCP tool (`axon`) with:
-- `action: "map"`
-- map `$ARGUMENTS` to schema fields
+```json
+{ "action": "map", "url": "<url from $ARGUMENTS>", "limit": 25 }
+```
 
-## Instructions
+Optional: `limit` (int, default 25), `offset` (int), `response_mode`.
 
-1. Execute using the Axon MCP tool (`axon`) with action/subaction routing and mapped arguments.
-2. Parse discovered URLs and coverage summary.
-3. Present domain/path distribution and crawl recommendations.
-
-## Expected Output
-
-The command returns:
-- discovered URLs
-- counts by scope/path
-- mapping summary
+Present discovered URLs, total count, and path distribution. Suggest crawl targets based on URL patterns.

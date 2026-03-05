@@ -191,6 +191,12 @@ export function SourcesDashboard() {
       {!loading && !error && rows.length === 0 && query && (
         <p className="text-center text-[12px] text-[var(--text-dim)]">No results for "{query}"</p>
       )}
+
+      {!loading && !error && !data && (
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-base)] px-4 py-3 text-[12px] text-[var(--text-dim)]">
+          Sources payload is empty. Try Refresh.
+        </div>
+      )}
     </div>
   )
 }

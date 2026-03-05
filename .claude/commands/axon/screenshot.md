@@ -1,24 +1,15 @@
 ---
-description: Capture webpage screenshot through Axon action
+description: Capture webpage screenshot via headless Chrome
 argument-hint: <url>
-allowed-tools: mcp__axon__axon
+allowed-tools: mcp__axon__axon, Bash
 ---
 
-# Capture Screenshot
+Use `mcp__axon__axon` directly:
 
-Call the Axon MCP tool (`axon`) with:
-- `action: "screenshot"`
-- map `$ARGUMENTS` to schema fields
+```json
+{ "action": "screenshot", "url": "<url from $ARGUMENTS>" }
+```
 
-## Instructions
+Optional: `viewport` (string, e.g. "1280x720"), `response_mode`.
 
-1. Execute using the Axon MCP tool (`axon`) with action/subaction routing and mapped arguments.
-2. Parse screenshot artifact path and metadata.
-3. Report navigation/render failures clearly.
-
-## Expected Output
-
-The command returns:
-- screenshot artifact path
-- image metadata
-- error diagnostics (if any)
+Present artifact path and image metadata. On failure, suggest checking Chrome via `action: "doctor"`.

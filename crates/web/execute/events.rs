@@ -3,6 +3,7 @@
 //! All variants of [`WsEventV2`] are serialized as JSON with a `"type"` tag
 //! and consumed by `apps/web`. Fields not constructed in Rust may still be
 //! active wire protocol members.
+use crate::crates::services::types::{AcpBridgeEvent, AcpSessionUpdateKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -122,4 +123,38 @@ pub enum WsEventV2 {
 
 pub(super) fn serialize_v2_event(event: WsEventV2) -> Option<String> {
     serde_json::to_string(&event).ok()
+}
+
+pub(super) fn acp_bridge_event_payload(event: &AcpBridgeEvent) -> Value {
+    match event {
+        AcpBridgeEvent::SessionUpdate(update) => {
+            let event_type = match update.kind {
+                AcpSessionUpdateKind::AssistantDelta => "assistant_delta",
+                AcpSessionUpdateKind::ThinkingDelta => "thinking_content",
+                AcpSessionUpdateKind::UserDelta => "user_delta",
+                AcpSessionUpdateKind::ToolCallStarted | AcpSessionUpdateKind::ToolCallUpdated => {
+                    "tool_use"
+                }
+                _ => "status",
+            };
+            serde_json::json!({
+                "type": event_type,
+                "session_id": update.session_id,
+                "delta": update.text_delta,
+                "tool_call_id": update.tool_call_id,
+            })
+        }
+        AcpBridgeEvent::PermissionRequest(req) => serde_json::json!({
+            "type": "permission_request",
+            "session_id": req.session_id,
+            "tool_call_id": req.tool_call_id,
+            "options": req.option_ids,
+        }),
+        AcpBridgeEvent::TurnResult(result) => serde_json::json!({
+            "type": "result",
+            "session_id": result.session_id,
+            "stop_reason": result.stop_reason,
+            "result": result.result,
+        }),
+    }
 }

@@ -12,6 +12,7 @@ import { checkPermission } from '@/lib/pulse/permissions'
 import { detectPulsePromptIntent } from '@/lib/pulse/prompt-intent'
 import type {
   DocOperation,
+  PulseAgent,
   PulseMessageBlock,
   PulseModel,
   PulsePermissionLevel,
@@ -23,6 +24,7 @@ import type { WsServerMsg } from '@/lib/ws-protocol'
 interface UsePulseChatInput {
   documentMarkdown: string
   permissionLevel: PulsePermissionLevel
+  agent: PulseAgent
   model: PulseModel
   subscribe: (handler: (msg: WsServerMsg) => void) => () => void
   onApplyOperations: (ops: DocOperation[]) => void
@@ -42,6 +44,7 @@ interface UsePulseChatInput {
 export function usePulseChat({
   documentMarkdown,
   permissionLevel,
+  agent,
   model,
   subscribe,
   onApplyOperations,
@@ -91,6 +94,7 @@ export function usePulseChat({
     activeThreadSources,
     scrapedContext,
     permissionLevel,
+    agent,
     model,
     effort,
     maxTurns,
@@ -108,6 +112,7 @@ export function usePulseChat({
     activeThreadSources,
     scrapedContext,
     permissionLevel,
+    agent,
     model,
     effort,
     maxTurns,
@@ -367,6 +372,7 @@ export function usePulseChat({
           activeThreadSources: cfg.activeThreadSources,
           scrapedContext: cfg.scrapedContext,
           permissionLevel: cfg.permissionLevel,
+          agent: cfg.agent,
           model: cfg.model,
           effort: cfg.effort,
           maxTurns: cfg.maxTurns,

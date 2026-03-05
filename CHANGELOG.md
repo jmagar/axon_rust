@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-03-04 (session: services-layer refactor complete; editor tab bar; CmdK palette improvements; MCP common.rs expansion; docker/scripts/docs; v0.5.0)
+Last Modified: 2026-03-05 (session: v0.6.0 release + scrape/embed fixes + Pulse ACP frontend agent wiring; v0.7.0)
 
 ## [Unreleased] — feat/services-layer-refactor
 
@@ -8,6 +8,9 @@ This section documents commits on `feat/services-layer-refactor` relative to `ma
 ### Highlights
 
 - **Services layer refactor complete (v0.5.0)** — `crates/services/` is now the single source of business logic; CLI/MCP/WS are thin transport adapters; `crawl`/`extract`/`embed` modes use fire-and-forget direct service enqueue (no subprocess); `github`/`reddit`/`youtube` remain on subprocess fallback due to `!Send` constraint; `polling.rs` deleted; 971 tests passing
+- **Pulse ACP agent selection + routing (v0.7.0)** — Pulse UI now supports selecting `claude`/`codex`; selection persists in workspace state/localStorage; `/api/pulse/chat` forwards `agent` to ws flags; `pulse_chat` sync mode resolves per-agent ACP adapter env overrides (`AXON_ACP_CLAUDE_ADAPTER_*`, `AXON_ACP_CODEX_ADAPTER_*`) with fallback to shared `AXON_ACP_ADAPTER_*`; replay cache key now includes `agent` to prevent cross-agent replay collisions
+- **Scrape/embed stabilization** — fixed scrape page selection and constrained embed operations to the current run for deterministic indexing behavior
+- **Release v0.6.0** — web workspace/sidebar updates landed with TEI retry behavior hardening and release/documentation refresh
 - **Editor tab bar + tabs hook** — new `apps/web/components/editor-tab-bar.tsx`, `apps/web/hooks/use-tabs.ts`, `apps/web/lib/pending-tab.ts`, `apps/web/lib/result-to-markdown.ts` for multi-tab editor UX
 - **CmdK palette improvements** — `CmdKOutput`, `CmdKPalette`, `cmdk-palette-dialog.tsx`, `cmdk-palette-types.ts` updated for better JSON/output display
 - **MCP common.rs expansion** — `crates/mcp/server/common.rs` (+99 lines) with shared helpers; `handlers_system.rs` updated
@@ -76,7 +79,10 @@ This section documents commits on `feat/services-layer-refactor` relative to `ma
 
 | Commit | Type | Message |
 |---|---|---|
-| *(this commit)* | feat(release) | v0.5.0; editor tab bar; CmdK palette updates; MCP common helpers; docker/scripts hardening; services-layer refactor complete |
+| *(this commit)* | feat(release) | v0.7.0; Pulse agent selector (claude/codex), ACP adapter routing, ws/api wiring, replay-key hardening |
+| `baf24e5e` | fix(scrape) | select requested page and scope embed to current run |
+| `4d5b0cb5` | feat(release) | v0.6.0 — web workspace/sidebar updates + TEI retry fixes |
+| `f90d123a` | feat(release) | v0.5.0 — services-layer refactor complete + editor tabs + CmdK + scripts |
 | `4e5144a3` | chore(web) | remove dead code from services layer refactor |
 | `14b62d49` | feat(web) | fire-and-forget async dispatch and cancel via services |
 | `476ad35b` | feat(web) | replace sync subprocess execution with direct service dispatch |

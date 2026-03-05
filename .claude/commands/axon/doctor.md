@@ -1,27 +1,12 @@
 ---
 description: Run connectivity diagnostics for Axon dependencies
-argument-hint: [--json]
-allowed-tools: mcp__axon__axon
+allowed-tools: mcp__axon__axon, Bash
 ---
 
-# Run Axon Doctor
+Use `mcp__axon__axon` directly:
 
-Call the Axon MCP tool (`axon`) with:
-- `action: "doctor"`
-- map `$ARGUMENTS` to schema fields
+```json
+{ "action": "doctor" }
+```
 
-## Instructions
-
-1. Execute using the Axon MCP tool (`axon`) with action/subaction routing and mapped arguments.
-2. Parse each service check result.
-3. Report failures first with probable cause.
-
-## Expected Output
-
-The command returns diagnostics for:
-- Postgres
-- Redis
-- RabbitMQ
-- Qdrant
-- TEI
-- LLM endpoint
+Checks: Postgres, Redis, RabbitMQ, Qdrant, TEI, LLM, Chrome. Report failures first with probable cause and remediation.

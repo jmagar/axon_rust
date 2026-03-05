@@ -30,6 +30,8 @@ export type PulsePermissionLevel = z.infer<typeof PulsePermissionLevel>
 
 export const PulseModel = z.enum(['sonnet', 'opus', 'haiku'])
 export type PulseModel = z.infer<typeof PulseModel>
+export const PulseAgent = z.enum(['claude', 'codex'])
+export type PulseAgent = z.infer<typeof PulseAgent>
 
 export const PulseChatRequestSchema = z.object({
   prompt: z.string().min(1).max(8000),
@@ -52,6 +54,7 @@ export const PulseChatRequestSchema = z.object({
     .max(50)
     .default([]),
   permissionLevel: PulsePermissionLevel.default('accept-edits'),
+  agent: PulseAgent.default('claude'),
   model: PulseModel.default('sonnet'),
   effort: z.enum(['low', 'medium', 'high']).default('medium'),
   maxTurns: z.number().int().min(0).max(100).default(0),
@@ -114,6 +117,7 @@ export interface PulseChatResponse {
   blocks: PulseMessageBlock[]
   metadata?: {
     model: PulseModel
+    agent?: PulseAgent
     elapsedMs: number
     contextCharsTotal: number
     contextBudgetChars: number

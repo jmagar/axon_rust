@@ -31,6 +31,7 @@ export function usePulseWorkspaceBehavior() {
     workspacePromptVersion,
     workspaceResumeSessionId,
     workspaceResumeVersion,
+    pulseAgent,
     pulseModel,
     pulsePermissionLevel,
   } = useWsWorkspaceState()
@@ -49,6 +50,7 @@ export function usePulseWorkspaceBehavior() {
   const [pendingValidation, setPendingValidation] = useState<ValidationResult | null>(null)
   const [sourcesExpanded, setSourcesExpanded] = useState(false)
 
+  const agent = pulseAgent
   const model = pulseModel
   const permissionLevel = pulsePermissionLevel
 
@@ -83,6 +85,7 @@ export function usePulseWorkspaceBehavior() {
   const chat = usePulseChat({
     documentMarkdown,
     permissionLevel,
+    agent,
     model,
     subscribe,
     onApplyOperations: applyOperations,
@@ -176,6 +179,7 @@ export function usePulseWorkspaceBehavior() {
   usePulsePersistence({
     data: {
       permissionLevel,
+      agent,
       model,
       documentMarkdown,
       chatHistory,
@@ -193,6 +197,7 @@ export function usePulseWorkspaceBehavior() {
     },
     setters: {
       setPulsePermissionLevel,
+      setPulseAgent,
       setPulseModel,
       setDocumentMarkdown,
       setChatHistory,
@@ -247,6 +252,7 @@ export function usePulseWorkspaceBehavior() {
       contextCharsTotal: lastContextStats?.contextCharsTotal ?? 0,
       contextBudgetChars: lastContextStats?.contextBudgetChars ?? 0,
       lastLatencyMs: lastResponseLatencyMs ?? 0,
+      agent,
       model,
       permissionLevel,
       saveStatus,
@@ -258,6 +264,7 @@ export function usePulseWorkspaceBehavior() {
     lastResponseLatencyMs,
     lastContextStats,
     model,
+    agent,
     permissionLevel,
     saveStatus,
     updateWorkspaceContext,

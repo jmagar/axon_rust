@@ -7,16 +7,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type LogEntry, LogLine } from './log-line'
 import { LogsToolbar, type ServiceName, TAIL_OPTIONS, type TailLines } from './logs-toolbar'
 
-const MAX_LINES = 2000
+const MAX_LINES = 1200
 const API_TOKEN = process.env.NEXT_PUBLIC_AXON_API_TOKEN
+const LOGS_SERVICE_KEY = 'axon.web.logs.service'
+const DEFAULT_SERVICE: ServiceName = 'axon-web'
 
 export function LogsViewer() {
   const router = useRouter()
-  const [service, setService] = useState<ServiceName>('all')
-  const [tailLines, setTailLines] = useState<TailLines>(TAIL_OPTIONS[2]) // 200
+  const [service, setService] = useState<ServiceName>(DEFAULT_SERVICE)
+  const [tailLines, setTailLines] = useState<TailLines>(TAIL_OPTIONS[1]) // 100
   const [lines, setLines] = useState<LogEntry[]>([])
   const [filter, setFilter] = useState('')
   const [autoScroll, setAutoScroll] = useState(true)
+  const [compact, setCompact] = useState(true)
+  const [wrapLines, setWrapLines] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
 
   const scrollAreaRef = useRef<HTMLDivElement>(null)
@@ -25,6 +29,15 @@ export function LogsViewer() {
   useEffect(() => {
     autoScrollRef.current = autoScroll
   }, [autoScroll])
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(LOGS_SERVICE_KEY) as ServiceName | null
+      if (saved) setService(saved)
+    } catch {
+      /* ignore */
+    }
+  }, [])
 
   // SSE connection — reconnects when service or tailLines changes
   useEffect(() => {
@@ -104,6 +117,11 @@ export function LogsViewer() {
 
   function handleServiceChange(s: ServiceName) {
     setService(s)
+    try {
+      window.localStorage.setItem(LOGS_SERVICE_KEY, s)
+    } catch {
+      /* ignore */
+    }
   }
 
   function handleTailChange(t: TailLines) {
@@ -167,11 +185,16 @@ export function LogsViewer() {
             tailLines={tailLines}
             filter={filter}
             autoScroll={autoScroll}
+            compact={compact}
+            wrapLines={wrapLines}
             isConnected={isConnected}
             onServiceChange={handleServiceChange}
             onTailChange={handleTailChange}
             onFilterChange={setFilter}
             onAutoScrollToggle={handleAutoScrollToggle}
+            onCompactToggle={() => setCompact((prev) => !prev)}
+            onWrapToggle={() => setWrapLines((prev) => !prev)}
+            onClear={() => setLines([])}
           />
         </div>
 
@@ -211,7 +234,7 @@ export function LogsViewer() {
                     width: '100%',
                   }}
                 >
-                  <LogLine entry={entry} />
+                  <LogLine entry={entry} compact={compact} wrapLines={wrapLines} />
                 </div>
               )
             })}
@@ -223,6 +246,10 @@ export function LogsViewer() {
           <span className="text-[10px] text-[var(--text-dim)]">
             {filteredLines.length.toLocaleString()} line{filteredLines.length !== 1 ? 's' : ''}
             {filter ? ' (filtered)' : ''}
+          </span>
+          <span className="text-[10px] text-[var(--text-dim)]">
+            Snapshot {tailLines} then live stream{' '}
+            {service === 'all' ? '(all services)' : `(${service})`}
           </span>
           {lines.length >= MAX_LINES && (
             <span className="text-[10px] text-[var(--axon-warning)]">

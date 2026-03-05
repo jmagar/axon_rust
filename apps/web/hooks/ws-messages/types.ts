@@ -1,4 +1,4 @@
-import type { PulseModel, PulsePermissionLevel } from '@/lib/pulse/types'
+import type { PulseAgent, PulseModel, PulsePermissionLevel } from '@/lib/pulse/types'
 import type { WsLifecycleEntry, WsServerMsg } from '@/lib/ws-protocol'
 
 export interface LogLine {
@@ -46,6 +46,7 @@ export interface WorkspaceContextState {
   contextCharsTotal: number
   contextBudgetChars: number
   lastLatencyMs: number
+  agent: PulseWorkspaceAgent
   model: 'sonnet' | 'opus' | 'haiku'
   permissionLevel: 'plan' | 'accept-edits' | 'bypass-permissions'
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error'
@@ -55,6 +56,8 @@ export interface WorkspaceContextState {
 export type PulseWorkspaceModel = PulseModel
 /** @deprecated Use PulsePermissionLevel from @/lib/pulse/types directly */
 export type PulseWorkspacePermission = PulsePermissionLevel
+/** @deprecated Use PulseAgent from @/lib/pulse/types directly */
+export type PulseWorkspaceAgent = PulseAgent
 
 export interface WsMessagesRuntimeState {
   currentJobId: string | null
@@ -113,6 +116,8 @@ export interface WsMessagesContextValue {
   workspaceContext: WorkspaceContextState | null
   pulseModel: PulseWorkspaceModel
   pulsePermissionLevel: PulseWorkspacePermission
+  pulseAgent: PulseWorkspaceAgent
+  setPulseAgent: (agent: PulseWorkspaceAgent) => void
   setPulseModel: (model: PulseWorkspaceModel) => void
   setPulsePermissionLevel: (level: PulseWorkspacePermission) => void
   activateWorkspace: (mode: string) => void
@@ -153,10 +158,12 @@ export interface WsMessagesWorkspaceState {
   workspaceContext: WsMessagesContextValue['workspaceContext']
   pulseModel: WsMessagesContextValue['pulseModel']
   pulsePermissionLevel: WsMessagesContextValue['pulsePermissionLevel']
+  pulseAgent: WsMessagesContextValue['pulseAgent']
 }
 
 export interface WsMessagesActions {
   selectFile: WsMessagesContextValue['selectFile']
+  setPulseAgent: WsMessagesContextValue['setPulseAgent']
   setPulseModel: WsMessagesContextValue['setPulseModel']
   setPulsePermissionLevel: WsMessagesContextValue['setPulsePermissionLevel']
   activateWorkspace: WsMessagesContextValue['activateWorkspace']

@@ -5,6 +5,7 @@
  */
 
 import type {
+  PulseAgent,
   PulseChatResponse,
   PulseMessageBlock,
   PulseModel,
@@ -29,6 +30,7 @@ export interface ChatMessage {
 
 export type PersistedPulseWorkspaceState = {
   permissionLevel: PulsePermissionLevel
+  agent: PulseAgent
   model: PulseModel
   documentMarkdown: string
   chatHistory: ChatMessage[]
@@ -71,6 +73,8 @@ export function parsePersistedWorkspaceState(
     if (typeof parsed.documentTitle !== 'string' || typeof parsed.documentMarkdown !== 'string') {
       return null
     }
+    const agent: PulseAgent =
+      parsed.agent === 'codex' || parsed.agent === 'claude' ? parsed.agent : 'claude'
     const model: PulseModel =
       parsed.model === 'opus' || parsed.model === 'haiku' || parsed.model === 'sonnet'
         ? parsed.model
@@ -95,6 +99,7 @@ export function parsePersistedWorkspaceState(
     if (!showChat && !showEditor) showChat = true
     return {
       permissionLevel,
+      agent,
       model,
       documentMarkdown: parsed.documentMarkdown,
       chatHistory: Array.isArray(parsed.chatHistory) ? parsed.chatHistory.slice(-250) : [],

@@ -85,6 +85,7 @@ export function computeReplayKey(data: {
   scrapedContext: unknown
   conversationHistory: unknown[]
   permissionLevel: string
+  agent: string
   model: string
 }): string {
   return createHash('sha256').update(JSON.stringify(data)).digest('hex')

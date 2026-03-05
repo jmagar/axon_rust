@@ -6,7 +6,7 @@
 //! - **Async modes** (`crawl`, `extract`, `embed`, `github`, `reddit`, `youtube`):
 //!   `async_mode::handle_async_command` — direct service enqueue, fire-and-forget.
 //! - **Sync direct modes** (scrape, map, query, retrieve, ask, search, research,
-//!   stats, sources, domains, doctor, status):
+//!   stats, sources, domains, doctor, status, pulse_chat):
 //!   `sync_mode::handle_sync_direct` — direct service call, awaited inline.
 //! - **Sync subprocess fallback** (suggest, screenshot, evaluate, sessions,
 //!   dedupe, debug, refresh): spawns the `axon` binary until direct dispatch is wired.
@@ -188,7 +188,7 @@ pub(super) async fn handle_command(
     }
 
     // Sync direct modes (scrape, map, query, retrieve, ask, search, research,
-    // stats, sources, domains, doctor, status) — call services directly.
+    // stats, sources, domains, doctor, status, pulse_chat) — call services directly.
     if let Some(params) = sync_mode::classify_sync_direct(&mode, &input, &flags, cfg, &ws_ctx) {
         ws_send::send_command_start(&tx, &context).await;
         sync_mode::handle_sync_direct(params, tx, ws_ctx).await;

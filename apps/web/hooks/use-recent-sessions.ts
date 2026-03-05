@@ -25,6 +25,27 @@ interface SessionContentResponse {
   messages: ParsedMessage[]
 }
 
+function dedupeSessions(list: SessionSummary[]): SessionSummary[] {
+  const byFilename = new Map<string, SessionSummary>()
+  for (const session of list) {
+    const existing = byFilename.get(session.filename)
+    if (!existing) {
+      byFilename.set(session.filename, session)
+      continue
+    }
+    if (session.mtimeMs > existing.mtimeMs) {
+      byFilename.set(session.filename, session)
+      continue
+    }
+    if (session.mtimeMs === existing.mtimeMs) {
+      if (existing.project === 'tmp' && session.project !== 'tmp') {
+        byFilename.set(session.filename, session)
+      }
+    }
+  }
+  return Array.from(byFilename.values()).sort((a, b) => b.mtimeMs - a.mtimeMs)
+}
+
 export function useRecentSessions() {
   const { resumeWorkspaceSession } = useWsMessageActions()
   const [sessions, setSessions] = useState<SessionSummary[]>([])
@@ -46,7 +67,7 @@ export function useRecentSessions() {
         return
       }
       const data = (await response.json()) as SessionSummary[]
-      setSessions(Array.isArray(data) ? data : [])
+      setSessions(Array.isArray(data) ? dedupeSessions(data) : [])
     } catch {
       setSessions([])
       setError('Failed to load sessions')

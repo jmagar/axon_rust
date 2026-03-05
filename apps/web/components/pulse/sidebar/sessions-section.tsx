@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRecentSessions } from '@/hooks/use-recent-sessions'
 import { useWsMessageActions } from '@/hooks/use-ws-messages'
 
@@ -23,6 +23,8 @@ export function SessionsSection() {
   const { sessions, isLoading, error, loadSession, reload } = useRecentSessions()
   const [loadingId, setLoadingId] = useState<string | null>(null)
   const [failedId, setFailedId] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [sortMode, setSortMode] = useState<'recent' | 'oldest' | 'project'>('recent')
   const [activeSessionId, setActiveSessionId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null
     return window.localStorage.getItem(ACTIVE_SESSION_ID_KEY)
@@ -52,6 +54,34 @@ export function SessionsSection() {
       )
     }
   }, [])
+
+  const filteredSessions = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const filtered = !q
+      ? sessions
+      : sessions.filter((session) => {
+          const preview = (session.preview ?? '').toLowerCase()
+          return (
+            preview.includes(q) ||
+            session.filename.toLowerCase().includes(q) ||
+            session.project.toLowerCase().includes(q)
+          )
+        })
+
+    const sorted = [...filtered]
+    if (sortMode === 'oldest') {
+      sorted.sort((a, b) => a.mtimeMs - b.mtimeMs)
+    } else if (sortMode === 'project') {
+      sorted.sort(
+        (a, b) =>
+          a.project.localeCompare(b.project, undefined, { sensitivity: 'base' }) ||
+          b.mtimeMs - a.mtimeMs,
+      )
+    } else {
+      sorted.sort((a, b) => b.mtimeMs - a.mtimeMs)
+    }
+    return sorted
+  }, [query, sessions, sortMode])
 
   async function handleOpenSession(id: string) {
     if (loadingId) return
@@ -117,8 +147,33 @@ export function SessionsSection() {
           </button>
         </div>
       )}
+      <div className="mb-2 space-y-1.5">
+        <input
+          type="text"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search sessions..."
+          aria-label="Search sessions"
+          className="w-full rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.55)] px-2 py-1 text-[11px] text-[var(--text-secondary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-standard)] focus:outline-none"
+        />
+        <div className="flex items-center justify-between gap-2">
+          <select
+            value={sortMode}
+            onChange={(event) => setSortMode(event.target.value as 'recent' | 'oldest' | 'project')}
+            aria-label="Sort sessions"
+            className="rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.55)] px-2 py-1 text-[11px] text-[var(--text-secondary)] focus:border-[var(--border-standard)] focus:outline-none"
+          >
+            <option value="recent">Recent first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="project">By project</option>
+          </select>
+          <span className="text-[10px] text-[var(--text-dim)]">
+            {filteredSessions.length} shown
+          </span>
+        </div>
+      </div>
       <div className="space-y-1">
-        {sessions.slice(0, 20).map((session) => {
+        {filteredSessions.slice(0, 30).map((session) => {
           const isLoadingRow = loadingId === session.id
           const isFailedRow = failedId === session.id
           return (
@@ -152,6 +207,11 @@ export function SessionsSection() {
             </button>
           )
         })}
+        {filteredSessions.length === 0 && (
+          <p className="px-2 py-3 text-center text-[11px] text-[var(--text-dim)]">
+            No sessions match "{query}"
+          </p>
+        )}
       </div>
     </div>
   )

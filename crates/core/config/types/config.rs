@@ -225,6 +225,15 @@ pub struct Config {
     /// Model name to use for LLM completions (e.g. `llama3`). Env: `OPENAI_MODEL`.
     pub openai_model: String,
 
+    /// ACP adapter command used by `pulse_chat` execution mode.
+    /// Env: `AXON_ACP_ADAPTER_CMD`.
+    pub acp_adapter_cmd: Option<String>,
+
+    /// Optional ACP adapter args encoded as a pipe-delimited string
+    /// (e.g. `--stdio|--model|gemini-3-flash-preview`).
+    /// Env: `AXON_ACP_ADAPTER_ARGS`.
+    pub acp_adapter_args: Option<String>,
+
     /// Tavily search API key. Env: `TAVILY_API_KEY`. **Secret.**
     pub tavily_api_key: String,
 

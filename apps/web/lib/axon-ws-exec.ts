@@ -42,6 +42,17 @@ interface WsLike {
 
 type WebSocketConstructor = new (url: string) => WsLike
 
+export interface RunAxonCommandWsStreamOptions {
+  timeoutMs?: number
+  input?: string
+  flags?: Record<string, string | boolean>
+  signal?: AbortSignal
+  onJson?: (data: unknown) => void
+  onOutputLine?: (line: string) => void
+  onDone?: (payload: { exit_code: number; elapsed_ms?: number }) => void
+  onError?: (payload: { message: string; elapsed_ms?: number }) => void
+}
+
 async function resolveWebSocketConstructor(): Promise<WebSocketConstructor> {
   const nativeConstructor = globalThis.WebSocket as unknown as WebSocketConstructor | undefined
   if (nativeConstructor) return nativeConstructor
@@ -69,26 +80,65 @@ export async function runAxonCommandWs(
   input = '',
   flags: Record<string, string | boolean> = {},
 ): Promise<unknown> {
+  let result: unknown
+  let commandErrorMessage: string | null = null
+
+  await runAxonCommandWsStream(mode, {
+    timeoutMs,
+    input,
+    flags,
+    onJson: (data) => {
+      result = data
+    },
+    onError: (payload) => {
+      commandErrorMessage = payload.message
+    },
+  })
+
+  if (commandErrorMessage) {
+    throw new Error(commandErrorMessage)
+  }
+  return result
+}
+
+export async function runAxonCommandWsStream(
+  mode: string,
+  options: RunAxonCommandWsStreamOptions = {},
+): Promise<void> {
   const WebSocketImpl = await resolveWebSocketConstructor()
   const workersWsUrl = buildWorkersWsUrl()
+  const timeoutMs = options.timeoutMs ?? 30_000
+  const input = options.input ?? ''
+  const flags = options.flags ?? {}
 
   return new Promise((resolve, reject) => {
     const ws = new WebSocketImpl(workersWsUrl)
-    let result: unknown
     let settled = false
+    const abortSignal = options.signal
 
     const finish = (err?: Error) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      abortSignal?.removeEventListener('abort', onAbort)
       try {
         ws.close()
       } catch {
         /* ignore */
       }
       if (err) reject(err)
-      else resolve(result)
+      else resolve()
     }
+
+    const onAbort = () => {
+      finish(new Error(`axon ${mode} request aborted`))
+    }
+
+    if (abortSignal?.aborted) {
+      onAbort()
+      return
+    }
+    abortSignal?.addEventListener('abort', onAbort, { once: true })
 
     const timer = setTimeout(
       () => finish(new Error(`Timeout waiting for axon ${mode} (${timeoutMs}ms)`)),
@@ -101,16 +151,47 @@ export async function runAxonCommandWs(
 
     ws.addEventListener('message', (event) => {
       try {
-        const msg = JSON.parse(String(event.data)) as { type: string; data?: unknown }
-        if (msg.type === 'command.output.json') {
-          // data.data is the parsed JSON payload from the subprocess stdout
-          const payload = msg.data as { data?: unknown }
-          result = payload?.data ?? payload
-        } else if (msg.type === 'command.done') {
+        const parsed = JSON.parse(String(event.data)) as { type?: unknown; data?: unknown }
+        const type = typeof parsed.type === 'string' ? parsed.type : ''
+        const data =
+          parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
+            ? (parsed.data as Record<string, unknown>)
+            : null
+
+        if (type === 'command.output.json') {
+          const outputData = data && data.data !== undefined ? data.data : data
+          options.onJson?.(outputData)
+          return
+        }
+        if (type === 'command.output.line') {
+          options.onOutputLine?.(typeof data?.line === 'string' ? data.line : '')
+          return
+        }
+        if (type === 'command.done') {
+          const payload =
+            data?.payload && typeof data.payload === 'object' && !Array.isArray(data.payload)
+              ? (data.payload as Record<string, unknown>)
+              : null
+          options.onDone?.({
+            exit_code: typeof payload?.exit_code === 'number' ? payload.exit_code : 0,
+            elapsed_ms: typeof payload?.elapsed_ms === 'number' ? payload.elapsed_ms : undefined,
+          })
           finish()
-        } else if (msg.type === 'command.error') {
-          const payload = msg.data as { payload?: { message?: string } }
-          finish(new Error(payload?.payload?.message ?? `axon ${mode} failed`))
+          return
+        }
+        if (type === 'command.error') {
+          const payload =
+            data?.payload && typeof data.payload === 'object' && !Array.isArray(data.payload)
+              ? (data.payload as Record<string, unknown>)
+              : null
+          options.onError?.({
+            message:
+              typeof payload?.message === 'string' && payload.message.length > 0
+                ? payload.message
+                : `axon ${mode} failed`,
+            elapsed_ms: typeof payload?.elapsed_ms === 'number' ? payload.elapsed_ms : undefined,
+          })
+          finish()
         }
       } catch {
         /* ignore non-JSON messages */

@@ -201,6 +201,12 @@ export function StatsDashboard() {
           )}
         </>
       )}
+
+      {!loading && !error && !data && (
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-base)] px-4 py-3 text-[12px] text-[var(--text-dim)]">
+          Stats are not available yet. Try Refresh in a moment.
+        </div>
+      )}
     </div>
   )
 }

@@ -8,6 +8,7 @@ const BASE_REQUEST_EXTRAS = {
   fallbackModel: '',
   allowedTools: '',
   disallowedTools: '',
+  agent: 'claude',
 } as const
 
 describe('pulse rag prompt builder', () => {

@@ -1,15 +1,18 @@
 use crate::crates::core::config::{Config, ConfigOverrides};
+use crate::crates::services::acp as acp_svc;
+use crate::crates::services::events::ServiceEvent;
 use crate::crates::services::map as map_svc;
 use crate::crates::services::query as query_svc;
 use crate::crates::services::scrape as scrape_svc;
 use crate::crates::services::search as search_svc;
 use crate::crates::services::system as system_svc;
 use crate::crates::services::types::{
-    AskResult, DoctorResult, DomainsResult, MapOptions, MapResult, Pagination, QueryResult,
-    ResearchResult, RetrieveOptions, RetrieveResult, ScrapeResult, SearchOptions, SearchResult,
-    SourcesResult, StatsResult, StatusResult,
+    AcpAdapterCommand, AcpPromptTurnRequest, AskResult, DoctorResult, DomainsResult, MapOptions,
+    MapResult, Pagination, QueryResult, ResearchResult, RetrieveOptions, RetrieveResult,
+    ScrapeResult, SearchOptions, SearchResult, SourcesResult, StatsResult, StatusResult,
 };
 use serde_json::json;
+use std::env;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -31,8 +34,19 @@ use super::ws_send::{send_command_output_line, send_done_dual, send_error_dual};
 /// builds — the `allow` below silences the warning intentionally.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) const DIRECT_SYNC_MODES: &[&str] = &[
-    "scrape", "map", "query", "retrieve", "ask", "search", "research", "stats", "sources",
-    "domains", "doctor", "status",
+    "scrape",
+    "map",
+    "query",
+    "retrieve",
+    "ask",
+    "search",
+    "research",
+    "stats",
+    "sources",
+    "domains",
+    "doctor",
+    "status",
+    "pulse_chat",
 ];
 
 /// Owned parameters extracted from the WS request before any `.await`.
@@ -52,6 +66,23 @@ pub(super) struct DirectParams {
     limit: usize,
     offset: usize,
     max_points: Option<usize>,
+    agent: PulseChatAgent,
+    session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PulseChatAgent {
+    Claude,
+    Codex,
+}
+
+impl PulseChatAgent {
+    fn from_flag(value: Option<&str>) -> Self {
+        match value {
+            Some(raw) if raw.eq_ignore_ascii_case("codex") => Self::Codex,
+            _ => Self::Claude,
+        }
+    }
 }
 
 /// Classified service mode — replaces `mode: String` in `DirectParams` so the
@@ -79,6 +110,7 @@ enum ServiceMode {
     Domains,
     Doctor,
     Status,
+    PulseChat,
 }
 
 impl ServiceMode {
@@ -97,6 +129,7 @@ impl ServiceMode {
             "domains" => Some(Self::Domains),
             "doctor" => Some(Self::Doctor),
             "status" => Some(Self::Status),
+            "pulse_chat" => Some(Self::PulseChat),
             _ => None,
         }
     }
@@ -114,6 +147,66 @@ fn flag_usize(flags: &serde_json::Value, key: &str, default: usize) -> usize {
 /// Extract an optional `usize` from a flags JSON value.
 fn flag_opt_usize(flags: &serde_json::Value, key: &str) -> Option<usize> {
     flags.get(key).and_then(|v| v.as_u64()).map(|n| n as usize)
+}
+
+/// Delimiter for `AXON_ACP_ADAPTER_ARGS`.
+///
+/// The env var is parsed as a pipe-delimited list (e.g. `--flag|value|--stdio`).
+/// Empty segments are ignored.
+const ACP_ADAPTER_ARGS_DELIMITER: char = '|';
+
+/// Parse pipe-delimited adapter args from `AXON_ACP_ADAPTER_ARGS`.
+fn parse_acp_adapter_args(raw: &str) -> Vec<String> {
+    raw.split(ACP_ADAPTER_ARGS_DELIMITER)
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn resolve_acp_adapter_command_from_values(
+    cmd_value: Option<&str>,
+    args_value: Option<&str>,
+) -> Result<AcpAdapterCommand, String> {
+    let program = cmd_value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "missing required env var AXON_ACP_ADAPTER_CMD for pulse_chat".to_string())?
+        .to_string();
+
+    let args = args_value.map(parse_acp_adapter_args).unwrap_or_default();
+
+    Ok(AcpAdapterCommand {
+        program,
+        args,
+        cwd: None,
+    })
+}
+
+/// Resolve ACP adapter command and args for `pulse_chat`.
+///
+/// Values are parsed from `Config` fields sourced from environment parsing:
+/// - `Config::acp_adapter_cmd` from `AXON_ACP_ADAPTER_CMD` (required)
+/// - `Config::acp_adapter_args` from `AXON_ACP_ADAPTER_ARGS` (optional)
+fn resolve_acp_adapter_command(
+    cfg: &Config,
+    agent: PulseChatAgent,
+) -> Result<AcpAdapterCommand, String> {
+    let (cmd_env_key, args_env_key) = match agent {
+        PulseChatAgent::Claude => (
+            "AXON_ACP_CLAUDE_ADAPTER_CMD",
+            "AXON_ACP_CLAUDE_ADAPTER_ARGS",
+        ),
+        PulseChatAgent::Codex => ("AXON_ACP_CODEX_ADAPTER_CMD", "AXON_ACP_CODEX_ADAPTER_ARGS"),
+    };
+
+    let cmd_override = env::var(cmd_env_key).ok();
+    let args_override = env::var(args_env_key).ok();
+
+    resolve_acp_adapter_command_from_values(
+        cmd_override.as_deref().or(cfg.acp_adapter_cmd.as_deref()),
+        args_override.as_deref().or(cfg.acp_adapter_args.as_deref()),
+    )
 }
 
 /// Build a per-request `Config` wrapped in `Arc` by applying collection + limit
@@ -155,6 +248,11 @@ fn extract_params(context: &ExecCommandContext, flags: &serde_json::Value) -> Op
     let limit = flag_usize(flags, "limit", cfg.search_limit);
     let offset = flag_usize(flags, "offset", 0);
     let max_points = flag_opt_usize(flags, "limit");
+    let agent = PulseChatAgent::from_flag(flags.get("agent").and_then(serde_json::Value::as_str));
+    let session_id = flags
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string);
     Some(DirectParams {
         mode,
         input: context.input.clone(),
@@ -162,6 +260,8 @@ fn extract_params(context: &ExecCommandContext, flags: &serde_json::Value) -> Op
         limit,
         offset,
         max_points,
+        agent,
+        session_id,
     })
 }
 
@@ -442,6 +542,8 @@ async fn dispatch_service(
         limit,
         offset,
         max_points,
+        agent,
+        session_id,
     } = params;
 
     // `mode` is a `Copy` enum — no string borrow anywhere in this async fn.
@@ -547,6 +649,45 @@ async fn dispatch_service(
         ServiceMode::Status => {
             let result = call_status(cfg).await?;
             send_json_owned(tx, ws_ctx, result.payload).await;
+        }
+
+        ServiceMode::PulseChat => {
+            let (event_tx, mut event_rx) = mpsc::channel::<ServiceEvent>(32);
+            let adapter = resolve_acp_adapter_command(&cfg, agent)?;
+            let scaffold = acp_svc::AcpClientScaffold::new(adapter);
+            let req = AcpPromptTurnRequest {
+                session_id,
+                prompt: vec![input],
+            };
+            scaffold
+                .start_prompt_turn(
+                    &req,
+                    env::current_dir().map_err(|e| e.to_string())?,
+                    Some(event_tx),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            while let Ok(event) = event_rx.try_recv() {
+                match event {
+                    ServiceEvent::Log { level, message } => {
+                        send_json_owned(
+                            tx.clone(),
+                            ws_ctx.clone(),
+                            json!({
+                                "type": "status",
+                                "level": level,
+                                "message": message,
+                            }),
+                        )
+                        .await;
+                    }
+                    ServiceEvent::AcpBridge { event } => {
+                        let payload = super::events::acp_bridge_event_payload(&event);
+                        send_json_owned(tx.clone(), ws_ctx.clone(), payload).await;
+                    }
+                }
+            }
         }
     }
 
@@ -753,6 +894,37 @@ mod tests {
         assert_eq!(params.offset, 5);
         assert_eq!(params.input, "rust async");
         assert!(matches!(params.mode, ServiceMode::Query));
+        assert_eq!(params.agent, PulseChatAgent::Claude);
+        assert_eq!(params.session_id, None);
+    }
+
+    #[test]
+    fn extract_params_populates_session_id_for_pulse_chat() {
+        let base = Config::default();
+        let context = ExecCommandContext {
+            exec_id: "test".to_string(),
+            mode: "pulse_chat".to_string(),
+            input: "hello".to_string(),
+            cfg: Arc::new(base),
+        };
+        let flags = serde_json::json!({"session_id": "session-123"});
+        let params = extract_params(&context, &flags).expect("pulse_chat is a recognised mode");
+        assert_eq!(params.agent, PulseChatAgent::Claude);
+        assert_eq!(params.session_id.as_deref(), Some("session-123"));
+    }
+
+    #[test]
+    fn extract_params_reads_codex_agent_for_pulse_chat() {
+        let base = Config::default();
+        let context = ExecCommandContext {
+            exec_id: "test".to_string(),
+            mode: "pulse_chat".to_string(),
+            input: "hello".to_string(),
+            cfg: Arc::new(base),
+        };
+        let flags = serde_json::json!({"agent": "codex"});
+        let params = extract_params(&context, &flags).expect("pulse_chat is a recognised mode");
+        assert_eq!(params.agent, PulseChatAgent::Codex);
     }
 
     #[test]
@@ -776,5 +948,49 @@ mod tests {
                 "ServiceMode::from_str(\"{mode}\") should return Some"
             );
         }
+    }
+
+    #[test]
+    fn parse_acp_adapter_args_uses_pipe_delimiter_and_trims_segments() {
+        let parsed = parse_acp_adapter_args(" --stdio | --model | gemini-3-flash-preview |  ");
+        assert_eq!(parsed, vec!["--stdio", "--model", "gemini-3-flash-preview"]);
+    }
+
+    #[test]
+    fn parse_acp_adapter_args_returns_empty_for_blank_input() {
+        let parsed = parse_acp_adapter_args("   |   || ");
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn resolve_acp_adapter_command_reads_required_cmd_and_optional_args() {
+        let cmd = resolve_acp_adapter_command_from_values(
+            Some("/usr/local/bin/acp-adapter-test"),
+            Some("--stdio|--model|gpt-5-mini"),
+        )
+        .expect("env values should resolve");
+        assert_eq!(cmd.program, "/usr/local/bin/acp-adapter-test");
+        assert_eq!(cmd.args, vec!["--stdio", "--model", "gpt-5-mini"]);
+        assert_eq!(cmd.cwd, None);
+    }
+
+    #[test]
+    fn resolve_acp_adapter_command_requires_non_empty_cmd() {
+        let err = resolve_acp_adapter_command_from_values(Some("   "), None)
+            .expect_err("blank cmd should fail");
+        assert!(
+            err.contains("AXON_ACP_ADAPTER_CMD"),
+            "error should mention missing/invalid env var: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_acp_adapter_command_requires_cmd_env_var() {
+        let err = resolve_acp_adapter_command_from_values(None, None)
+            .expect_err("missing cmd should fail");
+        assert!(
+            err.contains("AXON_ACP_ADAPTER_CMD"),
+            "error should mention missing/invalid env var: {err}"
+        );
     }
 }

@@ -1,3 +1,4 @@
+pub mod acp;
 pub mod crawl;
 pub mod embed;
 pub mod events;

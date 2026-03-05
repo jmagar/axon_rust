@@ -1,28 +1,14 @@
-import { EventEmitter } from 'node:events'
-import { PassThrough } from 'node:stream'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { RunAxonCommandWsStreamOptions } from '@/lib/axon-ws-exec'
 import { type PulseChatStreamEvent, parsePulseChatStreamChunk } from '@/lib/pulse/chat-stream'
 
-type MockChild = EventEmitter & {
-  stdout: PassThrough
-  stderr: PassThrough
-  kill: ReturnType<typeof vi.fn>
-}
+type WsScenario = (args: {
+  mode: string
+  options: RunAxonCommandWsStreamOptions
+}) => void | Promise<void>
 
-type SpawnScenario = (child: MockChild) => void
-
-let pendingScenario: SpawnScenario | null = null
-let spawnSpy = vi.fn()
-
-function makeMockChild(): MockChild {
-  const child = new EventEmitter() as MockChild
-  child.stdout = new PassThrough()
-  child.stderr = new PassThrough()
-  child.kill = vi.fn(() => {
-    child.emit('close', null, 'SIGTERM')
-  })
-  return child
-}
+let pendingScenario: WsScenario | null = null
+let wsRunSpy = vi.fn()
 
 async function readNdjsonEvents(response: Response): Promise<PulseChatStreamEvent[]> {
   if (!response.body) return []
@@ -47,7 +33,7 @@ async function readNdjsonEvents(response: Response): Promise<PulseChatStreamEven
   return events
 }
 
-function queueScenario(scenario: SpawnScenario): void {
+function queueScenario(scenario: WsScenario): void {
   pendingScenario = scenario
 }
 
@@ -65,19 +51,20 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
   beforeEach(async () => {
     vi.resetModules()
     pendingScenario = null
-    spawnSpy = vi.fn()
+    wsRunSpy = vi.fn()
 
-    vi.doMock('node:child_process', () => ({
-      spawn: (...args: unknown[]) => {
-        spawnSpy(...args)
+    vi.doMock('@/lib/axon-ws-exec', () => ({
+      runAxonCommandWsStream: (
+        mode: string,
+        options: RunAxonCommandWsStreamOptions = {},
+      ): Promise<void> => {
+        wsRunSpy(mode, options)
         if (!pendingScenario) {
-          throw new Error('Missing spawn scenario for test')
+          throw new Error('Missing WS scenario for test')
         }
         const scenario = pendingScenario
         pendingScenario = null
-        const child = makeMockChild()
-        scenario(child)
-        return child
+        return Promise.resolve(scenario({ mode, options }))
       },
     }))
 
@@ -99,17 +86,12 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
     post = routeModule.POST
   })
 
-  it('e2e-like: first assistant delta arrives before done even with malformed NDJSON lines', async () => {
-    queueScenario((child) => {
+  it('e2e-like: first assistant delta arrives before done via WS output frames', async () => {
+    queueScenario(({ options }) => {
       queueMicrotask(() => {
-        child.stdout.write(
-          `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Hello from stream' }] } })}\n`,
-        )
-        child.stdout.write('not-json\n')
-        child.stdout.write(
-          `${JSON.stringify({ type: 'result', result: '{"text":"Final answer","operations":[]}' })}\n`,
-        )
-        child.emit('close', 0, null)
+        options.onJson?.({ type: 'assistant_delta', delta: 'Hello from stream' })
+        options.onJson?.({ type: 'result', result: '{"text":"Final answer","operations":[]}' })
+        options.onDone?.({ exit_code: 0 })
       })
     })
 
@@ -129,16 +111,15 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
         text: 'Final answer',
       },
     })
-    expect(spawnSpy).toHaveBeenCalledTimes(1)
+    expect(wsRunSpy).toHaveBeenCalledTimes(1)
+    expect(wsRunSpy.mock.calls[0]?.[0]).toBe('pulse_chat')
   })
 
-  it('e2e-like: preserves partial assistant output when subprocess aborts before done', async () => {
-    queueScenario((child) => {
+  it('e2e-like: preserves partial output and emits error when worker sends command.error', async () => {
+    queueScenario(({ options }) => {
       queueMicrotask(() => {
-        child.stdout.write(
-          `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Partial output' }] } })}\n`,
-        )
-        child.emit('close', null, 'SIGTERM')
+        options.onJson?.({ type: 'assistant_delta', delta: 'Partial output' })
+        options.onError?.({ message: 'worker crashed' })
       })
     })
 
@@ -153,7 +134,33 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
         }),
         expect.objectContaining({
           type: 'error',
-          code: 'pulse_chat_terminated_signal',
+          code: 'pulse_chat_command_error',
+        }),
+      ]),
+    )
+    expect(events.some((event) => event.type === 'done')).toBe(false)
+  })
+
+  it('e2e-like: emits error when worker exits non-zero via command.done', async () => {
+    queueScenario(({ options }) => {
+      queueMicrotask(() => {
+        options.onJson?.({ type: 'assistant_delta', delta: 'Partial output' })
+        options.onDone?.({ exit_code: 2 })
+      })
+    })
+
+    const response = await post(makeRequest())
+    const events = await readNdjsonEvents(response)
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'assistant_delta',
+          delta: 'Partial output',
+        }),
+        expect.objectContaining({
+          type: 'error',
+          code: 'pulse_chat_exit_nonzero',
         }),
       ]),
     )
@@ -161,35 +168,22 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
   })
 
   it('e2e-like: emits status + tool_use events and includes tool results in done response blocks', async () => {
-    queueScenario((child) => {
+    queueScenario(({ options }) => {
       queueMicrotask(() => {
-        child.stdout.write(
-          `${JSON.stringify({
-            type: 'assistant',
-            message: {
-              content: [
-                { type: 'text', text: 'Thinking...' },
-                {
-                  type: 'tool_use',
-                  id: 'tool-1',
-                  name: 'search_docs',
-                  input: { query: 'rag' },
-                },
-              ],
-            },
-          })}\n`,
-        )
-        child.stdout.write(
-          `${JSON.stringify({
-            type: 'tool_result',
-            tool_use_id: 'tool-1',
-            content: [{ type: 'text', text: 'tool result text' }],
-          })}\n`,
-        )
-        child.stdout.write(
-          `${JSON.stringify({ type: 'result', result: '{"text":"Done","operations":[]}' })}\n`,
-        )
-        child.emit('close', 0, null)
+        options.onJson?.({ type: 'status', phase: 'thinking' })
+        options.onJson?.({ type: 'assistant_delta', delta: 'Thinking...' })
+        options.onJson?.({
+          type: 'tool_use',
+          tool_call_id: 'tool-1',
+          tool: { name: 'search_docs', input: { query: 'rag' } },
+        })
+        options.onJson?.({
+          type: 'tool_result',
+          tool_call_id: 'tool-1',
+          content: [{ type: 'text', text: 'tool result text' }],
+        })
+        options.onJson?.({ type: 'result', result: '{"text":"Done","operations":[]}' })
+        options.onDone?.({ exit_code: 0 })
       })
     })
 
@@ -232,15 +226,11 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
   })
 
   it('replays cached tail events when last_event_id is provided', async () => {
-    queueScenario((child) => {
+    queueScenario(({ options }) => {
       queueMicrotask(() => {
-        child.stdout.write(
-          `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Replay me' }] } })}\n`,
-        )
-        child.stdout.write(
-          `${JSON.stringify({ type: 'result', result: '{"text":"Replay done","operations":[]}' })}\n`,
-        )
-        child.emit('close', 0, null)
+        options.onJson?.({ type: 'assistant_delta', delta: 'Replay me' })
+        options.onJson?.({ type: 'result', result: '{"text":"Replay done","operations":[]}' })
+        options.onDone?.({ exit_code: 0 })
       })
     })
 
@@ -250,7 +240,6 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
     expect(typeof resumeFromId).toBe('string')
     expect(resumeFromId).toBeTruthy()
 
-    // Do not queue another spawn scenario; replay should complete from cache and avoid spawning.
     const replayRequest = makeRequest({
       prompt: 'hello',
       last_event_id: resumeFromId,
@@ -258,20 +247,22 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
     const replayResponse = await post(replayRequest)
     const replayEvents = await readNdjsonEvents(replayResponse)
 
-    expect(spawnSpy).toHaveBeenCalledTimes(1)
+    expect(wsRunSpy).toHaveBeenCalledTimes(1)
     expect(replayEvents.length).toBeGreaterThan(0)
     expect(replayEvents.some((event) => event.type === 'done')).toBe(true)
     expect(replayEvents.some((event) => event.type === 'assistant_delta')).toBe(true)
     expect(replayEvents[0]?.event_id).not.toBe(resumeFromId)
   })
 
-  it('returns session_id from claude result event in done response', async () => {
-    queueScenario((child) => {
+  it('returns session_id from result event in done response', async () => {
+    queueScenario(({ options }) => {
       queueMicrotask(() => {
-        child.stdout.write(
-          `${JSON.stringify({ type: 'result', result: '{"text":"Answer","operations":[]}', session_id: 'abcdef01-abcd-1234-5678-abcdef012345' })}\n`,
-        )
-        child.emit('close', 0, null)
+        options.onJson?.({
+          type: 'result',
+          result: '{"text":"Answer","operations":[]}',
+          session_id: 'abcdef01-abcd-1234-5678-abcdef012345',
+        })
+        options.onDone?.({ exit_code: 0 })
       })
     })
 
@@ -288,58 +279,62 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
     })
   })
 
-  it('passes --resume to claude spawn args when sessionId is in the request', async () => {
-    queueScenario((child) => {
+  it('passes session_id flag to pulse_chat WS mode when sessionId is provided', async () => {
+    queueScenario(({ options }) => {
       queueMicrotask(() => {
-        child.stdout.write(
-          `${JSON.stringify({ type: 'result', result: '{"text":"Resumed","operations":[]}', session_id: 'deadbeef-cafe-1234-5678-abcdef012345' })}\n`,
-        )
-        child.emit('close', 0, null)
+        options.onJson?.({
+          type: 'result',
+          result: '{"text":"Resumed","operations":[]}',
+          session_id: 'deadbeef-cafe-1234-5678-abcdef012345',
+        })
+        options.onDone?.({ exit_code: 0 })
       })
     })
 
     await post(makeRequest({ prompt: 'hello', sessionId: 'deadbeef-cafe-1234-5678-abcdef012345' }))
 
-    const spawnArgs: string[] = spawnSpy.mock.calls[0]?.[1] ?? []
-    const resumeIdx = spawnArgs.indexOf('--resume')
-    expect(resumeIdx).toBeGreaterThanOrEqual(0)
-    expect(spawnArgs[resumeIdx + 1]).toBe('deadbeef-cafe-1234-5678-abcdef012345')
+    const wsOptions = wsRunSpy.mock.calls[0]?.[1] as RunAxonCommandWsStreamOptions
+    expect(wsOptions.flags?.session_id).toBe('deadbeef-cafe-1234-5678-abcdef012345')
   })
 
-  it('omits --resume from claude spawn args when sessionId is absent', async () => {
-    queueScenario((child) => {
+  it('omits session_id WS flag when sessionId is absent', async () => {
+    queueScenario(({ options }) => {
       queueMicrotask(() => {
-        child.stdout.write(
-          `${JSON.stringify({ type: 'result', result: '{"text":"Fresh","operations":[]}' })}\n`,
-        )
-        child.emit('close', 0, null)
+        options.onJson?.({ type: 'result', result: '{"text":"Fresh","operations":[]}' })
+        options.onDone?.({ exit_code: 0 })
       })
     })
 
     await post(makeRequest({ prompt: 'hello' }))
 
-    const spawnArgs: string[] = spawnSpy.mock.calls[0]?.[1] ?? []
-    expect(spawnArgs.includes('--resume')).toBe(false)
+    const wsOptions = wsRunSpy.mock.calls[0]?.[1] as RunAxonCommandWsStreamOptions
+    expect(wsOptions.flags?.session_id).toBeUndefined()
+  })
+
+  it('passes agent flag to pulse_chat WS mode', async () => {
+    queueScenario(({ options }) => {
+      queueMicrotask(() => {
+        options.onJson?.({ type: 'result', result: '{"text":"Codex","operations":[]}' })
+        options.onDone?.({ exit_code: 0 })
+      })
+    })
+
+    await post(makeRequest({ prompt: 'hello', agent: 'codex' }))
+
+    const wsOptions = wsRunSpy.mock.calls[0]?.[1] as RunAxonCommandWsStreamOptions
+    expect(wsOptions.flags?.agent).toBe('codex')
   })
 
   it('replays from a mid-stream event id through done (dropped-connection resume)', async () => {
-    queueScenario((child) => {
+    queueScenario(({ options }) => {
       queueMicrotask(() => {
-        child.stdout.write(
-          `${JSON.stringify({
-            type: 'assistant',
-            message: {
-              content: [
-                { type: 'text', text: 'Chunk A' },
-                { type: 'text', text: 'Chunk B' },
-              ],
-            },
-          })}\n`,
-        )
-        child.stdout.write(
-          `${JSON.stringify({ type: 'result', result: '{"text":"Reconnect complete","operations":[]}' })}\n`,
-        )
-        child.emit('close', 0, null)
+        options.onJson?.({ type: 'assistant_delta', delta: 'Chunk A' })
+        options.onJson?.({ type: 'assistant_delta', delta: 'Chunk B' })
+        options.onJson?.({
+          type: 'result',
+          result: '{"text":"Reconnect complete","operations":[]}',
+        })
+        options.onDone?.({ exit_code: 0 })
       })
     })
 
@@ -356,7 +351,7 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
     )
     const replayEvents = await readNdjsonEvents(replayResponse)
 
-    expect(spawnSpy).toHaveBeenCalledTimes(1)
+    expect(wsRunSpy).toHaveBeenCalledTimes(1)
     expect(replayEvents.length).toBeGreaterThan(0)
     expect(replayEvents.some((event) => event.type === 'done')).toBe(true)
     expect(replayEvents.some((event) => event.type === 'assistant_delta')).toBe(true)
