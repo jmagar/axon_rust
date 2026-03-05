@@ -51,6 +51,7 @@ lint-all:
     cd apps/web && pnpm lint
 
 verify:
+    ./scripts/check_dockerignore_guards.sh
     just fmt-check
     just clippy
     just check
@@ -61,6 +62,7 @@ ci:
 
 precommit:
     python3 scripts/enforce_no_legacy_symbols.py
+    ./scripts/check_dockerignore_guards.sh
     if [ -f "$HOME/.claude/hooks/enforce_monoliths.py" ]; then python3 "$HOME/.claude/hooks/enforce_monoliths.py" --staged; elif [ -f "scripts/enforce_monoliths.py" ]; then python3 scripts/enforce_monoliths.py --staged; else echo "ERROR: enforce_monoliths.py not found" && exit 1; fi
     just fmt-check
     just clippy
@@ -106,6 +108,15 @@ docker-down:
 
 rebuild-fresh:
     ./scripts/rebuild-fresh.sh
+
+cache-status:
+    ./scripts/cache-guard.sh status
+
+cache-prune:
+    ./scripts/cache-guard.sh prune
+
+docker-context-probe:
+    ./scripts/check_docker_context_size.sh
 
 check-container-revisions:
     ./scripts/check-container-revisions.sh

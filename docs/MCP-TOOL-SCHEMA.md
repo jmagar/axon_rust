@@ -47,7 +47,7 @@ For lifecycle management (`status|cancel|list|cleanup|clear|recover`), use canon
 
 ## Response Policy (Context-Safe Defaults)
 - Default is artifact-first (`response_mode=path`).
-- Heavy operations write result artifacts to `.cache/axon-mcp/`.
+- Heavy operations write result artifacts to `.cache/axon-mcp/` in the runtime filesystem (container path when running in Docker). Override root via `AXON_MCP_ARTIFACT_DIR`; Docker deployments typically map this to `${AXON_DATA_DIR}/axon/artifacts`.
 - Tool response returns compact metadata only by default:
   - `path`, `bytes`, `line_count`, `sha256`, `preview`, `preview_truncated`
 - Inline modes are capped/truncated and always include artifact pointers.

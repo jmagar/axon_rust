@@ -76,7 +76,7 @@ Transport status:
 - Stdio transport is not exposed.
 
 MCP defaults are context-safe:
-- Artifact-first responses (`response_mode=path`) written to `.cache/axon-mcp/`
+- Artifact-first responses (`response_mode=path`) written to `.cache/axon-mcp/` inside the running process/container (override with `AXON_MCP_ARTIFACT_DIR`; in Docker this is typically bind-mounted to `${AXON_DATA_DIR}/axon/artifacts`)
 - Inline responses are optional (`response_mode=inline|both`) and capped
 - Resource: `axon://schema/mcp-tool`
 - Primary MCP test path: `./scripts/test-mcp-tools-mcporter.sh`
@@ -182,9 +182,22 @@ Copy `.env.example` to `.env`. At minimum set the `[REQUIRED]` vars:
 | `AXON_NO_COLOR` | — | Disable ANSI color output when set |
 | `AXON_DOMAINS_DETAILED` | — | Enable detailed `domains` command output |
 | `AXON_EXTRACT_EST_COST_PER_1K_TOKENS` | — | Override extract cost estimate (USD/1K tokens) |
+| `AXON_MCP_ARTIFACT_DIR` | `.cache/axon-mcp` | MCP artifact output root in the runtime filesystem for `response_mode=path` (container path in Docker) |
 | `AXON_LOG_FILE` | `logs/axon.log` | Structured log file path (always on) |
 | `AXON_LOG_MAX_BYTES` | `10485760` | Max bytes per log file before rotation (10MB) |
 | `AXON_LOG_MAX_FILES` | `3` | Total log files to keep (`axon.log`, `.1`, `.2`) |
+
+### Optional Cache/Build Guardrails
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AXON_TARGET_MAX_GB` | `30` | `scripts/cache-guard.sh` threshold for local `target/` size before pruning |
+| `AXON_BUILDKIT_MAX_GB` | `120` | `scripts/cache-guard.sh` threshold for Docker BuildKit cache before `docker builder prune -af` |
+| `AXON_AUTO_CACHE_GUARD` | `true` | Run cache guard automatically in `scripts/rebuild-fresh.sh` |
+| `AXON_ENFORCE_DOCKER_CONTEXT_PROBE` | `true` | Run Docker context-size probe automatically in `scripts/rebuild-fresh.sh` |
+| `AXON_WORKERS_CONTEXT_MAX_MB` | `500` | Max allowed workers build context during probe |
+| `AXON_WEB_CONTEXT_MAX_MB` | `100` | Max allowed web build context during probe |
+| `AXON_CONTEXT_PROBE_TIMEOUT_SECS` | `30` | Timeout per service probe build |
 
 ### Web App Security (`apps/web`)
 
@@ -714,12 +727,22 @@ just watch-check
 
 # branch-level coverage report (lcov)
 just coverage-branch
+
+# inspect/trim local build caches
+just cache-status
+just cache-prune
+
+# enforce live Docker build-context size thresholds
+just docker-context-probe
 ```
 
 Notes:
 - `just` auto-enables `sccache` and `mold` if installed (`RUSTC_WRAPPER=sccache`, `-fuse-ld=mold`).
 - Worker E2E tests are marked `#[ignore]` and intended to run explicitly via `just test-infra`.
 - Build/test/check/clippy commands in local and CI paths are lockfile-strict (`--locked`).
+- `scripts/rebuild-fresh.sh` runs two guardrails by default before rebuilding:
+  - cache guard (`scripts/cache-guard.sh`)
+  - live Docker context probe (`scripts/check_docker_context_size.sh`)
 
 ### Manual CI Infra Lane
 

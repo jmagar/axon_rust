@@ -185,11 +185,38 @@ Persistent data roots are under `${AXON_DATA_DIR}/axon/...`:
 - RabbitMQ data
 - Qdrant storage
 - Worker output and logs
+- MCP artifacts (`${AXON_DATA_DIR}/axon/artifacts` when `AXON_MCP_ARTIFACT_DIR` is set)
 
 Cleanup caution:
 
 - `clear` and aggressive cleanup commands are destructive.
 - Use `list` and `status` first.
+
+Cache and build-context guardrails:
+
+```bash
+# inspect local target/ + BuildKit cache sizes
+just cache-status
+
+# enforce size thresholds (prunes incremental/target and/or BuildKit cache)
+just cache-prune
+
+# run live Docker context-size probe for axon-workers + axon-web
+just docker-context-probe
+```
+
+Threshold tuning (optional):
+
+- `AXON_TARGET_MAX_GB` (default `30`)
+- `AXON_BUILDKIT_MAX_GB` (default `120`)
+- `AXON_WORKERS_CONTEXT_MAX_MB` (default `500`)
+- `AXON_WEB_CONTEXT_MAX_MB` (default `100`)
+- `AXON_CONTEXT_PROBE_TIMEOUT_SECS` (default `30`)
+
+`scripts/rebuild-fresh.sh` runs cache guard + context probe automatically unless disabled:
+
+- `AXON_AUTO_CACHE_GUARD=false`
+- `AXON_ENFORCE_DOCKER_CONTEXT_PROBE=false`
 
 ## Logs and Diagnostics
 

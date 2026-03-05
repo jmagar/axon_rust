@@ -1,6 +1,7 @@
 'use client'
 
 import dynamic from 'next/dynamic'
+import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DockerStats } from '@/components/docker-stats'
 import { LandingCards } from '@/components/landing-cards'
@@ -19,12 +20,16 @@ import { WsIndicator } from '@/components/ws-indicator'
 import { useAxonWs } from '@/hooks/use-axon-ws'
 import { MOBILE_PANE_STORAGE_KEY } from '@/hooks/use-split-pane'
 import { useWsMessages } from '@/hooks/use-ws-messages'
+import { setPendingTab } from '@/lib/pending-tab'
 import {
   DEFAULT_NEURAL_CANVAS_PROFILE,
   type NeuralCanvasProfile,
 } from '@/lib/pulse/neural-canvas-presets'
+import { resultToMarkdown } from '@/lib/result-to-markdown'
 import { getStorageItem, setStorageItem } from '@/lib/storage'
 import type { ContainerStats, WsServerMsg } from '@/lib/ws-protocol'
+
+const INLINE_RESULT_MODES = new Set(['ask', 'research', 'query', 'retrieve'])
 
 const NeuralCanvas = dynamic(() => import('@/components/neural-canvas'), {
   ssr: false,
@@ -33,9 +38,11 @@ const CANVAS_PROFILE_STORAGE_KEY = 'axon.web.neural-canvas.profile'
 const CANVAS_PROFILE_OPTIONS: NeuralCanvasProfile[] = ['current', 'subtle', 'cinematic', 'electric']
 
 export default function DashboardPage() {
+  const router = useRouter()
   const { subscribe } = useAxonWs()
   const canvasRef = useRef<NeuralCanvasHandle>(null)
-  const { isProcessing, hasResults, workspaceMode, workspacePromptVersion } = useWsMessages()
+  const { isProcessing, hasResults, currentMode, workspaceMode, workspacePromptVersion } =
+    useWsMessages()
   const [canvasProfile, setCanvasProfile] = useState<NeuralCanvasProfile>(
     DEFAULT_NEURAL_CANVAS_PROFILE,
   )
@@ -88,6 +95,36 @@ export default function DashboardPage() {
     }
   }, [isProcessing])
 
+  // For inline-result modes (ask, research, query, retrieve): auto-open results in editor tab
+  const capturedJsonRef = useRef<unknown[]>([])
+  const currentModeRef = useRef(currentMode)
+  useEffect(() => {
+    currentModeRef.current = currentMode
+  }, [currentMode])
+  useEffect(() => {
+    if (isProcessing) capturedJsonRef.current = []
+  }, [isProcessing])
+  useEffect(() => {
+    return subscribe((msg: WsServerMsg) => {
+      if (msg.type === 'command.output.json') {
+        if (INLINE_RESULT_MODES.has(currentModeRef.current)) {
+          capturedJsonRef.current = [...capturedJsonRef.current, msg.data.data]
+        }
+      } else if (msg.type === 'command.done') {
+        const mode = currentModeRef.current
+        if (INLINE_RESULT_MODES.has(mode) && capturedJsonRef.current.length > 0) {
+          const markdown = resultToMarkdown(mode, capturedJsonRef.current)
+          if (markdown) {
+            const label = mode.charAt(0).toUpperCase() + mode.slice(1)
+            setPendingTab({ title: label, markdown })
+            router.push('/editor')
+            capturedJsonRef.current = []
+          }
+        }
+      }
+    })
+  }, [subscribe, router])
+
   const handleStats = useCallback(
     (data: {
       aggregate: { cpu_percent: number }
@@ -104,6 +141,7 @@ export default function DashboardPage() {
     [isProcessing],
   )
 
+  const isInlineMode = INLINE_RESULT_MODES.has(currentMode)
   const isPulseWorkspaceActive =
     workspaceMode === 'pulse' && hasResults && workspacePromptVersion > 0
 
@@ -159,13 +197,15 @@ export default function DashboardPage() {
                     />
                   </div>
                 )}
-                <div
-                  className={
-                    landingMobilePane === 'editor' && !hasResults ? 'hidden lg:block' : undefined
-                  }
-                >
-                  <ResultsPanel statsSlot={<DockerStats onStats={handleStats} />} />
-                </div>
+                {!isInlineMode && (
+                  <div
+                    className={
+                      landingMobilePane === 'editor' && !hasResults ? 'hidden lg:block' : undefined
+                    }
+                  >
+                    <ResultsPanel statsSlot={<DockerStats onStats={handleStats} />} />
+                  </div>
+                )}
               </div>
             </div>
           </div>

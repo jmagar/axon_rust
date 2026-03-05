@@ -56,6 +56,7 @@ just verify
 ```
 
 `just verify` runs:
+- `check_dockerignore_guards.sh`
 - `fmt-check`
 - `clippy`
 - `check`

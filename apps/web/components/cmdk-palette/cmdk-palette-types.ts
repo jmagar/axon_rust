@@ -16,6 +16,7 @@ export interface PaletteDialogState {
   inputValue: string
   lines: string[]
   jsonCount: number
+  capturedJson: unknown[]
   progress: PaletteProgress | null
   exitCode: number | null
   errorMsg: string | null

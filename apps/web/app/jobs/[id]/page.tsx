@@ -182,6 +182,59 @@ function KV({
   )
 }
 
+function ShowMoreList<T>({
+  title,
+  items,
+  emptyText,
+  initial = 200,
+  step = 500,
+  renderItem,
+}: {
+  title: string
+  items: T[]
+  emptyText: string
+  initial?: number
+  step?: number
+  renderItem: (item: T, index: number) => React.ReactNode
+}) {
+  const [visible, setVisible] = useState(initial)
+  const shown = items.slice(0, visible)
+  const hasMore = visible < items.length
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-dim)]">
+          {title}
+        </div>
+        <div className="font-mono text-[10px] text-[var(--text-muted)]">
+          {items.length.toLocaleString()} total
+        </div>
+      </div>
+      {items.length === 0 ? (
+        <div className="rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.35)] px-3 py-2 text-[11px] text-[var(--text-muted)]">
+          {emptyText}
+        </div>
+      ) : (
+        <ul className="max-h-[22rem] space-y-1 overflow-auto rounded border border-[var(--border-subtle)] bg-[rgba(10,18,35,0.35)] p-2">
+          {shown.map((item, idx) => (
+            <li key={idx}>{renderItem(item, idx)}</li>
+          ))}
+        </ul>
+      )}
+      {hasMore && (
+        <button
+          type="button"
+          onClick={() => setVisible((prev) => prev + step)}
+          className="rounded border border-[var(--border-subtle)] px-2 py-1 text-[11px] text-[var(--axon-primary)] hover:bg-[rgba(135,175,255,0.1)]"
+        >
+          Show {Math.min(step, items.length - visible).toLocaleString()} More
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ── main page ─────────────────────────────────────────────────────────────────
 
 export default function JobDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -190,32 +243,43 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
-  const fetchJob = useCallback(async () => {
-    try {
-      const res = await apiFetch(`/api/jobs/${id}`)
-      if (!res.ok) {
-        const body = (await res.json()) as { error?: string }
-        setError(body.error ?? `HTTP ${res.status}`)
-        return
+  const fetchJob = useCallback(
+    async (includeArtifacts = true) => {
+      try {
+        const artifacts = includeArtifacts ? '1' : '0'
+        const res = await apiFetch(`/api/jobs/${id}?includeArtifacts=${artifacts}`)
+        if (!res.ok) {
+          const body = (await res.json()) as { error?: string }
+          setError(body.error ?? `HTTP ${res.status}`)
+          return
+        }
+        const data = (await res.json()) as JobDetail
+        setJob((previous) => {
+          if (!previous) return data
+          return {
+            ...data,
+            observedUrls: data.observedUrls ?? previous.observedUrls,
+            markdownFiles: data.markdownFiles ?? previous.markdownFiles,
+          }
+        })
+        setError(null)
+      } catch {
+        setError('Failed to fetch job')
+      } finally {
+        setLoading(false)
       }
-      const data = (await res.json()) as JobDetail
-      setJob(data)
-      setError(null)
-    } catch {
-      setError('Failed to fetch job')
-    } finally {
-      setLoading(false)
-    }
-  }, [id])
+    },
+    [id],
+  )
 
   useEffect(() => {
-    void fetchJob()
+    void fetchJob(true)
   }, [fetchJob])
 
   // Poll every 3s while running
   useEffect(() => {
     if (!job || job.status !== 'running') return
-    const interval = setInterval(() => void fetchJob(), 3000)
+    const interval = setInterval(() => void fetchJob(false), 3000)
     return () => clearInterval(interval)
   }, [job, fetchJob])
 
@@ -314,6 +378,14 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
             <Stat label="Pages Discovered" value={job.pagesDiscovered} icon={Globe} />
             <Stat label="Markdown Created" value={job.mdCreated} icon={FileText} />
             <Stat label="Thin Skipped" value={job.thinMd} icon={FileText} />
+            <Stat label="Filtered URLs" value={job.filteredUrls} icon={Globe} />
+            <Stat label="Error Pages" value={job.errorPages} icon={AlertCircle} />
+            <Stat label="WAF Blocked" value={job.wafBlockedPages} icon={AlertCircle} />
+            <Stat
+              label="Success"
+              value={job.success == null ? 'running' : job.success ? 'yes' : 'no'}
+              icon={job.success ? CheckCircle : XCircle}
+            />
           </div>
         )}
 
@@ -380,8 +452,72 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
             {job.embed != null && <KV label="Auto-embed" value={job.embed ? 'yes' : 'no'} />}
             {job.cacheHit != null && <KV label="Cache Hit" value={job.cacheHit ? 'yes' : 'no'} />}
             {job.outputDir && <KV label="Output Dir" value={job.outputDir} mono />}
+            {job.staleUrlsDeleted != null && (
+              <KV label="Stale URLs Deleted" value={job.staleUrlsDeleted} />
+            )}
           </div>
         </Section>
+
+        {job.type === 'crawl' && (
+          <Section title="Crawl Artifacts" icon={FileText}>
+            <div className="space-y-4">
+              <ShowMoreList
+                title="Observed URLs"
+                items={job.observedUrls ?? []}
+                emptyText="No URL artifacts found."
+                renderItem={(url) => (
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 break-all font-mono text-[11px] text-[var(--axon-primary)] hover:underline"
+                  >
+                    {url}
+                    <ExternalLink className="size-3 flex-shrink-0" />
+                  </a>
+                )}
+              />
+              <ShowMoreList
+                title="Markdown Files Created"
+                items={job.markdownFiles ?? []}
+                emptyText="No manifest file entries found."
+                renderItem={(entry) => (
+                  <div className="space-y-0.5 rounded border border-[var(--border-subtle)] bg-[rgba(0,0,0,0.2)] px-2 py-1.5">
+                    <div className="break-all font-mono text-[11px] text-[var(--text-secondary)]">
+                      {entry.relativePath}
+                    </div>
+                    <div className="break-all font-mono text-[10px] text-[var(--text-muted)]">
+                      {entry.url}
+                    </div>
+                    <div className="text-[10px] text-[var(--text-dim)]">
+                      {entry.markdownChars.toLocaleString()} chars
+                    </div>
+                  </div>
+                )}
+              />
+              <ShowMoreList
+                title="Thin URLs"
+                items={job.thinUrls ?? []}
+                emptyText="No thin URL list recorded."
+                renderItem={(url) => (
+                  <span className="break-all font-mono text-[11px] text-[var(--text-secondary)]">
+                    {url}
+                  </span>
+                )}
+              />
+              <ShowMoreList
+                title="WAF Blocked URLs"
+                items={job.wafBlockedUrls ?? []}
+                emptyText="No WAF-blocked URL list recorded."
+                renderItem={(url) => (
+                  <span className="break-all font-mono text-[11px] text-[var(--text-secondary)]">
+                    {url}
+                  </span>
+                )}
+              />
+            </div>
+          </Section>
+        )}
 
         {/* Raw result JSON */}
         {job.resultJson && Object.keys(job.resultJson).length > 0 && (

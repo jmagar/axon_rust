@@ -1,21 +1,27 @@
 # Standalone axon_cli extraction: keep build context small.
-.git
-.github
-.cache
-.serena
-.1code
-target
-docs
-storage
-data
-specs
-.full-review
-http-cacache
-logs
+/.git
+/.github
+/.cache
+/.serena
+/.1code
+/.claude
+/.codex
+/.gemini
+/target
+/docs
+/storage
+/data
+/specs
+/.full-review
+/http-cacache
+/logs
+/docker-build.log
 
 # Frontend — not needed for the Rust worker image
 apps
+/apps
 node_modules
+/node_modules
 **/node_modules
 
 **/.DS_Store

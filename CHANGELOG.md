@@ -1,12 +1,18 @@
 # Changelog
-Last Modified: 2026-03-04 (session: post-v0.4.0 stabilization + release prep; CI/test hardening; WS/API token docs and compose/docker updates; services-layer execution plan hardening; v0.4.1)
+Last Modified: 2026-03-04 (session: services-layer refactor complete; editor tab bar; CmdK palette improvements; MCP common.rs expansion; docker/scripts/docs; v0.5.0)
 
-## [Unreleased] — feat/sidebar
+## [Unreleased] — feat/services-layer-refactor
 
-This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`).
+This section documents commits on `feat/services-layer-refactor` relative to `main` (`51a2c9c8`).
 
 ### Highlights
 
+- **Services layer refactor complete (v0.5.0)** — `crates/services/` is now the single source of business logic; CLI/MCP/WS are thin transport adapters; `crawl`/`extract`/`embed` modes use fire-and-forget direct service enqueue (no subprocess); `github`/`reddit`/`youtube` remain on subprocess fallback due to `!Send` constraint; `polling.rs` deleted; 971 tests passing
+- **Editor tab bar + tabs hook** — new `apps/web/components/editor-tab-bar.tsx`, `apps/web/hooks/use-tabs.ts`, `apps/web/lib/pending-tab.ts`, `apps/web/lib/result-to-markdown.ts` for multi-tab editor UX
+- **CmdK palette improvements** — `CmdKOutput`, `CmdKPalette`, `cmdk-palette-dialog.tsx`, `cmdk-palette-types.ts` updated for better JSON/output display
+- **MCP common.rs expansion** — `crates/mcp/server/common.rs` (+99 lines) with shared helpers; `handlers_system.rs` updated
+- **Scripts + docker hardening** — `scripts/cache-guard.sh`, `scripts/check_docker_context_size.sh`, `scripts/check_dockerignore_guards.sh` added; `docker-compose.yaml`, `.dockerignore`, `scripts/rebuild-fresh.sh`, `lefthook.yml`, `Justfile` updated
+- **Docs updated** — `docs/MCP-TOOL-SCHEMA.md`, `docs/OPERATIONS.md`, `docs/TESTING.md`, `README.md`, `.env.example` refreshed
 - **Post-v0.4.0 stabilization** — fixed MCP OAuth smoke env handling and serialized crawl DB tests to reduce flakes; fixed 4 failing CI checks; pinned Vitest timezone (`TZ=UTC`) and refreshed snapshots for deterministic test output
 - **Release prep + execution hardening (v0.4.1)** — updated web/container/docs env wiring and token guidance (`AXON_WEB_API_TOKEN`/`NEXT_PUBLIC_AXON_API_TOKEN`), refreshed Docker/compose defaults, and fully hardened the services-layer refactor execution plan with strict preflight, safety rails, and parallel-worker dispatch protocol
 - **Full codebase security & quality review (v0.4.0)** — comprehensive 5-phase review covering 244 Rust + 424 TypeScript files; 40 Phase 1 findings (3 Critical, 7 High, 17 Medium, 13 Low) + 17 CodeRabbit findings all addressed; WS OAuth bearer token gating added; all `format!` SQL → parameterized queries (H-03); `Secret<T>` wrapper with `[REDACTED]` debug; `ConfigOverrides` + sub-config scaffolding (A-H-01); `Config::test_default()` (CR-Q); ANTHROPIC_API_KEY + CLAUDE_* passthrough in child env allowlist (H-02/CR-D); `spawn_blocking` replaces `block_in_place` in MCP ask handler (CR-E); token rotation race fixed (CR-F); OAuth state capacity caps (H-05/CR-K); `apply_overrides` returns new `Config` (CR-M); `ServiceUrls` Debug redacts secrets (CR-L); migration table for `axon_session_ingest_state` (CR-B); arch docs for A-H-01/A-M-01/A-M-04/A-M-08
@@ -70,7 +76,28 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 | Commit | Type | Message |
 |---|---|---|
-| *(this commit)* | chore(release) | v0.4.1; stage pending web/docker/docs updates; harden services-layer refactor execution plan and dispatch safety |
+| *(this commit)* | feat(release) | v0.5.0; editor tab bar; CmdK palette updates; MCP common helpers; docker/scripts hardening; services-layer refactor complete |
+| `4e5144a3` | chore(web) | remove dead code from services layer refactor |
+| `14b62d49` | feat(web) | fire-and-forget async dispatch and cancel via services |
+| `476ad35b` | feat(web) | replace sync subprocess execution with direct service dispatch |
+| `fe83d0a9` | fix(web) | replace dead Some(other) arm with unreachable! in render_mode match |
+| `ed2bd90d` | refactor(web) | plumb base Config and ws override mapping for direct service dispatch |
+| `dae2b0b1` | test(mcp) | pin map_retrieve_result data contract — chunk_count in wrapper element |
+| `e93df53e` | fix(mcp) | correct retrieve chunk_count and research error class |
+| `fb485043` | fix(mcp) | preserve sources wire contract — urls remains string[] in MCP response |
+| `03996f72` | fix(mcp) | use option mapper helpers in system and query handlers |
+| `38f0a53d` | refactor(mcp) | rewire handlers to use services layer |
+| `d146571f` | refactor(mcp) | add request-to-service option mappers |
+| `e4f81653` | fix(services) | address quality review issues from Wave 2 |
+| `7f91caf2` | refactor(cli) | route system/stats/doctor/status handlers through services |
+| `196ab300` | refactor(cli) | route query scrape search lifecycle and ingest handlers through services |
+| `a802ff87` | feat(services) | implement query services (query/retrieve/ask/evaluate/suggest) |
+| `c76fe394` | feat(services) | implement scrape/map/search/research services |
+| `5a6f0393` | feat(services) | implement system services (sources/domains/stats/doctor/status/dedupe) |
+| `475aa3da` | feat(services) | scaffold services module and events/types base |
+| `cd42ee57` | docs(plan) | record baseline verification for services refactor |
+| `58c66e29` | fix(docker) | expose service ports and restore external MCP reachability |
+| *(prev)* | chore(release) | v0.4.1; stage pending web/docker/docs updates; harden services-layer refactor execution plan and dispatch safety |
 | `b71fd7fd` | test | fix mcp-oauth-smoke missing env vars and serialize crawl DB tests |
 | `25e2287f` | fix(ci) | fix 4 failing CI checks |
 | `05238113` | fix(web) | set TZ=UTC in vitest config and update snapshot timestamps |

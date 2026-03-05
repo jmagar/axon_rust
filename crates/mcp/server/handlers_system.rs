@@ -1,7 +1,7 @@
 use super::AxonMcpServer;
 use super::common::{
-    MCP_TOOL_SCHEMA_URI, ensure_artifact_root, internal_error, invalid_params, line_count,
-    parse_limit_usize, parse_offset, parse_response_mode, resolve_artifact_output_path,
+    MCP_TOOL_SCHEMA_URI, artifact_root, ensure_artifact_root, internal_error, invalid_params,
+    line_count, parse_limit_usize, parse_offset, parse_response_mode, resolve_artifact_output_path,
     respond_with_mode, sha256_hex, to_pagination, validate_artifact_path,
 };
 use crate::crates::cli::commands::screenshot::{
@@ -193,7 +193,7 @@ impl AxonMcpServer {
                 ],
                 "defaults": {
                     "response_mode": "path",
-                    "artifact_dir": ".cache/axon-mcp"
+                    "artifact_dir": artifact_root()
                 }
             }),
         )

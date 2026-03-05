@@ -9,10 +9,12 @@ use crate::crates::services::types::{
 use rmcp::ErrorData;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use uuid::Uuid;
 
 pub(super) const MCP_TOOL_SCHEMA_URI: &str = "axon://schema/mcp-tool";
+const MCP_ARTIFACT_DIR_ENV: &str = "AXON_MCP_ARTIFACT_DIR";
 
 impl AxonMcpServer {
     pub(super) fn parse_viewport(
@@ -71,12 +73,38 @@ pub(super) fn paginate_vec<T: Clone>(items: &[T], offset: usize, limit: usize) -
 }
 
 pub(super) fn artifact_root() -> PathBuf {
-    PathBuf::from(".cache/axon-mcp")
+    std::env::var(MCP_ARTIFACT_DIR_ENV)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".cache/axon-mcp"))
+}
+
+fn fallback_artifact_root() -> PathBuf {
+    std::env::temp_dir().join("axon-mcp")
+}
+
+fn ensure_dir(path: &Path) -> Result<(), std::io::Error> {
+    fs::create_dir_all(path)
 }
 
 pub(super) fn ensure_artifact_root() -> Result<PathBuf, ErrorData> {
     let root = artifact_root();
-    fs::create_dir_all(&root).map_err(|e| internal_error(e.to_string()))?;
+    if let Err(primary_err) = ensure_dir(&root) {
+        let fallback = fallback_artifact_root();
+        if fallback != root {
+            if let Err(fallback_err) = ensure_dir(&fallback) {
+                return Err(internal_error(format!(
+                    "failed to create artifact dir '{}' ({primary_err}); fallback '{}' also failed ({fallback_err})",
+                    root.display(),
+                    fallback.display()
+                )));
+            }
+            return Ok(fallback);
+        }
+        return Err(internal_error(primary_err.to_string()));
+    }
     Ok(root)
 }
 
@@ -162,9 +190,10 @@ pub(super) fn validate_artifact_path(raw: &str) -> Result<PathBuf, ErrorData> {
         }
     };
     if !canonical.starts_with(&root) {
-        return Err(invalid_params(
-            "artifact path must be inside .cache/axon-mcp",
-        ));
+        return Err(invalid_params(format!(
+            "artifact path must be inside {}",
+            root.display()
+        )));
     }
     Ok(canonical)
 }
@@ -175,9 +204,10 @@ pub(super) fn resolve_artifact_output_path(raw: &str) -> Result<PathBuf, ErrorDa
         return Err(invalid_params("output path cannot be empty"));
     }
     if candidate.is_absolute() {
-        return Err(invalid_params(
-            "output path must be relative to .cache/axon-mcp",
-        ));
+        return Err(invalid_params(format!(
+            "output path must be relative to {}",
+            ensure_artifact_root()?.display()
+        )));
     }
     if candidate.components().any(|c| {
         matches!(
@@ -337,5 +367,58 @@ pub fn to_search_options(
         limit: limit.unwrap_or(10).clamp(1, 500),
         offset: offset.unwrap_or(0),
         time_range: time_range.map(to_service_time_range),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::sync::Mutex;
+    use tempfile::tempdir;
+
+    static ENV_CWD_LOCK: Mutex<()> = Mutex::new(());
+
+    #[allow(unsafe_code)]
+    #[test]
+    fn ensure_artifact_root_uses_env_override_when_set() {
+        let _guard = ENV_CWD_LOCK.lock().expect("lock poisoned");
+        let tmp = tempdir().expect("tempdir");
+        let override_path = tmp.path().join("custom-artifacts");
+        // SAFETY: guarded by ENV_CWD_LOCK; no concurrent env mutation in this module.
+        unsafe {
+            env::set_var(MCP_ARTIFACT_DIR_ENV, &override_path);
+        }
+
+        let root = ensure_artifact_root().expect("artifact root");
+        assert_eq!(root, override_path);
+        assert!(root.exists());
+
+        // SAFETY: guarded by ENV_CWD_LOCK; no concurrent env mutation in this module.
+        unsafe {
+            env::remove_var(MCP_ARTIFACT_DIR_ENV);
+        }
+    }
+
+    #[allow(unsafe_code)]
+    #[test]
+    fn ensure_artifact_root_falls_back_when_primary_root_is_invalid() {
+        let _guard = ENV_CWD_LOCK.lock().expect("lock poisoned");
+        // SAFETY: guarded by ENV_CWD_LOCK; no concurrent env mutation in this module.
+        unsafe {
+            env::remove_var(MCP_ARTIFACT_DIR_ENV);
+        }
+
+        let cwd_before = env::current_dir().expect("cwd");
+        let tmp = tempdir().expect("tempdir");
+        env::set_current_dir(tmp.path()).expect("chdir temp");
+        fs::write(tmp.path().join(".cache"), b"not-a-directory").expect("create file .cache");
+
+        let root = ensure_artifact_root().expect("artifact root fallback");
+        let expected_fallback = fallback_artifact_root();
+        assert_eq!(root, expected_fallback);
+        assert!(root.exists());
+
+        env::set_current_dir(cwd_before).expect("restore cwd");
     }
 }
