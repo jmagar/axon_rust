@@ -6,13 +6,6 @@ use crate::crates::services::types::{MapOptions, MapResult};
 use std::error::Error;
 use tokio::sync::mpsc;
 
-/// Map a raw JSON payload into a [`MapResult`].
-///
-/// This is a pure function — no network required. Tests call it with JSON literals.
-pub fn map_map_payload(payload: serde_json::Value) -> Result<MapResult, Box<dyn Error>> {
-    Ok(MapResult { payload })
-}
-
 /// Discover all URLs for a site starting at `url`.
 ///
 /// Calls [`map_with_sitemap`] from the crawl engine directly, applies
@@ -68,5 +61,5 @@ pub async fn discover(
         "urls": urls,
     });
 
-    map_map_payload(payload)
+    Ok(MapResult { payload })
 }

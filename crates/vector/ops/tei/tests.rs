@@ -5,6 +5,9 @@ use std::env;
 use std::sync::{Arc, Mutex};
 
 /// Guard that restores (or removes) an env var on drop.
+///
+/// Use only inside tests annotated with `#[serial_test::serial]` to prevent concurrent
+/// env mutation across test threads.
 struct EnvGuard {
     key: &'static str,
     original: Option<String>,
@@ -13,7 +16,8 @@ impl EnvGuard {
     #[allow(unsafe_code)]
     fn set(key: &'static str, value: &str) -> Self {
         let original = env::var(key).ok();
-        // SAFETY: single-threaded test; no concurrent env mutation in this scope.
+        // SAFETY: caller must hold the serial_test lock (see #[serial] annotation) so no
+        // other test thread reads or writes env vars concurrently.
         unsafe { env::set_var(key, value) };
         EnvGuard { key, original }
     }
@@ -21,7 +25,8 @@ impl EnvGuard {
 impl Drop for EnvGuard {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
-        // SAFETY: restoring original value; no concurrent env mutation.
+        // SAFETY: same serial_test lock guarantees exclusive env access for the duration
+        // of the test and its cleanup.
         unsafe {
             match &self.original {
                 Some(v) => env::set_var(self.key, v),
@@ -128,6 +133,7 @@ async fn tei_embed_splits_batch_on_413() {
 }
 
 /// Non-success HTTP responses (not just 429/503) should also retry.
+#[serial_test::serial]
 #[tokio::test]
 async fn tei_embed_retries_on_500() {
     let server = MockServer::start_async().await;

@@ -205,11 +205,12 @@ function useCmdKPaletteState() {
           unsubRef.current = null
 
           if (isBackgroundRef.current) {
-            // Error in background: surface the error so the user sees it in the palette
-            setPhase('done')
-          } else {
-            setPhase('done')
+            // Error in background: clear the background flag so the next Cmd+K open
+            // doesn't mistakenly transition to 'running' with no active command.
+            isBackgroundRef.current = false
+            backgroundModeRef.current = null
           }
+          setPhase('done')
         }
       })
 

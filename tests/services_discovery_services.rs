@@ -1,6 +1,6 @@
-use axon::crates::services::map::map_map_payload;
 use axon::crates::services::scrape::map_scrape_payload;
 use axon::crates::services::search::{map_research_payload, map_search_results};
+use axon::crates::services::types::MapResult;
 
 // ---------------------------------------------------------------------------
 // scrape service — map_scrape_payload
@@ -55,7 +55,7 @@ fn maps_scrape_payload_wraps_json_value_verbatim() {
 }
 
 // ---------------------------------------------------------------------------
-// map service — map_map_payload
+// map service — MapResult
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -69,7 +69,9 @@ fn maps_map_payload_to_map_result() {
         "elapsed_ms": 450,
         "urls": ["https://example.com/a", "https://example.com/b", "https://example.com/c"],
     });
-    let result = map_map_payload(payload.clone()).expect("valid map payload");
+    let result = MapResult {
+        payload: payload.clone(),
+    };
     assert_eq!(result.payload, payload);
 }
 
@@ -84,7 +86,9 @@ fn maps_map_payload_preserves_urls_array() {
         "elapsed_ms": 200,
         "urls": ["https://example.com/one", "https://example.com/two"],
     });
-    let result = map_map_payload(payload.clone()).expect("valid map payload");
+    let result = MapResult {
+        payload: payload.clone(),
+    };
     let urls = result.payload["urls"]
         .as_array()
         .expect("urls must be array");
@@ -104,7 +108,9 @@ fn maps_map_payload_with_empty_urls() {
         "elapsed_ms": 50,
         "urls": [],
     });
-    let result = map_map_payload(payload.clone()).expect("empty urls is valid");
+    let result = MapResult {
+        payload: payload.clone(),
+    };
     assert_eq!(result.payload["mapped_urls"], 0);
     let urls = result.payload["urls"]
         .as_array()
@@ -115,7 +121,9 @@ fn maps_map_payload_with_empty_urls() {
 #[test]
 fn maps_map_payload_wraps_json_value_verbatim() {
     let payload = serde_json::json!({"x": true});
-    let result = map_map_payload(payload.clone()).expect("any JSON value is mappable");
+    let result = MapResult {
+        payload: payload.clone(),
+    };
     assert_eq!(result.payload, payload);
 }
 

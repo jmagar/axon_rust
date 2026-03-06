@@ -122,8 +122,6 @@ fn smoke_map_scrape_payload_wraps_value() {
 
 // ── services::map ─────────────────────────────────────────────────────────────
 
-use axon::crates::services::map::map_map_payload;
-
 #[test]
 fn smoke_map_map_payload_wraps_value() {
     let payload = serde_json::json!({
@@ -131,7 +129,9 @@ fn smoke_map_map_payload_wraps_value() {
         "mapped_urls": 42,
         "urls": ["https://docs.example.com/page1"]
     });
-    let result: MapResult = map_map_payload(payload.clone()).expect("valid map payload");
+    let result = MapResult {
+        payload: payload.clone(),
+    };
     assert_eq!(result.payload["mapped_urls"], 42);
 }
 

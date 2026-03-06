@@ -19,6 +19,12 @@ function EditorPageInner() {
 
   const loadedDocRef = useRef<string | null>(null)
   const loadedWorkspaceRef = useRef<string | null>(null)
+  // Tracks latest tabs without adding `tabs` to the ?doc= effect's dependency array,
+  // which would abort in-flight fetches on every tab state change.
+  const tabsRef = useRef(tabs)
+  useEffect(() => {
+    tabsRef.current = tabs
+  }, [tabs])
 
   // Consume pending tab written by Cmd+K background execution on page load
   useEffect(() => {
@@ -36,11 +42,14 @@ function EditorPageInner() {
     })
   }, [openTab])
 
-  // Load ?doc= URL param into a tab (dedupe by docFilename)
+  // Load ?doc= URL param into a tab (dedupe by docFilename).
+  // `tabs` is intentionally accessed via `tabsRef` instead of being listed in deps —
+  // including `tabs` would abort in-flight fetches whenever an unrelated tab update
+  // changes the array reference.
   useEffect(() => {
     if (!hydrated || !docParam || loadedDocRef.current === docParam) return
     loadedDocRef.current = docParam
-    const existing = tabs.find((t) => t.docFilename === docParam)
+    const existing = tabsRef.current.find((t) => t.docFilename === docParam)
     if (existing) {
       activateTab(existing.id)
       return
@@ -75,7 +84,8 @@ function EditorPageInner() {
       }
     })()
     return () => controller.abort()
-  }, [hydrated, docParam, tabs, activateTab, openTab])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, docParam, activateTab, openTab])
 
   // Load ?workspace= URL param into a tab
   useEffect(() => {
