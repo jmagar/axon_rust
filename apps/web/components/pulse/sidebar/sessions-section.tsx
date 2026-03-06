@@ -27,7 +27,11 @@ export function SessionsSection() {
   const [sortMode, setSortMode] = useState<'recent' | 'oldest' | 'project'>('recent')
   const [activeSessionId, setActiveSessionId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null
-    return window.localStorage.getItem(ACTIVE_SESSION_ID_KEY)
+    try {
+      return window.localStorage.getItem(ACTIVE_SESSION_ID_KEY)
+    } catch {
+      return null
+    }
   })
 
   useEffect(() => {

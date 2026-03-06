@@ -105,7 +105,13 @@ export async function runAxonCommandWsStream(
   mode: string,
   options: RunAxonCommandWsStreamOptions = {},
 ): Promise<void> {
-  const WebSocketImpl = await resolveWebSocketConstructor()
+  let WebSocketImpl: WebSocketConstructor
+  try {
+    WebSocketImpl = await resolveWebSocketConstructor()
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'unknown error'
+    throw new Error(`Failed to initialize WebSocket runtime for axon ${mode}: ${reason}`)
+  }
   const workersWsUrl = buildWorkersWsUrl()
   const timeoutMs = options.timeoutMs ?? 30_000
   const input = options.input ?? ''

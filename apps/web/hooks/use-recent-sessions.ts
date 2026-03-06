@@ -84,12 +84,16 @@ export function useRecentSessions() {
 
   const loadSession = useCallback(
     async (id: string): Promise<boolean> => {
-      const r = await apiFetch(`/api/sessions/${id}`)
-      if (!r.ok) return false
-      const data = (await r.json()) as SessionContentResponse
-      if (!data.sessionId) return false
-      resumeWorkspaceSession(data.sessionId)
-      return true
+      try {
+        const r = await apiFetch(`/api/sessions/${id}`)
+        if (!r.ok) return false
+        const data = (await r.json()) as SessionContentResponse
+        if (!data.sessionId) return false
+        resumeWorkspaceSession(data.sessionId)
+        return true
+      } catch {
+        return false
+      }
     },
     [resumeWorkspaceSession],
   )
