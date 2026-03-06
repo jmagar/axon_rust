@@ -1,5 +1,5 @@
 # Changelog
-Last Modified: 2026-03-05 (session: v0.6.0 release + scrape/embed fixes + Pulse ACP frontend agent wiring; v0.7.0)
+Last Modified: 2026-03-06 (session: v0.7.1 — address all PR review threads, batches 1-10)
 
 ## [Unreleased] — feat/services-layer-refactor
 
@@ -8,6 +8,7 @@ This section documents commits on `feat/services-layer-refactor` relative to `ma
 ### Highlights
 
 - **Services layer refactor complete (v0.5.0)** — `crates/services/` is now the single source of business logic; CLI/MCP/WS are thin transport adapters; `crawl`/`extract`/`embed` modes use fire-and-forget direct service enqueue (no subprocess); `github`/`reddit`/`youtube` remain on subprocess fallback due to `!Send` constraint; `polling.rs` deleted; 971 tests passing
+- **PR review threads fully resolved (v0.7.1)** — all 154 review threads on `feat/services-layer-refactor` addressed across 10 batches; fixes cover security hardening (env mutation serialization, port binding to localhost), stale React ref cleanup (`isBackgroundRef` on background error), `AbortController` dedup via `tabsRef`, trivial wrapper removal (`map_map_payload` inlined), and a range of typed errors, fail-fast mappers, probe uniqueness, MCP error sanitization, and flag validation
 - **Pulse ACP agent selection + routing (v0.7.0)** — Pulse UI now supports selecting `claude`/`codex`; selection persists in workspace state/localStorage; `/api/pulse/chat` forwards `agent` to ws flags; `pulse_chat` sync mode resolves per-agent ACP adapter env overrides (`AXON_ACP_CLAUDE_ADAPTER_*`, `AXON_ACP_CODEX_ADAPTER_*`) with fallback to shared `AXON_ACP_ADAPTER_*`; replay cache key now includes `agent` to prevent cross-agent replay collisions
 - **Scrape/embed stabilization** — fixed scrape page selection and constrained embed operations to the current run for deterministic indexing behavior
 - **Release v0.6.0** — web workspace/sidebar updates landed with TEI retry behavior hardening and release/documentation refresh
@@ -79,7 +80,21 @@ This section documents commits on `feat/services-layer-refactor` relative to `ma
 
 | Commit | Type | Message |
 |---|---|---|
-| *(this commit)* | feat(release) | v0.7.0; Pulse agent selector (claude/codex), ACP adapter routing, ws/api wiring, replay-key hardening |
+| `2ae80ede` | fix | address PR review batch 10 — thread-safety, stale ref, and cleanup |
+| `98f0d817` | fix | address remaining CodeRabbit review comments (batch 9) |
+| `b464c3ab` | fix | address frontend PR review comments (batch 8) |
+| `cb708b2a` | fix | decouple services layer from CLI commands (screenshot + map) |
+| `68ff42c9` | fix | bind infra ports to localhost, fix nginx CORS, pin TEI retry env vars in tests |
+| `e2f8bd90` | fix | address PR review batch 5 — typed errors, fail-fast mappers, probe uniqueness |
+| `e933160c` | fix | address PR review feedback (batch 4 - frontend) |
+| `5359faba` | fix | address PR review feedback (batch 3) |
+| `2ad79b93` | fix | address PR review feedback (batch 2) |
+| `6fde4d77` | fix | address PR review threads — dead code, render modes, service hardening |
+| `54075260` | fix(review) | arrow fns, session id, proxy headers, pulse chat, chunk fix, dispatch split |
+| `b787c7ba` | fix(review) | mode ref routing, log visibility, facet limit clamps |
+| `e7b3e249` | fix(review) | address PR comments — MCP error sanitization, event field names, cancel safety, flag validation |
+| `477f44a0` | fix(pr) | address review comments — security, correctness, and flag propagation |
+| `de90c337` | feat(release) | v0.7.0; Pulse agent selector (claude/codex), ACP adapter routing, ws/api wiring, replay-key hardening |
 | `baf24e5e` | fix(scrape) | select requested page and scope embed to current run |
 | `4d5b0cb5` | feat(release) | v0.6.0 — web workspace/sidebar updates + TEI retry fixes |
 | `f90d123a` | feat(release) | v0.5.0 — services-layer refactor complete + editor tabs + CmdK + scripts |
