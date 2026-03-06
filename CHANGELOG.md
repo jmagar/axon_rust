@@ -1,11 +1,13 @@
 # Changelog
-Last Modified: 2026-03-06 (session: v0.7.2 — fix Pulse Chat local dev: CLAUDECODE env + ACP double-wrap)
+Last Modified: 2026-03-06 (session: v0.7.3 — regression tests for ACP env isolation)
 
 ## [Unreleased] — feat/services-layer-refactor
 
 This section documents commits on `feat/services-layer-refactor` relative to `main` (`51a2c9c8`).
 
 ### Highlights
+
+- **Regression tests for ACP env isolation (v0.7.3)** — `tests/services_acp_spawn_env.rs` (3 tests) locks in `spawn_adapter()` env stripping: `CLAUDECODE`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` must never leak to child process; uses process-level `Mutex` to serialize env mutations; `#![allow(unsafe_code)]` at file scope with `#[allow(clippy::await_holding_lock)]` per test; credentials staged into `axon-web` via `16-materialize-agent-credentials` cont-init.d
 
 - **Pulse Chat local dev fixed (v0.7.2)** — two root causes identified and fixed: (1) `CLAUDECODE` env var inherited from parent Claude Code session blocked `claude-agent-acp` from spawning the `claude` CLI ("Claude Code cannot be launched inside another Claude Code session") — fixed by `command.env_remove("CLAUDECODE")` in `spawn_adapter()`; (2) `acp.rs` was double-wrapping `assistant_text` in a JSON object before passing it as `AcpTurnResultEvent.result`, causing `parseClaudeAssistantPayload` to extract raw JSON instead of the assistant's text — fixed by passing `assistant_text` directly; added `17-materialize-claude-credentials` cont-init.d for Docker credential staging; `docker-compose.yaml` mounts host Claude credentials read-only into workers container; `constants.rs` updated with Pulse Chat WS mode constant
 
@@ -82,6 +84,9 @@ This section documents commits on `feat/services-layer-refactor` relative to `ma
 
 | Commit | Type | Message |
 |---|---|---|
+| `7368ddb7` | fix | stage claude/codex credentials into axon-web container |
+| `107d2a6c` | fix | remove pulse_chat direct-dispatch flags from ALLOWED_FLAGS |
+| `a017bb28` | chore | v0.7.1 — address all PR review threads (batches 1-10) |
 | `2ae80ede` | fix | address PR review batch 10 — thread-safety, stale ref, and cleanup |
 | `98f0d817` | fix | address remaining CodeRabbit review comments (batch 9) |
 | `b464c3ab` | fix | address frontend PR review comments (batch 8) |
