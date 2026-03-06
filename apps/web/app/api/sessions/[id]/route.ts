@@ -17,9 +17,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({
       project: session.project,
       filename: session.filename,
-      // Claude session files are named by session id in ~/.claude/projects/*/*.jsonl
-      // and can be resumed directly via: claude --resume <sessionId>.
-      sessionId: session.filename,
+      sessionId: session.id,
       messages,
     })
   } catch {

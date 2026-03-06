@@ -372,7 +372,11 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
             </button>
             {toolsOpen && (
               <div
-                className="absolute bottom-[calc(100%+6px)] right-0 z-50 w-44 space-y-2 rounded-md border border-[var(--border-standard)] bg-[rgba(10,18,35,0.96)] p-2 shadow-[0_8px_24px_rgba(0,0,0,0.45)]"
+                className={[
+                  'absolute bottom-[calc(100%+6px)] right-0 z-50 w-44 space-y-2 rounded-md',
+                  'border border-[var(--border-standard)] bg-[rgba(10,18,35,0.96)]',
+                  'p-2 shadow-[0_8px_24px_rgba(0,0,0,0.45)]',
+                ].join(' ')}
                 role="dialog"
                 aria-label="Pulse model and permission controls"
               >

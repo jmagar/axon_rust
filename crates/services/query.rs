@@ -19,7 +19,7 @@ pub fn map_query_results(results: Vec<serde_json::Value>) -> QueryResult {
 }
 
 pub fn map_retrieve_result(chunk_count: usize, content: String) -> RetrieveResult {
-    let chunks = if chunk_count == 0 || content.is_empty() {
+    let chunks = if chunk_count == 0 {
         Vec::new()
     } else {
         vec![serde_json::json!({

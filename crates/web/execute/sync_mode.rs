@@ -530,17 +530,127 @@ pub(super) async fn handle_sync_direct(
     }
 }
 
-/// Inner dispatch — all parameters are owned, resulting in a `Send + 'static` future.
+/// Send a single ACP `ServiceEvent` to the WS channel.
+async fn dispatch_acp_event(
+    event: ServiceEvent,
+    tx: &mpsc::Sender<String>,
+    ws_ctx: &CommandContext,
+) {
+    match event {
+        ServiceEvent::Log { level, message } => {
+            send_json_owned(
+                tx.clone(),
+                ws_ctx.clone(),
+                json!({"type": "status", "level": level, "message": message}),
+            )
+            .await;
+        }
+        ServiceEvent::AcpBridge { event } => {
+            let payload = super::events::acp_bridge_event_payload(&event);
+            send_json_owned(tx.clone(), ws_ctx.clone(), payload).await;
+        }
+    }
+}
+
+/// Drive the ACP event loop shared by `pulse_chat` and `pulse_chat_probe`.
 ///
-/// Uses a `ServiceMode` enum rather than `match mode.as_str()`.  Matching on a
-/// `String` via `.as_str()` creates a `&str` scrutinee borrow whose lifetime
-/// spans the entire match block, including every `.await` suspension point
-/// inside the arms.  The Rust async state machine includes that borrow in its
-/// generated state variants, causing an HRTB `Send` diagnostic when the
-/// resulting `Future` is passed to `tokio::task::spawn`.  Using a pre-classified
-/// `Copy` enum eliminates the string borrow entirely.
+/// Polls `task` and `event_rx` concurrently; forwards each `ServiceEvent` to
+/// the WS channel as it arrives.  Returns after the task completes and the
+/// event channel is drained.
+async fn run_acp_event_loop(
+    mut task: tokio::task::JoinHandle<Result<(), String>>,
+    mut event_rx: mpsc::Receiver<ServiceEvent>,
+    tx: mpsc::Sender<String>,
+    ws_ctx: CommandContext,
+    task_name: &'static str,
+) -> Result<(), String> {
+    loop {
+        tokio::select! {
+            join_result = &mut task => {
+                let run_result = join_result
+                    .map_err(|e| format!("failed to join {task_name} task: {e}"))?;
+                run_result?;
+                while let Ok(event) = event_rx.try_recv() {
+                    dispatch_acp_event(event, &tx, &ws_ctx).await;
+                }
+                break;
+            }
+            maybe_event = event_rx.recv() => {
+                match maybe_event {
+                    Some(event) => dispatch_acp_event(event, &tx, &ws_ctx).await,
+                    None => {
+                        let run_result = (&mut task)
+                            .await
+                            .map_err(|e| format!("failed to join {task_name} task: {e}"))?;
+                        run_result?;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Handle the `pulse_chat` service mode: start a prompt-turn ACP session and
+/// stream events back over the WS channel.
+async fn handle_pulse_chat(
+    cfg: Arc<Config>,
+    input: String,
+    session_id: Option<String>,
+    model: Option<String>,
+    agent: PulseChatAgent,
+    tx: mpsc::Sender<String>,
+    ws_ctx: CommandContext,
+) -> Result<(), String> {
+    let (event_tx, event_rx) = mpsc::channel::<ServiceEvent>(32);
+    let adapter = resolve_acp_adapter_command(&cfg, agent)?;
+    let scaffold = acp_svc::AcpClientScaffold::new(adapter);
+    let req = AcpPromptTurnRequest {
+        session_id,
+        prompt: vec![input],
+        model,
+    };
+    let cwd = env::current_dir().map_err(|e| e.to_string())?;
+    let task = tokio::spawn(async move {
+        scaffold
+            .start_prompt_turn(&req, cwd, Some(event_tx))
+            .await
+            .map_err(|e| e.to_string())
+    });
+    run_acp_event_loop(task, event_rx, tx, ws_ctx, "pulse_chat").await
+}
+
+/// Handle the `pulse_chat_probe` service mode: probe an existing session and
+/// stream events back over the WS channel.
+async fn handle_pulse_chat_probe(
+    cfg: Arc<Config>,
+    session_id: Option<String>,
+    model: Option<String>,
+    agent: PulseChatAgent,
+    tx: mpsc::Sender<String>,
+    ws_ctx: CommandContext,
+) -> Result<(), String> {
+    let (event_tx, event_rx) = mpsc::channel::<ServiceEvent>(32);
+    let adapter = resolve_acp_adapter_command(&cfg, agent)?;
+    let scaffold = acp_svc::AcpClientScaffold::new(adapter);
+    let req = AcpSessionProbeRequest { session_id, model };
+    let cwd = env::current_dir().map_err(|e| e.to_string())?;
+    let task = tokio::spawn(async move {
+        scaffold
+            .start_session_probe(&req, cwd, Some(event_tx))
+            .await
+            .map_err(|e| e.to_string())
+    });
+    run_acp_event_loop(task, event_rx, tx, ws_ctx, "pulse_chat_probe").await
+}
+
+/// Inner dispatch — routes a pre-classified `ServiceMode` to the appropriate
+/// service call and streams the result back over the WS channel.
 ///
-/// Returns `Ok(())` on success or `Err(message)` on failure.
+/// Uses a `ServiceMode` enum rather than `match mode.as_str()` to prevent any
+/// `&str` borrow from entering the async state machine, which would trigger an
+/// HRTB `Send` diagnostic when the future is submitted to `tokio::task::spawn`.
 async fn dispatch_service(
     params: DirectParams,
     tx: mpsc::Sender<String>,
@@ -558,42 +668,28 @@ async fn dispatch_service(
         model,
     } = params;
 
-    // `mode` is a `Copy` enum — no string borrow anywhere in this async fn.
     match mode {
         ServiceMode::Scrape => {
             let result = call_scrape(cfg, input).await?;
             send_json_owned(tx.clone(), ws_ctx.clone(), result.payload).await;
-            // Send the scraped markdown file (same as subprocess path).
-            // Pass owned values — send_scrape_file takes ownership to avoid
-            // borrows crossing .await points in the async state machine.
             files::send_scrape_file(tx, ws_ctx).await;
         }
-
         ServiceMode::Map => {
-            let opts = MapOptions { limit, offset };
-            let result = call_map(cfg, input, opts).await?;
+            let result = call_map(cfg, input, MapOptions { limit, offset }).await?;
             send_json_owned(tx, ws_ctx, result.payload).await;
         }
-
         ServiceMode::Query => {
-            let pagination = Pagination { limit, offset };
-            let result = call_query(cfg, input, pagination).await?;
-            let data = json!({ "results": result.results });
-            send_json_owned(tx, ws_ctx, data).await;
+            let result = call_query(cfg, input, Pagination { limit, offset }).await?;
+            send_json_owned(tx, ws_ctx, json!({ "results": result.results })).await;
         }
-
         ServiceMode::Retrieve => {
-            let opts = RetrieveOptions { max_points };
-            let result = call_retrieve(cfg, input, opts).await?;
-            let data = json!({ "chunks": result.chunks });
-            send_json_owned(tx, ws_ctx, data).await;
+            let result = call_retrieve(cfg, input, RetrieveOptions { max_points }).await?;
+            send_json_owned(tx, ws_ctx, json!({ "chunks": result.chunks })).await;
         }
-
         ServiceMode::Ask => {
             let result = call_ask(cfg, input).await?;
             send_json_owned(tx, ws_ctx, result.payload).await;
         }
-
         ServiceMode::Search => {
             let opts = SearchOptions {
                 limit,
@@ -601,10 +697,8 @@ async fn dispatch_service(
                 time_range: None,
             };
             let result = call_search(cfg, input, opts).await?;
-            let data = json!({ "results": result.results });
-            send_json_owned(tx, ws_ctx, data).await;
+            send_json_owned(tx, ws_ctx, json!({ "results": result.results })).await;
         }
-
         ServiceMode::Research => {
             let opts = SearchOptions {
                 limit,
@@ -614,15 +708,12 @@ async fn dispatch_service(
             let result = call_research(cfg, input, opts).await?;
             send_json_owned(tx, ws_ctx, result.payload).await;
         }
-
         ServiceMode::Stats => {
             let result = call_stats(cfg).await?;
             send_json_owned(tx, ws_ctx, result.payload).await;
         }
-
         ServiceMode::Sources => {
-            let pagination = Pagination { limit, offset };
-            let result = call_sources(cfg, pagination).await?;
+            let result = call_sources(cfg, Pagination { limit, offset }).await?;
             let urls_json: Vec<serde_json::Value> = result
                 .urls
                 .into_iter()
@@ -636,10 +727,8 @@ async fn dispatch_service(
             });
             send_json_owned(tx, ws_ctx, data).await;
         }
-
         ServiceMode::Domains => {
-            let pagination = Pagination { limit, offset };
-            let result = call_domains(cfg, pagination).await?;
+            let result = call_domains(cfg, Pagination { limit, offset }).await?;
             let domains_json: Vec<serde_json::Value> = result
                 .domains
                 .into_iter()
@@ -652,163 +741,19 @@ async fn dispatch_service(
             });
             send_json_owned(tx, ws_ctx, data).await;
         }
-
         ServiceMode::Doctor => {
             let result = call_doctor(cfg).await?;
             send_json_owned(tx, ws_ctx, result.payload).await;
         }
-
         ServiceMode::Status => {
             let result = call_status(cfg).await?;
             send_json_owned(tx, ws_ctx, result.payload).await;
         }
-
         ServiceMode::PulseChat => {
-            let (event_tx, mut event_rx) = mpsc::channel::<ServiceEvent>(32);
-            let adapter = resolve_acp_adapter_command(&cfg, agent)?;
-            let scaffold = acp_svc::AcpClientScaffold::new(adapter);
-            let req = AcpPromptTurnRequest {
-                session_id,
-                prompt: vec![input],
-                model,
-            };
-            let cwd = env::current_dir().map_err(|e| e.to_string())?;
-            let mut prompt_turn = tokio::spawn(async move {
-                scaffold
-                    .start_prompt_turn(&req, cwd, Some(event_tx))
-                    .await
-                    .map_err(|e| e.to_string())
-            });
-
-            loop {
-                tokio::select! {
-                    join_result = &mut prompt_turn => {
-                        let run_result = join_result
-                            .map_err(|e| format!("failed to join pulse_chat task: {e}"))?;
-                        run_result?;
-                        while let Ok(event) = event_rx.try_recv() {
-                            match event {
-                                ServiceEvent::Log { level, message } => {
-                                    send_json_owned(
-                                        tx.clone(),
-                                        ws_ctx.clone(),
-                                        json!({
-                                            "type": "status",
-                                            "level": level,
-                                            "message": message,
-                                        }),
-                                    )
-                                    .await;
-                                }
-                                ServiceEvent::AcpBridge { event } => {
-                                    let payload = super::events::acp_bridge_event_payload(&event);
-                                    send_json_owned(tx.clone(), ws_ctx.clone(), payload).await;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                    maybe_event = event_rx.recv() => {
-                        match maybe_event {
-                            Some(ServiceEvent::Log { level, message }) => {
-                                send_json_owned(
-                                    tx.clone(),
-                                    ws_ctx.clone(),
-                                    json!({
-                                        "type": "status",
-                                        "level": level,
-                                        "message": message,
-                                    }),
-                                )
-                                .await;
-                            }
-                            Some(ServiceEvent::AcpBridge { event }) => {
-                                let payload = super::events::acp_bridge_event_payload(&event);
-                                send_json_owned(tx.clone(), ws_ctx.clone(), payload).await;
-                            }
-                            None => {
-                                let run_result = (&mut prompt_turn)
-                                    .await
-                                    .map_err(|e| format!("failed to join pulse_chat task: {e}"))?;
-                                run_result?;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+            handle_pulse_chat(cfg, input, session_id, model, agent, tx, ws_ctx).await?;
         }
-
         ServiceMode::PulseChatProbe => {
-            let (event_tx, mut event_rx) = mpsc::channel::<ServiceEvent>(32);
-            let adapter = resolve_acp_adapter_command(&cfg, agent)?;
-            let scaffold = acp_svc::AcpClientScaffold::new(adapter);
-            let req = AcpSessionProbeRequest { session_id, model };
-            let cwd = env::current_dir().map_err(|e| e.to_string())?;
-            let mut probe = tokio::spawn(async move {
-                scaffold
-                    .start_session_probe(&req, cwd, Some(event_tx))
-                    .await
-                    .map_err(|e| e.to_string())
-            });
-
-            loop {
-                tokio::select! {
-                    join_result = &mut probe => {
-                        let run_result = join_result
-                            .map_err(|e| format!("failed to join pulse_chat_probe task: {e}"))?;
-                        run_result?;
-                        while let Ok(event) = event_rx.try_recv() {
-                            match event {
-                                ServiceEvent::Log { level, message } => {
-                                    send_json_owned(
-                                        tx.clone(),
-                                        ws_ctx.clone(),
-                                        json!({
-                                            "type": "status",
-                                            "level": level,
-                                            "message": message,
-                                        }),
-                                    )
-                                    .await;
-                                }
-                                ServiceEvent::AcpBridge { event } => {
-                                    let payload = super::events::acp_bridge_event_payload(&event);
-                                    send_json_owned(tx.clone(), ws_ctx.clone(), payload).await;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                    maybe_event = event_rx.recv() => {
-                        match maybe_event {
-                            Some(ServiceEvent::Log { level, message }) => {
-                                send_json_owned(
-                                    tx.clone(),
-                                    ws_ctx.clone(),
-                                    json!({
-                                        "type": "status",
-                                        "level": level,
-                                        "message": message,
-                                    }),
-                                )
-                                .await;
-                            }
-                            Some(ServiceEvent::AcpBridge { event }) => {
-                                let payload = super::events::acp_bridge_event_payload(&event);
-                                send_json_owned(tx.clone(), ws_ctx.clone(), payload).await;
-                            }
-                            None => {
-                                let run_result = (&mut probe)
-                                    .await
-                                    .map_err(|e| format!("failed to join pulse_chat_probe task: {e}"))?;
-                                run_result?;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+            handle_pulse_chat_probe(cfg, session_id, model, agent, tx, ws_ctx).await?;
         }
     }
 

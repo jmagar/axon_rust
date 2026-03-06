@@ -105,9 +105,12 @@ function isAllowedOrigin(req: NextRequest): boolean {
 
   const forwardedProto = req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase()
   const forwardedHost = req.headers.get('x-forwarded-host')?.split(',')[0]?.trim().toLowerCase()
-  const requestOrigin = `${
-    forwardedProto && forwardedHost ? forwardedProto : req.nextUrl.protocol.replace(':', '')
-  }://${forwardedHost || req.nextUrl.host}`.toLowerCase()
+  // Only use forwarded headers when BOTH are present; mixing them produces an
+  // http://external-host origin that never matches the browser's https:// Origin.
+  const useForwarded = !!(forwardedProto && forwardedHost)
+  const proto = useForwarded ? forwardedProto : req.nextUrl.protocol.replace(':', '')
+  const host = useForwarded ? forwardedHost : req.nextUrl.host
+  const requestOrigin = `${proto}://${host}`.toLowerCase()
   return normalizedOrigin === requestOrigin
 }
 

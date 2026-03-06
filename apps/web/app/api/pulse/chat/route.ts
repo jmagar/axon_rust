@@ -43,16 +43,24 @@ function resolvePulseChatTimeoutMs(): number {
   return Math.floor(parsed)
 }
 
-// ── Request preparation (extracted from POST for readability) ────────────────
-
 function buildPromptText(userPrompt: string): string {
-  return userPrompt
+  return [
+    userPrompt,
+    '',
+    'Respond as JSON only with this exact shape:',
+    '{"text":"...","operations":[...]}',
+    'Allowed operation types and their required fields:',
+    '  replace_document: {"type":"replace_document","markdown":"<full doc content>"}',
+    '  append_markdown:  {"type":"append_markdown","markdown":"<content to append>"}',
+    '  insert_section:   {"type":"insert_section","heading":"<title>","markdown":"<content>","position":"top"|"bottom"}',
+    'IMPORTANT: use "markdown" (not "content") for the document text field.',
+    'If no operations are needed, return operations as an empty array.',
+  ].join('\n')
 }
 
-function parseOperations(result: string): {
-  text: string
-  operations: PulseChatResponse['operations']
-} {
+type ParseOperationsResult = { text: string; operations: PulseChatResponse['operations'] }
+
+function parseOperations(result: string): ParseOperationsResult {
   const parsedPayload = parseClaudeAssistantPayload(result)
   if (!parsedPayload) {
     return { text: fallbackAssistantText(result), operations: [] }
@@ -134,9 +142,7 @@ function recordAssistantDelta(
 ): void {
   parserState.blocks.push({ type: 'text', content: delta })
   parserState.deltaCount += 1
-  if (parserState.firstDeltaMs === null) {
-    parserState.firstDeltaMs = Date.now() - startedAt
-  }
+  parserState.firstDeltaMs ??= Date.now() - startedAt
 }
 
 function recordThinking(
@@ -192,8 +198,6 @@ function patchToolResult(
   if (block?.type !== 'tool_use') return
   block.result = resultText.slice(0, 600)
 }
-
-// ── POST handler ─────────────────────────────────────────────────────────────
 
 export async function POST(request: Request) {
   ensureRepoRootEnvLoaded()

@@ -29,9 +29,13 @@ function parseCount(v: number | [number, number]): { urls: number; vectors: numb
   return { urls: 0, vectors: v }
 }
 
-function normalizeDomains(
-  data: DomainsResult | null,
-): Array<{ domain: string; urls: number; vectors: number }> {
+interface DomainRow {
+  domain: string
+  urls: number
+  vectors: number
+}
+
+const normalizeDomains = (data: DomainsResult | null): DomainRow[] => {
   if (!data) return []
 
   if (isDomainsPagedResult(data)) {

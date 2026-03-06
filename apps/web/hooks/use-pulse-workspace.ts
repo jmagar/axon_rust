@@ -281,13 +281,7 @@ export function usePulseWorkspaceBehavior() {
 
   const clearResumeSession = useCallback(() => {
     clearWorkspaceResumeSession()
-    setChatSessionId(null)
-    try {
-      window.localStorage.removeItem(ACTIVE_SESSION_ID_KEY)
-    } catch {
-      // Ignore storage errors.
-    }
-  }, [clearWorkspaceResumeSession, setChatSessionId])
+  }, [clearWorkspaceResumeSession])
 
   // Cleanup workspace context on unmount
   useEffect(() => {

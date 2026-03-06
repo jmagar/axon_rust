@@ -9,7 +9,7 @@
 const WORKERS_WS_URL = process.env.AXON_WORKERS_WS_URL ?? 'ws://axon-workers:49000/ws'
 const WORKERS_WS_TOKEN = process.env.AXON_WEB_API_TOKEN?.trim() ?? ''
 
-function buildWorkersWsUrl(): string {
+const buildWorkersWsUrl = (): string => {
   if (!WORKERS_WS_TOKEN) return WORKERS_WS_URL
   try {
     const url = new URL(WORKERS_WS_URL)

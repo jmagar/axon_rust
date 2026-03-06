@@ -18,7 +18,7 @@ interface SourceRow {
   chunks: number
 }
 
-function normalizeSources(data: SourcesResult | null): SourceRow[] {
+const normalizeSources = (data: SourcesResult | null): SourceRow[] => {
   if (!data) return []
 
   if ('urls' in data && Array.isArray(data.urls)) {

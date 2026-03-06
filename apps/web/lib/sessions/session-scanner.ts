@@ -32,7 +32,7 @@ const PREVIEW_TRUNCATE_PATTERNS = [
   /\s+Respond as JSON only with this shape:.*/i,
 ]
 
-function normalizePreviewText(text: string): string {
+const normalizePreviewText = (text: string): string => {
   let out = text.trim().replace(/\n+/g, ' ')
   for (const pattern of PREVIEW_TRUNCATE_PATTERNS) {
     out = out.replace(pattern, '').trim()
