@@ -27,6 +27,9 @@ use super::exe::strip_ansi;
 use super::files;
 use super::ws_send::{send_command_output_line, send_done_dual, send_error_dual};
 
+/// Typed error alias for service call wrappers — erased to `String` only at the WS boundary.
+type SvcError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 /// Modes dispatched directly through service functions (no subprocess).
 ///
 /// This constant is the authoritative list consumed by tests and must stay in
@@ -353,11 +356,11 @@ async fn send_error_owned(
 fn call_scrape(
     cfg: Arc<Config>,
     url: String,
-) -> Pin<Box<dyn Future<Output = Result<ScrapeResult, String>> + Send + 'static>> {
+) -> Pin<Box<dyn Future<Output = Result<ScrapeResult, SvcError>> + Send + 'static>> {
     Box::pin(async move {
         scrape_svc::scrape(&cfg, &url)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| -> SvcError { format!("{e}").into() })
     })
 }
 
@@ -365,11 +368,11 @@ fn call_map(
     cfg: Arc<Config>,
     url: String,
     opts: MapOptions,
-) -> Pin<Box<dyn Future<Output = Result<MapResult, String>> + Send + 'static>> {
+) -> Pin<Box<dyn Future<Output = Result<MapResult, SvcError>> + Send + 'static>> {
     Box::pin(async move {
         map_svc::discover(&cfg, &url, opts, None)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| -> SvcError { format!("{e}").into() })
     })
 }
 
@@ -377,11 +380,11 @@ fn call_query(
     cfg: Arc<Config>,
     text: String,
     pagination: Pagination,
-) -> Pin<Box<dyn Future<Output = Result<QueryResult, String>> + Send + 'static>> {
+) -> Pin<Box<dyn Future<Output = Result<QueryResult, SvcError>> + Send + 'static>> {
     Box::pin(async move {
         query_svc::query(&cfg, &text, pagination)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| -> SvcError { format!("{e}").into() })
     })
 }
 
@@ -389,22 +392,22 @@ fn call_retrieve(
     cfg: Arc<Config>,
     url: String,
     opts: RetrieveOptions,
-) -> Pin<Box<dyn Future<Output = Result<RetrieveResult, String>> + Send + 'static>> {
+) -> Pin<Box<dyn Future<Output = Result<RetrieveResult, SvcError>> + Send + 'static>> {
     Box::pin(async move {
         query_svc::retrieve(&cfg, &url, opts)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| -> SvcError { format!("{e}").into() })
     })
 }
 
 fn call_ask(
     cfg: Arc<Config>,
     question: String,
-) -> Pin<Box<dyn Future<Output = Result<AskResult, String>> + Send + 'static>> {
+) -> Pin<Box<dyn Future<Output = Result<AskResult, SvcError>> + Send + 'static>> {
     Box::pin(async move {
         query_svc::ask(&cfg, &question, None)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| -> SvcError { format!("{e}").into() })
     })
 }
 
@@ -412,11 +415,11 @@ fn call_search(
     cfg: Arc<Config>,
     query: String,
     opts: SearchOptions,
-) -> Pin<Box<dyn Future<Output = Result<SearchResult, String>> + Send + 'static>> {
+) -> Pin<Box<dyn Future<Output = Result<SearchResult, SvcError>> + Send + 'static>> {
     Box::pin(async move {
         search_svc::search(&cfg, &query, opts, None)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| -> SvcError { format!("{e}").into() })
     })
 }
 
@@ -424,55 +427,63 @@ fn call_research(
     cfg: Arc<Config>,
     query: String,
     opts: SearchOptions,
-) -> Pin<Box<dyn Future<Output = Result<ResearchResult, String>> + Send + 'static>> {
+) -> Pin<Box<dyn Future<Output = Result<ResearchResult, SvcError>> + Send + 'static>> {
     Box::pin(async move {
         search_svc::research(&cfg, &query, opts, None)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| -> SvcError { format!("{e}").into() })
     })
 }
 
 fn call_stats(
     cfg: Arc<Config>,
-) -> Pin<Box<dyn Future<Output = Result<StatsResult, String>> + Send + 'static>> {
-    Box::pin(async move { system_svc::stats(&cfg).await.map_err(|e| e.to_string()) })
+) -> Pin<Box<dyn Future<Output = Result<StatsResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        system_svc::stats(&cfg)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
 }
 
 fn call_sources(
     cfg: Arc<Config>,
     pagination: Pagination,
-) -> Pin<Box<dyn Future<Output = Result<SourcesResult, String>> + Send + 'static>> {
+) -> Pin<Box<dyn Future<Output = Result<SourcesResult, SvcError>> + Send + 'static>> {
     Box::pin(async move {
         system_svc::sources(&cfg, pagination)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| -> SvcError { format!("{e}").into() })
     })
 }
 
 fn call_domains(
     cfg: Arc<Config>,
     pagination: Pagination,
-) -> Pin<Box<dyn Future<Output = Result<DomainsResult, String>> + Send + 'static>> {
+) -> Pin<Box<dyn Future<Output = Result<DomainsResult, SvcError>> + Send + 'static>> {
     Box::pin(async move {
         system_svc::domains(&cfg, pagination)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| -> SvcError { format!("{e}").into() })
     })
 }
 
 fn call_doctor(
     cfg: Arc<Config>,
-) -> Pin<Box<dyn Future<Output = Result<DoctorResult, String>> + Send + 'static>> {
-    Box::pin(async move { system_svc::doctor(&cfg).await.map_err(|e| e.to_string()) })
+) -> Pin<Box<dyn Future<Output = Result<DoctorResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        system_svc::doctor(&cfg)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
 }
 
 fn call_status(
     cfg: Arc<Config>,
-) -> Pin<Box<dyn Future<Output = Result<StatusResult, String>> + Send + 'static>> {
+) -> Pin<Box<dyn Future<Output = Result<StatusResult, SvcError>> + Send + 'static>> {
     Box::pin(async move {
         system_svc::full_status(&cfg)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| -> SvcError { format!("{e}").into() })
     })
 }
 
@@ -526,7 +537,7 @@ pub(super) async fn handle_sync_direct(
 
     match svc_result {
         Ok(()) => send_done_owned(tx, ws_ctx, 0, elapsed_ms).await,
-        Err(msg) => send_error_owned(tx, ws_ctx, msg, elapsed_ms).await,
+        Err(e) => send_error_owned(tx, ws_ctx, e.to_string(), elapsed_ms).await,
     }
 }
 
@@ -655,7 +666,7 @@ async fn dispatch_service(
     params: DirectParams,
     tx: mpsc::Sender<String>,
     ws_ctx: CommandContext,
-) -> Result<(), String> {
+) -> Result<(), SvcError> {
     let DirectParams {
         mode,
         input,

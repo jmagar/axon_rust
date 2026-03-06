@@ -98,7 +98,11 @@ fn ensure_dir(path: &Path) -> Result<(), std::io::Error> {
 
 fn is_writable(path: &Path) -> bool {
     use std::fs::OpenOptions;
-    let probe = path.join(format!(".axon-write-probe-{}", std::process::id()));
+    let probe = path.join(format!(
+        ".axon-write-probe-{}-{}",
+        std::process::id(),
+        Uuid::new_v4().simple()
+    ));
     match OpenOptions::new().write(true).create_new(true).open(&probe) {
         Ok(_) => {
             let _ = fs::remove_file(&probe);

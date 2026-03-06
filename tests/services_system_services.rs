@@ -44,6 +44,39 @@ fn maps_domain_facets_to_domains_result() {
 }
 
 #[test]
+fn map_sources_payload_rejects_missing_count() {
+    let payload = serde_json::json!({ "limit": 10, "offset": 0, "urls": [] });
+    assert!(map_sources_payload(&payload).is_err());
+}
+
+#[test]
+fn map_sources_payload_rejects_malformed_url_item() {
+    let payload = serde_json::json!({
+        "count": 1,
+        "limit": 1,
+        "offset": 0,
+        "urls": [{"chunks": 5}]  // missing "url" field
+    });
+    assert!(map_sources_payload(&payload).is_err());
+}
+
+#[test]
+fn map_domains_payload_rejects_missing_domains() {
+    let payload = serde_json::json!({ "limit": 10, "offset": 0 });
+    assert!(map_domains_payload(&payload).is_err());
+}
+
+#[test]
+fn map_domains_payload_rejects_malformed_domain_item() {
+    let payload = serde_json::json!({
+        "domains": [{"vectors": 4}],  // missing "domain" field
+        "limit": 10,
+        "offset": 0
+    });
+    assert!(map_domains_payload(&payload).is_err());
+}
+
+#[test]
 fn maps_stats_payload_shape() {
     let payload = serde_json::json!({"collection": "cortex", "points_count": 12});
     let result = map_stats_payload(payload.clone());

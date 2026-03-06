@@ -132,7 +132,9 @@ pub async fn sources_payload(
     limit: usize,
     offset: usize,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
-    let sources = qdrant_url_facets(cfg, limit.saturating_add(offset).max(1)).await?;
+    let facet_cap = env_usize_clamped("AXON_SOURCES_FACET_LIMIT", 100_000, 1, 1_000_000);
+    let fetch = limit.saturating_add(offset).max(1).min(facet_cap);
+    let sources = qdrant_url_facets(cfg, fetch).await?;
     let total = sources.len();
     let urls: Vec<serde_json::Value> = sources
         .into_iter()
@@ -153,7 +155,9 @@ pub async fn domains_payload(
     limit: usize,
     offset: usize,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
-    let domains = qdrant_domain_facets(cfg, limit.saturating_add(offset).max(1)).await?;
+    let facet_cap = env_usize_clamped("AXON_DOMAINS_FACET_LIMIT", 100_000, 1, 1_000_000);
+    let fetch = limit.saturating_add(offset).max(1).min(facet_cap);
+    let domains = qdrant_domain_facets(cfg, fetch).await?;
     let values = domains
         .into_iter()
         .skip(offset)

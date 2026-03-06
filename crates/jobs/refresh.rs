@@ -320,8 +320,11 @@ mod tests {
         };
         let cfg = test_config(&pg_url);
         let pool = match make_pool(&cfg).await {
-            Ok(pool) => pool,
-            Err(_) => return Ok(()),
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("DB unavailable, skipping test: {e}");
+                return Ok(());
+            }
         };
         ensure_schema(&pool).await?;
 
@@ -347,8 +350,11 @@ mod tests {
         };
         let cfg = test_config(&pg_url);
         let pool = match make_pool(&cfg).await {
-            Ok(pool) => pool,
-            Err(_) => return Ok(()),
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("DB unavailable, skipping test: {e}");
+                return Ok(());
+            }
         };
         ensure_schema(&pool).await?;
 
@@ -439,8 +445,11 @@ mod tests {
         };
         let cfg = test_config(&pg_url);
         let pool = match make_pool(&cfg).await {
-            Ok(pool) => pool,
-            Err(_) => return Ok(()),
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("DB unavailable, skipping test: {e}");
+                return Ok(());
+            }
         };
         ensure_schema(&pool).await?;
 

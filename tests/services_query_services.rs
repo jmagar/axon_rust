@@ -124,7 +124,7 @@ fn map_suggest_payload_missing_suggestions_returns_error() {
 }
 
 #[test]
-fn map_suggest_payload_skips_items_without_url_field() {
+fn map_suggest_payload_rejects_items_without_url_field() {
     let payload = serde_json::json!({
         "suggestions": [
             {"url": "https://good.com/docs", "reason": "valid"},
@@ -132,8 +132,6 @@ fn map_suggest_payload_skips_items_without_url_field() {
             {"url": "https://also-good.com/api", "reason": "also valid"}
         ]
     });
-    let result = map_suggest_payload(&payload).expect("valid payload with some missing urls");
-    assert_eq!(result.urls.len(), 2);
-    assert_eq!(result.urls[0], "https://good.com/docs");
-    assert_eq!(result.urls[1], "https://also-good.com/api");
+    // fail-fast: missing url field at index 1 returns an error
+    assert!(map_suggest_payload(&payload).is_err());
 }

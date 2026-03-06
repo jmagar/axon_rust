@@ -9,32 +9,53 @@ use crate::crates::services::types::{
 use crate::crates::vector::ops::qdrant::{domains_payload, run_dedupe_native, sources_payload};
 use crate::crates::vector::ops::stats::stats_payload;
 use std::error::Error;
+use std::fmt;
 use tokio::sync::mpsc;
 
-pub fn map_sources_payload(payload: &serde_json::Value) -> Result<SourcesResult, Box<dyn Error>> {
+#[derive(Debug)]
+pub struct PayloadParseError(String);
+impl fmt::Display for PayloadParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "payload parse error: {}", self.0)
+    }
+}
+impl Error for PayloadParseError {}
+
+pub fn map_sources_payload(
+    payload: &serde_json::Value,
+) -> Result<SourcesResult, PayloadParseError> {
     let count = payload
         .get("count")
         .and_then(serde_json::Value::as_u64)
-        .ok_or("missing count")? as usize;
+        .ok_or_else(|| PayloadParseError("missing count".into()))? as usize;
     let limit = payload
         .get("limit")
         .and_then(serde_json::Value::as_u64)
-        .ok_or("missing limit")? as usize;
+        .ok_or_else(|| PayloadParseError("missing limit".into()))? as usize;
     let offset = payload
         .get("offset")
         .and_then(serde_json::Value::as_u64)
-        .ok_or("missing offset")? as usize;
+        .ok_or_else(|| PayloadParseError("missing offset".into()))? as usize;
     let urls = payload
         .get("urls")
         .and_then(serde_json::Value::as_array)
-        .ok_or("missing urls")?
+        .ok_or_else(|| PayloadParseError("missing urls".into()))?
         .iter()
-        .filter_map(|item| {
-            let url = item.get("url")?.as_str()?.to_string();
-            let chunks = item.get("chunks")?.as_u64()? as usize;
-            Some((url, chunks))
+        .enumerate()
+        .map(|(i, item)| {
+            let url = item
+                .get("url")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| PayloadParseError(format!("urls[{i}]: missing url")))?
+                .to_string();
+            let chunks = item
+                .get("chunks")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| PayloadParseError(format!("urls[{i}]: missing chunks")))?
+                as usize;
+            Ok((url, chunks))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, PayloadParseError>>()?;
 
     Ok(SourcesResult {
         count,
@@ -44,28 +65,39 @@ pub fn map_sources_payload(payload: &serde_json::Value) -> Result<SourcesResult,
     })
 }
 
-pub fn map_domains_payload(payload: &serde_json::Value) -> Result<DomainsResult, Box<dyn Error>> {
+pub fn map_domains_payload(
+    payload: &serde_json::Value,
+) -> Result<DomainsResult, PayloadParseError> {
     let limit = payload
         .get("limit")
         .and_then(serde_json::Value::as_u64)
-        .ok_or("missing limit")? as usize;
+        .ok_or_else(|| PayloadParseError("missing limit".into()))? as usize;
     let offset = payload
         .get("offset")
         .and_then(serde_json::Value::as_u64)
-        .ok_or("missing offset")? as usize;
+        .ok_or_else(|| PayloadParseError("missing offset".into()))? as usize;
 
     let domains = payload
         .get("domains")
         .and_then(serde_json::Value::as_array)
-        .ok_or("missing domains")?
+        .ok_or_else(|| PayloadParseError("missing domains".into()))?
         .iter()
-        .filter_map(|item| {
-            Some(DomainFacet {
-                domain: item.get("domain")?.as_str()?.to_string(),
-                vectors: item.get("vectors")?.as_u64()? as usize,
+        .enumerate()
+        .map(|(i, item)| {
+            Ok(DomainFacet {
+                domain: item
+                    .get("domain")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| PayloadParseError(format!("domains[{i}]: missing domain")))?
+                    .to_string(),
+                vectors: item
+                    .get("vectors")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| PayloadParseError(format!("domains[{i}]: missing vectors")))?
+                    as usize,
             })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, PayloadParseError>>()?;
 
     Ok(DomainsResult {
         domains,
@@ -87,7 +119,7 @@ pub async fn sources(
     pagination: Pagination,
 ) -> Result<SourcesResult, Box<dyn Error>> {
     let payload = sources_payload(cfg, pagination.limit, pagination.offset).await?;
-    map_sources_payload(&payload)
+    Ok(map_sources_payload(&payload)?)
 }
 
 pub async fn domains(
@@ -95,7 +127,7 @@ pub async fn domains(
     pagination: Pagination,
 ) -> Result<DomainsResult, Box<dyn Error>> {
     let payload = domains_payload(cfg, pagination.limit, pagination.offset).await?;
-    map_domains_payload(&payload)
+    Ok(map_domains_payload(&payload)?)
 }
 
 pub async fn stats(cfg: &Config) -> Result<StatsResult, Box<dyn Error>> {
@@ -124,7 +156,16 @@ pub async fn dedupe(
             message: "starting dedupe".to_string(),
         },
     );
-    run_dedupe_native(cfg).await?;
+    if let Err(e) = run_dedupe_native(cfg).await {
+        emit(
+            &tx,
+            ServiceEvent::Log {
+                level: "error".to_string(),
+                message: format!("dedupe failed: {e}"),
+            },
+        );
+        return Err(e);
+    }
     emit(
         &tx,
         ServiceEvent::Log {

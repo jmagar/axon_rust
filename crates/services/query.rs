@@ -45,8 +45,14 @@ pub fn map_suggest_payload(payload: &serde_json::Value) -> Result<SuggestResult,
         .ok_or("missing suggestions array")?;
     let urls = suggestions
         .iter()
-        .filter_map(|item| item.get("url")?.as_str().map(ToString::to_string))
-        .collect::<Vec<_>>();
+        .enumerate()
+        .map(|(i, item)| {
+            item.get("url")
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string)
+                .ok_or_else(|| format!("suggestions[{i}]: missing url").into())
+        })
+        .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
     Ok(SuggestResult { urls })
 }
 
