@@ -210,7 +210,7 @@ export async function runAxonCommandWsStream(
 
       ws.addEventListener('error', () => {
         if (!opened && connectAttempts < maxConnectAttempts) {
-          setTimeout(connect, 250 * connectAttempts)
+          // 'close' always fires after 'error'; let it handle the retry
           return
         }
         finish(new Error(`WebSocket connection error (${WORKERS_WS_URL})`))

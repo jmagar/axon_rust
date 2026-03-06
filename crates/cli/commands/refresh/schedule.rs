@@ -166,7 +166,7 @@ async fn handle_refresh_schedule_add(cfg: &Config) -> Result<(), Box<dyn Error>>
         "seed_url": created.seed_url,
         "urls": created.urls_json,
     });
-    let _ = create_watch_def(
+    create_watch_def(
         cfg,
         &WatchDefCreate {
             name: created.name.clone(),
@@ -177,7 +177,7 @@ async fn handle_refresh_schedule_add(cfg: &Config) -> Result<(), Box<dyn Error>>
             next_run_at: created.next_run_at,
         },
     )
-    .await;
+    .await?;
 
     if cfg.json_output {
         println!("{}", serde_json::to_string_pretty(&created)?);
@@ -194,35 +194,30 @@ async fn handle_refresh_schedule_add(cfg: &Config) -> Result<(), Box<dyn Error>>
 }
 
 async fn handle_refresh_schedule_list(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let watch_defs = list_watch_defs(cfg, 500).await?;
-    let refresh_watch_defs = watch_defs
+    let (watch_defs, legacy_schedules) =
+        tokio::try_join!(list_watch_defs(cfg, 500), list_refresh_schedules(cfg, 200))?;
+    let mut seen = std::collections::HashSet::new();
+    let mut schedules: Vec<serde_json::Value> = watch_defs
         .into_iter()
         .filter(|w| w.task_type == "refresh")
-        .collect::<Vec<_>>();
-    let schedules = if refresh_watch_defs.is_empty() {
-        list_refresh_schedules(cfg, 200)
-            .await?
-            .into_iter()
-            .map(|s| {
-                serde_json::json!({
-                    "name": s.name,
-                    "enabled": s.enabled,
-                    "every_seconds": s.every_seconds,
-                })
+        .map(|w| {
+            seen.insert(w.name.clone());
+            serde_json::json!({
+                "name": w.name,
+                "enabled": w.enabled,
+                "every_seconds": w.every_seconds,
             })
-            .collect::<Vec<_>>()
-    } else {
-        refresh_watch_defs
-            .into_iter()
-            .map(|w| {
-                serde_json::json!({
-                    "name": w.name,
-                    "enabled": w.enabled,
-                    "every_seconds": w.every_seconds,
-                })
-            })
-            .collect::<Vec<_>>()
-    };
+        })
+        .collect();
+    for s in legacy_schedules {
+        if !seen.contains(&s.name) {
+            schedules.push(serde_json::json!({
+                "name": s.name,
+                "enabled": s.enabled,
+                "every_seconds": s.every_seconds,
+            }));
+        }
+    }
     if cfg.json_output {
         println!("{}", serde_json::to_string_pretty(&schedules)?);
         return Ok(());

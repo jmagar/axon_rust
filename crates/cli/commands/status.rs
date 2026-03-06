@@ -79,24 +79,13 @@ struct StatusJobs {
 
 async fn run_status_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let jobs = load_status_jobs(cfg).await?;
-
-    if cfg.json_output {
-        presentation::emit_status_json(
-            &jobs.crawl,
-            &jobs.extract,
-            &jobs.embed,
-            &jobs.ingest,
-            &jobs.refresh,
-        )?;
-    } else {
-        presentation::emit_status_human(
-            &jobs.crawl,
-            &jobs.extract,
-            &jobs.embed,
-            &jobs.ingest,
-            &jobs.refresh,
-        );
-    }
+    presentation::emit_status_human(
+        &jobs.crawl,
+        &jobs.extract,
+        &jobs.embed,
+        &jobs.ingest,
+        &jobs.refresh,
+    );
     Ok(())
 }
 

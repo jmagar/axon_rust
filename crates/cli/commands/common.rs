@@ -5,7 +5,21 @@ use crate::crates::core::config::{CommandKind, Config};
 use crate::crates::core::http::normalize_url;
 use crate::crates::core::logging::log_warn;
 use crate::crates::core::ui::{accent, muted, primary, status_text, symbol_for_status};
+use crate::crates::services::types::ServiceTimeRange;
 use std::collections::HashSet;
+
+/// Convert a CLI time-range string to the services-layer [`ServiceTimeRange`] enum.
+///
+/// Shared by `search` and `research` commands.
+pub fn parse_service_time_range(value: Option<&str>) -> Option<ServiceTimeRange> {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        Some("day") => Some(ServiceTimeRange::Day),
+        Some("week") => Some(ServiceTimeRange::Week),
+        Some("month") => Some(ServiceTimeRange::Month),
+        Some("year") => Some(ServiceTimeRange::Year),
+        _ => None,
+    }
+}
 
 /// Truncate a string to at most `max_chars` characters, slicing on a char
 /// boundary so multi-byte UTF-8 sequences never panic.

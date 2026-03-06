@@ -1,10 +1,11 @@
+use crate::crates::cli::commands::common::parse_service_time_range;
 use crate::crates::core::config::Config;
 use crate::crates::core::logging::log_done;
 #[cfg(test)]
 use crate::crates::core::logging::log_warn;
 use crate::crates::core::ui::{muted, primary, print_phase};
 use crate::crates::services::search as search_service;
-use crate::crates::services::types::{SearchOptions as ServiceSearchOptions, ServiceTimeRange};
+use crate::crates::services::types::SearchOptions as ServiceSearchOptions;
 use spider_agent::{Agent, SearchOptions, TimeRange};
 use std::error::Error;
 
@@ -105,19 +106,6 @@ pub async fn run_search(cfg: &Config) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Convert a CLI time-range string to the services-layer [`ServiceTimeRange`] enum.
-/// Used by `run_search` when routing through the services layer.
-fn parse_service_time_range(value: Option<&str>) -> Option<ServiceTimeRange> {
-    match value.map(str::trim).filter(|v| !v.is_empty()) {
-        Some("day") => Some(ServiceTimeRange::Day),
-        Some("week") => Some(ServiceTimeRange::Week),
-        Some("month") => Some(ServiceTimeRange::Month),
-        Some("year") => Some(ServiceTimeRange::Year),
-        _ => None,
-    }
-}
-
-// TODO: This function is duplicated in research.rs. Extract to commands/common.rs as a shared helper.
 // Only used in tests via `use super::*` in the test module.
 #[cfg(test)]
 fn parse_search_time_range(value: Option<&str>) -> Option<TimeRange> {
