@@ -1,4 +1,6 @@
-use super::super::cli::{JobSubcommand, RefreshScheduleSubcommand, RefreshSubcommand};
+use super::super::cli::{
+    JobSubcommand, RefreshScheduleSubcommand, RefreshSubcommand, WatchSubcommand,
+};
 
 pub(super) fn positional_from_job(job: JobSubcommand) -> Vec<String> {
     match job {
@@ -10,6 +12,57 @@ pub(super) fn positional_from_job(job: JobSubcommand) -> Vec<String> {
         JobSubcommand::Clear => vec!["clear".to_string()],
         JobSubcommand::Worker => vec!["worker".to_string()],
         JobSubcommand::Recover => vec!["recover".to_string()],
+    }
+}
+
+pub(super) fn positional_from_watch_subcommand(action: WatchSubcommand) -> Vec<String> {
+    match action {
+        WatchSubcommand::Create {
+            name,
+            task_type,
+            every_seconds,
+            task_payload,
+        } => {
+            let mut positional = vec![
+                "create".to_string(),
+                name,
+                "--task-type".to_string(),
+                task_type,
+                "--every-seconds".to_string(),
+                every_seconds.to_string(),
+            ];
+            if let Some(payload) = task_payload {
+                positional.push("--task-payload".to_string());
+                positional.push(payload);
+            }
+            positional
+        }
+        WatchSubcommand::List => vec!["list".to_string()],
+        WatchSubcommand::Get { id } => vec!["get".to_string(), id],
+        WatchSubcommand::Update { id, every_seconds } => {
+            let mut positional = vec!["update".to_string(), id];
+            if let Some(v) = every_seconds {
+                positional.push("--every-seconds".to_string());
+                positional.push(v.to_string());
+            }
+            positional
+        }
+        WatchSubcommand::RunNow { id } => vec!["run-now".to_string(), id],
+        WatchSubcommand::Pause { id } => vec!["pause".to_string(), id],
+        WatchSubcommand::Resume { id } => vec!["resume".to_string(), id],
+        WatchSubcommand::Delete { id } => vec!["delete".to_string(), id],
+        WatchSubcommand::History { id, limit } => vec![
+            "history".to_string(),
+            id,
+            "--limit".to_string(),
+            limit.to_string(),
+        ],
+        WatchSubcommand::Artifacts { run_id, limit } => vec![
+            "artifacts".to_string(),
+            run_id,
+            "--limit".to_string(),
+            limit.to_string(),
+        ],
     }
 }
 

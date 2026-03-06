@@ -72,6 +72,10 @@ const TYPE_STYLES: Record<JobType, { chip: string; dot: string }> = {
     chip: 'text-[#fb7185] bg-[rgba(251,113,133,0.1)] border border-[rgba(251,113,133,0.25)]',
     dot: '#fb7185',
   },
+  refresh: {
+    chip: 'text-[#34d399] bg-[rgba(52,211,153,0.1)] border border-[rgba(52,211,153,0.25)]',
+    dot: '#34d399',
+  },
 }
 
 export function TypeChip({ type }: { type: JobType }) {
@@ -241,9 +245,6 @@ export function SkeletonRow() {
       </td>
       <td className="px-3 py-2.5">
         <div className={`${shimmer} h-3 w-16`} />
-      </td>
-      <td className="px-3 py-2.5">
-        <div className={`${shimmer} h-5 w-14 rounded`} />
       </td>
     </tr>
   )

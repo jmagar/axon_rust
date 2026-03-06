@@ -20,7 +20,9 @@ required_patterns=(
 
 missing=()
 for pattern in "${required_patterns[@]}"; do
-  if ! rg -q "^${pattern}$" "$DOCKERIGNORE"; then
+  # Use grep -xF (exact line match, fixed strings) to avoid regex metacharacter
+  # false positives — e.g. '/.claude' as a regex would match '/xclaude'.
+  if ! grep -qxF "$pattern" "$DOCKERIGNORE"; then
     missing+=("$pattern")
   fi
 done

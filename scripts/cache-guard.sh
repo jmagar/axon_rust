@@ -41,7 +41,12 @@ fmt_gb() {
 
 target_bytes() {
   if [[ -d target ]]; then
-    du -sb target | awk '{print $1}'
+    # du -sb is Linux-specific; macOS uses du -sk (kilobytes)
+    if du -sb target &>/dev/null 2>&1; then
+      du -sb target | awk '{print $1}'
+    else
+      du -sk target | awk '{print $1 * 1024}'
+    fi
   else
     echo 0
   fi
@@ -49,7 +54,8 @@ target_bytes() {
 
 buildkit_bytes() {
   local size
-  size="$(docker system df --format '{{.Type}}|{{.Size}}' 2>/dev/null | awk -F'|' '$1=="Build Cache"{print $2; exit}')"
+  # Capture docker output without triggering set -e if Docker is unavailable
+  size="$(docker system df --format '{{.Type}}|{{.Size}}' 2>/dev/null | awk -F'|' '$1=="Build Cache"{print $2; exit}')" || true
   if [[ -z "${size:-}" ]]; then
     echo 0
     return

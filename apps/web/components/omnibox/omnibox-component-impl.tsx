@@ -43,6 +43,7 @@ export function Omnibox() {
           pulseAgent={state.pulseAgent}
           pulseModel={state.pulseModel}
           pulsePermissionLevel={state.pulsePermissionLevel}
+          acpConfigOptions={state.acpConfigOptions}
           currentMode={state.currentMode}
           isProcessingWithCurrentMode={state.isProcessingWithCurrentMode}
           inputRef={state.inputRef}

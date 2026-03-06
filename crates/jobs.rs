@@ -5,4 +5,6 @@ pub mod extract;
 pub mod ingest;
 pub mod refresh;
 pub mod status;
+pub mod watch;
+pub mod watch_worker;
 pub(crate) mod worker_lane;

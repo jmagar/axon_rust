@@ -33,15 +33,19 @@ vi.mock('@/hooks/use-ws-messages', () => ({
       permissionLevel: 'accept-edits',
       saveStatus: 'saved',
     },
+    pulseAgent: 'claude',
     pulseModel: 'sonnet',
     pulsePermissionLevel: 'accept-edits',
+    acpConfigOptions: [],
   }),
   useWsMessageActions: () => ({
     startExecution: vi.fn(),
     activateWorkspace: vi.fn(),
     submitWorkspacePrompt: vi.fn(),
+    setPulseAgent: vi.fn(),
     setPulseModel: vi.fn(),
     setPulsePermissionLevel: vi.fn(),
+    setAcpConfigOptions: vi.fn(),
   }),
 }))
 

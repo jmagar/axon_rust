@@ -28,6 +28,7 @@ pub(super) const ALLOWED_MODES: &[&str] = &[
     "sessions",
     "screenshot",
     "pulse_chat",
+    "pulse_chat_probe",
 ];
 
 pub(super) const ALLOWED_FLAGS: &[(&str, &str)] = &[

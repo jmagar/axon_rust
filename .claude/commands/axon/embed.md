@@ -1,6 +1,6 @@
 ---
 description: Embed content with lifecycle job controls
-argument-hint: <input> | status <job-id> | list | cleanup | clear | recover
+argument-hint: <input> | status <job-id> | cancel <job-id> | list | cleanup | clear | recover
 allowed-tools: mcp__axon__axon, Bash
 ---
 

@@ -101,13 +101,17 @@ async fn dispatch_async(
 
     let result = match mode {
         "crawl" => {
+            if input.is_empty() {
+                return Err("crawl requires a non-empty URL input".to_string());
+            }
             let urls: Vec<String> = input.split_whitespace().map(str::to_string).collect();
-            let urls = if urls.is_empty() { vec![input] } else { urls };
             call_crawl_start(cfg, urls).await?
         }
         "extract" => {
+            if input.is_empty() {
+                return Err("extract requires a non-empty URL input".to_string());
+            }
             let urls: Vec<String> = input.split_whitespace().map(str::to_string).collect();
-            let urls = if urls.is_empty() { vec![input] } else { urls };
             call_extract_start(cfg, urls).await?
         }
         "embed" => call_embed_start(cfg).await?,

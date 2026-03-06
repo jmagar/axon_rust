@@ -28,7 +28,9 @@ fn acp_prompt_turn_request_is_constructible() {
     let req = AcpPromptTurnRequest {
         session_id: Some("session-1".to_string()),
         prompt: vec!["hello".to_string()],
+        model: None,
     };
     assert_eq!(req.session_id.as_deref(), Some("session-1"));
     assert_eq!(req.prompt.len(), 1);
+    assert_eq!(req.model, None);
 }

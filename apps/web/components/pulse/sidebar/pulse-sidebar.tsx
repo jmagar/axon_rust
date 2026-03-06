@@ -16,10 +16,10 @@ import {
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
+import { SessionsSection } from '@/components/pulse/sidebar/sessions-section'
 import { useWsExecutionState, useWsMessageActions } from '@/hooks/use-ws-messages'
 import type { CrawlFile } from '@/lib/ws-protocol'
 import { ExtractedSection } from './extracted-section'
-import { SessionsSection } from './sessions-section'
 import type { SidebarSectionId } from './types'
 import { WorkspaceSection } from './workspace-section'
 

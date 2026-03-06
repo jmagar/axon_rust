@@ -28,12 +28,13 @@ interface JobsApiResponse {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const TYPE_TABS: { value: TypeFilter; label: string }[] = [
+export const TYPE_TABS: { value: TypeFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'crawl', label: 'Crawl' },
   { value: 'extract', label: 'Extract' },
   { value: 'embed', label: 'Embed' },
   { value: 'ingest', label: 'Ingest' },
+  { value: 'refresh', label: 'Refresh' },
 ]
 
 const STATUS_TABS: { value: StatusFilter; label: string }[] = [
@@ -46,6 +47,21 @@ const STATUS_TABS: { value: StatusFilter; label: string }[] = [
 
 const PAGE_SIZE = 50
 const POLL_INTERVAL_MS = 3000
+
+export function buildJobsQuery(
+  type: TypeFilter,
+  status: StatusFilter,
+  limit: number,
+  offset: number,
+): string {
+  const params = new URLSearchParams({
+    type,
+    status,
+    limit: String(limit),
+    offset: String(offset),
+  })
+  return params.toString()
+}
 
 // Status sort priority: active > pending > failed > canceled > done
 const STATUS_ORDER: Record<JobStatus, number> = {
@@ -150,8 +166,8 @@ export function JobsDashboard() {
       setLoading(true)
       setError(null)
       try {
-        const params = new URLSearchParams({ type, status, limit: String(PAGE_SIZE), offset: '0' })
-        const res = await apiFetch(`/api/jobs?${params}`, { signal: controller.signal })
+        const query = buildJobsQuery(type, status, PAGE_SIZE, 0)
+        const res = await apiFetch(`/api/jobs?${query}`, { signal: controller.signal })
         const data = (await res.json()) as JobsApiResponse
         if (data.error) {
           setError(data.error)
@@ -195,13 +211,8 @@ export function JobsDashboard() {
     setOffset(next)
     setLoadingMore(true)
     const { typeFilter: type, statusFilter: status } = filterRef.current
-    const params = new URLSearchParams({
-      type,
-      status,
-      limit: String(PAGE_SIZE),
-      offset: String(next),
-    })
-    apiFetch(`/api/jobs?${params}`)
+    const query = buildJobsQuery(type, status, PAGE_SIZE, next)
+    apiFetch(`/api/jobs?${query}`)
       .then((r) => r.json())
       .then((data: JobsApiResponse) => {
         if (data.error) {

@@ -28,6 +28,7 @@ This document defines lifecycle behavior for async jobs across:
 - Embed
 - Ingest (`github`, `reddit`, `youtube`, `sessions`)
 - Refresh (schedule-triggered or manual URL re-checking)
+- Watch (top-level recurring scheduler definitions and run history)
 
 ## Job Families
 
@@ -38,6 +39,7 @@ This document defines lifecycle behavior for async jobs across:
 | Embed | `axon_embed_jobs` | `AXON_EMBED_QUEUE` | `start_embed_job_with_pool` |
 | Ingest | `axon_ingest_jobs` | `AXON_INGEST_QUEUE` | `start_ingest_job` (`sessions` uses same ingest table and queue) |
 | Refresh | `axon_refresh_jobs` | `AXON_REFRESH_QUEUE` | `start_refresh_job` (schedule-triggered), `run_refresh_once` (manual/`--wait true`) |
+| Watch | `axon_watch_defs`, `axon_watch_runs` | N/A (direct DB poll loop) | `run_watch_scheduler_tick`, `run_watch_worker` |
 
 ## State Machine
 
@@ -143,6 +145,9 @@ Full schema lives in `docs/SCHEMA.md`. Summary:
 - Refresh-specific: `urls_json` (array of URLs to re-check)
 - Refresh targets: `axon_refresh_targets` (per-URL ETag/hash state, separate table)
 - Refresh schedules: `axon_refresh_schedules` (recurring schedule definitions, separate table)
+- Watch definitions: `axon_watch_defs` (generic scheduler definitions)
+- Watch runs: `axon_watch_runs` (run status/history and dispatched job references)
+- Watch artifacts: `axon_watch_run_artifacts` (optional run artifact pointers)
 
 ## Operational Commands
 
@@ -204,6 +209,27 @@ Refresh jobs re-check previously crawled URLs for content changes using HTTP con
 - `axon_refresh_targets`: persists per-URL conditional request state across jobs. No foreign key to jobs — targets accumulate indefinitely.
 - `axon_refresh_schedules`: defines recurring refresh configurations. See `docs/SCHEMA.md` for column details.
 
+## Watch Scheduler Lifecycle
+
+Top-level watch scheduling is handled by a dedicated poll loop (`run_watch_worker`) that repeatedly calls `run_watch_scheduler_tick`.
+
+### Claim and lease
+
+1. `claim_due_watches_with_pool` selects due rows from `axon_watch_defs` using `FOR UPDATE SKIP LOCKED`.
+2. Claimed rows receive a short lease via `lease_expires_at` to prevent duplicate dispatch.
+3. Claim order is oldest `next_run_at` first.
+
+### Dispatch and run history
+
+1. For each claimed watch, `create_watch_run_with_pool` inserts a `running` row in `axon_watch_runs`.
+2. Dispatcher routes by `task_type` (current implementation supports `refresh` task dispatch).
+3. Run row is completed via `mark_watch_run_finished_with_pool` with status + result/error payload.
+4. Definition row is advanced: `last_run_at = NOW()`, `next_run_at = NOW() + every_seconds`, and lease is cleared.
+
+### Refresh compatibility bridge
+
+`axon refresh schedule add/list` is now compatibility-backed by watch definitions (`task_type=refresh`). This preserves existing operator workflows while consolidating scheduler state in watch tables.
+
 ## Failure Modes
 
 | Job Type | Failure Mode | Symptom | Recovery |
@@ -248,5 +274,7 @@ will remain in `running` state until the watchdog reclaims it.
 - `crates/jobs/refresh/schedule.rs`
 - `crates/jobs/refresh/state.rs`
 - `crates/jobs/refresh/worker.rs`
+- `crates/jobs/watch.rs`
+- `crates/jobs/watch_worker.rs`
 - `crates/jobs/common/amqp.rs`
 - `docs/SCHEMA.md`

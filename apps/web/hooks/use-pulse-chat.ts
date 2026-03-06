@@ -11,6 +11,7 @@ import { validateDocOperations } from '@/lib/pulse/doc-ops'
 import { checkPermission } from '@/lib/pulse/permissions'
 import { detectPulsePromptIntent } from '@/lib/pulse/prompt-intent'
 import type {
+  AcpConfigOption,
   DocOperation,
   PulseAgent,
   PulseMessageBlock,
@@ -76,6 +77,7 @@ export function usePulseChat({
   } | null>(null)
   const [streamPhase, setStreamPhase] = useState<'started' | 'thinking' | 'finalizing' | null>(null)
   const [liveToolUses, setLiveToolUses] = useState<PulseToolUse[]>([])
+  const [acpConfigOptions, setAcpConfigOptions] = useState<AcpConfigOption[]>([])
   const { notice: requestNotice, showNotice: showRequestNotice } = useTimedNotice()
 
   const chatHistoryRef = useRef<ChatMessage[]>([])
@@ -365,6 +367,10 @@ export function usePulseChat({
                 toolUses: [...partialTools],
                 blocks: [...partialBlocks],
               }))
+              return
+            }
+            if (event.type === 'config_options_update' && event.configOptions) {
+              setAcpConfigOptions(event.configOptions)
             }
           },
           chatSessionId: cfg.chatSessionId,
@@ -500,6 +506,8 @@ export function usePulseChat({
     lastContextStats,
     streamPhase,
     liveToolUses,
+    acpConfigOptions,
+    setAcpConfigOptions,
     requestNotice,
     handlePrompt,
     handleCancelPrompt,

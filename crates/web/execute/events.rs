@@ -137,12 +137,19 @@ pub(super) fn acp_bridge_event_payload(event: &AcpBridgeEvent) -> Value {
                 }
                 _ => "status",
             };
-            serde_json::json!({
+            // "thinking_content" events: client reads `content`; all other deltas: `delta`.
+            let text_key = if event_type == "thinking_content" {
+                "content"
+            } else {
+                "delta"
+            };
+            let mut obj = serde_json::json!({
                 "type": event_type,
                 "session_id": update.session_id,
-                "delta": update.text_delta,
                 "tool_call_id": update.tool_call_id,
-            })
+            });
+            obj[text_key] = Value::String(update.text_delta.clone().unwrap_or_default());
+            obj
         }
         AcpBridgeEvent::PermissionRequest(req) => serde_json::json!({
             "type": "permission_request",
@@ -156,5 +163,28 @@ pub(super) fn acp_bridge_event_payload(event: &AcpBridgeEvent) -> Value {
             "stop_reason": result.stop_reason,
             "result": result.result,
         }),
+        AcpBridgeEvent::ConfigOptionsUpdate(options) => {
+            let serialized_options: Vec<Value> = options
+                .iter()
+                .map(|opt| {
+                    serde_json::json!({
+                        "id": opt.id,
+                        "name": opt.name,
+                        "description": opt.description,
+                        "category": opt.category,
+                        "currentValue": opt.current_value,
+                        "options": opt.options.iter().map(|v| serde_json::json!({
+                            "value": v.value,
+                            "name": v.name,
+                            "description": v.description,
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "type": "config_options_update",
+                "configOptions": serialized_options,
+            })
+        }
     }
 }

@@ -7,8 +7,8 @@ use crate::crates::services::types::{
 use agent_client_protocol::{
     Agent, Client, ClientSideConnection, ContentBlock, InitializeRequest, LoadSessionRequest,
     NewSessionRequest, PromptRequest, ProtocolVersion, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
-    SessionConfigKind, SessionConfigOption as SdkConfigOption, SessionConfigOptionCategory,
+    RequestPermissionRequest, RequestPermissionResponse, SessionConfigKind,
+    SessionConfigOption as SdkConfigOption, SessionConfigOptionCategory,
     SessionConfigSelectOptions, SessionId, SessionNotification, SessionUpdate,
     SetSessionConfigOptionRequest, StopReason,
 };
@@ -1045,13 +1045,8 @@ impl Client for AcpBridgeClient {
         args: RequestPermissionRequest,
     ) -> agent_client_protocol::Result<RequestPermissionResponse> {
         emit(&self.tx, map_permission_request_event(&args));
-        if let Some(first_option) = args.options.first() {
-            return Ok(RequestPermissionResponse::new(
-                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                    first_option.option_id.clone(),
-                )),
-            ));
-        }
+        // Default-deny: emit the event for UI visibility but do not auto-approve.
+        // Interactive approval must be wired before granting permission.
         Ok(RequestPermissionResponse::new(
             RequestPermissionOutcome::Cancelled,
         ))

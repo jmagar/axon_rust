@@ -18,6 +18,7 @@ import {
 } from '@/lib/pulse/types'
 import { apiError, makeErrorId } from '@/lib/server/api-error'
 import {
+  CLAUDE_TIMEOUT_MS,
   computeContextCharsTotal,
   GLOBAL_CLAUDE_MD_CHARS,
   HEARTBEAT_INTERVAL_MS,
@@ -31,6 +32,16 @@ import {
   upsertReplayEntry,
 } from './replay-cache'
 import { createStreamParserState, extractToolResultText } from './stream-parser'
+
+const DEFAULT_PULSE_CHAT_TIMEOUT_MS = CLAUDE_TIMEOUT_MS
+
+function resolvePulseChatTimeoutMs(): number {
+  const raw = process.env.AXON_PULSE_CHAT_TIMEOUT_MS
+  if (!raw) return DEFAULT_PULSE_CHAT_TIMEOUT_MS
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_PULSE_CHAT_TIMEOUT_MS
+  return Math.floor(parsed)
+}
 
 // ── Request preparation (extracted from POST for readability) ────────────────
 
@@ -419,6 +430,14 @@ export async function POST(request: Request) {
               patchToolResult(parserState, toolUseId, resultText)
               return
             }
+            case 'config_options_update':
+            case 'config_option_update': {
+              const configOptions = data.configOptions
+              if (Array.isArray(configOptions)) {
+                emit({ type: 'config_options_update', configOptions })
+              }
+              return
+            }
             case 'result': {
               if (typeof data.result === 'string') {
                 parserState.result = data.result
@@ -439,8 +458,14 @@ export async function POST(request: Request) {
           wsFlags.session_id = req.sessionId
         }
         wsFlags.agent = req.agent
+        if (req.agent === 'claude') {
+          wsFlags.model = req.model
+        } else if (req.model !== 'default') {
+          wsFlags.model = req.model
+        }
 
         void runAxonCommandWsStream('pulse_chat', {
+          timeoutMs: resolvePulseChatTimeoutMs(),
           input: prompt,
           flags: wsFlags,
           signal: request.signal,

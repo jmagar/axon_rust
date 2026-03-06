@@ -31,7 +31,9 @@ async fn run_ingest_sync(cfg: &Config, source: IngestSource) -> Result<(), Box<d
     };
 
     let result = ingest_service::ingest_sessions(cfg, None).await?;
-    let chunks = result.payload["chunks"].as_u64().unwrap_or(0) as usize;
+    let chunks = result.payload["chunks"]
+        .as_u64()
+        .ok_or("sessions: service payload missing 'chunks' field")? as usize;
     ingest_common::print_ingest_sync_result(cfg, "sessions", chunks, "local history paths");
     Ok(())
 }

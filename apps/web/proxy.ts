@@ -103,7 +103,7 @@ function isAllowedOrigin(req: NextRequest): boolean {
     return true
   }
 
-  const forwardedProto = req.headers.get('x-forwarded-proto')?.trim().toLowerCase()
+  const forwardedProto = req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase()
   const forwardedHost = req.headers.get('x-forwarded-host')?.split(',')[0]?.trim().toLowerCase()
   const requestOrigin = `${
     forwardedProto && forwardedHost ? forwardedProto : req.nextUrl.protocol.replace(':', '')
@@ -120,7 +120,11 @@ function extractToken(req: NextRequest): string {
   const key = req.headers.get('x-api-key')
   if (key?.trim()) return key.trim()
 
-  return req.nextUrl.searchParams.get('token')?.trim() ?? ''
+  const ALLOW_QUERY_TOKEN = process.env.AXON_WEB_ALLOW_QUERY_TOKEN === 'true'
+  if (ALLOW_QUERY_TOKEN) {
+    return req.nextUrl.searchParams.get('token')?.trim() ?? ''
+  }
+  return ''
 }
 
 function constantTimeEqual(a: string, b: string): boolean {

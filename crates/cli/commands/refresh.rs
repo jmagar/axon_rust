@@ -73,6 +73,10 @@ pub async fn run_refresh(cfg: &Config) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "refresh/schedule_compat_tests.rs"]
+mod schedule_compat_tests;
+
 async fn maybe_handle_refresh_subcommand(cfg: &Config) -> Result<bool, Box<dyn Error>> {
     let Some(subcmd) = cfg.positional.first().map(|s| s.as_str()) else {
         return Ok(false);

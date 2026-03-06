@@ -53,6 +53,12 @@ pub fn should_fallback_to_chrome(summary: &CrawlSummary, max_pages: u32, cfg: &C
     if summary.markdown_files == 0 {
         return true;
     }
+    // A single-page crawl does not provide enough HTTP-only signal to judge
+    // whether the captured content is complete, so give AutoSwitch one Chrome
+    // retry even if the page is not technically "thin".
+    if summary.pages_seen == 1 {
+        return true;
+    }
     let thin_ratio = if summary.pages_seen == 0 {
         1.0
     } else {

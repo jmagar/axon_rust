@@ -181,6 +181,11 @@ Optional OAuth broker env vars:
 - `GOOGLE_OAUTH_REDIS_URL`
 - `GOOGLE_OAUTH_REDIS_PREFIX`
 
+`GOOGLE_OAUTH_REDIRECT_POLICY` modes:
+- `loopback_or_https` (default): allow loopback HTTP callbacks and any HTTPS callback
+- `loopback_only`: allow only loopback HTTP callbacks
+- `any`: allow any HTTP/HTTPS callback URI
+
 ## Error Semantics
 - Input or shape failures -> MCP `invalid_params`
 - Runtime failures -> MCP `internal_error`

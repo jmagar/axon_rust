@@ -246,6 +246,7 @@ export function useOmniboxState() {
     pulseAgent: execution.pulseAgent,
     pulseModel: execution.pulseModel,
     pulsePermissionLevel: execution.pulsePermissionLevel,
+    acpConfigOptions: execution.acpConfigOptions,
     currentMode: execution.currentMode,
     isProcessingWithCurrentMode: execution.isProcessing && Boolean(execution.currentMode),
 

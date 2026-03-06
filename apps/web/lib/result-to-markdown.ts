@@ -15,7 +15,8 @@ export function resultToMarkdown(mode: string, items: unknown[]): string {
 
   if (mode === 'ask' && isRecord(first) && typeof first.answer === 'string') {
     const r = first as unknown as AskResult
-    return `# ${r.query}\n\n${r.answer}`
+    const heading = typeof r.query === 'string' && r.query ? `# ${r.query}\n\n` : ''
+    return `${heading}${r.answer}`
   }
 
   if (mode === 'research') {

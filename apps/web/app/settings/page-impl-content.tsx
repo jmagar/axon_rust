@@ -14,7 +14,7 @@ const NeuralCanvas = dynamic(() => import('@/components/neural-canvas'), { ssr: 
 
 export default function SettingsPage() {
   const router = useRouter()
-  const { pulseModel, pulsePermissionLevel } = useWsWorkspaceState()
+  const { pulseAgent, pulseModel, pulsePermissionLevel, acpConfigOptions } = useWsWorkspaceState()
   const { setPulseModel, setPulsePermissionLevel } = useWsMessageActions()
   const { settings, updateSettings } = usePulseSettings()
   const [activeSection, setActiveSection] = useState('model')
@@ -153,7 +153,9 @@ export default function SettingsPage() {
           <main className="flex-1 overflow-y-auto">
             <div className="mx-auto max-w-[780px] px-4 py-8 sm:px-6">
               <SettingsSections
+                pulseAgent={pulseAgent}
                 pulseModel={pulseModel}
+                acpConfigOptions={acpConfigOptions}
                 setPulseModel={setPulseModel}
                 pulsePermissionLevel={pulsePermissionLevel}
                 setPulsePermissionLevel={setPulsePermissionLevel}

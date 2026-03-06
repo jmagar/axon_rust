@@ -202,6 +202,11 @@ services:
       - ${HOST_HOME:-${HOME}}/.claude/projects:/home/axon/.claude/projects
       - ${HOST_HOME:-${HOME}}/.codex/sessions:/home/axon/.codex/sessions
       - ${HOST_HOME:-${HOME}}/.gemini:/home/axon/.gemini
+      # ACP adapter auth/config mounts — required for pulse_chat adapter handshake.
+      - ${HOST_HOME:-${HOME}}/.claude.json:/home/axon/.claude.json
+      - ${HOST_HOME:-${HOME}}/.codex/auth.json:/run/host-codex/auth.json:ro
+      - ${HOST_HOME:-${HOME}}/.codex/config.toml:/run/host-codex/config.toml:ro
+      - ${HOST_HOME:-${HOME}}/.codex/models_cache.json:/run/host-codex/models_cache.json:ro
 
   axon-web:
     <<: *common-service

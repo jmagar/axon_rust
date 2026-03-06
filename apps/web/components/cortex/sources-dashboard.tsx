@@ -188,7 +188,7 @@ export function SourcesDashboard() {
         </div>
       )}
 
-      {!loading && !error && rows.length === 0 && query && (
+      {!loading && !error && !!data && rows.length === 0 && query && (
         <p className="text-center text-[12px] text-[var(--text-dim)]">No results for "{query}"</p>
       )}
 

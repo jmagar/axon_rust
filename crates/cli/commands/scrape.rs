@@ -183,6 +183,16 @@ async fn direct_fetch_requested_page(
             builder = builder.default_headers(map);
         }
     }
+    // Validate each redirect target through the SSRF blacklist so a public URL
+    // cannot redirect to a private/internal address and bypass the guard.
+    builder = builder.redirect(reqwest::redirect::Policy::custom(|attempt| {
+        let url = attempt.url().as_str().to_string();
+        if validate_url(&url).is_err() {
+            attempt.error(format!("SSRF: redirect to blocked URL {url}"))
+        } else {
+            attempt.follow()
+        }
+    }));
     let client = builder.build()?;
     let attempts = cfg.fetch_retries.saturating_add(1).max(1);
     let mut last_err: Option<String> = None;

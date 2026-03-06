@@ -47,6 +47,13 @@ pub(super) fn internal_error(msg: impl Into<String>) -> ErrorData {
     ErrorData::internal_error(msg.into(), None)
 }
 
+/// Log the raw error server-side and return a generic MCP error so internal
+/// details (DSNs, file paths, stack traces) are never forwarded to clients.
+pub(super) fn logged_internal_error(context: &str, e: impl std::fmt::Display) -> ErrorData {
+    tracing::error!("{context}: {e}");
+    internal_error(format!("{context} failed"))
+}
+
 pub(super) fn parse_job_id(job_id: Option<&String>) -> Result<Uuid, ErrorData> {
     let raw = job_id.ok_or_else(|| invalid_params("job_id is required for this subaction"))?;
     Uuid::parse_str(raw).map_err(|e| invalid_params(format!("invalid job_id: {e}")))

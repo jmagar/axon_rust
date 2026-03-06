@@ -2,7 +2,10 @@ use super::super::cli::{Cli, CliCommand, RefreshScheduleSubcommand, RefreshSubco
 use super::super::types::{CommandKind, Config, EvaluateResponsesMode, RedditSort, RedditTime};
 use super::docker::normalize_local_service_url;
 use super::excludes;
-use super::helpers::{parse_viewport, positional_from_job, positional_from_refresh_subcommand};
+use super::helpers::{
+    parse_viewport, positional_from_job, positional_from_refresh_subcommand,
+    positional_from_watch_subcommand,
+};
 use super::performance;
 use std::env;
 
@@ -33,6 +36,14 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
                 positional_from_job(job)
             } else {
                 args.positional_urls
+            },
+        ),
+        CliCommand::Watch(args) => (
+            CommandKind::Watch,
+            if let Some(action) = args.action {
+                positional_from_watch_subcommand(action)
+            } else {
+                vec!["list".to_string()]
             },
         ),
         CliCommand::Refresh(args) => (

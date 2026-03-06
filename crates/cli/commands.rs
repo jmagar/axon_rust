@@ -20,6 +20,7 @@ pub mod search;
 pub mod serve;
 pub mod sessions;
 pub mod status;
+pub mod watch;
 pub mod youtube;
 
 pub use common::start_url_from_cfg;
@@ -41,4 +42,5 @@ pub use search::run_search;
 pub use serve::run_serve;
 pub use sessions::run_sessions;
 pub use status::run_status;
+pub use watch::run_watch;
 pub use youtube::run_youtube;

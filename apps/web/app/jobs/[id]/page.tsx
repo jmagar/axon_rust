@@ -323,6 +323,8 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
             ...data,
             observedUrls: data.observedUrls ?? previous.observedUrls,
             markdownFiles: data.markdownFiles ?? previous.markdownFiles,
+            thinUrls: data.thinUrls ?? previous.thinUrls,
+            wafBlockedUrls: data.wafBlockedUrls ?? previous.wafBlockedUrls,
           }
         })
         if (needsArtifactRefetch) {

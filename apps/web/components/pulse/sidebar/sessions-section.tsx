@@ -209,7 +209,7 @@ export function SessionsSection() {
         })}
         {filteredSessions.length === 0 && (
           <p className="px-2 py-3 text-center text-[11px] text-[var(--text-dim)]">
-            No sessions match "{query}"
+            {query.trim() ? `No sessions match "${query}"` : 'No sessions yet'}
           </p>
         )}
       </div>

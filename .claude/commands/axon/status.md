@@ -1,6 +1,6 @@
 ---
 description: Check Axon async queue and worker status
-allowed-tools: mcp__axon__axon, Bash
+allowed-tools: mcp__axon__axon
 ---
 
 Use `mcp__axon__axon` directly:

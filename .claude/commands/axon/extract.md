@@ -1,6 +1,6 @@
 ---
 description: Extract structured data with lifecycle job controls
-argument-hint: <url1> [url2] | status <job-id> | list | cleanup | clear | recover
+argument-hint: <url1> [url2] | status <job-id> | cancel <job-id> | list | cleanup | clear | recover
 allowed-tools: mcp__axon__axon, Bash
 ---
 

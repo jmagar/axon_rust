@@ -1,4 +1,9 @@
-import type { PulseAgent, PulseModel, PulsePermissionLevel } from '@/lib/pulse/types'
+import type {
+  AcpConfigOption,
+  PulseAgent,
+  PulseModel,
+  PulsePermissionLevel,
+} from '@/lib/pulse/types'
 import type { WsLifecycleEntry, WsServerMsg } from '@/lib/ws-protocol'
 
 export interface LogLine {
@@ -47,7 +52,7 @@ export interface WorkspaceContextState {
   contextBudgetChars: number
   lastLatencyMs: number
   agent: PulseWorkspaceAgent
-  model: 'sonnet' | 'opus' | 'haiku'
+  model: PulseWorkspaceModel
   permissionLevel: 'plan' | 'accept-edits' | 'bypass-permissions'
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error'
 }
@@ -116,10 +121,12 @@ export interface WsMessagesContextValue {
   workspaceContext: WorkspaceContextState | null
   pulseModel: PulseWorkspaceModel
   pulsePermissionLevel: PulseWorkspacePermission
+  acpConfigOptions: AcpConfigOption[]
   pulseAgent: PulseWorkspaceAgent
   setPulseAgent: (agent: PulseWorkspaceAgent) => void
   setPulseModel: (model: PulseWorkspaceModel) => void
   setPulsePermissionLevel: (level: PulseWorkspacePermission) => void
+  setAcpConfigOptions: (options: AcpConfigOption[]) => void
   activateWorkspace: (mode: string) => void
   submitWorkspacePrompt: (prompt: string) => void
   resumeWorkspaceSession: (sessionId: string) => void
@@ -159,6 +166,7 @@ export interface WsMessagesWorkspaceState {
   pulseModel: WsMessagesContextValue['pulseModel']
   pulsePermissionLevel: WsMessagesContextValue['pulsePermissionLevel']
   pulseAgent: WsMessagesContextValue['pulseAgent']
+  acpConfigOptions: WsMessagesContextValue['acpConfigOptions']
 }
 
 export interface WsMessagesActions {
@@ -166,6 +174,7 @@ export interface WsMessagesActions {
   setPulseAgent: WsMessagesContextValue['setPulseAgent']
   setPulseModel: WsMessagesContextValue['setPulseModel']
   setPulsePermissionLevel: WsMessagesContextValue['setPulsePermissionLevel']
+  setAcpConfigOptions: WsMessagesContextValue['setAcpConfigOptions']
   activateWorkspace: WsMessagesContextValue['activateWorkspace']
   submitWorkspacePrompt: WsMessagesContextValue['submitWorkspacePrompt']
   resumeWorkspaceSession: WsMessagesContextValue['resumeWorkspaceSession']

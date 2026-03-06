@@ -2,7 +2,13 @@
 
 import { Brain, Cpu, Gauge, Info, Shield, Sparkles, Terminal, Wrench, Zap } from 'lucide-react'
 import type { PulseSettings } from '@/hooks/use-pulse-settings'
-import type { PulseModel, PulsePermissionLevel } from '@/lib/pulse/types'
+import { getAcpModelConfigOption } from '@/lib/pulse/acp-config'
+import type {
+  AcpConfigOption,
+  PulseAgent,
+  PulseModel,
+  PulsePermissionLevel,
+} from '@/lib/pulse/types'
 import {
   FieldHint,
   GLASS_SELECT,
@@ -12,15 +18,17 @@ import {
   ToggleRow,
 } from './settings-components'
 import {
+  CLAUDE_MODEL_OPTIONS,
   EFFORT_OPTIONS,
   FALLBACK_MODEL_OPTIONS,
   KEYBOARD_SHORTCUTS,
-  MODEL_OPTIONS,
   PERMISSION_OPTIONS,
 } from './settings-data'
 
 interface SettingsSectionsProps {
+  pulseAgent: PulseAgent
   pulseModel: PulseModel
+  acpConfigOptions: AcpConfigOption[]
   setPulseModel: (v: PulseModel) => void
   pulsePermissionLevel: PulsePermissionLevel
   setPulsePermissionLevel: (v: PulsePermissionLevel) => void
@@ -29,14 +37,29 @@ interface SettingsSectionsProps {
 }
 
 export function SettingsSections({
+  pulseAgent,
   pulseModel,
+  acpConfigOptions,
   setPulseModel,
   pulsePermissionLevel,
   setPulsePermissionLevel,
   settings,
   updateSettings,
 }: SettingsSectionsProps) {
-  const selectedModel = MODEL_OPTIONS.find((o) => o.id === pulseModel) ?? MODEL_OPTIONS[0]
+  const modelOptions: Array<{ id: string; label: string; sub: string; badge?: string }> =
+    pulseAgent === 'claude'
+      ? CLAUDE_MODEL_OPTIONS.map((option) => ({
+          id: option.id,
+          label: option.label,
+          sub: option.sub,
+          badge: option.badge,
+        }))
+      : (getAcpModelConfigOption(acpConfigOptions)?.options.map((option) => ({
+          id: option.value,
+          label: option.name,
+          sub: option.description ?? '',
+        })) ?? [{ id: 'default', label: 'Default', sub: 'Agent default model' }])
+  const selectedModel = modelOptions.find((option) => option.id === pulseModel) ?? modelOptions[0]
   const selectedPermission =
     PERMISSION_OPTIONS.find((o) => o.id === pulsePermissionLevel) ?? PERMISSION_OPTIONS[0]
   const selectedEffort = EFFORT_OPTIONS.find((o) => o.id === settings.effort) ?? EFFORT_OPTIONS[1]
@@ -58,7 +81,7 @@ export function SettingsSections({
           className={GLASS_SELECT}
           style={{ backdropFilter: 'blur(4px)' }}
         >
-          {MODEL_OPTIONS.map((opt) => (
+          {modelOptions.map((opt) => (
             <option key={opt.id} value={opt.id}>
               {opt.label}
               {opt.badge ? ` (${opt.badge})` : ''} — {opt.sub}

@@ -2,22 +2,28 @@
 
 import {
   CheckCircle2,
+  ChevronRight,
   SendHorizontal,
   Settings2,
   Shield,
   ShieldCheck,
   ShieldOff,
+  SlidersHorizontal,
   Square,
   Wrench,
   XCircle,
 } from 'lucide-react'
 import Link from 'next/link'
+import { useEffect, useMemo } from 'react'
+import { CLAUDE_MODEL_IDS, CLAUDE_MODEL_OPTIONS } from '@/app/settings/settings-data'
 import type {
   PulseWorkspaceAgent,
   PulseWorkspaceModel,
   PulseWorkspacePermission,
 } from '@/hooks/ws-messages/types'
 import type { CompletionStatus } from '@/lib/omnibox-types'
+import { getAcpModelConfigOption } from '@/lib/pulse/acp-config'
+import type { AcpConfigOption } from '@/lib/pulse/types'
 import type { ModeDefinition, ModeId } from '@/lib/ws-protocol'
 import { NO_INPUT_MODES } from '@/lib/ws-protocol'
 import { PLACEHOLDER_TEXTS } from './utils'
@@ -53,6 +59,7 @@ interface OmniboxInputBarProps {
   pulseAgent: PulseWorkspaceAgent
   pulseModel: PulseWorkspaceModel
   pulsePermissionLevel: PulseWorkspacePermission
+  acpConfigOptions: AcpConfigOption[]
   currentMode: string | null
   isProcessingWithCurrentMode: boolean
 
@@ -103,6 +110,7 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
     pulseAgent,
     pulseModel,
     pulsePermissionLevel,
+    acpConfigOptions,
     currentMode: _currentMode,
     isProcessingWithCurrentMode,
     inputRef,
@@ -120,6 +128,37 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
     cancel,
     handleKeyDown,
   } = props
+
+  const modelOptions = useMemo(() => {
+    if (pulseAgent === 'claude') {
+      return CLAUDE_MODEL_OPTIONS.map((option) => ({ value: option.id, label: option.label }))
+    }
+    const modelConfig = getAcpModelConfigOption(acpConfigOptions)
+    if (modelConfig) {
+      return modelConfig.options.map((option) => ({ value: option.value, label: option.name }))
+    }
+    return [{ value: 'default', label: 'Default' }]
+  }, [pulseAgent, acpConfigOptions])
+
+  useEffect(() => {
+    if (pulseAgent === 'claude') {
+      if (!CLAUDE_MODEL_IDS.includes(pulseModel as (typeof CLAUDE_MODEL_IDS)[number])) {
+        setPulseModel('sonnet')
+      }
+      return
+    }
+    const modelConfig = getAcpModelConfigOption(acpConfigOptions)
+    if (!modelConfig || modelConfig.options.length === 0) {
+      if (pulseModel !== 'default') {
+        setPulseModel('default')
+      }
+      return
+    }
+    const hasCurrent = modelConfig.options.some((option) => option.value === pulseModel)
+    if (!hasCurrent) {
+      setPulseModel(modelConfig.options[0]!.value)
+    }
+  }, [acpConfigOptions, pulseAgent, pulseModel, setPulseModel])
 
   return (
     <div
@@ -141,14 +180,12 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
           <div className="animate-omnibox-sweep absolute inset-0" />
         </div>
       )}
-
       {/* Bottom progress bar */}
       {isProcessing && (
         <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-[2px] overflow-hidden rounded-b-2xl">
           <div className="animate-omnibox-progress h-full w-1/3" />
         </div>
       )}
-
       {/* Context utilization strip */}
       {!isProcessing && workspaceContext && workspaceContext.turns > 0 && (
         <div
@@ -164,7 +201,6 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
           />
         </div>
       )}
-
       {/* Text input */}
       <textarea
         id="axon-omnibox-input"
@@ -181,7 +217,6 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
         style={{ overflowY: 'hidden' }}
         disabled={isProcessing}
       />
-
       {/* Animated placeholder overlay */}
       <span
         aria-hidden="true"
@@ -191,7 +226,6 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
       >
         {PLACEHOLDER_TEXTS[placeholderIdx]}
       </span>
-
       {/* @mention discovery tip */}
       {!mentionTipSeen && isFocused && !input && (
         <div
@@ -216,7 +250,6 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
           </button>
         </div>
       )}
-
       {/* Inline status */}
       <div
         className={`flex shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap transition-all duration-300 ${
@@ -256,10 +289,8 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
           </div>
         ) : null}
       </div>
-
       {/* Divider */}
       <div className="h-[20px] w-px shrink-0 bg-[var(--border-subtle)]" />
-
       {/* Mode icon chip */}
       {showModeSelector && (
         <div className="inline-flex shrink-0 items-center px-2">
@@ -285,7 +316,6 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
           </span>
         </div>
       )}
-
       {/* Settings link */}
       {workspaceMode === 'pulse' && workspaceResumeSessionId && (
         <>
@@ -301,7 +331,6 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
           </span>
         </>
       )}
-
       {/* Settings link */}
       <div className="h-[20px] w-px shrink-0 bg-[var(--border-subtle)]" />
       <Link
@@ -312,7 +341,6 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
       >
         <Settings2 className="size-3.5" />
       </Link>
-
       {/* Pulse tools panel */}
       {workspaceMode === 'pulse' && (
         <>
@@ -376,9 +404,11 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
                     className="h-7 w-full rounded border border-[rgba(95,135,175,0.24)] bg-[rgba(10,18,35,0.72)] px-2 text-[length:var(--text-xs)] font-semibold uppercase tracking-[0.04em] text-[var(--text-primary)] outline-none"
                     aria-label="Model selector"
                   >
-                    <option value="sonnet">Sonnet</option>
-                    <option value="opus">Opus</option>
-                    <option value="haiku">Haiku</option>
+                    {modelOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label className="block space-y-1">
@@ -403,7 +433,6 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
           </div>
         </>
       )}
-
       {/* Options button */}
       {hasOptions && (
         <>
@@ -421,25 +450,7 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
             }`}
             title="Command options"
           >
-            <svg
-              className="size-3.5 shrink-0"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <line x1="4" y1="21" x2="4" y2="14" />
-              <line x1="4" y1="10" x2="4" y2="3" />
-              <line x1="12" y1="21" x2="12" y2="12" />
-              <line x1="12" y1="8" x2="12" y2="3" />
-              <line x1="20" y1="21" x2="20" y2="16" />
-              <line x1="20" y1="12" x2="20" y2="3" />
-              <line x1="2" y1="14" x2="6" y2="14" />
-              <line x1="10" y1="8" x2="14" y2="8" />
-              <line x1="18" y1="16" x2="22" y2="16" />
-            </svg>
+            <SlidersHorizontal className="size-3.5 shrink-0" />
             {activeOptionCount > 0 && (
               <span className="absolute -right-0.5 -top-0.5 inline-flex min-w-[14px] items-center justify-center rounded-full border border-[rgba(175,215,255,0.35)] bg-[rgba(175,215,255,0.12)] px-1 text-[length:var(--text-2xs)] leading-[var(--leading-tight)] text-[var(--axon-primary)]">
                 {activeOptionCount}
@@ -448,10 +459,8 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
           </button>
         </>
       )}
-
       {/* Divider before send/cancel */}
       <div className="h-[20px] w-px shrink-0 bg-[var(--border-subtle)]" />
-
       {/* Send / cancel */}
       <button
         type="button"
@@ -468,7 +477,6 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
       >
         {isProcessing ? <Square className="size-3.5" /> : <SendHorizontal className="size-3.5" />}
       </button>
-
       {/* Chevron — mode dropdown toggle */}
       {showModeSelector && (
         <button
@@ -477,14 +485,9 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
           className="flex shrink-0 items-center justify-center rounded-r-[10px] bg-transparent px-2 py-1.5 text-[var(--text-muted)] transition-colors duration-150 hover:text-[var(--axon-secondary)]"
           title="Select mode"
         >
-          <svg
+          <ChevronRight
             className={`size-3.5 transition-transform duration-200 ${effectiveDropdownOpen ? 'rotate-90' : ''}`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
+          />
         </button>
       )}
     </div>

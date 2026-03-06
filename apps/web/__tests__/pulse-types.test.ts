@@ -44,6 +44,15 @@ describe('pulse types', () => {
     expect(parsed.threadSources).toEqual([])
   })
 
+  it('accepts freeform model ids', () => {
+    const parsed = PulseChatRequestSchema.parse({
+      prompt: 'hello',
+      agent: 'codex',
+      model: 'o3',
+    })
+    expect(parsed.model).toBe('o3')
+  })
+
   it('rejects empty prompt', () => {
     expect(() => PulseChatRequestSchema.parse({ prompt: '' })).toThrow()
   })

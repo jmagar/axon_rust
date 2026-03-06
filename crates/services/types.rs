@@ -84,6 +84,34 @@ pub struct AcpAdapterCommand {
 pub struct AcpPromptTurnRequest {
     pub session_id: Option<String>,
     pub prompt: Vec<String>,
+    /// Model config option value to set after session setup (if agent supports it).
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpSessionProbeRequest {
+    pub session_id: Option<String>,
+    /// Optional model config option value to apply during probe.
+    pub model: Option<String>,
+}
+
+/// A single selectable value within an ACP config option.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpConfigSelectValue {
+    pub value: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+/// An ACP session config option (model selector, mode selector, etc.).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcpConfigOption {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub current_value: String,
+    pub options: Vec<AcpConfigSelectValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +155,7 @@ pub enum AcpBridgeEvent {
     SessionUpdate(AcpSessionUpdateEvent),
     PermissionRequest(AcpPermissionRequestEvent),
     TurnResult(AcpTurnResultEvent),
+    ConfigOptionsUpdate(Vec<AcpConfigOption>),
 }
 
 // Query / retrieve / ask / evaluate / suggest

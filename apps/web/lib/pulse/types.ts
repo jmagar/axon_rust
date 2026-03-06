@@ -28,7 +28,24 @@ export type DocOperation = z.infer<typeof DocOperationSchema>
 export const PulsePermissionLevel = z.enum(['plan', 'accept-edits', 'bypass-permissions'])
 export type PulsePermissionLevel = z.infer<typeof PulsePermissionLevel>
 
-export const PulseModel = z.enum(['sonnet', 'opus', 'haiku'])
+export const AcpConfigSelectValue = z.object({
+  value: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+})
+export type AcpConfigSelectValue = z.infer<typeof AcpConfigSelectValue>
+
+export const AcpConfigOption = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  category: z.string().optional(),
+  currentValue: z.string(),
+  options: z.array(AcpConfigSelectValue),
+})
+export type AcpConfigOption = z.infer<typeof AcpConfigOption>
+
+export const PulseModel = z.string().default('sonnet')
 export type PulseModel = z.infer<typeof PulseModel>
 export const PulseAgent = z.enum(['claude', 'codex'])
 export type PulseAgent = z.infer<typeof PulseAgent>

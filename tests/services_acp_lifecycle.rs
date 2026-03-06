@@ -41,6 +41,7 @@ fn prepare_session_setup_builds_new_session_when_no_session_id() {
     let req = AcpPromptTurnRequest {
         session_id: None,
         prompt: vec!["hello".to_string()],
+        model: None,
     };
     let setup = scaffold
         .prepare_session_setup(&req, "/tmp")
@@ -63,6 +64,7 @@ fn prepare_session_setup_builds_load_session_when_session_id_present() {
     let req = AcpPromptTurnRequest {
         session_id: Some("session-42".to_string()),
         prompt: vec!["continue".to_string()],
+        model: None,
     };
     let setup = scaffold
         .prepare_session_setup(&req, "/tmp")
@@ -86,6 +88,7 @@ fn prepare_session_setup_rejects_blank_session_id() {
     let req = AcpPromptTurnRequest {
         session_id: Some("   ".to_string()),
         prompt: vec!["continue".to_string()],
+        model: None,
     };
     let err = scaffold
         .prepare_session_setup(&req, "/tmp")
@@ -99,6 +102,7 @@ fn prepare_session_setup_rejects_relative_cwd() {
     let req = AcpPromptTurnRequest {
         session_id: None,
         prompt: vec!["hello".to_string()],
+        model: None,
     };
     let err = scaffold
         .prepare_session_setup(&req, "relative/path")
@@ -111,6 +115,7 @@ fn validate_prompt_turn_request_rejects_empty_prompt() {
     let req = AcpPromptTurnRequest {
         session_id: None,
         prompt: vec![],
+        model: None,
     };
     let err = validate_prompt_turn_request(&req).expect_err("empty prompt should fail");
     assert!(err.to_string().contains("at least one prompt block"));

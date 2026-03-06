@@ -16,7 +16,7 @@ Axon is a single CLI for crawl/scrape/extract plus local vector retrieval and Q&
 
 ## Features
 
-- Commands: `scrape`, `crawl`, `refresh`, `map`, `search`, `research`, `extract`, `embed`, `query`, `retrieve`, `ask`, `evaluate`, `suggest`, `github`, `ingest`, `reddit`, `youtube`, `sessions`, `screenshot`, `sources`, `domains`, `stats`, `status`, `doctor`, `dedupe`, `debug`, `mcp`, `serve`
+- Commands: `scrape`, `crawl`, `watch`, `refresh`, `map`, `search`, `research`, `extract`, `embed`, `query`, `retrieve`, `ask`, `evaluate`, `suggest`, `github`, `ingest`, `reddit`, `youtube`, `sessions`, `screenshot`, `sources`, `domains`, `stats`, `status`, `doctor`, `dedupe`, `debug`, `mcp`, `serve`
 - Async queue-backed jobs for `crawl`/`extract`/`embed`/`refresh`/ingest
 - **Surgical Incremental Crawling**: SHA-256 content hashing, Reflink/Hardlink storage reuse, and smart embedding skips for unchanged pages.
 - TEI embeddings + Qdrant vector storage
@@ -276,6 +276,7 @@ Axon implements a multi-layered incremental crawl mechanism to minimize network 
 | `scrape <url>...` | Scrape one or more URLs to markdown | No |
 | `crawl <url>...` | Full site crawl for one or more start URLs | Yes (default) |
 | `refresh <url>...` | Revalidate known URLs and update stored content/embeddings | Yes (default) |
+| `watch <subcommand>` | Define and run top-level recurring watches (currently refresh task dispatch) | No |
 | `map <url>` | Discover all URLs without scraping | No |
 | `extract <urls...>` | LLM-powered structured data extraction | Yes (default) |
 | `search <query>` | Web search via Tavily, auto-queues crawl jobs for results | No |
@@ -353,6 +354,19 @@ axon refresh schedule disable <name>
 axon refresh schedule delete <name>
 axon refresh schedule run-due [--batch <n>]
 ```
+
+`refresh schedule` is a compatibility interface backed by top-level watch definitions (`task_type=refresh`). Existing automation can keep using `axon refresh schedule ...` while new workflows can use `axon watch ...` directly.
+
+### Top-level Watch Subcommands
+
+```bash
+axon watch create <name> --task-type <type> --every-seconds <n> [--task-payload <json>]
+axon watch list
+axon watch run-now <watch_id>
+axon watch history <watch_id> [--limit <n>]
+```
+
+Current dispatch support in the worker loop is `task_type=refresh` (payload shape: `{"urls":["https://..."]}`).
 
 ### Job Subcommands (for github / reddit / youtube)
 
@@ -655,6 +669,7 @@ When Chrome feature is compiled in, `crawl()` expects a Chrome instance. `crawl_
 `tei_embed()` in `vector/ops/tei.rs` auto-splits batches on HTTP 413 (Payload Too Large). Set `TEI_MAX_CLIENT_BATCH_SIZE` env var to control default chunk size (default: 64, effective max: 128).
 
 ### TEI retries / timeouts
+
 `tei_embed()` retries transient failures (transport errors, HTTP 429, and HTTP 5xx) with exponential backoff + jitter.
 - `TEI_MAX_RETRIES` controls max attempts per TEI request (default: 10, max: 20).
 - `TEI_REQUEST_TIMEOUT_MS` controls per-attempt request timeout (default: 30000, clamped 100..600000).

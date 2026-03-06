@@ -26,24 +26,25 @@ interface SessionContentResponse {
 }
 
 function dedupeSessions(list: SessionSummary[]): SessionSummary[] {
-  const byFilename = new Map<string, SessionSummary>()
+  const seen = new Map<string, SessionSummary>()
   for (const session of list) {
-    const existing = byFilename.get(session.filename)
+    const key = `${session.project}/${session.filename}`
+    const existing = seen.get(key)
     if (!existing) {
-      byFilename.set(session.filename, session)
+      seen.set(key, session)
       continue
     }
     if (session.mtimeMs > existing.mtimeMs) {
-      byFilename.set(session.filename, session)
+      seen.set(key, session)
       continue
     }
     if (session.mtimeMs === existing.mtimeMs) {
       if (existing.project === 'tmp' && session.project !== 'tmp') {
-        byFilename.set(session.filename, session)
+        seen.set(key, session)
       }
     }
   }
-  return Array.from(byFilename.values()).sort((a, b) => b.mtimeMs - a.mtimeMs)
+  return Array.from(seen.values()).sort((a, b) => b.mtimeMs - a.mtimeMs)
 }
 
 export function useRecentSessions() {

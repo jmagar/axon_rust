@@ -158,3 +158,57 @@ Scheduled refresh configurations. Each schedule defines a set of URLs (or a seed
 **Notes:**
 - Claim uses a lease mechanism: `next_run_at` is advanced by `SCHEDULE_CLAIM_LEASE_SECS` (300s) during claim to prevent duplicate claims. After the job completes, `mark_refresh_schedule_ran` sets `next_run_at` to the actual next interval.
 - Either `seed_url` or `urls_json` (or both) should be provided. `seed_url` is reserved for future integration with crawl-based URL discovery.
+
+## axon_watch_defs
+
+Top-level scheduler definitions used by `axon watch` and by the refresh schedule compatibility bridge (`task_type = 'refresh'`).
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `id` | UUID | NOT NULL | — | Primary key, watch definition identifier |
+| `name` | TEXT | NOT NULL | — | Unique human-readable watch name |
+| `task_type` | TEXT | NOT NULL | — | Dispatched task family (current worker support: `refresh`) |
+| `task_payload` | JSONB | NOT NULL | — | Task payload for dispatcher (for refresh: `{\"urls\":[...]}`) |
+| `every_seconds` | BIGINT | NOT NULL | — | Recurrence interval in seconds (`CHECK > 0`) |
+| `enabled` | BOOLEAN | NOT NULL | `TRUE` | Whether watch is active |
+| `next_run_at` | TIMESTAMPTZ | NOT NULL | — | Next due timestamp |
+| `lease_expires_at` | TIMESTAMPTZ | NULL | — | Short claim lease to avoid duplicate dispatch |
+| `last_run_at` | TIMESTAMPTZ | NULL | — | Last successful/attempted run timestamp |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Creation timestamp |
+| `updated_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Last update timestamp |
+
+**Unique constraint:** `name` column is UNIQUE.
+
+**Index:** `idx_axon_watch_defs_due` — partial index on `next_run_at ASC WHERE enabled = TRUE`.
+
+## axon_watch_runs
+
+Run history for each watch execution attempt.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `id` | UUID | NOT NULL | — | Primary key, watch run identifier |
+| `watch_id` | UUID | NOT NULL | — | FK to `axon_watch_defs(id)` with `ON DELETE CASCADE` |
+| `status` | TEXT | NOT NULL | — | `pending` / `running` / `completed` / `failed` / `canceled` |
+| `dispatched_job_id` | UUID | NULL | — | Back-reference to downstream async job id (when any) |
+| `error_text` | TEXT | NULL | — | Dispatcher/runtime error details |
+| `result_json` | JSONB | NULL | — | Execution result metadata |
+| `started_at` | TIMESTAMPTZ | NULL | — | Run start timestamp |
+| `finished_at` | TIMESTAMPTZ | NULL | — | Run finish timestamp |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Creation timestamp |
+| `updated_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Last update timestamp |
+
+**Index:** `idx_axon_watch_runs_watch_id` on `(watch_id, created_at DESC)`.
+
+## axon_watch_run_artifacts
+
+Optional artifact pointers associated with watch runs.
+
+| Column | Type | Nullable | Default | Description |
+|--------|------|----------|---------|-------------|
+| `id` | BIGSERIAL | NOT NULL | — | Primary key |
+| `watch_run_id` | UUID | NOT NULL | — | FK to `axon_watch_runs(id)` with `ON DELETE CASCADE` |
+| `kind` | TEXT | NOT NULL | — | Artifact kind discriminator |
+| `path` | TEXT | NULL | — | Filesystem path pointer |
+| `payload` | JSONB | NULL | — | Structured artifact payload |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `NOW()` | Creation timestamp |

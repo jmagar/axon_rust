@@ -49,6 +49,14 @@ export interface JobDetail {
   chunksEmbedded: number | null
   // extract-specific
   urls: string[] | null
+  // refresh-specific
+  checked: number | null
+  changed: number | null
+  unchanged: number | null
+  notModified: number | null
+  failedCount: number | null
+  total: number | null
+  manifestPath: string | null
   // raw JSON for advanced view
   resultJson: Record<string, unknown> | null
   configJson: Record<string, unknown> | null
@@ -65,6 +73,15 @@ function numberOrNull(value: unknown): number | null {
 function stringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((v): v is string => typeof v === 'string')
+}
+
+export function normalizeOutputDirForWeb(outputDir: string | null): string | null {
+  if (!outputDir) return null
+  const fromPrefix = '/app/.cache/axon-rust/output'
+  if (!outputDir.startsWith(fromPrefix)) return outputDir
+  const webOutputDir = process.env.AXON_OUTPUT_DIR || '/axon-output'
+  const suffix = outputDir.slice(fromPrefix.length)
+  return `${webOutputDir}${suffix}`
 }
 
 async function readCrawlManifest(outputDir: string): Promise<CrawlMarkdownFile[]> {
@@ -119,7 +136,7 @@ async function findCrawlJob(id: string, includeArtifacts: boolean): Promise<JobD
   const row = r.rows[0]
   const res = (row.result_json ?? {}) as Record<string, unknown>
   const cfg = (row.config_json ?? {}) as Record<string, unknown>
-  const outputDir = (res.output_dir as string) ?? null
+  const outputDir = normalizeOutputDirForWeb((res.output_dir as string) ?? null)
   const manifestFiles = includeArtifacts && outputDir ? await readCrawlManifest(outputDir) : []
   const thinUrls = stringArray(res.thin_urls)
   const wafBlockedUrls = stringArray(res.waf_blocked_urls)
@@ -169,6 +186,77 @@ async function findCrawlJob(id: string, includeArtifacts: boolean): Promise<JobD
     docsEmbedded: null,
     chunksEmbedded: null,
     urls: null,
+    checked: null,
+    changed: null,
+    unchanged: null,
+    notModified: null,
+    failedCount: null,
+    total: null,
+    manifestPath: null,
+    resultJson: res,
+    configJson: cfg,
+  }
+}
+
+async function findRefreshJob(id: string): Promise<JobDetail | null> {
+  const r = await getJobsPgPool().query(
+    `SELECT id, status, created_at, started_at, finished_at, error_text, urls_json, result_json, config_json
+     FROM axon_refresh_jobs WHERE id = $1`,
+    [id],
+  )
+  if (!r.rows.length) return null
+  const row = r.rows[0]
+  const res = (row.result_json ?? {}) as Record<string, unknown>
+  const cfg = (row.config_json ?? {}) as Record<string, unknown>
+  const urls = Array.isArray(row.urls_json) ? (row.urls_json as string[]) : []
+  const createdAt = row.created_at as Date
+  const startedAt = row.started_at as Date | null
+  const finishedAt = row.finished_at as Date | null
+  return {
+    id: row.id as string,
+    type: 'refresh',
+    status: safeStatus(row.status as string),
+    success:
+      row.status === 'completed'
+        ? true
+        : row.status === 'failed' || row.status === 'canceled'
+          ? false
+          : null,
+    target: urls[0] ?? '—',
+    collection: (cfg.collection as string) ?? (res.collection as string) ?? null,
+    renderMode: null,
+    maxDepth: null,
+    maxPages: null,
+    embed: null,
+    createdAt: createdAt.toISOString(),
+    startedAt: startedAt ? startedAt.toISOString() : null,
+    finishedAt: finishedAt ? finishedAt.toISOString() : null,
+    elapsedMs: res.elapsed_ms != null ? Number(res.elapsed_ms) : null,
+    errorText: row.error_text as string | null,
+    pagesCrawled: null,
+    pagesDiscovered: null,
+    mdCreated: null,
+    thinMd: null,
+    filteredUrls: null,
+    errorPages: null,
+    wafBlockedPages: null,
+    cacheHit: null,
+    outputDir: null,
+    staleUrlsDeleted: null,
+    thinUrls: null,
+    wafBlockedUrls: null,
+    observedUrls: null,
+    markdownFiles: null,
+    docsEmbedded: null,
+    chunksEmbedded: null,
+    urls,
+    checked: res.checked != null ? Number(res.checked) : null,
+    changed: res.changed != null ? Number(res.changed) : null,
+    unchanged: res.unchanged != null ? Number(res.unchanged) : null,
+    notModified: res.not_modified != null ? Number(res.not_modified) : null,
+    failedCount: res.failed != null ? Number(res.failed) : null,
+    total: res.total != null ? Number(res.total) : null,
+    manifestPath: (res.manifest_path as string) ?? null,
     resultJson: res,
     configJson: cfg,
   }
@@ -226,6 +314,13 @@ async function findEmbedJob(id: string): Promise<JobDetail | null> {
     docsEmbedded: res.docs_embedded != null ? Number(res.docs_embedded) : null,
     chunksEmbedded: res.chunks_embedded != null ? Number(res.chunks_embedded) : null,
     urls: null,
+    checked: null,
+    changed: null,
+    unchanged: null,
+    notModified: null,
+    failedCount: null,
+    total: null,
+    manifestPath: null,
     resultJson: res,
     configJson: cfg,
   }
@@ -284,6 +379,13 @@ async function findExtractJob(id: string): Promise<JobDetail | null> {
     docsEmbedded: null,
     chunksEmbedded: null,
     urls,
+    checked: null,
+    changed: null,
+    unchanged: null,
+    notModified: null,
+    failedCount: null,
+    total: null,
+    manifestPath: null,
     resultJson: res,
     configJson: cfg,
   }
@@ -341,6 +443,13 @@ async function findIngestJob(id: string): Promise<JobDetail | null> {
     docsEmbedded: null,
     chunksEmbedded: null,
     urls: null,
+    checked: null,
+    changed: null,
+    unchanged: null,
+    notModified: null,
+    failedCount: null,
+    total: null,
+    manifestPath: null,
     resultJson: res,
     configJson: cfg,
   }
@@ -363,7 +472,8 @@ export async function GET(
       (await findCrawlJob(id, includeArtifacts)) ??
       (await findEmbedJob(id)) ??
       (await findExtractJob(id)) ??
-      (await findIngestJob(id))
+      (await findIngestJob(id)) ??
+      (await findRefreshJob(id))
 
     if (!job) {
       return apiError(404, 'Job not found')

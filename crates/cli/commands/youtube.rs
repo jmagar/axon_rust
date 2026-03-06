@@ -32,7 +32,9 @@ async fn run_ingest_sync(cfg: &Config, source: IngestSource) -> Result<(), Box<d
     };
 
     let result = ingest_service::ingest_youtube(cfg, target, None).await?;
-    let chunks = result.payload["chunks"].as_u64().unwrap_or(0) as usize;
+    let chunks = result.payload["chunks"]
+        .as_u64()
+        .ok_or("youtube: service payload missing 'chunks' field")? as usize;
     ingest_common::print_ingest_sync_result(cfg, "youtube", chunks, target);
     Ok(())
 }

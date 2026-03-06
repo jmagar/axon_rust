@@ -14,7 +14,14 @@ import {
 } from 'lucide-react'
 import type { PulseModel, PulsePermissionLevel } from '@/lib/pulse/types'
 
-export const MODEL_OPTIONS: { id: PulseModel; label: string; sub: string; badge?: string }[] = [
+export const CLAUDE_MODEL_IDS = ['sonnet', 'opus', 'haiku'] as const
+
+export const CLAUDE_MODEL_OPTIONS: {
+  id: PulseModel
+  label: string
+  sub: string
+  badge?: string
+}[] = [
   {
     id: 'sonnet',
     label: 'Claude Sonnet 4.6',

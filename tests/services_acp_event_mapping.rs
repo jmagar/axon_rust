@@ -1,7 +1,8 @@
 use agent_client_protocol::{
     ContentChunk, PermissionOption, PermissionOptionId, PermissionOptionKind,
-    RequestPermissionRequest, SessionNotification, SessionUpdate, ToolCallId, ToolCallUpdate,
-    ToolCallUpdateFields,
+    RequestPermissionRequest, SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
+    SessionConfigSelectOption, SessionConfigSelectOptions, SessionNotification, SessionUpdate,
+    ToolCallId, ToolCallUpdate, ToolCallUpdateFields,
 };
 use axon::crates::services::acp::{
     map_permission_request, map_permission_request_event, map_session_notification,
@@ -81,6 +82,42 @@ fn map_session_notification_event_wraps_bridge_event() {
             assert_eq!(update.session_id, "session-wrap");
             assert_eq!(update.kind, AcpSessionUpdateKind::AssistantDelta);
             assert_eq!(update.text_delta.as_deref(), Some("wrapped delta"));
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
+#[test]
+fn map_session_notification_event_emits_config_options_update_for_config_changes() {
+    let option = SessionConfigOption::new(
+        "choice",
+        "Model Selector",
+        SessionConfigKind::Select(agent_client_protocol::SessionConfigSelect::new(
+            "gpt-5.4",
+            SessionConfigSelectOptions::Ungrouped(vec![
+                SessionConfigSelectOption::new("gpt-5.4", "GPT 5.4"),
+                SessionConfigSelectOption::new("gpt-5.3-codex", "GPT 5.3 Codex"),
+            ]),
+        )),
+    )
+    .category(SessionConfigOptionCategory::Model);
+    let notification = SessionNotification::new(
+        "session-config",
+        SessionUpdate::ConfigOptionUpdate(agent_client_protocol::ConfigOptionUpdate::new(vec![
+            option,
+        ])),
+    );
+
+    let event = map_session_notification_event(&notification);
+    match event {
+        ServiceEvent::AcpBridge {
+            event: AcpBridgeEvent::ConfigOptionsUpdate(options),
+        } => {
+            assert_eq!(options.len(), 1);
+            assert_eq!(options[0].id, "choice");
+            assert_eq!(options[0].category.as_deref(), Some("model"));
+            assert_eq!(options[0].options.len(), 2);
+            assert_eq!(options[0].options[0].value, "gpt-5.4");
         }
         other => panic!("unexpected event: {other:?}"),
     }

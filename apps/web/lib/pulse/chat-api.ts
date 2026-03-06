@@ -6,6 +6,7 @@
 import { apiFetch } from '@/lib/api-fetch'
 import { parsePulseChatStreamChunk } from '@/lib/pulse/chat-stream'
 import type {
+  AcpConfigOption,
   PulseAgent,
   PulseChatResponse,
   PulseModel,
@@ -15,11 +16,12 @@ import type {
 } from '@/lib/pulse/types'
 
 export interface ChatStreamEvent {
-  type: 'status' | 'assistant_delta' | 'tool_use' | 'thinking_content'
+  type: 'status' | 'assistant_delta' | 'tool_use' | 'thinking_content' | 'config_options_update'
   phase?: 'started' | 'thinking' | 'finalizing'
   delta?: string
   tool?: PulseToolUse
   content?: string
+  configOptions?: AcpConfigOption[]
 }
 
 export interface RunChatPromptOptions {
@@ -82,6 +84,10 @@ async function readNdjsonStream(
       }
       if (event.type === 'tool_use') {
         onEvent?.({ type: 'tool_use', tool: event.tool })
+        continue
+      }
+      if (event.type === 'config_options_update') {
+        onEvent?.({ type: 'config_options_update', configOptions: event.configOptions })
         continue
       }
       if (event.type === 'error') {

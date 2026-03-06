@@ -41,6 +41,7 @@ export function useOmniboxExecution({
     pulseAgent,
     pulseModel,
     pulsePermissionLevel,
+    acpConfigOptions,
   } = useWsWorkspaceState()
   const {
     startExecution,
@@ -162,6 +163,7 @@ export function useOmniboxExecution({
     pulseAgent,
     pulseModel,
     pulsePermissionLevel,
+    acpConfigOptions,
     currentMode,
     currentJobId,
     setIsProcessing,

@@ -76,9 +76,7 @@ export function parsePersistedWorkspaceState(
     const agent: PulseAgent =
       parsed.agent === 'codex' || parsed.agent === 'claude' ? parsed.agent : 'claude'
     const model: PulseModel =
-      parsed.model === 'opus' || parsed.model === 'haiku' || parsed.model === 'sonnet'
-        ? parsed.model
-        : 'sonnet'
+      typeof parsed.model === 'string' && parsed.model.length > 0 ? parsed.model : 'sonnet'
     const permissionLevel: PulsePermissionLevel =
       parsed.permissionLevel === 'plan' ||
       parsed.permissionLevel === 'accept-edits' ||
@@ -116,9 +114,7 @@ export function parsePersistedWorkspaceState(
       lastResponseLatencyMs:
         typeof parsed.lastResponseLatencyMs === 'number' ? parsed.lastResponseLatencyMs : null,
       lastResponseModel:
-        parsed.lastResponseModel === 'sonnet' ||
-        parsed.lastResponseModel === 'opus' ||
-        parsed.lastResponseModel === 'haiku'
+        typeof parsed.lastResponseModel === 'string' && parsed.lastResponseModel.length > 0
           ? parsed.lastResponseModel
           : null,
       showChat,

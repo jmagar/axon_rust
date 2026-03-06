@@ -83,7 +83,7 @@ fn cancel_rejects_non_uuid_job_id() {
 }
 
 #[test]
-fn cancel_accepts_valid_uuid_v4() {
+fn cancel_accepts_valid_uuid_format() {
     assert!(
         execute::is_valid_cancel_job_id_pub("550e8400-e29b-41d4-a716-446655440000"),
         "well-formed UUID should be accepted as cancel job_id"

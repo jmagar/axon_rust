@@ -1,7 +1,7 @@
 use super::AxonMcpServer;
 use super::common::{
-    apply_crawl_overrides, internal_error, invalid_params, parse_job_id, parse_limit, parse_offset,
-    parse_response_mode, respond_with_mode,
+    apply_crawl_overrides, invalid_params, logged_internal_error, parse_job_id, parse_limit,
+    parse_offset, parse_response_mode, respond_with_mode,
 };
 use crate::crates::core::http::validate_url;
 use crate::crates::jobs::crawl::{
@@ -37,7 +37,7 @@ impl AxonMcpServer {
                 }
                 let result = crawl_svc::crawl_start(&cfg, &urls, None)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "crawl",
                     "start",
@@ -50,7 +50,7 @@ impl AxonMcpServer {
                 let id = parse_job_id(req.job_id.as_ref())?;
                 let result = crawl_svc::crawl_status(&cfg, id)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "crawl",
                     "status",
@@ -61,7 +61,7 @@ impl AxonMcpServer {
                 let id = parse_job_id(req.job_id.as_ref())?;
                 let canceled = cancel_job(&cfg, id)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "crawl",
                     "cancel",
@@ -73,7 +73,7 @@ impl AxonMcpServer {
                 let offset = parse_offset(req.offset);
                 let jobs = list_jobs(&cfg, limit, offset as i64)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 respond_with_mode(
                     "crawl",
                     "list",
@@ -85,7 +85,7 @@ impl AxonMcpServer {
             CrawlSubaction::Cleanup => {
                 let deleted = cleanup_jobs(&cfg)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "crawl",
                     "cleanup",
@@ -95,7 +95,7 @@ impl AxonMcpServer {
             CrawlSubaction::Clear => {
                 let deleted = clear_jobs(&cfg)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "crawl",
                     "clear",
@@ -105,7 +105,7 @@ impl AxonMcpServer {
             CrawlSubaction::Recover => {
                 let recovered = recover_stale_crawl_jobs(&cfg)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "crawl",
                     "recover",
@@ -133,7 +133,7 @@ impl AxonMcpServer {
                 }
                 let id = start_extract_job(self.cfg.as_ref(), &urls, req.prompt)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "extract",
                     "start",
@@ -144,7 +144,7 @@ impl AxonMcpServer {
                 let id = parse_job_id(req.job_id.as_ref())?;
                 let job = get_extract_job(self.cfg.as_ref(), id)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 respond_with_mode(
                     "extract",
                     "status",
@@ -157,7 +157,7 @@ impl AxonMcpServer {
                 let id = parse_job_id(req.job_id.as_ref())?;
                 let canceled = cancel_extract_job(self.cfg.as_ref(), id)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "extract",
                     "cancel",
@@ -169,7 +169,7 @@ impl AxonMcpServer {
                 let offset = parse_offset(req.offset);
                 let jobs = list_extract_jobs(self.cfg.as_ref(), limit, offset as i64)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 respond_with_mode(
                     "extract",
                     "list",
@@ -181,7 +181,7 @@ impl AxonMcpServer {
             ExtractSubaction::Cleanup => {
                 let deleted = cleanup_extract_jobs(self.cfg.as_ref())
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "extract",
                     "cleanup",
@@ -191,7 +191,7 @@ impl AxonMcpServer {
             ExtractSubaction::Clear => {
                 let deleted = clear_extract_jobs(self.cfg.as_ref())
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "extract",
                     "clear",
@@ -201,7 +201,7 @@ impl AxonMcpServer {
             ExtractSubaction::Recover => {
                 let recovered = recover_stale_extract_jobs(self.cfg.as_ref())
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "extract",
                     "recover",

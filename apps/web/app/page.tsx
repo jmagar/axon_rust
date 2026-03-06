@@ -124,9 +124,11 @@ export default function DashboardPage() {
             const label = mode.charAt(0).toUpperCase() + mode.slice(1)
             setPendingTab({ title: label, markdown })
             router.push('/editor')
-            capturedJsonRef.current = []
           }
         }
+        capturedJsonRef.current = []
+      } else if (msg.type === 'command.error') {
+        capturedJsonRef.current = []
       }
     })
   }, [subscribe, router])

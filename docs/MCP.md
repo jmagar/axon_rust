@@ -53,6 +53,11 @@ Optional OAuth overrides:
 - `GOOGLE_OAUTH_REDIS_URL` (falls back to `AXON_REDIS_URL`)
 - `GOOGLE_OAUTH_REDIS_PREFIX`
 
+`GOOGLE_OAUTH_REDIRECT_POLICY` modes:
+- `loopback_or_https` (default): allow loopback HTTP callbacks (`localhost`, `127.0.0.1`, `::1`) and any HTTPS callback
+- `loopback_only`: allow only loopback HTTP callbacks
+- `any`: allow any HTTP/HTTPS callback URI
+
 If OAuth is not configured, requests to `/mcp` return unauthorized.
 
 ## Transport Notes

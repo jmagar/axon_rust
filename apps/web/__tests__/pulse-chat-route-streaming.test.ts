@@ -325,6 +325,72 @@ describe('pulse chat route streaming (e2e-like via Vitest; browser e2e harness u
     expect(wsOptions.flags?.agent).toBe('codex')
   })
 
+  it('passes model flag to pulse_chat WS mode', async () => {
+    queueScenario(({ options }) => {
+      queueMicrotask(() => {
+        options.onJson?.({ type: 'result', result: '{"text":"Model","operations":[]}' })
+        options.onDone?.({ exit_code: 0 })
+      })
+    })
+
+    await post(makeRequest({ prompt: 'hello', agent: 'codex', model: 'o3' }))
+
+    const wsOptions = wsRunSpy.mock.calls[0]?.[1] as RunAxonCommandWsStreamOptions
+    expect(wsOptions.flags?.model).toBe('o3')
+  })
+
+  it('omits default model flag for codex agent', async () => {
+    queueScenario(({ options }) => {
+      queueMicrotask(() => {
+        options.onJson?.({ type: 'result', result: '{"text":"Default model","operations":[]}' })
+        options.onDone?.({ exit_code: 0 })
+      })
+    })
+
+    await post(makeRequest({ prompt: 'hello', agent: 'codex', model: 'default' }))
+
+    const wsOptions = wsRunSpy.mock.calls[0]?.[1] as RunAxonCommandWsStreamOptions
+    expect(wsOptions.flags?.model).toBeUndefined()
+  })
+
+  it('normalizes singular config_option_update events from ACP', async () => {
+    queueScenario(({ options }) => {
+      queueMicrotask(() => {
+        options.onJson?.({
+          type: 'config_option_update',
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              currentValue: 'gpt-5.3-codex',
+              options: [{ value: 'gpt-5.3-codex', name: 'GPT 5.3 Codex' }],
+            },
+          ],
+        })
+        options.onJson?.({ type: 'result', result: '{"text":"OK","operations":[]}' })
+        options.onDone?.({ exit_code: 0 })
+      })
+    })
+
+    const response = await post(makeRequest())
+    const events = await readNdjsonEvents(response)
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'config_options_update',
+          configOptions: [
+            expect.objectContaining({
+              id: 'model',
+              currentValue: 'gpt-5.3-codex',
+            }),
+          ],
+        }),
+      ]),
+    )
+  })
+
   it('replays from a mid-stream event id through done (dropped-connection resume)', async () => {
     queueScenario(({ options }) => {
       queueMicrotask(() => {

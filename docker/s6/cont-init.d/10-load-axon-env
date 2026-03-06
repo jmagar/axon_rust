@@ -102,3 +102,23 @@ esac
 mkdir -p "$resolved_diag"
 chown -R axon:axon "$resolved_diag"
 chmod -R u+rwX,g+rwX "$resolved_diag"
+
+host_codex_dir="/run/host-codex"
+target_codex_dir="/home/axon/.codex"
+
+copy_if_present() {
+  local source_path="$1"
+  local target_path="$2"
+  local mode="$3"
+
+  if [[ ! -f "$source_path" ]]; then
+    return 0
+  fi
+
+  install -o axon -g axon -m "$mode" "$source_path" "$target_path"
+}
+
+mkdir -p "$target_codex_dir"
+copy_if_present "$host_codex_dir/config.toml" "$target_codex_dir/config.toml" 600
+copy_if_present "$host_codex_dir/auth.json" "$target_codex_dir/auth.json" 600
+copy_if_present "$host_codex_dir/models_cache.json" "$target_codex_dir/models_cache.json" 644

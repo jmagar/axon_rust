@@ -3,8 +3,10 @@
 //! async jobs with fire-and-forget semantics, and streams output over WebSocket.
 //!
 //! # Execution paths
-//! - **Async modes** (`crawl`, `extract`, `embed`, `github`, `reddit`, `youtube`):
+//! - **Async direct modes** (`crawl`, `extract`, `embed`):
 //!   `async_mode::handle_async_command` — direct service enqueue, fire-and-forget.
+//! - **Async subprocess modes** (`github`, `reddit`, `youtube`):
+//!   subprocess fallback — ingest service functions are `!Send`, so the binary is spawned.
 //! - **Sync direct modes** (scrape, map, query, retrieve, ask, search, research,
 //!   stats, sources, domains, doctor, status, pulse_chat):
 //!   `sync_mode::handle_sync_direct` — direct service call, awaited inline.
@@ -89,9 +91,7 @@ use tokio::process::Command;
 use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
 
-#[cfg(test)]
-use constants::ALLOWED_FLAGS;
-use constants::{ALLOWED_MODES, ASYNC_MODES, ASYNC_SUBPROCESS_MODES};
+use constants::{ALLOWED_FLAGS, ALLOWED_MODES, ASYNC_MODES, ASYNC_SUBPROCESS_MODES};
 use context::ExecCommandContext;
 
 fn resolve_exe() -> Result<std::path::PathBuf, String> {
@@ -179,7 +179,26 @@ pub(super) async fn handle_command(
         return;
     }
 
-    // Async modes (crawl, extract, embed) — fire-and-forget direct service dispatch:
+    // Reject unknown flag keys before processing; only whitelisted keys are accepted.
+    if let Some(obj) = flags.as_object() {
+        let allowed_keys: std::collections::HashSet<&str> =
+            ALLOWED_FLAGS.iter().map(|(k, _)| *k).collect();
+        let unknown: Vec<&String> = obj
+            .keys()
+            .filter(|k| !allowed_keys.contains(k.as_str()))
+            .collect();
+        if !unknown.is_empty() {
+            let list = unknown
+                .into_iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            send_error_dual(&tx, &ws_ctx, format!("unknown flag key(s): {list}"), None).await;
+            return;
+        }
+    }
+
+    // Async direct modes (crawl, extract, embed) — fire-and-forget direct service dispatch:
     // enqueue the job and return immediately with the job ID.
     // No subprocess is spawned; no polling loop is run.
     if ASYNC_MODES.contains(&mode.as_str()) {

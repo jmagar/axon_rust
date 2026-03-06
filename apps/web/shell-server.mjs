@@ -73,13 +73,15 @@ function isAllowedOrigin(req) {
 
   // In token-gated deployments behind reverse proxies, host/origin can be
   // rewritten internally (e.g. 127.0.0.1:49011). With no explicit allowlist,
-  // rely on token auth as the primary boundary.
-  if (TOKEN) return true
+  // rely on token auth as the primary boundary — but only for non-browser
+  // requests (those without an Origin header).
+  if (TOKEN && !req.headers.origin) return true
 
-  const forwardedHost = String(req.headers['x-forwarded-host'] ?? '')
+  const forwardedHostRaw = String(req.headers['x-forwarded-host'] ?? '')
     .split(',')[0]
     .trim()
-    .toLowerCase()
+  // Strip port from forwarded host so it matches parsedOrigin.hostname
+  const forwardedHost = forwardedHostRaw.split(':')[0].toLowerCase()
   const directHost = String(req.headers.host ?? '')
     .split(':')[0]
     .toLowerCase()

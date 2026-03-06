@@ -19,6 +19,39 @@ export interface Job {
   errorText: string | null
 }
 
+async function queryRefresh(statusFilter: StatusFilter, limit: number, offset: number) {
+  const where = statusWhere(statusFilter)
+  const rows = await getJobsPgPool().query(
+    `SELECT id, urls_json, status, created_at, started_at, finished_at, error_text,
+            config_json->>'collection' AS collection,
+            COUNT(*) OVER() AS total
+     FROM axon_refresh_jobs
+     WHERE ${where}
+     ORDER BY created_at DESC
+     LIMIT $1 OFFSET $2`,
+    [limit, offset],
+  )
+  return {
+    jobs: rows.rows.map((r) => {
+      const urls = Array.isArray(r.urls_json) ? (r.urls_json as string[]) : []
+      const first = urls[0] ?? '—'
+      const label = urls.length > 1 ? `${first} (+${urls.length - 1})` : first
+      return {
+        id: r.id as string,
+        type: 'refresh' as JobType,
+        status: safeStatus(r.status as string),
+        target: truncate(label),
+        collection: r.collection as string | null,
+        createdAt: (r.created_at as Date).toISOString(),
+        startedAt: r.started_at ? (r.started_at as Date).toISOString() : null,
+        finishedAt: r.finished_at ? (r.finished_at as Date).toISOString() : null,
+        errorText: r.error_text as string | null,
+      }
+    }),
+    total: Number((rows.rows[0] as { total?: string } | undefined)?.total ?? 0),
+  }
+}
+
 export interface StatusCounts {
   running: number
   pending: number
@@ -190,14 +223,15 @@ async function getStatusCounts(): Promise<StatusCounts> {
         COUNT(*) FILTER (WHERE status IN ('failed','canceled'))       AS failed
        FROM ${table}`,
     )
-  const [crawl, extract, embed, ingest] = await Promise.all([
+  const [crawl, extract, embed, ingest, refresh] = await Promise.all([
     countSql('axon_crawl_jobs'),
     countSql('axon_extract_jobs'),
     countSql('axon_embed_jobs'),
     countSql('axon_ingest_jobs'),
+    countSql('axon_refresh_jobs'),
   ])
   const sum = (key: keyof StatusCounts) =>
-    [crawl, extract, embed, ingest].reduce(
+    [crawl, extract, embed, ingest, refresh].reduce(
       (acc, r) => acc + Number((r.rows[0] as Record<string, string>)[key] ?? 0),
       0,
     )
@@ -211,7 +245,7 @@ async function getStatusCounts(): Promise<StatusCounts> {
 
 // ── GET /api/jobs ──────────────────────────────────────────────────────────────
 
-const VALID_TYPES = new Set(['all', 'crawl', 'extract', 'embed', 'ingest'])
+const VALID_TYPES = new Set(['all', 'crawl', 'extract', 'embed', 'ingest', 'refresh'])
 const VALID_STATUSES = new Set([
   'all',
   'active',
@@ -266,6 +300,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           UNION ALL
           SELECT id, 'ingest', source_type || ': ' || target, NULL, status, created_at, started_at, finished_at, error_text
             FROM axon_ingest_jobs WHERE ${where}
+          UNION ALL
+          SELECT id, 'refresh', urls_json::text, config_json->>'collection', status, created_at, started_at, finished_at, error_text
+            FROM axon_refresh_jobs WHERE ${where}
         )
         SELECT *, COUNT(*) OVER() AS total
         FROM combined
@@ -293,7 +330,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             ? queryExtract
             : type === 'embed'
               ? queryEmbed
-              : queryIngest
+              : type === 'ingest'
+                ? queryIngest
+                : queryRefresh
       const result = await query(safeStatusFilter, limit, offset)
       jobs = result.jobs
       total = result.total

@@ -109,13 +109,7 @@ pub(super) async fn handle_cancel(
         "embed" => jobs::embed::cancel_embed_job(&cfg, uuid)
             .await
             .map_err(|e| e.to_string()),
-        _ => {
-            // Fallback: attempt crawl cancel for any other mode (e.g., ingest jobs
-            // don't have a cancel surface — they run to completion inline).
-            jobs::crawl::cancel_job(&cfg, uuid)
-                .await
-                .map_err(|e| e.to_string())
-        }
+        other => Err(format!("cancel not supported for mode '{other}'")),
     };
 
     match cancel_result {

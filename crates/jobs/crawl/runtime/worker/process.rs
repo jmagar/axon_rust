@@ -133,6 +133,12 @@ const DEFAULT_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
 /// Must not appear in any error message from external libraries.
 const CANCEL_SENTINEL: &str = "AXON_JOB_CANCELED";
 
+fn sorted_urls(values: &HashSet<String>) -> Vec<String> {
+    let mut urls: Vec<String> = values.iter().cloned().collect();
+    urls.sort();
+    urls
+}
+
 async fn maybe_complete_cache_hit(
     pool: &PgPool,
     id: Uuid,
@@ -463,6 +469,10 @@ async fn run_active_crawl_job(
                             "phase": "canceled",
                             "md_created": summary.markdown_files,
                             "thin_md": summary.thin_pages,
+                            "error_pages": summary.error_pages,
+                            "waf_blocked_pages": summary.waf_blocked_pages,
+                            "thin_urls": sorted_urls(&summary.thin_urls),
+                            "waf_blocked_urls": sorted_urls(&summary.waf_blocked_urls),
                             "pages_crawled": summary.pages_seen,
                             "elapsed_ms": summary.elapsed_ms,
                             "output_dir": ctx.job_cfg.output_dir.to_string_lossy(),

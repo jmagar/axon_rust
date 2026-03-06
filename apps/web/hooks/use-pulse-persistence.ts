@@ -74,9 +74,6 @@ export function usePulsePersistence({ data, setters, messageIdRef }: UsePulsePer
     showEditor,
   } = data
   const {
-    setPulsePermissionLevel,
-    setPulseAgent,
-    setPulseModel,
     setDocumentMarkdown,
     setChatHistory,
     setDocumentTitle,
@@ -106,9 +103,8 @@ export function usePulsePersistence({ data, setters, messageIdRef }: UsePulsePer
         hasHydratedRef.current = true
         return
       }
-      setPulsePermissionLevel(restored.permissionLevel)
-      setPulseAgent(restored.agent)
-      setPulseModel(restored.model)
+      // Agent/model/permission are owned by dedicated localStorage keys in use-ws-messages.
+      // Do not let the older workspace blob overwrite current selections during rehydration.
       setDocumentMarkdown(restored.documentMarkdown)
       setChatHistory(restored.chatHistory)
       setDocumentTitle(restored.documentTitle)
@@ -143,9 +139,6 @@ export function usePulsePersistence({ data, setters, messageIdRef }: UsePulsePer
     setLastResponseLatencyMs,
     setLastResponseModel,
     setMobileSplitPercent,
-    setPulseModel,
-    setPulsePermissionLevel,
-    setPulseAgent,
   ])
 
   const persistWorkspaceState = useCallback(() => {

@@ -121,6 +121,7 @@ pub(crate) struct RateLimitRecord {
 pub(crate) enum RedirectPolicy {
     Any,
     LoopbackOnly,
+    LoopbackOrHttps,
 }
 
 #[derive(Debug, Serialize)]

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { JOB_TYPES } from '@/lib/server/job-types'
 
 /**
  * Tests for jobs route validation logic.
@@ -6,7 +7,7 @@ import { describe, expect, it } from 'vitest'
  * the route itself requires a real PG connection.
  */
 
-const VALID_TYPES = new Set(['all', 'crawl', 'extract', 'embed', 'ingest'])
+const VALID_TYPES = new Set(['all', 'crawl', 'extract', 'embed', 'ingest', 'refresh'])
 const VALID_STATUSES = new Set([
   'all',
   'active',
@@ -29,6 +30,16 @@ describe('jobs route validation', () => {
       expect(VALID_TYPES.has('foo')).toBe(false)
       expect(VALID_TYPES.has('CRAWL')).toBe(false)
       expect(VALID_TYPES.has('')).toBe(false)
+    })
+
+    it('includes refresh type filter', () => {
+      expect(VALID_TYPES.has('refresh')).toBe(true)
+    })
+  })
+
+  describe('server job types', () => {
+    it('includes refresh in canonical JOB_TYPES', () => {
+      expect([...JOB_TYPES]).toContain('refresh')
     })
   })
 

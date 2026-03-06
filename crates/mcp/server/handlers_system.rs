@@ -1,8 +1,9 @@
 use super::AxonMcpServer;
 use super::common::{
-    MCP_TOOL_SCHEMA_URI, artifact_root, ensure_artifact_root, internal_error, invalid_params,
-    line_count, parse_limit_usize, parse_offset, parse_response_mode, resolve_artifact_output_path,
-    respond_with_mode, sha256_hex, to_pagination, validate_artifact_path,
+    MCP_TOOL_SCHEMA_URI, artifact_root, ensure_artifact_root, invalid_params, line_count,
+    logged_internal_error, parse_limit_usize, parse_offset, parse_response_mode,
+    resolve_artifact_output_path, respond_with_mode, sha256_hex, to_pagination,
+    validate_artifact_path,
 };
 use crate::crates::cli::commands::screenshot::{
     spider_screenshot_with_options, url_to_screenshot_filename,
@@ -38,7 +39,7 @@ impl AxonMcpServer {
         let bytes =
             spider_screenshot_with_options(&self.cfg, &normalized, width, height, full_page)
                 .await
-                .map_err(|e| internal_error(e.to_string()))?;
+                .map_err(|e| logged_internal_error("operation", e))?;
 
         let path = if let Some(output) = req.output {
             resolve_artifact_output_path(&output)?
@@ -50,11 +51,11 @@ impl AxonMcpServer {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
-                .map_err(|e| internal_error(e.to_string()))?;
+                .map_err(|e| logged_internal_error("operation", e))?;
         }
         tokio::fs::write(&path, &bytes)
             .await
-            .map_err(|e| internal_error(e.to_string()))?;
+            .map_err(|e| logged_internal_error("operation", e))?;
 
         Ok(AxonToolResponse::ok(
             "screenshot",
@@ -78,7 +79,7 @@ impl AxonMcpServer {
             .as_deref()
             .ok_or_else(|| invalid_params("path is required for artifacts operations"))?;
         let path = validate_artifact_path(path)?;
-        let text = fs::read_to_string(&path).map_err(|e| internal_error(e.to_string()))?;
+        let text = fs::read_to_string(&path).map_err(|e| logged_internal_error("operation", e))?;
 
         match req.subaction {
             ArtifactsSubaction::Head => {
@@ -205,7 +206,7 @@ impl AxonMcpServer {
     ) -> Result<AxonToolResponse, ErrorData> {
         let result = system::doctor(self.cfg.as_ref())
             .await
-            .map_err(|e| internal_error(e.to_string()))?;
+            .map_err(|e| logged_internal_error("operation", e))?;
         Ok(AxonToolResponse::ok("doctor", "doctor", result.payload))
     }
 
@@ -217,7 +218,7 @@ impl AxonMcpServer {
         let response_mode = parse_response_mode(req.response_mode);
         let result = system::domains(self.cfg.as_ref(), pagination)
             .await
-            .map_err(|e| internal_error(e.to_string()))?;
+            .map_err(|e| logged_internal_error("operation", e))?;
         let payload = serde_json::json!({
             "limit": result.limit,
             "offset": result.offset,
@@ -237,7 +238,7 @@ impl AxonMcpServer {
         let response_mode = parse_response_mode(req.response_mode);
         let result = system::sources(self.cfg.as_ref(), pagination)
             .await
-            .map_err(|e| internal_error(e.to_string()))?;
+            .map_err(|e| logged_internal_error("operation", e))?;
         let payload = serde_json::json!({
             "count": result.count,
             "limit": result.limit,
@@ -254,7 +255,7 @@ impl AxonMcpServer {
     ) -> Result<AxonToolResponse, ErrorData> {
         let result = system::stats(self.cfg.as_ref())
             .await
-            .map_err(|e| internal_error(e.to_string()))?;
+            .map_err(|e| logged_internal_error("operation", e))?;
         Ok(AxonToolResponse::ok("stats", "stats", result.payload))
     }
 }

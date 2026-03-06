@@ -1,4 +1,4 @@
-import type { PulseChatResponse, PulseToolUse } from '@/lib/pulse/types'
+import type { AcpConfigOption, PulseChatResponse, PulseToolUse } from '@/lib/pulse/types'
 
 export const PULSE_CHAT_STREAM_PROTOCOL_VERSION = 1 as const
 
@@ -7,6 +7,7 @@ type PulseChatStreamEventPayload =
   | { type: 'assistant_delta'; delta: string }
   | { type: 'thinking_content'; content: string }
   | { type: 'tool_use'; tool: PulseToolUse }
+  | { type: 'config_options_update'; configOptions: AcpConfigOption[] }
   | { type: 'heartbeat'; elapsed_ms: number }
   | { type: 'done'; response: PulseChatResponse }
   | { type: 'error'; error: string; code?: string }

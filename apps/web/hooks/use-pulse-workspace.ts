@@ -12,8 +12,9 @@ import {
   useWsMessageActions,
   useWsWorkspaceState,
 } from '@/hooks/use-ws-messages'
+import { getAcpModelConfigOption } from '@/lib/pulse/acp-config'
 import type { ValidationResult } from '@/lib/pulse/doc-ops'
-import type { DocOperation, PulseModel, PulsePermissionLevel } from '@/lib/pulse/types'
+import type { DocOperation, PulsePermissionLevel } from '@/lib/pulse/types'
 import { PULSE_WORKSPACE_STATE_KEY } from '@/lib/pulse/workspace-persistence'
 
 const ACTIVE_SESSION_ID_KEY = 'axon.web.pulse.active-session-id'
@@ -34,11 +35,14 @@ export function usePulseWorkspaceBehavior() {
     pulseAgent,
     pulseModel,
     pulsePermissionLevel,
+    acpConfigOptions,
   } = useWsWorkspaceState()
   const {
     updateWorkspaceContext,
+    setPulseAgent,
     setPulseModel,
     setPulsePermissionLevel,
+    setAcpConfigOptions,
     clearWorkspaceResumeSession,
   } = useWsMessageActions()
   const { subscribe } = useAxonWs()
@@ -123,7 +127,12 @@ export function usePulseWorkspaceBehavior() {
     messageIdRef,
     setLastResponseLatencyMs,
     setLastResponseModel,
+    acpConfigOptions: chatAcpConfigOptions,
   } = chat
+
+  useEffect(() => {
+    setAcpConfigOptions(chatAcpConfigOptions)
+  }, [chatAcpConfigOptions, setAcpConfigOptions])
 
   const latestCitationCount = useMemo(() => {
     for (let i = chatHistory.length - 1; i >= 0; i -= 1) {
@@ -301,8 +310,16 @@ export function usePulseWorkspaceBehavior() {
           setPulsePermissionLevel(permissionByIndex[Number(key) - 1] ?? 'accept-edits')
           return
         }
-        const modelByIndex: PulseModel[] = ['sonnet', 'opus', 'haiku']
-        setPulseModel(modelByIndex[Number(key) - 1] ?? 'sonnet')
+        if (pulseAgent === 'claude') {
+          const modelByIndex: string[] = ['sonnet', 'opus', 'haiku']
+          setPulseModel(modelByIndex[Number(key) - 1] ?? 'sonnet')
+          return
+        }
+        const modelConfig = getAcpModelConfigOption(acpConfigOptions)
+        if (!modelConfig || modelConfig.options.length === 0) return
+        const idx = Number(key) - 1
+        const option = modelConfig.options[idx]
+        if (option) setPulseModel(option.value)
         return
       }
       const isMod = event.metaKey || event.ctrlKey
@@ -324,7 +341,14 @@ export function usePulseWorkspaceBehavior() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [setPulseModel, setPulsePermissionLevel, splitPane.toggleChat, splitPane.toggleEditor])
+  }, [
+    acpConfigOptions,
+    pulseAgent,
+    setPulseModel,
+    setPulsePermissionLevel,
+    splitPane.toggleChat,
+    splitPane.toggleEditor,
+  ])
 
   // Workspace prompt handler
   const handlePromptRef = useRef(handlePrompt)
@@ -417,6 +441,7 @@ export function usePulseWorkspaceBehavior() {
     handleNewSession,
     resumeSessionId: workspaceResumeSessionId,
     clearResumeSession,
+    acpConfigOptions,
 
     // Layout (re-exported from useSplitPane)
     ...splitPane,

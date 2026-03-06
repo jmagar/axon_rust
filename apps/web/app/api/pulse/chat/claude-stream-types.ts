@@ -15,7 +15,7 @@ try {
 }
 export const GLOBAL_CLAUDE_MD_CHARS = _globalClaudeMdChars
 
-export const CLAUDE_MODEL_ARG: Record<PulseModel, string> = {
+export const CLAUDE_MODEL_ARG: Record<string, string> = {
   sonnet: 'sonnet',
   opus: 'opus',
   haiku: 'haiku',
@@ -144,7 +144,7 @@ export function buildClaudeArgs(
     '--plugin-dir',
     '/home/node/.claude/plugins',
   ]
-  const modelArg = CLAUDE_MODEL_ARG[model]
+  const modelArg = CLAUDE_MODEL_ARG[model] ?? model
   if (modelArg) {
     args.push('--model', modelArg)
   }

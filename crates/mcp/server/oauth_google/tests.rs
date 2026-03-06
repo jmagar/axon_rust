@@ -9,6 +9,12 @@ fn normalize_loopback_redirect_uri_prefers_localhost_http() {
         .expect("loopback uri should normalize");
     assert_eq!(uri, "http://localhost:34543/callback");
 }
+#[test]
+fn normalize_loopback_redirect_uri_accepts_ipv6_loopback() {
+    let uri = normalize_loopback_redirect_uri("https://[::1]:34543/callback")
+        .expect("ipv6 loopback uri should normalize");
+    assert_eq!(uri, "http://localhost:34543/callback");
+}
 
 #[test]
 fn redirect_policy_loopback_only_rejects_non_loopback() {
@@ -19,6 +25,29 @@ fn redirect_policy_loopback_only_rejects_non_loopback() {
     assert!(!is_allowed_redirect_uri(
         "https://axon.tootie.tv/callback",
         RedirectPolicy::LoopbackOnly
+    ));
+}
+#[test]
+fn redirect_policy_loopback_only_allows_ipv6_loopback() {
+    assert!(is_allowed_redirect_uri(
+        "http://[::1]:5555/callback",
+        RedirectPolicy::LoopbackOnly
+    ));
+}
+
+#[test]
+fn redirect_policy_loopback_or_https_allows_hosted_https_and_loopback_http() {
+    assert!(is_allowed_redirect_uri(
+        "https://claude.ai/mcp/callback",
+        RedirectPolicy::LoopbackOrHttps
+    ));
+    assert!(is_allowed_redirect_uri(
+        "http://localhost:5555/callback",
+        RedirectPolicy::LoopbackOrHttps
+    ));
+    assert!(!is_allowed_redirect_uri(
+        "http://example.com/callback",
+        RedirectPolicy::LoopbackOrHttps
     ));
 }
 
