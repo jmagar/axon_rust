@@ -3,8 +3,8 @@ use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::jobs::common::make_pool;
 use crate::crates::jobs::refresh::start_refresh_job_with_pool;
 use crate::crates::jobs::watch::{
-    claim_due_watches_with_pool, create_watch_run_with_pool, ensure_schema_once,
-    mark_watch_run_finished_with_pool,
+    WATCH_RUN_STATUS_COMPLETED, WATCH_RUN_STATUS_FAILED, claim_due_watches_with_pool,
+    create_watch_run_with_pool, ensure_schema_once, mark_watch_run_finished_with_pool,
 };
 use std::error::Error;
 use tokio::time::Duration;
@@ -37,22 +37,29 @@ async fn dispatch_watch(
 pub async fn run_watch_scheduler_tick(cfg: &Config) -> Result<usize, Box<dyn Error>> {
     let pool = make_pool(cfg).await?;
     ensure_schema_once(&pool).await?;
-    let claimed = claim_due_watches_with_pool(&pool, 25).await?;
+    run_watch_tick_with_pool(cfg, &pool).await
+}
+
+async fn run_watch_tick_with_pool(
+    cfg: &Config,
+    pool: &sqlx::PgPool,
+) -> Result<usize, Box<dyn Error>> {
+    let claimed = claim_due_watches_with_pool(pool, 25).await?;
     let mut processed = 0usize;
 
     for watch in claimed {
-        let run = create_watch_run_with_pool(&pool, watch.id, None).await?;
-        match dispatch_watch(cfg, &pool, &watch).await {
+        let run = create_watch_run_with_pool(pool, watch.id, None).await?;
+        match dispatch_watch(cfg, pool, &watch).await {
             Ok(dispatched_job_id) => {
                 let result = serde_json::json!({
                     "task_type": watch.task_type,
                     "dispatched_job_id": dispatched_job_id,
                 });
                 let _ = mark_watch_run_finished_with_pool(
-                    &pool,
+                    pool,
                     watch.id,
                     run.id,
-                    "completed",
+                    WATCH_RUN_STATUS_COMPLETED,
                     Some(&result),
                     None,
                 )
@@ -61,10 +68,10 @@ pub async fn run_watch_scheduler_tick(cfg: &Config) -> Result<usize, Box<dyn Err
             }
             Err(err) => {
                 let _ = mark_watch_run_finished_with_pool(
-                    &pool,
+                    pool,
                     watch.id,
                     run.id,
-                    "failed",
+                    WATCH_RUN_STATUS_FAILED,
                     None,
                     Some(&err.to_string()),
                 )
@@ -82,8 +89,10 @@ pub async fn run_watch_scheduler_tick(cfg: &Config) -> Result<usize, Box<dyn Err
 
 pub async fn run_watch_worker(cfg: &Config) -> Result<(), Box<dyn Error>> {
     log_info("watch scheduler worker started");
+    let pool = make_pool(cfg).await?;
+    ensure_schema_once(&pool).await?;
     loop {
-        match run_watch_scheduler_tick(cfg).await {
+        match run_watch_tick_with_pool(cfg, &pool).await {
             Ok(processed) => {
                 if processed > 0 {
                     log_info(&format!("watch scheduler dispatched {} run(s)", processed));

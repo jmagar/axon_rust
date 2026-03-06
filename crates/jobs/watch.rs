@@ -8,6 +8,9 @@ use uuid::Uuid;
 
 static SCHEMA_INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 const WATCH_CLAIM_LEASE_SECS: i64 = 300;
+pub const WATCH_RUN_STATUS_RUNNING: &str = "running";
+pub const WATCH_RUN_STATUS_COMPLETED: &str = "completed";
+pub const WATCH_RUN_STATUS_FAILED: &str = "failed";
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct WatchDef {

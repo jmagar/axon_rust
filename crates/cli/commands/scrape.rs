@@ -185,7 +185,11 @@ async fn direct_fetch_requested_page(
     }
     // Validate each redirect target through the SSRF blacklist so a public URL
     // cannot redirect to a private/internal address and bypass the guard.
+    // Preserve reqwest's default redirect cap (10) to prevent infinite loops.
     builder = builder.redirect(reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 10 {
+            return attempt.error("too many redirects");
+        }
         let url = attempt.url().as_str().to_string();
         if validate_url(&url).is_err() {
             attempt.error(format!("SSRF: redirect to blocked URL {url}"))
