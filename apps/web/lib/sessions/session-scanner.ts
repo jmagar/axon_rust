@@ -193,7 +193,7 @@ export async function scanSessions(limit = 20): Promise<SessionFile[]> {
 
   const deduped = new Map<string, SessionFile>()
   for (const session of results) {
-    const key = session.absolutePath
+    const key = session.filename
     const existing = deduped.get(key)
     deduped.set(key, existing ? selectPreferredSession(existing, session) : session)
   }

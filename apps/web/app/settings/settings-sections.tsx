@@ -46,6 +46,14 @@ export function SettingsSections({
   settings,
   updateSettings,
 }: SettingsSectionsProps) {
+  const acpModelOptions =
+    getAcpModelConfigOption(acpConfigOptions)
+      ?.options.map((option) => ({
+        id: option.value,
+        label: option.name,
+        sub: option.description ?? '',
+      }))
+      .filter((o) => o.id) ?? []
   const modelOptions: Array<{ id: string; label: string; sub: string; badge?: string }> =
     pulseAgent === 'claude'
       ? CLAUDE_MODEL_OPTIONS.map((option) => ({
@@ -54,11 +62,9 @@ export function SettingsSections({
           sub: option.sub,
           badge: option.badge,
         }))
-      : (getAcpModelConfigOption(acpConfigOptions)?.options.map((option) => ({
-          id: option.value,
-          label: option.name,
-          sub: option.description ?? '',
-        })) ?? [{ id: 'default', label: 'Default', sub: 'Agent default model' }])
+      : acpModelOptions.length > 0
+        ? acpModelOptions
+        : [{ id: 'default', label: 'Default', sub: 'Agent default model' }]
   const selectedModel = modelOptions.find((option) => option.id === pulseModel) ?? modelOptions[0]
   const selectedPermission =
     PERMISSION_OPTIONS.find((o) => o.id === pulsePermissionLevel) ?? PERMISSION_OPTIONS[0]

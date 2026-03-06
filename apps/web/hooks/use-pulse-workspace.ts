@@ -131,7 +131,9 @@ export function usePulseWorkspaceBehavior() {
   } = chat
 
   useEffect(() => {
-    setAcpConfigOptions(chatAcpConfigOptions)
+    if (chatAcpConfigOptions.length > 0) {
+      setAcpConfigOptions(chatAcpConfigOptions)
+    }
   }, [chatAcpConfigOptions, setAcpConfigOptions])
 
   const latestCitationCount = useMemo(() => {
