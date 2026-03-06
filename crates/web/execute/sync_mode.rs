@@ -7,9 +7,10 @@ use crate::crates::services::scrape as scrape_svc;
 use crate::crates::services::search as search_svc;
 use crate::crates::services::system as system_svc;
 use crate::crates::services::types::{
-    AcpAdapterCommand, AcpPromptTurnRequest, AskResult, DoctorResult, DomainsResult, MapOptions,
-    MapResult, Pagination, QueryResult, ResearchResult, RetrieveOptions, RetrieveResult,
-    ScrapeResult, SearchOptions, SearchResult, SourcesResult, StatsResult, StatusResult,
+    AcpAdapterCommand, AcpPromptTurnRequest, AcpSessionProbeRequest, AskResult, DoctorResult,
+    DomainsResult, MapOptions, MapResult, Pagination, QueryResult, ResearchResult, RetrieveOptions,
+    RetrieveResult, ScrapeResult, SearchOptions, SearchResult, SourcesResult, StatsResult,
+    StatusResult,
 };
 use serde_json::json;
 use std::env;
@@ -47,6 +48,7 @@ pub(super) const DIRECT_SYNC_MODES: &[&str] = &[
     "doctor",
     "status",
     "pulse_chat",
+    "pulse_chat_probe",
 ];
 
 /// Owned parameters extracted from the WS request before any `.await`.
@@ -68,6 +70,7 @@ pub(super) struct DirectParams {
     max_points: Option<usize>,
     agent: PulseChatAgent,
     session_id: Option<String>,
+    model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +114,7 @@ enum ServiceMode {
     Doctor,
     Status,
     PulseChat,
+    PulseChatProbe,
 }
 
 impl ServiceMode {
@@ -130,6 +134,7 @@ impl ServiceMode {
             "doctor" => Some(Self::Doctor),
             "status" => Some(Self::Status),
             "pulse_chat" => Some(Self::PulseChat),
+            "pulse_chat_probe" => Some(Self::PulseChatProbe),
             _ => None,
         }
     }
@@ -253,6 +258,10 @@ fn extract_params(context: &ExecCommandContext, flags: &serde_json::Value) -> Op
         .get("session_id")
         .and_then(serde_json::Value::as_str)
         .map(ToString::to_string);
+    let model = flags
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string);
     Some(DirectParams {
         mode,
         input: context.input.clone(),
@@ -262,6 +271,7 @@ fn extract_params(context: &ExecCommandContext, flags: &serde_json::Value) -> Op
         max_points,
         agent,
         session_id,
+        model,
     })
 }
 
@@ -491,6 +501,7 @@ pub(super) fn classify_sync_direct(
         exec_id: ws_ctx.exec_id.clone(),
         mode: mode.to_string(),
         input: input.to_string(),
+        flags: flags.clone(),
         cfg,
     };
     extract_params(&context, flags)
@@ -544,6 +555,7 @@ async fn dispatch_service(
         max_points,
         agent,
         session_id,
+        model,
     } = params;
 
     // `mode` is a `Copy` enum — no string borrow anywhere in this async fn.
@@ -658,33 +670,142 @@ async fn dispatch_service(
             let req = AcpPromptTurnRequest {
                 session_id,
                 prompt: vec![input],
+                model,
             };
-            scaffold
-                .start_prompt_turn(
-                    &req,
-                    env::current_dir().map_err(|e| e.to_string())?,
-                    Some(event_tx),
-                )
-                .await
-                .map_err(|e| e.to_string())?;
+            let cwd = env::current_dir().map_err(|e| e.to_string())?;
+            let mut prompt_turn = tokio::spawn(async move {
+                scaffold
+                    .start_prompt_turn(&req, cwd, Some(event_tx))
+                    .await
+                    .map_err(|e| e.to_string())
+            });
 
-            while let Ok(event) = event_rx.try_recv() {
-                match event {
-                    ServiceEvent::Log { level, message } => {
-                        send_json_owned(
-                            tx.clone(),
-                            ws_ctx.clone(),
-                            json!({
-                                "type": "status",
-                                "level": level,
-                                "message": message,
-                            }),
-                        )
-                        .await;
+            loop {
+                tokio::select! {
+                    join_result = &mut prompt_turn => {
+                        let run_result = join_result
+                            .map_err(|e| format!("failed to join pulse_chat task: {e}"))?;
+                        run_result?;
+                        while let Ok(event) = event_rx.try_recv() {
+                            match event {
+                                ServiceEvent::Log { level, message } => {
+                                    send_json_owned(
+                                        tx.clone(),
+                                        ws_ctx.clone(),
+                                        json!({
+                                            "type": "status",
+                                            "level": level,
+                                            "message": message,
+                                        }),
+                                    )
+                                    .await;
+                                }
+                                ServiceEvent::AcpBridge { event } => {
+                                    let payload = super::events::acp_bridge_event_payload(&event);
+                                    send_json_owned(tx.clone(), ws_ctx.clone(), payload).await;
+                                }
+                            }
+                        }
+                        break;
                     }
-                    ServiceEvent::AcpBridge { event } => {
-                        let payload = super::events::acp_bridge_event_payload(&event);
-                        send_json_owned(tx.clone(), ws_ctx.clone(), payload).await;
+                    maybe_event = event_rx.recv() => {
+                        match maybe_event {
+                            Some(ServiceEvent::Log { level, message }) => {
+                                send_json_owned(
+                                    tx.clone(),
+                                    ws_ctx.clone(),
+                                    json!({
+                                        "type": "status",
+                                        "level": level,
+                                        "message": message,
+                                    }),
+                                )
+                                .await;
+                            }
+                            Some(ServiceEvent::AcpBridge { event }) => {
+                                let payload = super::events::acp_bridge_event_payload(&event);
+                                send_json_owned(tx.clone(), ws_ctx.clone(), payload).await;
+                            }
+                            None => {
+                                let run_result = (&mut prompt_turn)
+                                    .await
+                                    .map_err(|e| format!("failed to join pulse_chat task: {e}"))?;
+                                run_result?;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        ServiceMode::PulseChatProbe => {
+            let (event_tx, mut event_rx) = mpsc::channel::<ServiceEvent>(32);
+            let adapter = resolve_acp_adapter_command(&cfg, agent)?;
+            let scaffold = acp_svc::AcpClientScaffold::new(adapter);
+            let req = AcpSessionProbeRequest { session_id, model };
+            let cwd = env::current_dir().map_err(|e| e.to_string())?;
+            let mut probe = tokio::spawn(async move {
+                scaffold
+                    .start_session_probe(&req, cwd, Some(event_tx))
+                    .await
+                    .map_err(|e| e.to_string())
+            });
+
+            loop {
+                tokio::select! {
+                    join_result = &mut probe => {
+                        let run_result = join_result
+                            .map_err(|e| format!("failed to join pulse_chat_probe task: {e}"))?;
+                        run_result?;
+                        while let Ok(event) = event_rx.try_recv() {
+                            match event {
+                                ServiceEvent::Log { level, message } => {
+                                    send_json_owned(
+                                        tx.clone(),
+                                        ws_ctx.clone(),
+                                        json!({
+                                            "type": "status",
+                                            "level": level,
+                                            "message": message,
+                                        }),
+                                    )
+                                    .await;
+                                }
+                                ServiceEvent::AcpBridge { event } => {
+                                    let payload = super::events::acp_bridge_event_payload(&event);
+                                    send_json_owned(tx.clone(), ws_ctx.clone(), payload).await;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    maybe_event = event_rx.recv() => {
+                        match maybe_event {
+                            Some(ServiceEvent::Log { level, message }) => {
+                                send_json_owned(
+                                    tx.clone(),
+                                    ws_ctx.clone(),
+                                    json!({
+                                        "type": "status",
+                                        "level": level,
+                                        "message": message,
+                                    }),
+                                )
+                                .await;
+                            }
+                            Some(ServiceEvent::AcpBridge { event }) => {
+                                let payload = super::events::acp_bridge_event_payload(&event);
+                                send_json_owned(tx.clone(), ws_ctx.clone(), payload).await;
+                            }
+                            None => {
+                                let run_result = (&mut probe)
+                                    .await
+                                    .map_err(|e| format!("failed to join pulse_chat_probe task: {e}"))?;
+                                run_result?;
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -857,6 +978,7 @@ mod tests {
             exec_id: "test".to_string(),
             mode: "query".to_string(),
             input: "test".to_string(),
+            flags: serde_json::Value::Null,
             cfg: Arc::new(base),
         };
         let flags = serde_json::json!({"collection": "my_custom_col"});
@@ -872,6 +994,7 @@ mod tests {
             exec_id: "test".to_string(),
             mode: "query".to_string(),
             input: "test".to_string(),
+            flags: serde_json::Value::Null,
             cfg: Arc::new(base),
         };
         let flags = serde_json::json!({"collection": ""});
@@ -886,6 +1009,7 @@ mod tests {
             exec_id: "test".to_string(),
             mode: "query".to_string(),
             input: "rust async".to_string(),
+            flags: serde_json::Value::Null,
             cfg: Arc::new(base),
         };
         let flags = serde_json::json!({"limit": 25, "offset": 5});
@@ -896,6 +1020,7 @@ mod tests {
         assert!(matches!(params.mode, ServiceMode::Query));
         assert_eq!(params.agent, PulseChatAgent::Claude);
         assert_eq!(params.session_id, None);
+        assert_eq!(params.model, None);
     }
 
     #[test]
@@ -905,12 +1030,14 @@ mod tests {
             exec_id: "test".to_string(),
             mode: "pulse_chat".to_string(),
             input: "hello".to_string(),
+            flags: serde_json::Value::Null,
             cfg: Arc::new(base),
         };
         let flags = serde_json::json!({"session_id": "session-123"});
         let params = extract_params(&context, &flags).expect("pulse_chat is a recognised mode");
         assert_eq!(params.agent, PulseChatAgent::Claude);
         assert_eq!(params.session_id.as_deref(), Some("session-123"));
+        assert_eq!(params.model, None);
     }
 
     #[test]
@@ -920,11 +1047,29 @@ mod tests {
             exec_id: "test".to_string(),
             mode: "pulse_chat".to_string(),
             input: "hello".to_string(),
+            flags: serde_json::Value::Null,
             cfg: Arc::new(base),
         };
         let flags = serde_json::json!({"agent": "codex"});
         let params = extract_params(&context, &flags).expect("pulse_chat is a recognised mode");
         assert_eq!(params.agent, PulseChatAgent::Codex);
+        assert_eq!(params.model, None);
+    }
+
+    #[test]
+    fn extract_params_reads_model_for_pulse_chat() {
+        let base = Config::default();
+        let context = ExecCommandContext {
+            exec_id: "test".to_string(),
+            mode: "pulse_chat".to_string(),
+            input: "hello".to_string(),
+            flags: serde_json::Value::Null,
+            cfg: Arc::new(base),
+        };
+        let flags = serde_json::json!({"agent": "codex", "model": "o3"});
+        let params = extract_params(&context, &flags).expect("pulse_chat is a recognised mode");
+        assert_eq!(params.agent, PulseChatAgent::Codex);
+        assert_eq!(params.model.as_deref(), Some("o3"));
     }
 
     #[test]
@@ -934,6 +1079,7 @@ mod tests {
             exec_id: "test".to_string(),
             mode: "unknown_mode".to_string(),
             input: "some input".to_string(),
+            flags: serde_json::Value::Null,
             cfg: Arc::new(base),
         };
         let flags = serde_json::json!({});

@@ -12,7 +12,7 @@
 use super::context::ExecCommandContext;
 use super::events::{CommandContext, WsEventV2, serialize_v2_event};
 use super::ws_send::{send_done_dual, send_error_dual};
-use crate::crates::core::config::Config;
+use crate::crates::core::config::{Config, ConfigOverrides};
 use crate::crates::services;
 use serde_json::json;
 use std::future::Future;
@@ -82,11 +82,22 @@ async fn dispatch_async(
     context: &ExecCommandContext,
     tx: &mpsc::Sender<String>,
     ws_ctx: &CommandContext,
-    cfg: Arc<Config>,
     crawl_job_id: Arc<Mutex<Option<String>>>,
 ) -> Result<(), String> {
     let mode = context.mode.as_str();
     let input = context.input.trim().to_string();
+
+    // Apply flag overrides (collection, etc.) to produce a per-request Config.
+    let mut overrides = ConfigOverrides::default();
+    if let Some(col) = context
+        .flags
+        .get("collection")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        overrides.collection = Some(col.to_string());
+    }
+    let cfg = Arc::new(context.cfg.apply_overrides(&overrides));
 
     let result = match mode {
         "crawl" => {
@@ -145,12 +156,11 @@ pub(super) async fn handle_async_command(
     context: ExecCommandContext,
     tx: mpsc::Sender<String>,
     crawl_job_id: Arc<Mutex<Option<String>>>,
-    cfg: Arc<Config>,
 ) {
     let ws_ctx = context.to_ws_ctx();
     let start = std::time::Instant::now();
 
-    match dispatch_async(&context, &tx, &ws_ctx, cfg, crawl_job_id).await {
+    match dispatch_async(&context, &tx, &ws_ctx, crawl_job_id).await {
         Ok(()) => {
             let elapsed = start.elapsed().as_millis() as u64;
             send_done_dual(&tx, &ws_ctx, 0, Some(elapsed)).await;

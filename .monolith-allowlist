@@ -21,5 +21,7 @@ crates/vector/ops/commands/evaluate.rs  # expires: 2026-03-11
 # expires: 2026-03-12 — ACP rollout; split pending in follow-up.
 crates/services/acp.rs  # expires: 2026-03-12
 crates/web/execute/sync_mode.rs  # expires: 2026-03-12
-crates/services/acp.rs
-crates/web/execute/sync_mode.rs
+
+# expires: 2026-03-12 — pre-existing size from services-layer-refactor PR; split pending.
+apps/web/app/jobs/[id]/page.tsx  # expires: 2026-03-12
+apps/web/hooks/use-ws-messages.ts  # expires: 2026-03-12

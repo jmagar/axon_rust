@@ -3,6 +3,9 @@
 import type React from 'react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useAxonWs } from '@/hooks/use-axon-ws'
+import { getAcpModelConfigOption } from '@/lib/pulse/acp-config'
+import { probePulseConfigOptions } from '@/lib/pulse/config-api'
+import type { AcpConfigOption } from '@/lib/pulse/types'
 import type { CrawlFile, WsLifecycleEntry, WsServerMsg } from '@/lib/ws-protocol'
 import { handleWsMessage } from './ws-messages/handlers'
 import { makeInitialRuntimeState, reduceRuntimeState } from './ws-messages/runtime'
@@ -118,6 +121,7 @@ export function useWsMessagesProvider() {
   const [pulseModel, setPulseModel] = useState<PulseWorkspaceModel>('sonnet')
   const [pulsePermissionLevel, setPulsePermissionLevel] =
     useState<PulseWorkspacePermission>('accept-edits')
+  const [acpConfigOptions, setAcpConfigOptions] = useState<AcpConfigOption[]>([])
 
   const selectedFileRef = useRef<string | null>(null)
   const crawlFilesRef = useRef<CrawlFile[]>([])
@@ -219,7 +223,7 @@ export function useWsMessagesProvider() {
       const a = localStorage.getItem('axon.web.pulse-agent') as PulseWorkspaceAgent
       if (a && ['claude', 'codex'].includes(a)) setPulseAgent(a)
       const m = localStorage.getItem('axon.web.pulse-model') as PulseWorkspaceModel
-      if (m && ['sonnet', 'opus', 'haiku'].includes(m)) setPulseModel(m)
+      if (m && typeof m === 'string' && m.length > 0) setPulseModel(m)
       const p = localStorage.getItem('axon.web.pulse-permission') as PulseWorkspacePermission
       if (p && ['plan', 'accept-edits', 'bypass-permissions'].includes(p)) {
         setPulsePermissionLevel(p)
@@ -252,6 +256,38 @@ export function useWsMessagesProvider() {
       /* ignore */
     }
   }, [pulsePermissionLevel])
+
+  useEffect(() => {
+    if (pulseAgent === 'claude') {
+      setAcpConfigOptions([])
+    }
+  }, [pulseAgent])
+
+  useEffect(() => {
+    if (pulseAgent !== 'codex') return
+
+    let cancelled = false
+
+    void probePulseConfigOptions({ agent: pulseAgent, model: pulseModel })
+      .then((options) => {
+        if (cancelled || options.length === 0) return
+        setAcpConfigOptions(options)
+
+        const modelConfig = getAcpModelConfigOption(options)
+        if (!modelConfig || modelConfig.options.length === 0) return
+        const hasCurrent = modelConfig.options.some((option) => option.value === pulseModel)
+        if (hasCurrent) return
+        setPulseModel(modelConfig.currentValue || modelConfig.options[0]!.value)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        console.warn('[pulse] codex config probe failed', error)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [pulseAgent, pulseModel])
 
   const setCurrentJobIdTracked = useCallback((jobId: string | null) => {
     currentJobIdRef.current = jobId
@@ -384,6 +420,7 @@ export function useWsMessagesProvider() {
     setWorkspaceMode('pulse')
     setHasResults(true)
     setWorkspaceResumeSessionId(null)
+    setWorkspaceResumeVersion(0)
     setWorkspacePrompt(prompt)
     setWorkspacePromptVersion((prev) => prev + 1)
   }, [])
@@ -475,6 +512,7 @@ export function useWsMessagesProvider() {
       pulseAgent,
       pulseModel,
       pulsePermissionLevel,
+      acpConfigOptions,
     }),
     [
       workspaceMode,
@@ -486,6 +524,7 @@ export function useWsMessagesProvider() {
       pulseAgent,
       pulseModel,
       pulsePermissionLevel,
+      acpConfigOptions,
     ],
   )
 
@@ -495,6 +534,7 @@ export function useWsMessagesProvider() {
       setPulseAgent,
       setPulseModel,
       setPulsePermissionLevel,
+      setAcpConfigOptions,
       activateWorkspace,
       submitWorkspacePrompt,
       resumeWorkspaceSession,
@@ -505,7 +545,6 @@ export function useWsMessagesProvider() {
     }),
     [
       selectFile,
-      setPulseAgent,
       activateWorkspace,
       submitWorkspacePrompt,
       resumeWorkspaceSession,

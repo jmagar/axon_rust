@@ -82,7 +82,10 @@ pub async fn ask(
         &tx,
         ServiceEvent::Log {
             level: "info".to_string(),
-            message: format!("starting ask: {}", &question[..question.len().min(80)]),
+            message: format!(
+                "starting ask: {}",
+                question.chars().take(80).collect::<String>()
+            ),
         },
     );
     let payload = ask_payload(cfg, question)

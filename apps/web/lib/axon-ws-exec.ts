@@ -110,11 +110,15 @@ export async function runAxonCommandWsStream(
   const timeoutMs = options.timeoutMs ?? 30_000
   const input = options.input ?? ''
   const flags = options.flags ?? {}
+  const maxConnectAttempts = 4
 
   return new Promise((resolve, reject) => {
-    const ws = new WebSocketImpl(workersWsUrl)
     let settled = false
+    let ws: WsLike | null = null
+    let opened = false
+    let connectAttempts = 0
     const abortSignal = options.signal
+    let timer: ReturnType<typeof setTimeout> | undefined
 
     const finish = (err?: Error) => {
       if (settled) return
@@ -122,7 +126,7 @@ export async function runAxonCommandWsStream(
       clearTimeout(timer)
       abortSignal?.removeEventListener('abort', onAbort)
       try {
-        ws.close()
+        ws?.close()
       } catch {
         /* ignore */
       }
@@ -140,72 +144,88 @@ export async function runAxonCommandWsStream(
     }
     abortSignal?.addEventListener('abort', onAbort, { once: true })
 
-    const timer = setTimeout(
+    timer = setTimeout(
       () => finish(new Error(`Timeout waiting for axon ${mode} (${timeoutMs}ms)`)),
       timeoutMs,
     )
 
-    ws.addEventListener('open', () => {
-      ws.send(JSON.stringify({ type: 'execute', mode, input, flags }))
-    })
+    const connect = () => {
+      if (settled) return
+      connectAttempts += 1
+      ws = new WebSocketImpl(workersWsUrl)
 
-    ws.addEventListener('message', (event) => {
-      try {
-        const parsed = JSON.parse(String(event.data)) as { type?: unknown; data?: unknown }
-        const type = typeof parsed.type === 'string' ? parsed.type : ''
-        const data =
-          parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
-            ? (parsed.data as Record<string, unknown>)
-            : null
+      ws.addEventListener('open', () => {
+        opened = true
+        ws?.send(JSON.stringify({ type: 'execute', mode, input, flags }))
+      })
 
-        if (type === 'command.output.json') {
-          const outputData = data && data.data !== undefined ? data.data : data
-          options.onJson?.(outputData)
-          return
-        }
-        if (type === 'command.output.line') {
-          options.onOutputLine?.(typeof data?.line === 'string' ? data.line : '')
-          return
-        }
-        if (type === 'command.done') {
-          const payload =
-            data?.payload && typeof data.payload === 'object' && !Array.isArray(data.payload)
-              ? (data.payload as Record<string, unknown>)
+      ws.addEventListener('message', (event) => {
+        try {
+          const parsed = JSON.parse(String(event.data)) as { type?: unknown; data?: unknown }
+          const type = typeof parsed.type === 'string' ? parsed.type : ''
+          const data =
+            parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
+              ? (parsed.data as Record<string, unknown>)
               : null
-          options.onDone?.({
-            exit_code: typeof payload?.exit_code === 'number' ? payload.exit_code : 0,
-            elapsed_ms: typeof payload?.elapsed_ms === 'number' ? payload.elapsed_ms : undefined,
-          })
-          finish()
+
+          if (type === 'command.output.json') {
+            const outputData = data && data.data !== undefined ? data.data : data
+            options.onJson?.(outputData)
+            return
+          }
+          if (type === 'command.output.line') {
+            options.onOutputLine?.(typeof data?.line === 'string' ? data.line : '')
+            return
+          }
+          if (type === 'command.done') {
+            const payload =
+              data?.payload && typeof data.payload === 'object' && !Array.isArray(data.payload)
+                ? (data.payload as Record<string, unknown>)
+                : null
+            options.onDone?.({
+              exit_code: typeof payload?.exit_code === 'number' ? payload.exit_code : 0,
+              elapsed_ms: typeof payload?.elapsed_ms === 'number' ? payload.elapsed_ms : undefined,
+            })
+            finish()
+            return
+          }
+          if (type === 'command.error') {
+            const payload =
+              data?.payload && typeof data.payload === 'object' && !Array.isArray(data.payload)
+                ? (data.payload as Record<string, unknown>)
+                : null
+            options.onError?.({
+              message:
+                typeof payload?.message === 'string' && payload.message.length > 0
+                  ? payload.message
+                  : `axon ${mode} failed`,
+              elapsed_ms: typeof payload?.elapsed_ms === 'number' ? payload.elapsed_ms : undefined,
+            })
+            finish()
+          }
+        } catch {
+          /* ignore non-JSON messages */
+        }
+      })
+
+      ws.addEventListener('error', () => {
+        if (!opened && connectAttempts < maxConnectAttempts) {
+          setTimeout(connect, 250 * connectAttempts)
           return
         }
-        if (type === 'command.error') {
-          const payload =
-            data?.payload && typeof data.payload === 'object' && !Array.isArray(data.payload)
-              ? (data.payload as Record<string, unknown>)
-              : null
-          options.onError?.({
-            message:
-              typeof payload?.message === 'string' && payload.message.length > 0
-                ? payload.message
-                : `axon ${mode} failed`,
-            elapsed_ms: typeof payload?.elapsed_ms === 'number' ? payload.elapsed_ms : undefined,
-          })
-          finish()
+        finish(new Error(`WebSocket connection error (${WORKERS_WS_URL})`))
+      })
+
+      ws.addEventListener('close', (event) => {
+        if (settled) return
+        if (!opened && connectAttempts < maxConnectAttempts) {
+          setTimeout(connect, 250 * connectAttempts)
+          return
         }
-      } catch {
-        /* ignore non-JSON messages */
-      }
-    })
-
-    ws.addEventListener('error', () => {
-      finish(new Error(`WebSocket connection error (${workersWsUrl})`))
-    })
-
-    ws.addEventListener('close', (event) => {
-      if (!settled) {
         finish(new Error(`WebSocket closed unexpectedly (code ${event.code})`))
-      }
-    })
+      })
+    }
+
+    connect()
   })
 }

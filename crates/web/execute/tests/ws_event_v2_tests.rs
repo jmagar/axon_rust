@@ -269,6 +269,7 @@ async fn sync_single_line_json_emits_one_structured_event() {
         exec_id: "exec-dup-check".to_string(),
         mode: "query".to_string(),
         input: "test".to_string(),
+        flags: Value::Null,
         cfg: Arc::new(Config::default()),
     };
 

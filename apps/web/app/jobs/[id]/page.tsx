@@ -54,6 +54,61 @@ function fmtDuration(
   return '—'
 }
 
+export function shouldRefetchArtifactsOnTerminalTransition(
+  previousStatus: JobDetail['status'] | null | undefined,
+  nextStatus: JobDetail['status'],
+): boolean {
+  return previousStatus === 'running' && nextStatus !== 'running'
+}
+
+export function buildJobDetailRequestPath(id: string, includeArtifacts: boolean): string {
+  const artifacts = includeArtifacts ? '1' : '0'
+  return `/api/jobs/${id}?includeArtifacts=${artifacts}`
+}
+
+type FlatEntry = { key: string; value: string }
+
+export function flattenJsonEntries(value: unknown, prefix = ''): FlatEntry[] {
+  if (value === null || value === undefined) return []
+  if (Array.isArray(value)) {
+    return [{ key: prefix, value: JSON.stringify(value) }]
+  }
+  if (typeof value !== 'object') {
+    return [{ key: prefix, value: String(value) }]
+  }
+
+  const obj = value as Record<string, unknown>
+  const entries: FlatEntry[] = []
+  for (const [k, v] of Object.entries(obj)) {
+    const nextKey = prefix ? `${prefix}.${k}` : k
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      entries.push(...flattenJsonEntries(v, nextKey))
+    } else if (Array.isArray(v)) {
+      entries.push({ key: nextKey, value: JSON.stringify(v) })
+    } else if (v === null || v === undefined) {
+      entries.push({ key: nextKey, value: 'null' })
+    } else {
+      entries.push({ key: nextKey, value: String(v) })
+    }
+  }
+  entries.sort((a, b) => a.key.localeCompare(b.key))
+  return entries
+}
+
+export function getRefreshSummaryRows(
+  job: JobDetail,
+): Array<{ label: string; value: string | number | null }> {
+  return [
+    { label: 'Checked', value: job.checked },
+    { label: 'Changed', value: job.changed },
+    { label: 'Unchanged', value: job.unchanged },
+    { label: 'Not Modified', value: job.notModified },
+    { label: 'Failed', value: job.failedCount },
+    { label: 'Total', value: job.total },
+    { label: 'Manifest Path', value: job.manifestPath },
+  ]
+}
+
 // ── sub-components ────────────────────────────────────────────────────────────
 
 const STATUS_CONFIG = {
@@ -107,6 +162,7 @@ const TYPE_COLORS: Record<string, string> = {
   embed: 'text-[var(--axon-secondary)] bg-[rgba(255,135,175,0.1)]',
   extract: 'text-[#d7af87]               bg-[rgba(215,175,135,0.1)]',
   ingest: 'text-[#87d7d7]               bg-[rgba(135,215,215,0.1)]',
+  refresh: 'text-[#34d399]              bg-[rgba(52,211,153,0.1)]',
 }
 
 function TypeBadge({ type }: { type: string }) {
@@ -246,15 +302,22 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
   const fetchJob = useCallback(
     async (includeArtifacts = true) => {
       try {
-        const artifacts = includeArtifacts ? '1' : '0'
-        const res = await apiFetch(`/api/jobs/${id}?includeArtifacts=${artifacts}`)
+        const res = await apiFetch(buildJobDetailRequestPath(id, includeArtifacts))
         if (!res.ok) {
           const body = (await res.json()) as { error?: string }
           setError(body.error ?? `HTTP ${res.status}`)
           return
         }
         const data = (await res.json()) as JobDetail
+        let needsArtifactRefetch = false
         setJob((previous) => {
+          if (
+            previous &&
+            !includeArtifacts &&
+            shouldRefetchArtifactsOnTerminalTransition(previous.status, data.status)
+          ) {
+            needsArtifactRefetch = true
+          }
           if (!previous) return data
           return {
             ...data,
@@ -262,6 +325,9 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
             markdownFiles: data.markdownFiles ?? previous.markdownFiles,
           }
         })
+        if (needsArtifactRefetch) {
+          void fetchJob(true)
+        }
         setError(null)
       } catch {
         setError('Failed to fetch job')
@@ -310,6 +376,8 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
 
   const duration = fmtDuration(job.elapsedMs, job.startedAt, job.finishedAt)
   const isUrl = job.type === 'crawl' || (job.type === 'embed' && job.target.startsWith('http'))
+  const resultJsonFlat = flattenJsonEntries(job.resultJson)
+  const configJsonFlat = flattenJsonEntries(job.configJson)
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -401,19 +469,61 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
         {job.type === 'extract' && job.urls && job.urls.length > 0 && (
           <Section title="URLs" icon={Globe}>
             <ul className="space-y-1">
-              {job.urls.map((u) => (
-                <li key={u}>
-                  <a
-                    href={u}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-mono text-[11px] text-[var(--axon-primary)] hover:underline flex items-center gap-1"
-                  >
-                    {u} <ExternalLink className="size-3 flex-shrink-0" />
-                  </a>
-                </li>
-              ))}
+              {job.urls.map((u) => {
+                const isSafeUrl = /^https?:\/\//i.test(u)
+                return (
+                  <li key={u}>
+                    {isSafeUrl ? (
+                      <a
+                        href={u}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-mono text-[11px] text-[var(--axon-primary)] hover:underline flex items-center gap-1"
+                      >
+                        {u} <ExternalLink className="size-3 flex-shrink-0" />
+                      </a>
+                    ) : (
+                      <span className="font-mono text-[11px] text-[var(--axon-primary)]">{u}</span>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
+          </Section>
+        )}
+
+        {job.type === 'refresh' && (
+          <Section title="Refresh Summary" icon={RefreshCw}>
+            <div className="space-y-0">
+              {getRefreshSummaryRows(job).map((row) => (
+                <KV
+                  key={row.label}
+                  label={row.label}
+                  value={row.value}
+                  mono={row.label === 'Manifest Path'}
+                />
+              ))}
+            </div>
+            {job.urls && job.urls.length > 0 && (
+              <div className="mt-3">
+                <ShowMoreList
+                  title="Refresh URLs"
+                  items={job.urls}
+                  emptyText="No refresh URLs recorded."
+                  renderItem={(url) => (
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 break-all font-mono text-[11px] text-[var(--axon-primary)] hover:underline"
+                    >
+                      {url}
+                      <ExternalLink className="size-3 flex-shrink-0" />
+                    </a>
+                  )}
+                />
+              </div>
+            )}
           </Section>
         )}
 
@@ -454,6 +564,12 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
             {job.outputDir && <KV label="Output Dir" value={job.outputDir} mono />}
             {job.staleUrlsDeleted != null && (
               <KV label="Stale URLs Deleted" value={job.staleUrlsDeleted} />
+            )}
+            {typeof job.resultJson?.manifest_path === 'string' && (
+              <KV label="Manifest Path" value={job.resultJson.manifest_path} mono />
+            )}
+            {typeof job.resultJson?.audit_report_path === 'string' && (
+              <KV label="Audit Report Path" value={job.resultJson.audit_report_path} mono />
             )}
           </div>
         </Section>
@@ -520,6 +636,29 @@ export default function JobDetailPage({ params }: { params: Promise<{ id: string
         )}
 
         {/* Raw result JSON */}
+        <Section title="Result JSON Metadata" icon={Layers}>
+          <div className="space-y-0">
+            {resultJsonFlat.length === 0 ? (
+              <KV label="result_json" value="—" />
+            ) : (
+              resultJsonFlat.map((entry) => (
+                <KV key={entry.key} label={entry.key} value={entry.value} mono />
+              ))
+            )}
+          </div>
+        </Section>
+
+        <Section title="Config JSON Metadata" icon={Settings}>
+          <div className="space-y-0">
+            {configJsonFlat.length === 0 ? (
+              <KV label="config_json" value="—" />
+            ) : (
+              configJsonFlat.map((entry) => (
+                <KV key={entry.key} label={entry.key} value={entry.value} mono />
+              ))
+            )}
+          </div>
+        </Section>
         {job.resultJson && Object.keys(job.resultJson).length > 0 && (
           <Section title="Result Data" icon={Layers}>
             <pre className="overflow-x-auto rounded bg-[rgba(0,0,0,0.3)] p-3 font-mono text-[10px] text-[var(--text-dim)] leading-relaxed">

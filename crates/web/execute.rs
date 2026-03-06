@@ -169,6 +169,7 @@ pub(super) async fn handle_command(
         exec_id: format!("exec-{}", Uuid::new_v4()),
         mode: mode.clone(),
         input: input.clone(),
+        flags: flags.clone(),
         cfg: cfg.clone(),
     };
     let ws_ctx = context.to_ws_ctx();
@@ -183,7 +184,7 @@ pub(super) async fn handle_command(
     // No subprocess is spawned; no polling loop is run.
     if ASYNC_MODES.contains(&mode.as_str()) {
         ws_send::send_command_start(&tx, &context).await;
-        async_mode::handle_async_command(context, tx, crawl_job_id, cfg).await;
+        async_mode::handle_async_command(context, tx, crawl_job_id).await;
         return;
     }
 

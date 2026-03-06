@@ -96,12 +96,12 @@ function useCmdKPaletteState() {
       if (isMod && e.key === 'k') {
         e.preventDefault()
         setPhase((cur) => {
+          // Background mode sets phase to idle; check ref before the idle guard
+          if (isBackgroundRef.current) {
+            isBackgroundRef.current = false
+            return 'running'
+          }
           if (cur !== 'idle') {
-            // If running in background, just open the palette back up to the running view
-            if (isBackgroundRef.current) {
-              isBackgroundRef.current = false
-              return 'running'
-            }
             closeToIdle()
             return 'idle'
           }
@@ -132,7 +132,7 @@ function useCmdKPaletteState() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [closeToIdle, cancelAndClose, minimizeToBackground])
+  }, [closeToIdle, minimizeToBackground])
 
   useEffect(() => {
     if (phase === 'input') {

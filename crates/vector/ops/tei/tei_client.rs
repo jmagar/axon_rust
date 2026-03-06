@@ -13,9 +13,10 @@ const TEI_REQUEST_TIMEOUT_MS_MIN: u64 = 100;
 const TEI_REQUEST_TIMEOUT_MS_MAX: u64 = 600_000;
 
 fn retry_delay(attempt: usize) -> Duration {
-    let delay = Duration::from_millis(1000 * (2u64.pow(attempt as u32 - 1)));
+    let base_ms = 1000_u64.saturating_mul(2u64.saturating_pow(attempt as u32 - 1));
+    let capped_ms = base_ms.min(60_000);
     let jitter = Duration::from_millis(rand::rng().random_range(0..500));
-    delay + jitter
+    Duration::from_millis(capped_ms) + jitter
 }
 
 fn is_retryable_status(status: StatusCode) -> bool {

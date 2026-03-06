@@ -8,7 +8,12 @@ export interface PendingTab {
 
 export function setPendingTab(tab: Omit<PendingTab, 'id'>): void {
   const entry: PendingTab = { id: crypto.randomUUID(), ...tab }
-  localStorage.setItem(KEY, JSON.stringify(entry))
+  try {
+    localStorage.setItem(KEY, JSON.stringify(entry))
+  } catch {
+    // SecurityError or quota exceeded — skip persistence
+    return
+  }
   // Notify same-page listeners (cross-page gets native storage event)
   window.dispatchEvent(
     new StorageEvent('storage', {
@@ -20,9 +25,14 @@ export function setPendingTab(tab: Omit<PendingTab, 'id'>): void {
 }
 
 export function consumePendingTab(): PendingTab | null {
-  const raw = localStorage.getItem(KEY)
-  if (!raw) return null
-  localStorage.removeItem(KEY)
+  let raw: string | null
+  try {
+    raw = localStorage.getItem(KEY)
+    if (!raw) return null
+    localStorage.removeItem(KEY)
+  } catch {
+    return null
+  }
   try {
     return JSON.parse(raw) as PendingTab
   } catch {
