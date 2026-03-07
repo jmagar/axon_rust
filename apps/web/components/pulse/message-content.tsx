@@ -166,7 +166,7 @@ interface MessageBubbleProps {
   index: number
   onRetry: (prompt: string) => void
   copyStatus: 'idle' | 'copied' | 'failed'
-  onCopyError: (content: string) => void
+  onCopyError: (content: string, messageId: string) => void
 }
 
 export const MessageBubble = memo(function MessageBubble({
@@ -229,7 +229,7 @@ export const MessageBubble = memo(function MessageBubble({
                 <button
                   type="button"
                   onClick={() => {
-                    onCopyError(msg.content)
+                    onCopyError(msg.content, msg.id ?? '')
                     setCopyAnim(true)
                     setTimeout(() => setCopyAnim(false), 1400)
                   }}

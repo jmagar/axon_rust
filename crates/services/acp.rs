@@ -1,4 +1,4 @@
-use crate::crates::services::events::{ServiceEvent, emit};
+use crate::crates::services::events::{LogLevel, ServiceEvent, emit};
 use crate::crates::services::types::{
     AcpAdapterCommand, AcpBridgeEvent, AcpConfigOption, AcpConfigSelectValue,
     AcpPermissionRequestEvent, AcpPromptTurnRequest, AcpSessionProbeRequest, AcpSessionUpdateEvent,
@@ -20,6 +20,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
+
+const ACP_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Minimal ACP client scaffold for the services layer.
 ///
@@ -58,16 +60,30 @@ impl AcpClientScaffold {
         if let Some(cwd) = &self.adapter.cwd {
             command.current_dir(cwd);
         }
-        // ACP adapters manage their own LLM auth (OAuth, API keys).
-        // Remove Axon's LLM proxy vars so they don't override the adapter's config.
-        command.env_remove("OPENAI_BASE_URL");
-        command.env_remove("OPENAI_API_KEY");
-        command.env_remove("OPENAI_MODEL");
-        // Prevent the nested-session guard in the Claude CLI from blocking launch.
-        // When Axon runs inside a Claude Code session (e.g. local dev), the parent sets
-        // CLAUDECODE in the environment. The claude-agent-acp subprocess inherits it and
-        // the CLI refuses to start: "Claude Code cannot be launched inside another session."
-        command.env_remove("CLAUDECODE");
+        // Clear all inherited env vars, then allowlist only what adapters need.
+        // OPENAI_* vars are intentionally excluded — they point at Axon's local LLM
+        // proxy, not at OpenAI. Adapters (Claude CLI, Codex) use their own OAuth /
+        // stored API keys for authentication.
+        // CLAUDECODE is excluded to prevent nested-session detection.
+        command.env_clear();
+        for key in &[
+            "PATH",
+            "HOME",
+            "USER",
+            "SHELL",
+            "TERM",
+            "LANG",
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+        ] {
+            if let Ok(val) = std::env::var(key) {
+                command.env(key, val);
+            }
+        }
         command.stdin(std::process::Stdio::piped());
         command.stdout(std::process::Stdio::piped());
         command.stderr(std::process::Stdio::piped());
@@ -89,13 +105,7 @@ impl AcpClientScaffold {
     ) -> Result<AcpSessionSetupRequest, Box<dyn Error>> {
         self.validate_adapter()?;
         validate_prompt_turn_request(req)?;
-        let cwd = validate_session_cwd(cwd.as_ref())?;
-        match req.session_id.as_deref().map(str::trim) {
-            Some(session_id) if !session_id.is_empty() => Ok(AcpSessionSetupRequest::Load(
-                LoadSessionRequest::new(SessionId::new(session_id), cwd),
-            )),
-            _ => Ok(AcpSessionSetupRequest::New(NewSessionRequest::new(cwd))),
-        }
+        build_session_setup(req.session_id.as_deref(), cwd)
     }
 
     pub fn prepare_session_probe_setup(
@@ -105,13 +115,7 @@ impl AcpClientScaffold {
     ) -> Result<AcpSessionSetupRequest, Box<dyn Error>> {
         self.validate_adapter()?;
         validate_probe_request(req)?;
-        let cwd = validate_session_cwd(cwd.as_ref())?;
-        match req.session_id.as_deref().map(str::trim) {
-            Some(session_id) if !session_id.is_empty() => Ok(AcpSessionSetupRequest::Load(
-                LoadSessionRequest::new(SessionId::new(session_id), cwd),
-            )),
-            _ => Ok(AcpSessionSetupRequest::New(NewSessionRequest::new(cwd))),
-        }
+        build_session_setup(req.session_id.as_deref(), cwd)
     }
 
     pub async fn start_prompt_turn(
@@ -125,7 +129,7 @@ impl AcpClientScaffold {
         emit(
             &tx,
             ServiceEvent::Log {
-                level: "info".to_string(),
+                level: LogLevel::Info,
                 message: format!(
                     "ACP scaffold accepted prompt turn (session_id={})",
                     req.session_id.as_deref().unwrap_or("<new>")
@@ -146,10 +150,17 @@ impl AcpClientScaffold {
                 .build()
                 .map_err(|err| format!("failed to create ACP tokio runtime: {err}"))?;
             let local = tokio::task::LocalSet::new();
-            local.block_on(
-                &rt,
-                run_prompt_turn(adapter, initialize, session_setup, req_owned, tx),
-            )
+            local.block_on(&rt, async {
+                match tokio::time::timeout(
+                    ACP_ADAPTER_TIMEOUT,
+                    run_prompt_turn(adapter, initialize, session_setup, req_owned, tx),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err("ACP adapter timed out after 5 minutes".into()),
+                }
+            })
         })
         .await
         .map_err(|err| format!("failed to join ACP runtime worker: {err}"))?;
@@ -169,7 +180,7 @@ impl AcpClientScaffold {
         emit(
             &tx,
             ServiceEvent::Log {
-                level: "info".to_string(),
+                level: LogLevel::Info,
                 message: format!(
                     "ACP scaffold accepted session probe (session_id={})",
                     req.session_id.as_deref().unwrap_or("<new>")
@@ -186,10 +197,17 @@ impl AcpClientScaffold {
                 .build()
                 .map_err(|err| format!("failed to create ACP tokio runtime: {err}"))?;
             let local = tokio::task::LocalSet::new();
-            local.block_on(
-                &rt,
-                run_session_probe(adapter, initialize, session_setup, req_owned, tx),
-            )
+            local.block_on(&rt, async {
+                match tokio::time::timeout(
+                    ACP_ADAPTER_TIMEOUT,
+                    run_session_probe(adapter, initialize, session_setup, req_owned, tx),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => Err("ACP adapter timed out after 5 minutes".into()),
+                }
+            })
         })
         .await
         .map_err(|err| format!("failed to join ACP runtime worker: {err}"))?;
@@ -225,20 +243,35 @@ fn normalized_requested_model(model: Option<&str>) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn validate_model_string(model: &str) -> Result<(), Box<dyn Error>> {
+    if model.is_empty() {
+        return Err("model string is empty".into());
+    }
+    // Allow only alphanumeric, hyphens, underscores, dots, forward slashes, colons, spaces
+    if !model
+        .chars()
+        .all(|c| c.is_alphanumeric() || "-_./: ".contains(c))
+    {
+        return Err(format!("model string contains invalid characters: {}", model).into());
+    }
+    Ok(())
+}
+
 fn append_codex_model_override(
     adapter: &AcpAdapterCommand,
     requested_model: Option<&str>,
-) -> AcpAdapterCommand {
+) -> Result<AcpAdapterCommand, Box<dyn Error>> {
     let Some(model) = normalized_requested_model(requested_model) else {
-        return adapter.clone();
+        return Ok(adapter.clone());
     };
     if !is_codex_adapter(adapter) {
-        return adapter.clone();
+        return Ok(adapter.clone());
     }
+    validate_model_string(&model)?;
     let mut next = adapter.clone();
     next.args.push("-c".to_string());
     next.args.push(format!("model=\"{model}\""));
-    next
+    Ok(next)
 }
 
 fn codex_config_dir() -> Option<PathBuf> {
@@ -247,9 +280,9 @@ fn codex_config_dir() -> Option<PathBuf> {
         .map(|home| home.join(".codex"))
 }
 
-fn read_codex_default_model() -> Option<String> {
+async fn read_codex_default_model() -> Option<String> {
     let config_path = codex_config_dir()?.join("config.toml");
-    let raw = std::fs::read_to_string(config_path).ok()?;
+    let raw = tokio::fs::read_to_string(config_path).await.ok()?;
     raw.lines().find_map(|line| {
         let trimmed = line.trim();
         if !trimmed.starts_with("model") {
@@ -265,9 +298,11 @@ fn read_codex_default_model() -> Option<String> {
     })
 }
 
-fn read_codex_cached_model_options(current_model: Option<&str>) -> Option<Vec<AcpConfigOption>> {
+async fn read_codex_cached_model_options(
+    current_model: Option<&str>,
+) -> Option<Vec<AcpConfigOption>> {
     let cache_path = codex_config_dir()?.join("models_cache.json");
-    let raw = std::fs::read_to_string(cache_path).ok()?;
+    let raw = tokio::fs::read_to_string(cache_path).await.ok()?;
     let cache: CodexModelsCache = serde_json::from_str(&raw).ok()?;
     if cache.models.is_empty() {
         return None;
@@ -283,7 +318,7 @@ fn read_codex_cached_model_options(current_model: Option<&str>) -> Option<Vec<Ac
         .collect::<Vec<_>>();
     let selected = current_model
         .and_then(|value| normalized_requested_model(Some(value)))
-        .or_else(read_codex_default_model)
+        .or(read_codex_default_model().await)
         .or_else(|| options.first().map(|option| option.value.clone()))?;
     Some(vec![AcpConfigOption {
         id: "model".to_string(),
@@ -332,6 +367,20 @@ pub fn validate_session_cwd(cwd: &Path) -> Result<PathBuf, Box<dyn Error>> {
         return Err("ACP session cwd must be an absolute path".into());
     }
     Ok(cwd.to_path_buf())
+}
+
+fn build_session_setup(
+    session_id: Option<&str>,
+    cwd: impl AsRef<Path>,
+) -> Result<AcpSessionSetupRequest, Box<dyn Error>> {
+    let cwd = validate_session_cwd(cwd.as_ref())?;
+    match session_id.map(str::trim) {
+        Some(sid) if !sid.is_empty() => Ok(AcpSessionSetupRequest::Load(LoadSessionRequest::new(
+            SessionId::new(sid),
+            cwd,
+        ))),
+        _ => Ok(AcpSessionSetupRequest::New(NewSessionRequest::new(cwd))),
+    }
 }
 
 pub fn map_session_update_kind(update: &SessionUpdate) -> AcpSessionUpdateKind {
@@ -485,12 +534,13 @@ async fn run_prompt_turn(
     req: AcpPromptTurnRequest,
     tx: Option<mpsc::Sender<ServiceEvent>>,
 ) -> Result<(), String> {
-    let adapter = append_codex_model_override(&adapter, req.model.as_deref());
+    let adapter = append_codex_model_override(&adapter, req.model.as_deref())
+        .map_err(|err| format!("invalid model override: {err}"))?;
     let codex_adapter = is_codex_adapter(&adapter);
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: "ACP runtime: spawning adapter process".to_string(),
         },
     );
@@ -528,7 +578,7 @@ async fn run_prompt_turn(
                     emit(
                         &stderr_tx,
                         ServiceEvent::Log {
-                            level: "warn".to_string(),
+                            level: LogLevel::Warn,
                             message: format!("ACP adapter stderr: {trimmed}"),
                         },
                     );
@@ -546,7 +596,7 @@ async fn run_prompt_turn(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: "ACP runtime: transport ready, starting initialize".to_string(),
         },
     );
@@ -569,14 +619,14 @@ async fn run_prompt_turn(
             Ok(()) => emit(
                 &io_tx,
                 ServiceEvent::Log {
-                    level: "info".to_string(),
+                    level: LogLevel::Info,
                     message: "ACP runtime: IO task completed".to_string(),
                 },
             ),
             Err(err) => emit(
                 &io_tx,
                 ServiceEvent::Log {
-                    level: "warn".to_string(),
+                    level: LogLevel::Warn,
                     message: format!("ACP runtime: IO task failed: {err}"),
                 },
             ),
@@ -586,7 +636,7 @@ async fn run_prompt_turn(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: "ACP runtime: sending initialize request".to_string(),
         },
     );
@@ -597,7 +647,7 @@ async fn run_prompt_turn(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!(
                 "ACP initialized with protocol {}",
                 initialize_response.protocol_version
@@ -610,7 +660,7 @@ async fn run_prompt_turn(
             emit(
                 &tx,
                 ServiceEvent::Log {
-                    level: "info".to_string(),
+                    level: LogLevel::Info,
                     message: "ACP runtime: creating new session".to_string(),
                 },
             );
@@ -624,7 +674,7 @@ async fn run_prompt_turn(
             emit(
                 &tx,
                 ServiceEvent::Log {
-                    level: "info".to_string(),
+                    level: LogLevel::Info,
                     message: "ACP runtime: loading existing session".to_string(),
                 },
             );
@@ -636,7 +686,7 @@ async fn run_prompt_turn(
                     emit(
                         &tx,
                         ServiceEvent::Log {
-                            level: "warn".to_string(),
+                            level: LogLevel::Warn,
                             message: format!(
                                 "ACP load_session failed, falling back to new session: {err}"
                             ),
@@ -664,15 +714,16 @@ async fn run_prompt_turn(
                 event: AcpBridgeEvent::ConfigOptionsUpdate(mapped.clone()),
             },
         );
-    } else if codex_adapter
-        && let Some(fallback_options) = read_codex_cached_model_options(req.model.as_deref())
-    {
-        emit(
-            &tx,
-            ServiceEvent::AcpBridge {
-                event: AcpBridgeEvent::ConfigOptionsUpdate(fallback_options),
-            },
-        );
+    } else if codex_adapter {
+        if let Some(fallback_options) = read_codex_cached_model_options(req.model.as_deref()).await
+        {
+            emit(
+                &tx,
+                ServiceEvent::AcpBridge {
+                    event: AcpBridgeEvent::ConfigOptionsUpdate(fallback_options),
+                },
+            );
+        }
     }
 
     // If the caller requested a specific model and the agent advertises a model config option,
@@ -697,7 +748,7 @@ async fn run_prompt_turn(
                 emit(
                     &tx,
                     ServiceEvent::Log {
-                        level: "info".to_string(),
+                        level: LogLevel::Info,
                         message: format!("ACP runtime: setting model to {requested_model}"),
                     },
                 );
@@ -722,7 +773,7 @@ async fn run_prompt_turn(
                 emit(
                     &tx,
                     ServiceEvent::Log {
-                        level: "warn".to_string(),
+                        level: LogLevel::Warn,
                         message: format!(
                             "ACP runtime: skipping unsupported model value '{requested_model}'"
                         ),
@@ -743,7 +794,7 @@ async fn run_prompt_turn(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: "ACP runtime: sending prompt turn".to_string(),
         },
     );
@@ -754,7 +805,7 @@ async fn run_prompt_turn(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: "ACP runtime: prompt turn completed".to_string(),
         },
     );
@@ -781,12 +832,10 @@ async fn run_prompt_turn(
         },
     );
 
-    let turn_result = Ok::<(), String>(());
-
     let _ = child.kill().await;
     let _ = child.wait().await;
 
-    turn_result
+    Ok(())
 }
 
 async fn run_session_probe(
@@ -796,12 +845,13 @@ async fn run_session_probe(
     req: AcpSessionProbeRequest,
     tx: Option<mpsc::Sender<ServiceEvent>>,
 ) -> Result<(), String> {
-    let adapter = append_codex_model_override(&adapter, req.model.as_deref());
+    let adapter = append_codex_model_override(&adapter, req.model.as_deref())
+        .map_err(|err| format!("invalid model override: {err}"))?;
     let codex_adapter = is_codex_adapter(&adapter);
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: "ACP runtime: spawning adapter process".to_string(),
         },
     );
@@ -839,7 +889,7 @@ async fn run_session_probe(
                     emit(
                         &stderr_tx,
                         ServiceEvent::Log {
-                            level: "warn".to_string(),
+                            level: LogLevel::Warn,
                             message: format!("ACP adapter stderr: {trimmed}"),
                         },
                     );
@@ -857,7 +907,7 @@ async fn run_session_probe(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: "ACP runtime: transport ready, starting initialize".to_string(),
         },
     );
@@ -876,14 +926,14 @@ async fn run_session_probe(
             Ok(()) => emit(
                 &io_tx,
                 ServiceEvent::Log {
-                    level: "info".to_string(),
+                    level: LogLevel::Info,
                     message: "ACP runtime: IO task completed".to_string(),
                 },
             ),
             Err(err) => emit(
                 &io_tx,
                 ServiceEvent::Log {
-                    level: "warn".to_string(),
+                    level: LogLevel::Warn,
                     message: format!("ACP runtime: IO task failed: {err}"),
                 },
             ),
@@ -893,7 +943,7 @@ async fn run_session_probe(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: "ACP runtime: sending initialize request".to_string(),
         },
     );
@@ -904,7 +954,7 @@ async fn run_session_probe(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!(
                 "ACP initialized with protocol {}",
                 initialize_response.protocol_version
@@ -917,7 +967,7 @@ async fn run_session_probe(
             emit(
                 &tx,
                 ServiceEvent::Log {
-                    level: "info".to_string(),
+                    level: LogLevel::Info,
                     message: "ACP runtime: creating new session".to_string(),
                 },
             );
@@ -931,7 +981,7 @@ async fn run_session_probe(
             emit(
                 &tx,
                 ServiceEvent::Log {
-                    level: "info".to_string(),
+                    level: LogLevel::Info,
                     message: "ACP runtime: loading existing session".to_string(),
                 },
             );
@@ -943,7 +993,7 @@ async fn run_session_probe(
                     emit(
                         &tx,
                         ServiceEvent::Log {
-                            level: "warn".to_string(),
+                            level: LogLevel::Warn,
                             message: format!(
                                 "ACP load_session failed, falling back to new session: {err}"
                             ),
@@ -971,15 +1021,16 @@ async fn run_session_probe(
                 event: AcpBridgeEvent::ConfigOptionsUpdate(mapped.clone()),
             },
         );
-    } else if codex_adapter
-        && let Some(fallback_options) = read_codex_cached_model_options(req.model.as_deref())
-    {
-        emit(
-            &tx,
-            ServiceEvent::AcpBridge {
-                event: AcpBridgeEvent::ConfigOptionsUpdate(fallback_options),
-            },
-        );
+    } else if codex_adapter {
+        if let Some(fallback_options) = read_codex_cached_model_options(req.model.as_deref()).await
+        {
+            emit(
+                &tx,
+                ServiceEvent::AcpBridge {
+                    event: AcpBridgeEvent::ConfigOptionsUpdate(fallback_options),
+                },
+            );
+        }
     }
 
     if let Some(requested_model) = normalized_requested_model(req.model.as_deref())
@@ -1056,24 +1107,19 @@ impl Client for AcpBridgeClient {
         &self,
         args: SessionNotification,
     ) -> agent_client_protocol::Result<()> {
-        if let Some(text_delta) = extract_text_delta(&args.update)
-            && matches!(
-                map_session_update_kind(&args.update),
-                AcpSessionUpdateKind::AssistantDelta
-            )
         {
             let mut state = self.runtime_state.lock().map_err(|_| {
                 agent_client_protocol::Error::internal_error()
                     .data("ACP runtime state lock poisoned")
             })?;
-            state.assistant_text.push_str(&text_delta);
-        }
-
-        {
-            let mut state = self.runtime_state.lock().map_err(|_| {
-                agent_client_protocol::Error::internal_error()
-                    .data("ACP runtime state lock poisoned")
-            })?;
+            if let Some(text_delta) = extract_text_delta(&args.update)
+                && matches!(
+                    map_session_update_kind(&args.update),
+                    AcpSessionUpdateKind::AssistantDelta
+                )
+            {
+                state.assistant_text.push_str(&text_delta);
+            }
             if state.session_id.is_none() {
                 state.session_id = Some(args.session_id.0.to_string());
             }

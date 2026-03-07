@@ -1,7 +1,7 @@
 use crate::crates::cli::commands::research::research_payload;
 use crate::crates::cli::commands::search::search_results;
 use crate::crates::core::config::Config;
-use crate::crates::services::events::{ServiceEvent, emit};
+use crate::crates::services::events::{LogLevel, ServiceEvent, emit};
 use crate::crates::services::types::{
     ResearchResult, SearchOptions, SearchResult, ServiceTimeRange,
 };
@@ -48,7 +48,7 @@ pub async fn search(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("starting search: {query}"),
         },
     );
@@ -59,7 +59,7 @@ pub async fn search(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("search complete: {} results", raw.len()),
         },
     );
@@ -80,7 +80,7 @@ pub async fn research(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("starting research: {query}"),
         },
     );
@@ -91,7 +91,7 @@ pub async fn research(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: "research complete".to_string(),
         },
     );

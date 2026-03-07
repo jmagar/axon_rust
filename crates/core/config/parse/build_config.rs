@@ -27,7 +27,7 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
     let mut sessions_codex = false;
     let mut sessions_gemini = false;
     let mut sessions_project = None;
-    let mut serve_port = 3939u16;
+    let mut serve_port = 49000u16;
     let (command, positional) = match cli.command {
         CliCommand::Scrape(args) => (CommandKind::Scrape, args.positional_urls),
         CliCommand::Crawl(args) => (
@@ -471,6 +471,17 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
     }
     cfg.crawl_broadcast_buffer_min = ps.broadcast_buffer_min;
     cfg.crawl_broadcast_buffer_max = ps.broadcast_buffer_max;
+
+    // Derive output_dir from AXON_DATA_DIR when still at the clap default.
+    // This unifies local dev and Docker: both write to $AXON_DATA_DIR/axon/output.
+    if cfg.output_dir == std::path::Path::new(".cache/axon-rust/output") {
+        if let Ok(data_dir) = env::var("AXON_DATA_DIR") {
+            let data_dir = data_dir.trim();
+            if !data_dir.is_empty() {
+                cfg.output_dir = std::path::PathBuf::from(data_dir).join("axon/output");
+            }
+        }
+    }
 
     Ok(cfg)
 }

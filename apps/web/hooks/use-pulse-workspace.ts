@@ -95,6 +95,7 @@ export function usePulseWorkspaceBehavior() {
     onApplyOperations: applyOperations,
     onPendingOps: setPendingOps,
     onPendingValidation: setPendingValidation,
+    onAcpConfigUpdate: setAcpConfigOptions,
     effort: pulseSettings.effort,
     maxTurns: pulseSettings.maxTurns,
     maxBudgetUsd: pulseSettings.maxBudgetUsd,
@@ -127,12 +128,7 @@ export function usePulseWorkspaceBehavior() {
     messageIdRef,
     setLastResponseLatencyMs,
     setLastResponseModel,
-    acpConfigOptions: chatAcpConfigOptions,
   } = chat
-
-  useEffect(() => {
-    setAcpConfigOptions(chatAcpConfigOptions)
-  }, [chatAcpConfigOptions, setAcpConfigOptions])
 
   const latestCitationCount = useMemo(() => {
     for (let i = chatHistory.length - 1; i >= 0; i -= 1) {
@@ -302,11 +298,6 @@ export function usePulseWorkspaceBehavior() {
             'bypass-permissions',
           ]
           setPulsePermissionLevel(permissionByIndex[Number(key) - 1] ?? 'accept-edits')
-          return
-        }
-        if (pulseAgent === 'claude') {
-          const modelByIndex: string[] = ['sonnet', 'opus', 'haiku']
-          setPulseModel(modelByIndex[Number(key) - 1] ?? 'sonnet')
           return
         }
         const modelConfig = getAcpModelConfigOption(acpConfigOptions)

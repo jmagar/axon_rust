@@ -105,17 +105,27 @@ fn normalize_path_lexically(p: &Path) -> PathBuf {
     components.iter().collect()
 }
 
+/// Make a path absolute by prepending CWD if it is relative.
+fn make_absolute(p: &Path) -> PathBuf {
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(p)
+    }
+}
+
 /// Validate that `output_dir` does not escape the expected base directory.
 fn validate_output_dir(output_dir: &Path, base_dir: &Path) -> Result<(), Box<dyn Error>> {
     // Prefer canonicalize() (resolves symlinks + normalizes). If the path does
-    // not yet exist, fall back to lexical normalization so that a path like
-    // `/base/../evil` is caught rather than silently passing the prefix check.
+    // not yet exist, fall back to making it absolute + lexical normalization so
+    // that a relative path like `.cache/foo/bar` is correctly compared against
+    // the canonicalized (absolute) base directory.
     let canonical = output_dir
         .canonicalize()
-        .unwrap_or_else(|_| normalize_path_lexically(output_dir));
+        .unwrap_or_else(|_| normalize_path_lexically(&make_absolute(output_dir)));
     let canonical_base = base_dir
         .canonicalize()
-        .unwrap_or_else(|_| normalize_path_lexically(base_dir));
+        .unwrap_or_else(|_| normalize_path_lexically(&make_absolute(base_dir)));
     if !canonical.starts_with(&canonical_base) {
         return Err(format!(
             "output_dir path traversal rejected: {:?} is outside {:?}",

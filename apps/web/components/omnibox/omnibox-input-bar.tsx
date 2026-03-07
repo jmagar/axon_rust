@@ -15,7 +15,6 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { useEffect, useMemo } from 'react'
-import { CLAUDE_MODEL_IDS, CLAUDE_MODEL_OPTIONS } from '@/app/settings/settings-data'
 import type {
   PulseWorkspaceAgent,
   PulseWorkspaceModel,
@@ -130,23 +129,14 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
   } = props
 
   const modelOptions = useMemo(() => {
-    if (pulseAgent === 'claude') {
-      return CLAUDE_MODEL_OPTIONS.map((option) => ({ value: option.id, label: option.label }))
-    }
     const modelConfig = getAcpModelConfigOption(acpConfigOptions)
     if (modelConfig) {
       return modelConfig.options.map((option) => ({ value: option.value, label: option.name }))
     }
     return [{ value: 'default', label: 'Default' }]
-  }, [pulseAgent, acpConfigOptions])
+  }, [acpConfigOptions])
 
   useEffect(() => {
-    if (pulseAgent === 'claude') {
-      if (!CLAUDE_MODEL_IDS.includes(pulseModel as (typeof CLAUDE_MODEL_IDS)[number])) {
-        setPulseModel('sonnet')
-      }
-      return
-    }
     const modelConfig = getAcpModelConfigOption(acpConfigOptions)
     if (!modelConfig || modelConfig.options.length === 0) {
       if (pulseModel !== 'default') {
@@ -156,9 +146,9 @@ export function OmniboxInputBar(props: OmniboxInputBarProps) {
     }
     const hasCurrent = modelConfig.options.some((option) => option.value === pulseModel)
     if (!hasCurrent) {
-      setPulseModel(modelConfig.options[0]!.value)
+      setPulseModel(modelConfig.currentValue || modelConfig.options[0]!.value)
     }
-  }, [acpConfigOptions, pulseAgent, pulseModel, setPulseModel])
+  }, [acpConfigOptions, pulseModel, setPulseModel])
 
   return (
     <div

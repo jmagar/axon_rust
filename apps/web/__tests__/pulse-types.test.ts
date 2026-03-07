@@ -40,7 +40,7 @@ describe('pulse types', () => {
     const parsed = PulseChatRequestSchema.parse(req)
     expect(parsed).toBeTruthy()
     expect(parsed.agent).toBe('claude')
-    expect(parsed.model).toBe('sonnet')
+    expect(parsed.model).toBeUndefined()
     expect(parsed.threadSources).toEqual([])
   })
 

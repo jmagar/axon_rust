@@ -3,7 +3,7 @@
 //! All variants of [`WsEventV2`] are serialized as JSON with a `"type"` tag
 //! and consumed by `apps/web`. Fields not constructed in Rust may still be
 //! active wire protocol members.
-use crate::crates::services::types::{AcpBridgeEvent, AcpSessionUpdateKind};
+use crate::crates::services::types::AcpBridgeEvent;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -126,65 +126,6 @@ pub(super) fn serialize_v2_event(event: WsEventV2) -> Option<String> {
 }
 
 pub(super) fn acp_bridge_event_payload(event: &AcpBridgeEvent) -> Value {
-    match event {
-        AcpBridgeEvent::SessionUpdate(update) => {
-            let event_type = match update.kind {
-                AcpSessionUpdateKind::AssistantDelta => "assistant_delta",
-                AcpSessionUpdateKind::ThinkingDelta => "thinking_content",
-                AcpSessionUpdateKind::UserDelta => "user_delta",
-                AcpSessionUpdateKind::ToolCallStarted | AcpSessionUpdateKind::ToolCallUpdated => {
-                    "tool_use"
-                }
-                _ => "status",
-            };
-            // "thinking_content" events: client reads `content`; all other deltas: `delta`.
-            let text_key = if event_type == "thinking_content" {
-                "content"
-            } else {
-                "delta"
-            };
-            let mut obj = serde_json::json!({
-                "type": event_type,
-                "session_id": update.session_id,
-                "tool_call_id": update.tool_call_id,
-            });
-            obj[text_key] = Value::String(update.text_delta.clone().unwrap_or_default());
-            obj
-        }
-        AcpBridgeEvent::PermissionRequest(req) => serde_json::json!({
-            "type": "permission_request",
-            "session_id": req.session_id,
-            "tool_call_id": req.tool_call_id,
-            "options": req.option_ids,
-        }),
-        AcpBridgeEvent::TurnResult(result) => serde_json::json!({
-            "type": "result",
-            "session_id": result.session_id,
-            "stop_reason": result.stop_reason,
-            "result": result.result,
-        }),
-        AcpBridgeEvent::ConfigOptionsUpdate(options) => {
-            let serialized_options: Vec<Value> = options
-                .iter()
-                .map(|opt| {
-                    serde_json::json!({
-                        "id": opt.id,
-                        "name": opt.name,
-                        "description": opt.description,
-                        "category": opt.category,
-                        "currentValue": opt.current_value,
-                        "options": opt.options.iter().map(|v| serde_json::json!({
-                            "value": v.value,
-                            "name": v.name,
-                            "description": v.description,
-                        })).collect::<Vec<_>>(),
-                    })
-                })
-                .collect();
-            serde_json::json!({
-                "type": "config_options_update",
-                "configOptions": serialized_options,
-            })
-        }
-    }
+    serde_json::to_value(event)
+        .unwrap_or_else(|e| serde_json::json!({ "error": format!("serialization failed: {}", e) }))
 }

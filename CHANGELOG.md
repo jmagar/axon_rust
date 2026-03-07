@@ -1,11 +1,13 @@
 # Changelog
-Last Modified: 2026-03-06 (session: v0.7.3 — regression tests for ACP env isolation)
+Last Modified: 2026-03-06 (session: v0.7.4 — ACP comprehensive review fixes)
 
 ## [Unreleased] — feat/services-layer-refactor
 
 This section documents commits on `feat/services-layer-refactor` relative to `main` (`51a2c9c8`).
 
 ### Highlights
+
+- **ACP comprehensive review fixes (v0.7.4)** — 30 unique findings fixed across security, performance, and code quality: model argument injection guard (`validate_model_string`), env allowlist in `spawn_adapter` (env_clear + 12 vars), 5-minute adapter lifecycle timeout, `LogLevel` enum replacing raw strings (30+ call sites), `try_send` event loss logging, double mutex → single lock, `std::fs` → `tokio::fs`, dead code removal, duplicate function merge, `Serialize` derives on all ACP types with serde rename, hand-rolled JSON → `serde_json::to_value`, channel capacity 32→256, `toolsRestrict` regex tightened to match backend `TOOL_ENTRY_RE`, `--dangerously-skip-permissions` gated behind `AXON_ALLOW_SKIP_PERMISSIONS`, `response.body!` null guard, localStorage Zod validation, `handlePrompt` split 268→155 lines, dual config state unified, config probe caching (60s TTL), 5 localStorage effects consolidated to 2
 
 - **Regression tests for ACP env isolation (v0.7.3)** — `tests/services_acp_spawn_env.rs` (3 tests) locks in `spawn_adapter()` env stripping: `CLAUDECODE`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` must never leak to child process; uses process-level `Mutex` to serialize env mutations; `#![allow(unsafe_code)]` at file scope with `#[allow(clippy::await_holding_lock)]` per test; credentials staged into `axon-web` via `16-materialize-agent-credentials` cont-init.d
 

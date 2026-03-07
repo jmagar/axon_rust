@@ -45,7 +45,7 @@ export const AcpConfigOption = z.object({
 })
 export type AcpConfigOption = z.infer<typeof AcpConfigOption>
 
-export const PulseModel = z.string().default('sonnet')
+export const PulseModel = z.string().optional()
 export type PulseModel = z.infer<typeof PulseModel>
 export const PulseAgent = z.enum(['claude', 'codex'])
 export type PulseAgent = z.infer<typeof PulseAgent>
@@ -72,7 +72,7 @@ export const PulseChatRequestSchema = z.object({
     .default([]),
   permissionLevel: PulsePermissionLevel.default('accept-edits'),
   agent: PulseAgent.default('claude'),
-  model: PulseModel.default('sonnet'),
+  model: PulseModel,
   effort: z.enum(['low', 'medium', 'high']).default('medium'),
   maxTurns: z.number().int().min(0).max(100).default(0),
   maxBudgetUsd: z.number().min(0).max(1000).default(0),
@@ -98,10 +98,11 @@ export const PulseChatRequestSchema = z.object({
   /** --tools: restrict which built-in tools are available */
   toolsRestrict: z
     .string()
-    .regex(/^[a-zA-Z0-9,\-.:]*$/, 'toolsRestrict contains invalid characters')
+    .regex(/^[a-zA-Z0-9_:*-]+$/, 'toolsRestrict contains invalid characters')
     .optional(),
-  /** Stream replay: resume from this event ID (supports both camelCase and snake_case). */
+  /** Stream replay: resume from this event ID. */
   lastEventId: z.string().max(128).optional(),
+  /** @deprecated Use `lastEventId` instead. Kept for backward compatibility with existing callers. */
   last_event_id: z.string().max(128).optional(),
 })
 

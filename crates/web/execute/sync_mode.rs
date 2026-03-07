@@ -15,6 +15,7 @@ use crate::crates::services::types::{
 use serde_json::json;
 use std::env;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
@@ -179,9 +180,12 @@ fn resolve_acp_adapter_command_from_values(
     let program = cmd_value
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "missing required env var AXON_ACP_ADAPTER_CMD for pulse_chat".to_string())?
-        .to_string();
+        .ok_or_else(|| {
+            "missing required env var AXON_ACP_ADAPTER_CMD for pulse_chat".to_string()
+        })?;
 
+    let program =
+        resolve_local_executable_path(program, args_value).unwrap_or_else(|| program.to_string());
     let args = args_value.map(parse_acp_adapter_args).unwrap_or_default();
 
     Ok(AcpAdapterCommand {
@@ -196,6 +200,61 @@ fn resolve_acp_adapter_command_from_values(
 /// Values are parsed from `Config` fields sourced from environment parsing:
 /// - `Config::acp_adapter_cmd` from `AXON_ACP_ADAPTER_CMD` (required)
 /// - `Config::acp_adapter_args` from `AXON_ACP_ADAPTER_ARGS` (optional)
+fn candidate_local_executable_paths(program: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if program.contains(std::path::MAIN_SEPARATOR)
+        || (cfg!(windows) && program.contains('/'))
+        || Path::new(program).is_absolute()
+    {
+        candidates.push(PathBuf::from(program));
+        return candidates;
+    }
+
+    if let Some(path_var) = env::var_os("PATH") {
+        candidates.extend(env::split_paths(&path_var).map(|dir| dir.join(program)));
+    }
+
+    if let Some(home) = env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        candidates.push(home.join(".local/bin").join(program));
+        candidates.push(home.join(".cargo/bin").join(program));
+    }
+
+    candidates.push(PathBuf::from("/usr/local/bin").join(program));
+    candidates.push(PathBuf::from("/usr/bin").join(program));
+    candidates
+}
+
+fn resolve_local_executable_path(program: &str, args_value: Option<&str>) -> Option<String> {
+    let path = Path::new(program);
+    if path.is_absolute() && path.exists() {
+        return Some(program.to_string());
+    }
+
+    if let Some(found) = candidate_local_executable_paths(program)
+        .into_iter()
+        .find(|candidate| candidate.exists())
+        .map(|candidate| candidate.to_string_lossy().into_owned())
+    {
+        return Some(found);
+    }
+
+    let looks_like_codex = program.contains("codex")
+        || args_value
+            .map(|args| args.to_ascii_lowercase().contains("codex"))
+            .unwrap_or(false);
+
+    if looks_like_codex {
+        return candidate_local_executable_paths("codex")
+            .into_iter()
+            .find(|candidate| candidate.exists())
+            .map(|candidate| candidate.to_string_lossy().into_owned());
+    }
+
+    None
+}
+
 fn resolve_acp_adapter_command(
     cfg: &Config,
     agent: PulseChatAgent,
@@ -238,7 +297,24 @@ fn derive_cfg(context: &ExecCommandContext, flags: &serde_json::Value) -> Arc<Co
         overrides.limit = Some(limit);
     }
 
-    Arc::new(context.cfg.apply_overrides(&overrides))
+    let mut cfg = context.cfg.apply_overrides(&overrides);
+
+    if let Some(cmd) = env::var("AXON_ACP_CLAUDE_ADAPTER_CMD")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    {
+        cfg.acp_adapter_cmd = Some(cmd);
+    }
+    if let Some(args) = env::var("AXON_ACP_CLAUDE_ADAPTER_ARGS")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    {
+        cfg.acp_adapter_args = Some(args);
+    }
+
+    Arc::new(cfg)
 }
 
 /// Extract all parameters from `context` and `flags` into owned values before
@@ -549,6 +625,11 @@ async fn dispatch_acp_event(
 ) {
     match event {
         ServiceEvent::Log { level, message } => {
+            log::warn!(
+                "[pulse_chat] ACP log ({}): {}",
+                level,
+                message.chars().take(200).collect::<String>()
+            );
             send_json_owned(
                 tx.clone(),
                 ws_ctx.clone(),
@@ -558,6 +639,29 @@ async fn dispatch_acp_event(
         }
         ServiceEvent::AcpBridge { event } => {
             let payload = super::events::acp_bridge_event_payload(&event);
+            let event_type = payload
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let preview = match event_type {
+                "assistant_delta" => payload
+                    .get("delta")
+                    .and_then(|v| v.as_str())
+                    .map(|s| format!("delta={}chars", s.len()))
+                    .unwrap_or_default(),
+                "thinking_content" => "thinking".to_string(),
+                "result" => payload
+                    .get("result")
+                    .and_then(|v| v.as_str())
+                    .map(|s| format!("result={}chars", s.len()))
+                    .unwrap_or_else(|| "result=<none>".to_string()),
+                other => other.to_string(),
+            };
+            log::warn!(
+                "[pulse_chat] ACP bridge event: type={} {}",
+                event_type,
+                preview
+            );
             send_json_owned(tx.clone(), ws_ctx.clone(), payload).await;
         }
     }
@@ -614,8 +718,20 @@ async fn handle_pulse_chat(
     tx: mpsc::Sender<String>,
     ws_ctx: CommandContext,
 ) -> Result<(), String> {
-    let (event_tx, event_rx) = mpsc::channel::<ServiceEvent>(32);
+    log::warn!(
+        "[pulse_chat] starting: agent={:?} session_id={:?} model={:?} input_len={}",
+        agent,
+        session_id,
+        model,
+        input.len()
+    );
+    let (event_tx, event_rx) = mpsc::channel::<ServiceEvent>(256);
     let adapter = resolve_acp_adapter_command(&cfg, agent)?;
+    log::warn!(
+        "[pulse_chat] adapter resolved: program={} args={:?}",
+        adapter.program,
+        adapter.args
+    );
     let scaffold = acp_svc::AcpClientScaffold::new(adapter);
     let req = AcpPromptTurnRequest {
         session_id,
@@ -623,13 +739,24 @@ async fn handle_pulse_chat(
         model,
     };
     let cwd = env::current_dir().map_err(|e| e.to_string())?;
+    log::warn!("[pulse_chat] cwd={}", cwd.display());
     let task = tokio::spawn(async move {
-        scaffold
+        let result = scaffold
             .start_prompt_turn(&req, cwd, Some(event_tx))
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+        match &result {
+            Ok(()) => log::warn!("[pulse_chat] prompt turn completed successfully"),
+            Err(e) => log::error!("[pulse_chat] prompt turn failed: {}", e),
+        }
+        result
     });
-    run_acp_event_loop(task, event_rx, tx, ws_ctx, "pulse_chat").await
+    let loop_result = run_acp_event_loop(task, event_rx, tx, ws_ctx, "pulse_chat").await;
+    match &loop_result {
+        Ok(()) => log::warn!("[pulse_chat] event loop completed successfully"),
+        Err(e) => log::error!("[pulse_chat] event loop failed: {}", e),
+    }
+    loop_result
 }
 
 /// Handle the `pulse_chat_probe` service mode: probe an existing session and
@@ -642,7 +769,7 @@ async fn handle_pulse_chat_probe(
     tx: mpsc::Sender<String>,
     ws_ctx: CommandContext,
 ) -> Result<(), String> {
-    let (event_tx, event_rx) = mpsc::channel::<ServiceEvent>(32);
+    let (event_tx, event_rx) = mpsc::channel::<ServiceEvent>(256);
     let adapter = resolve_acp_adapter_command(&cfg, agent)?;
     let scaffold = acp_svc::AcpClientScaffold::new(adapter);
     let req = AcpSessionProbeRequest { session_id, model };

@@ -1,17 +1,27 @@
 # axon_cli — Axon CLI (Rust + Spider.rs)
-Last Modified: 2026-03-03
+Last Modified: 2026-03-06
 
 Web crawl, scrape, extract, embed, and query — all in one binary backed by a self-hosted RAG stack.
 
 ## Quick Start
 
-```bash
-# Start infrastructure (Postgres, Redis, RabbitMQ, Qdrant)
-docker compose up -d
+> **Local dev mode**: Workers and the web frontend run as local processes, not in Docker. Only infrastructure (Postgres, Redis, RabbitMQ, Qdrant, Chrome) runs via Docker Compose.
 
-# Recommended: use the wrapper script (auto-sources .env)
+```bash
+# 1. Start infrastructure only
+docker compose up -d axon-postgres axon-redis axon-rabbitmq axon-qdrant axon-chrome
+
+# 2. Recommended: use the wrapper script (auto-sources .env)
 ./scripts/axon doctor
 ./scripts/axon scrape https://example.com --wait true
+
+# 3. Run workers locally (each in a separate terminal or tmux pane)
+cargo run --bin axon -- crawl worker
+cargo run --bin axon -- embed worker
+cargo run --bin axon -- extract worker
+
+# 4. Run the web frontend locally
+cd apps/web && pnpm dev    # → http://localhost:49010
 
 # MCP server via CLI subcommand
 ./scripts/axon mcp
@@ -205,23 +215,28 @@ High-level subsystem map:
 | `axon-rabbitmq` | rabbitmq:4.0-management | `45535` | AMQP job queue |
 | `axon-qdrant` | qdrant/qdrant:v1.13.1 | `53333`, `53334` (gRPC) | Vector store |
 | `axon-chrome` | built from docker/chrome/Dockerfile | `6000` (management), `9222` (CDP proxy) | headless_browser + chrome-headless-shell |
-| `axon-workers` | built from Dockerfile | — | 4 workers (crawl/extract/embed/ingest) (also serves HTTP/WS on port 49000) |
-| `axon-web` | docker/web/Dockerfile | `49010` | Next.js dev UI with hot reload. `pnpm-watcher` s6 service auto-installs new packages within 3s of `pnpm add` on host — no rebuild needed. |
+| `axon-workers` | **local process** | — | Run with `cargo run --bin axon -- crawl worker` (and equivalent for extract/embed/ingest). Not in Docker for local dev. |
+| `axon-web` | **local process** | `49010` | Run with `cd apps/web && pnpm dev`. Not in Docker for local dev. |
 
-All services live on the `axon` bridge network. Data volumes use `${AXON_DATA_DIR:-./data}/axon/...` (override with `AXON_DATA_DIR` in `.env`).
+Infrastructure services (postgres, redis, rabbitmq, qdrant, chrome) live on the `axon` bridge network. Data volumes use `${AXON_DATA_DIR:-./data}/axon/...` (override with `AXON_DATA_DIR` in `.env`).
 
 ```bash
-# Start all services
-docker compose up -d
+# Start infrastructure only (no workers or web)
+docker compose up -d axon-postgres axon-redis axon-rabbitmq axon-qdrant axon-chrome
 
-# Start just infrastructure (no workers)
-docker compose up -d axon-postgres axon-redis axon-rabbitmq axon-qdrant
+# Run workers locally (each in its own terminal or via a process manager)
+cargo run --bin axon -- crawl worker
+cargo run --bin axon -- embed worker
+cargo run --bin axon -- extract worker
 
-# Check health
+# Run the frontend locally
+cd apps/web && pnpm dev    # → http://localhost:49010
+
+# Check infra health
 docker compose ps
 
-# Tail worker logs
-docker compose logs -f axon-workers
+# Tail infra logs
+docker compose logs -f axon-postgres axon-redis axon-rabbitmq axon-qdrant
 ```
 
 ### External Service: TEI (Text Embeddings Inference)

@@ -89,7 +89,29 @@ describe('pulse config probe route', () => {
     expect(wsOptions.flags?.model).toBeUndefined()
   })
 
-  it('returns empty config options for non-codex agents', async () => {
+  it('probes claude agent and returns config options', async () => {
+    queueScenario(({ options }) => {
+      queueMicrotask(() => {
+        options.onJson?.({
+          type: 'config_options_update',
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              currentValue: 'opus',
+              options: [
+                { value: 'default', name: 'Default (recommended)' },
+                { value: 'opus', name: 'Opus' },
+                { value: 'haiku', name: 'Haiku' },
+              ],
+            },
+          ],
+        })
+        options.onDone?.({ exit_code: 0 })
+      })
+    })
+
     const mod = await import('@/app/api/pulse/config/route')
     const req = new Request('http://localhost/api/pulse/config', {
       method: 'POST',
@@ -99,7 +121,13 @@ describe('pulse config probe route', () => {
 
     const res = await mod.POST(req)
     expect(res.status).toBe(200)
-    await expect(res.json()).resolves.toEqual({ configOptions: [] })
-    expect(wsRunSpy).not.toHaveBeenCalled()
+    const data = await res.json()
+    expect(data.configOptions).toHaveLength(1)
+    expect(data.configOptions[0].id).toBe('model')
+    expect(data.configOptions[0].currentValue).toBe('opus')
+
+    expect(wsRunSpy.mock.calls[0]?.[0]).toBe('pulse_chat_probe')
+    const wsOptions = wsRunSpy.mock.calls[0]?.[1] as RunAxonCommandWsStreamOptions
+    expect(wsOptions.flags?.agent).toBe('claude')
   })
 })

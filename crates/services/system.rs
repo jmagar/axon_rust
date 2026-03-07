@@ -1,7 +1,7 @@
 use crate::crates::cli::commands::doctor::build_doctor_report;
 use crate::crates::cli::commands::status::status_full;
 use crate::crates::core::config::Config;
-use crate::crates::services::events::{ServiceEvent, emit};
+use crate::crates::services::events::{LogLevel, ServiceEvent, emit};
 use crate::crates::services::types::{
     DedupeResult, DoctorResult, DomainFacet, DomainsResult, Pagination, SourcesResult, StatsResult,
     StatusResult,
@@ -152,7 +152,7 @@ pub async fn dedupe(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: "starting dedupe".to_string(),
         },
     );
@@ -160,7 +160,7 @@ pub async fn dedupe(
         emit(
             &tx,
             ServiceEvent::Log {
-                level: "error".to_string(),
+                level: LogLevel::Error,
                 message: format!("dedupe failed: {e}"),
             },
         );
@@ -169,7 +169,7 @@ pub async fn dedupe(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: "completed dedupe".to_string(),
         },
     );

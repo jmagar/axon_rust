@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { configToForm, type FormState, formToConfig, type KvPair } from '@/app/mcp/mcp-types'
+import {
+  configToForm,
+  type FormState,
+  formToConfig,
+  type KvPair,
+} from '@/app/settings/mcp/mcp-types'
 
 function kv(key: string, value: string): KvPair {
   return { id: 'test-id', key, value }

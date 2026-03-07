@@ -391,7 +391,7 @@ pub struct Config {
     /// Viewport height in pixels for screenshot capture. Default: 1080. Flag: `--viewport`.
     pub viewport_height: u32,
 
-    /// Port for the `serve` web UI server. Flag: `--port`. Default: 3939.
+    /// Port for the `serve` web UI server. Flag: `--port`, env: `AXON_SERVE_PORT`. Default: 49000.
     pub serve_port: u16,
 
     /// Custom HTTP request headers in `"Key: Value"` format (repeatable). Flag: `--header`.

@@ -52,6 +52,7 @@ export default function DashboardPage() {
   const [canvasProfile, setCanvasProfile] = useState<NeuralCanvasProfile>(
     DEFAULT_NEURAL_CANVAS_PROFILE,
   )
+  const omniboxDockRef = useRef<HTMLDivElement>(null)
   const [landingMobilePane, setLandingMobilePane] = useState<'chat' | 'editor'>('chat')
   const [landingEditorMarkdown, setLandingEditorMarkdown] = useState('')
 
@@ -155,6 +156,23 @@ export default function DashboardPage() {
     hasResults &&
     (workspacePromptVersion > 0 || workspaceResumeVersion > 0)
 
+  // Measure the fixed omnibox dock and set a CSS variable so the workspace
+  // overlay stops above it instead of being clipped behind it.
+  useEffect(() => {
+    const node = omniboxDockRef.current
+    if (!node) return
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry) {
+        document.documentElement.style.setProperty(
+          '--omnibox-dock-h',
+          `${entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height}px`,
+        )
+      }
+    })
+    ro.observe(node)
+    return () => ro.disconnect()
+  }, [])
+
   return (
     <>
       <NeuralCanvas ref={canvasRef} profile={canvasProfile} />
@@ -162,8 +180,8 @@ export default function DashboardPage() {
       {isPulseWorkspaceActive ? (
         /* Full-screen workspace — fixed overlay from sidebar right-edge to viewport edge */
         <div
-          className="fixed bottom-0 right-0 top-0 z-[3] overflow-hidden pointer-events-none"
-          style={{ left: 'var(--sidebar-w, 260px)' }}
+          className="fixed right-0 top-0 z-[3] overflow-hidden pointer-events-none"
+          style={{ left: 'var(--sidebar-w, 260px)', bottom: 'var(--omnibox-dock-h, 72px)' }}
         >
           <div className="h-full pointer-events-auto">
             <ResultsPanel statsSlot={<DockerStats onStats={handleStats} />} />
@@ -239,6 +257,7 @@ export default function DashboardPage() {
       {/* Fixed bottom omnibox — only when Pulse workspace is active */}
       {isPulseWorkspaceActive && (
         <div
+          ref={omniboxDockRef}
           className="fixed bottom-0 right-0 z-20 px-2.5 pb-3 sm:px-3.5 sm:pb-4"
           style={{ left: 'var(--sidebar-w, 260px)' }}
         >

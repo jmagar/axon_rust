@@ -88,8 +88,8 @@ MCP defaults are context-safe:
 cp .env.example .env
 # edit .env — set AXON_DATA_DIR, POSTGRES_PASSWORD, REDIS_PASSWORD, RABBITMQ_PASS, TEI_URL, OPENAI_*
 
-# 2) start stack
-docker compose up -d
+# 2) start infrastructure only (workers + web run locally, not in Docker)
+docker compose up -d axon-postgres axon-redis axon-rabbitmq axon-qdrant axon-chrome
 docker compose ps
 ```
 
@@ -244,20 +244,21 @@ Notes:
   - Config/schema queries require at least one exact-page citation.
   - If gates fail, output is forced to structured insufficient-evidence format.
 
-## Worker Model (s6 Supervised)
+## Worker Model (Local Processes)
 
-`axon-workers` uses `s6-overlay` and runs four long-lived worker services in one container:
+Workers run as local processes, not in Docker. Start each in its own terminal or tmux pane:
 
-- `crawl-worker` -> `/usr/local/bin/axon crawl worker`
-- `extract-worker` -> `/usr/local/bin/axon extract worker`
-- `embed-worker` -> `/usr/local/bin/axon embed worker`
-- `ingest-worker` -> `/usr/local/bin/axon ingest worker`
-
-Startup loads `.env` via `docker/s6/cont-init.d/10-load-axon-env`. Health checks verify each worker process via s6-svstat. The container is resource-limited to 4 CPUs / 4 GB RAM with a 512 MB / 1 CPU reservation.
+```bash
+cargo run --bin axon -- crawl worker
+cargo run --bin axon -- embed worker
+cargo run --bin axon -- extract worker
+cargo run --bin axon -- ingest worker
+```
 
 Worker behavior notes:
 - Workers run startup stale-job reclaim sweeps plus periodic stale sweeps.
 - Stale timeout and confirmation window are tunable via `AXON_JOB_STALE_TIMEOUT_SECS` / `AXON_JOB_STALE_CONFIRM_SECS`.
+- Use `./scripts/axon` wrapper to auto-source `.env` before launching workers.
 
 ## Surgical Incremental Crawling
 
@@ -532,8 +533,8 @@ Concurrency tuned relative to available CPU cores:
 
 - `axon doctor` for service reachability (Postgres/Redis/AMQP/Qdrant/TEI/OpenAI)
 - `axon debug` to run doctor + LLM-assisted troubleshooting with your configured OpenAI-compatible endpoint
-- `docker compose logs -f axon-workers` to inspect worker failures
-- Jobs stuck in pending: ensure `axon-workers` is healthy and AMQP/Redis are reachable
+- Check your worker terminal output for failures (workers run locally, not in Docker)
+- Jobs stuck in pending: ensure worker processes are running and AMQP/Redis are reachable (`./scripts/axon doctor`)
 - Manually reclaim stale jobs if needed:
   - `axon crawl recover`
   - `axon extract recover`

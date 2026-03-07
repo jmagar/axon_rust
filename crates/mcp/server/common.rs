@@ -85,6 +85,13 @@ pub(super) fn artifact_root() -> PathBuf {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("AXON_DATA_DIR")
+                .ok()
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty())
+                .map(|d| PathBuf::from(d).join("axon/artifacts"))
+        })
         .unwrap_or_else(|| PathBuf::from(".cache/axon-mcp"))
 }
 

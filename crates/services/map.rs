@@ -1,7 +1,7 @@
 use crate::crates::core::config::Config;
 use crate::crates::core::http::validate_url;
 use crate::crates::crawl::engine::map_with_sitemap;
-use crate::crates::services::events::{ServiceEvent, emit};
+use crate::crates::services::events::{LogLevel, ServiceEvent, emit};
 use crate::crates::services::types::{MapOptions, MapResult};
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -22,7 +22,7 @@ pub async fn discover(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("starting map: {url}"),
         },
     );
@@ -46,7 +46,7 @@ pub async fn discover(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("map complete: {mapped_count} urls"),
         },
     );

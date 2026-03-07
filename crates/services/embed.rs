@@ -1,6 +1,6 @@
 use crate::crates::core::config::Config;
 use crate::crates::jobs::embed::start_embed_job;
-use crate::crates::services::events::{ServiceEvent, emit};
+use crate::crates::services::events::{LogLevel, ServiceEvent, emit};
 use crate::crates::services::types::{EmbedJobResult, EmbedStartResult};
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -34,7 +34,7 @@ pub async fn embed_start(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("enqueueing embed job for input: {input}"),
         },
     );
@@ -44,7 +44,7 @@ pub async fn embed_start(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("enqueued embed job: {job_id}"),
         },
     );

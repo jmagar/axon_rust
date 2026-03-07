@@ -6,7 +6,11 @@
  * axon-workers container, which always has the binary available.
  */
 
-const WORKERS_WS_URL = process.env.AXON_WORKERS_WS_URL ?? 'ws://axon-workers:49000/ws'
+const WORKERS_WS_URL =
+  process.env.AXON_WORKERS_WS_URL ??
+  process.env.NEXT_PUBLIC_AXON_WS_URL ??
+  process.env.AXON_BACKEND_URL?.replace(/^http/i, 'ws').replace(/\/$/, '').concat('/ws') ??
+  `ws://127.0.0.1:${process.env.NEXT_PUBLIC_AXON_PORT || '49000'}/ws`
 const WORKERS_WS_TOKEN = process.env.AXON_WEB_API_TOKEN?.trim() ?? ''
 
 const buildWorkersWsUrl = (): string => {
@@ -162,6 +166,7 @@ export async function runAxonCommandWsStream(
 
       ws.addEventListener('open', () => {
         opened = true
+        console.log(`[axon-ws] connected to ${WORKERS_WS_URL} for mode=${mode}`)
         ws?.send(JSON.stringify({ type: 'execute', mode, input, flags }))
       })
 
@@ -215,6 +220,9 @@ export async function runAxonCommandWsStream(
       })
 
       ws.addEventListener('error', () => {
+        console.error(
+          `[axon-ws] error for mode=${mode} opened=${opened} attempt=${connectAttempts}/${maxConnectAttempts}`,
+        )
         if (!opened && connectAttempts < maxConnectAttempts) {
           // 'close' always fires after 'error'; let it handle the retry
           return
@@ -223,6 +231,9 @@ export async function runAxonCommandWsStream(
       })
 
       ws.addEventListener('close', (event) => {
+        console.log(
+          `[axon-ws] close for mode=${mode} code=${event.code} opened=${opened} settled=${settled}`,
+        )
         if (settled) return
         if (!opened && connectAttempts < maxConnectAttempts) {
           setTimeout(connect, 250 * connectAttempts)

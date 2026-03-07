@@ -1,5 +1,5 @@
 use crate::crates::core::config::Config;
-use crate::crates::services::events::{ServiceEvent, emit};
+use crate::crates::services::events::{LogLevel, ServiceEvent, emit};
 use crate::crates::services::types::{
     AskResult, EvaluateResult, Pagination, QueryResult, RetrieveOptions, RetrieveResult,
     SuggestResult,
@@ -87,7 +87,7 @@ pub async fn ask(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!(
                 "starting ask: {}",
                 question.chars().take(80).collect::<String>()
@@ -100,7 +100,7 @@ pub async fn ask(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: "ask complete".to_string(),
         },
     );

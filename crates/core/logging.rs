@@ -139,6 +139,13 @@ pub fn init_tracing() {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+        .or_else(|| {
+            std::env::var("AXON_DATA_DIR")
+                .ok()
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty())
+                .map(|d| format!("{d}/axon/logs/axon.log"))
+        })
         .unwrap_or_else(|| "logs/axon.log".to_string());
     let max_bytes = std::env::var("AXON_LOG_MAX_BYTES")
         .ok()
@@ -162,33 +169,61 @@ pub fn init_tracing() {
     // To force-enable this target, change/remove this directive in code.
     const SUPPRESS_CDP_NOISE: &str = "chromiumoxide::conn::raw_ws::parse_errors=off";
 
+    // agent-client-protocol 0.10.0 doesn't recognise `usage_update` session
+    // updates that Claude Code sends. The deserialization error is logged at ERROR
+    // but is non-fatal — the session continues normally. Suppress until the crate
+    // adds the variant upstream.
+    const SUPPRESS_ACP_DECODE_NOISE: &str = "agent_client_protocol::rpc=warn";
+
+    let noise_directives = [SUPPRESS_CDP_NOISE, SUPPRESS_ACP_DECODE_NOISE];
+
     let console_filter = EnvFilter::try_from_default_env()
         .map(|f| {
-            f.add_directive(
-                SUPPRESS_CDP_NOISE
-                    .parse()
-                    .expect("hard-coded directive is valid"),
-            )
+            noise_directives.iter().fold(f, |acc, d| {
+                acc.add_directive(d.parse().expect("hard-coded directive is valid"))
+            })
         })
-        .unwrap_or_else(|_| EnvFilter::new(format!("warn,{SUPPRESS_CDP_NOISE}")));
+        .unwrap_or_else(|_| {
+            let extras = noise_directives.join(",");
+            EnvFilter::new(format!("warn,{extras}"))
+        });
 
     let file_filter = EnvFilter::try_from_default_env()
         .map(|f| {
-            f.add_directive(
-                SUPPRESS_CDP_NOISE
-                    .parse()
-                    .expect("hard-coded directive is valid"),
-            )
+            noise_directives.iter().fold(f, |acc, d| {
+                acc.add_directive(d.parse().expect("hard-coded directive is valid"))
+            })
         })
-        .unwrap_or_else(|_| EnvFilter::new(format!("info,{SUPPRESS_CDP_NOISE}")));
+        .unwrap_or_else(|_| {
+            let extras = noise_directives.join(",");
+            EnvFilter::new(format!("info,{extras}"))
+        });
 
-    let log_path = PathBuf::from(json_log_file);
+    let log_path = PathBuf::from(&json_log_file);
 
     let console_layer = tracing_subscriber::fmt::layer()
         .with_writer(io::stderr)
         .with_filter(console_filter);
 
-    match SizeRotatingFile::new(log_path.clone(), max_bytes, max_files_total) {
+    // Try the configured path first; if it fails (e.g. permission denied when
+    // running locally against a Docker-owned data dir), fall back to a local
+    // `logs/axon.log` relative to CWD before giving up on file logging entirely.
+    let rotating_result = SizeRotatingFile::new(log_path.clone(), max_bytes, max_files_total)
+        .or_else(|primary_err| {
+            let fallback = PathBuf::from("logs/axon.log");
+            if fallback == log_path {
+                return Err(primary_err);
+            }
+            eprintln!(
+                "warning: cannot open log file {}: {} — falling back to {}",
+                log_path.display(),
+                primary_err,
+                fallback.display(),
+            );
+            SizeRotatingFile::new(fallback, max_bytes, max_files_total)
+        });
+
+    match rotating_result {
         Ok(rotating) => {
             let file_writer = SizeRotateMakeWriter {
                 inner: Arc::new(Mutex::new(rotating)),

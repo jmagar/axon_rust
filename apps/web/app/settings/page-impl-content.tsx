@@ -121,7 +121,7 @@ export default function SettingsPage() {
               </p>
               <button
                 type="button"
-                onClick={() => router.push('/mcp')}
+                onClick={() => router.push('/settings/mcp')}
                 className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] font-medium text-[var(--text-muted)] transition-all duration-150 hover:bg-[var(--surface-float)] hover:text-[var(--text-secondary)]"
               >
                 <Server className="size-3.5 shrink-0" />

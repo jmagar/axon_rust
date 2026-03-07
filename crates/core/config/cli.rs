@@ -51,7 +51,7 @@ pub(super) enum CliCommand {
 #[derive(Debug, Args)]
 pub(super) struct ServeArgs {
     /// Port to bind the web UI server on
-    #[arg(long, default_value_t = 3939)]
+    #[arg(long, env = "AXON_SERVE_PORT", default_value_t = 49000)]
     pub(super) port: u16,
 }
 

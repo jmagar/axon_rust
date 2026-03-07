@@ -18,7 +18,6 @@ import {
   ToggleRow,
 } from './settings-components'
 import {
-  CLAUDE_MODEL_OPTIONS,
   EFFORT_OPTIONS,
   FALLBACK_MODEL_OPTIONS,
   KEYBOARD_SHORTCUTS,
@@ -37,7 +36,7 @@ interface SettingsSectionsProps {
 }
 
 export function SettingsSections({
-  pulseAgent,
+  pulseAgent: _pulseAgent,
   pulseModel,
   acpConfigOptions,
   setPulseModel,
@@ -55,16 +54,9 @@ export function SettingsSections({
       }))
       .filter((o) => o.id) ?? []
   const modelOptions: Array<{ id: string; label: string; sub: string; badge?: string }> =
-    pulseAgent === 'claude'
-      ? CLAUDE_MODEL_OPTIONS.map((option) => ({
-          id: option.id,
-          label: option.label,
-          sub: option.sub,
-          badge: option.badge,
-        }))
-      : acpModelOptions.length > 0
-        ? acpModelOptions
-        : [{ id: 'default', label: 'Default', sub: 'Agent default model' }]
+    acpModelOptions.length > 0
+      ? acpModelOptions
+      : [{ id: 'default', label: 'Default', sub: 'Loading models...' }]
   const selectedModel = modelOptions.find((option) => option.id === pulseModel) ?? modelOptions[0]
   const selectedPermission =
     PERMISSION_OPTIONS.find((o) => o.id === pulsePermissionLevel) ?? PERMISSION_OPTIONS[0]

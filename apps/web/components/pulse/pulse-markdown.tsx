@@ -1,6 +1,6 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { memo, type ReactNode } from 'react'
 
 // ── Inline formatting ──────────────────────────────────────────────────────────
 
@@ -227,7 +227,7 @@ function renderLines(lines: string[]): ReactNode[] {
 
 // ── Public component ──────────────────────────────────────────────────────────
 
-export function PulseMarkdown({ content }: { content: string }) {
+export const PulseMarkdown = memo(function PulseMarkdown({ content }: { content: string }) {
   // Split on fenced code blocks first, preserving them as separate segments
   const segments = content.split(/(```[\w]*\n[\s\S]*?\n```)/g)
 
@@ -242,4 +242,4 @@ export function PulseMarkdown({ content }: { content: string }) {
       })}
     </div>
   )
-}
+})

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { runAxonCommandWsStream } from '@/lib/axon-ws-exec'
+import { ensureRepoRootEnvLoaded } from '@/lib/pulse/server-env'
 import { AcpConfigOption, PulseAgent } from '@/lib/pulse/types'
 import { apiError, makeErrorId } from '@/lib/server/api-error'
 
@@ -11,6 +12,15 @@ const PulseConfigProbeRequestSchema = z.object({
     .optional(),
   model: z.string().optional(),
 })
+
+// In-memory cache for config probe results. The probe spawns a full adapter lifecycle
+// just to read config options, then tears everything down. Caching avoids repeating
+// that expensive cycle on every settings panel render or page navigation.
+const CONFIG_CACHE = new Map<
+  string,
+  { options: z.infer<typeof AcpConfigOption>[]; expires: number }
+>()
+const CONFIG_CACHE_TTL = 60_000 // 60 seconds
 
 function normalizeConfigOptionsPayload(payload: unknown) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
@@ -24,6 +34,8 @@ function normalizeConfigOptionsPayload(payload: unknown) {
 }
 
 export async function POST(request: Request) {
+  ensureRepoRootEnvLoaded()
+
   let body: unknown
   try {
     body = await request.json()
@@ -37,11 +49,16 @@ export async function POST(request: Request) {
   }
 
   const req = parsed.data
-  if (req.agent !== 'codex') {
-    return Response.json({ configOptions: [] })
+
+  // Return cached config if still fresh — avoids spawning a full adapter lifecycle.
+  const cacheKey = `${req.agent}:${req.model ?? 'default'}`
+  const cached = CONFIG_CACHE.get(cacheKey)
+  if (cached && cached.expires > Date.now()) {
+    return Response.json({ configOptions: cached.options })
   }
 
   let configOptions = [] as z.infer<typeof AcpConfigOption>[]
+  let probeErrorMessage: string | null = null
 
   try {
     const flags: Record<string, string> = { agent: req.agent }
@@ -62,13 +79,44 @@ export async function POST(request: Request) {
           configOptions = parsedOptions
         }
       },
+      onError: (payload) => {
+        probeErrorMessage = payload.message
+      },
     })
 
+    if (probeErrorMessage) {
+      const errorId = makeErrorId('pulse-config')
+      console.error('[pulse/config] probe command failed', {
+        errorId,
+        message: probeErrorMessage,
+        agent: req.agent,
+        sessionId: req.sessionId ?? null,
+        model: req.model ?? null,
+      })
+      return apiError(502, 'ACP config probe failed', {
+        code: 'pulse_config_probe_failed',
+        errorId,
+        detail: probeErrorMessage,
+      })
+    }
+
+    CONFIG_CACHE.set(cacheKey, { options: configOptions, expires: Date.now() + CONFIG_CACHE_TTL })
     return Response.json({ configOptions })
   } catch (error: unknown) {
     const errorId = makeErrorId('pulse-config')
     const message = error instanceof Error ? error.message : String(error)
-    console.error('[pulse/config] probe failed', { errorId, message, error })
-    return apiError(502, 'ACP config probe failed', { code: 'pulse_config_probe_failed', errorId })
+    console.error('[pulse/config] probe failed', {
+      errorId,
+      message,
+      error,
+      agent: req.agent,
+      sessionId: req.sessionId ?? null,
+      model: req.model ?? null,
+    })
+    return apiError(502, 'ACP config probe failed', {
+      code: 'pulse_config_probe_failed',
+      errorId,
+      detail: message,
+    })
   }
 }

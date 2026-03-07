@@ -34,13 +34,20 @@ async fn send_artifact_list_v2(
 }
 
 /// Resolve the output directory for reading crawl results.
-/// Checks `AXON_WORKER_OUTPUT_DIR` first (host path to Docker bind mount),
-/// then `AXON_OUTPUT_DIR`, then the default relative path.
+/// Priority: `AXON_OUTPUT_DIR` → `$AXON_DATA_DIR/axon/output` → `.cache/axon-rust/output`.
 pub fn output_dir() -> PathBuf {
-    std::env::var("AXON_WORKER_OUTPUT_DIR")
-        .or_else(|_| std::env::var("AXON_OUTPUT_DIR"))
+    std::env::var("AXON_OUTPUT_DIR")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(".cache/axon-rust/output"))
+        .or_else(|| {
+            std::env::var("AXON_DATA_DIR")
+                .ok()
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty())
+                .map(|d| PathBuf::from(d).join("axon/output"))
+        })
+        .unwrap_or_else(|| PathBuf::from(".cache/axon-rust/output"))
 }
 
 /// Find the most recently modified `.md` file in a directory.

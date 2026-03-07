@@ -1,6 +1,6 @@
 use crate::crates::core::config::Config;
 use crate::crates::jobs::crawl;
-use crate::crates::services::events::{ServiceEvent, emit};
+use crate::crates::services::events::{LogLevel, ServiceEvent, emit};
 use crate::crates::services::types::{CrawlJobResult, CrawlStartResult};
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -33,7 +33,7 @@ pub async fn crawl_start(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("enqueueing crawl jobs for {} URL(s)", urls.len()),
         },
     );
@@ -46,7 +46,7 @@ pub async fn crawl_start(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("enqueued {} crawl job(s)", job_ids.len()),
         },
     );

@@ -64,6 +64,9 @@ pub(super) const ALLOWED_FLAGS: &[(&str, &str)] = &[
     ("batch_concurrency", "--batch-concurrency"),
     ("depth", "--depth"),
     ("responses_mode", "--responses-mode"),
+    ("agent", "--agent"),
+    ("model", "--model"),
+    ("session_id", "--session-id"),
 ];
 
 /// Modes that use fire-and-forget direct service enqueue.

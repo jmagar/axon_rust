@@ -62,7 +62,7 @@ describe('job detail metadata helpers', () => {
       notModified: 1,
       failedCount: 0,
       total: 4,
-      manifestPath: '/axon-output/domains/example/sync/manifest.jsonl',
+      manifestPath: '/data/axon/output/domains/example/sync/manifest.jsonl',
       resultJson: null,
       configJson: null,
     } satisfies JobDetail

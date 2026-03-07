@@ -124,7 +124,7 @@ impl Default for Config {
             screenshot_full_page: true,
             viewport_width: 1920,
             viewport_height: 1080,
-            serve_port: 3939,
+            serve_port: 49000,
             custom_headers: vec![],
         }
     }

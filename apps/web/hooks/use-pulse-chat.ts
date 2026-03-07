@@ -22,6 +22,8 @@ import type {
 import type { ChatMessage } from '@/lib/pulse/workspace-persistence'
 import type { WsServerMsg } from '@/lib/ws-protocol'
 
+// ── Types ───────────────────────────────────────────────────────────────────
+
 interface UsePulseChatInput {
   documentMarkdown: string
   permissionLevel: PulsePermissionLevel
@@ -31,6 +33,7 @@ interface UsePulseChatInput {
   onApplyOperations: (ops: DocOperation[]) => void
   onPendingOps: (ops: DocOperation[] | null) => void
   onPendingValidation: (v: ValidationResult | null) => void
+  onAcpConfigUpdate?: (options: AcpConfigOption[]) => void
   effort?: string
   maxTurns?: number
   maxBudgetUsd?: number
@@ -42,6 +45,304 @@ interface UsePulseChatInput {
   disallowedTools?: string
 }
 
+/** Snapshot of config values read from configRef at prompt submission time. */
+interface PromptConfig {
+  chatSessionId: string | null
+  documentMarkdown: string
+  activeThreadSources: string[]
+  scrapedContext: { url: string; markdown: string } | null
+  permissionLevel: PulsePermissionLevel
+  agent: PulseAgent
+  model: PulseModel
+  effort?: string
+  maxTurns?: number
+  maxBudgetUsd?: number
+  appendSystemPrompt?: string
+  disableSlashCommands?: boolean
+  noSessionPersistence?: boolean
+  fallbackModel?: string
+  allowedTools?: string
+  disallowedTools?: string
+}
+
+/** Mutable accumulator shared across streaming event handlers for a single prompt. */
+interface StreamAccumulator {
+  partialText: string
+  draftAdded: boolean
+  assistantDraftId: string | undefined
+  partialTools: PulseToolUse[]
+  partialBlocks: PulseMessageBlock[]
+}
+
+// ── Extracted helpers ───────────────────────────────────────────────────────
+
+/**
+ * Handle the "source" intent — index URLs and produce a summary message.
+ * Returns true if handled (caller should return early).
+ */
+async function handleSourceIntent(
+  urls: string[],
+  signal: AbortSignal,
+  promptId: number,
+  inFlightRef: React.RefObject<number>,
+  setIndexedSources: React.Dispatch<React.SetStateAction<string[]>>,
+  setActiveThreadSources: React.Dispatch<React.SetStateAction<string[]>>,
+  setScrapedContext: React.Dispatch<React.SetStateAction<{ url: string; markdown: string } | null>>,
+  setChatHistoryTracked: (action: React.SetStateAction<ChatMessage[]>) => void,
+  createMessage: (partial: Omit<ChatMessage, 'id' | 'createdAt'>) => ChatMessage,
+): Promise<void> {
+  const result = await runSourcePrompt(urls, signal)
+  if (inFlightRef.current !== promptId) return
+  setIndexedSources((prev) => {
+    const next = [...prev]
+    for (const url of result.indexed) {
+      if (!next.includes(url)) next.push(url)
+    }
+    return next.slice(-200)
+  })
+  setActiveThreadSources((prev) => {
+    const merged = [...prev]
+    for (const url of result.indexed) {
+      if (!merged.includes(url)) merged.push(url)
+    }
+    return merged.slice(-200)
+  })
+  if (result.markdownBySrc && Object.keys(result.markdownBySrc).length > 0) {
+    const firstUrl = result.indexed[0]
+    const md = firstUrl ? result.markdownBySrc[firstUrl] : undefined
+    if (md && md.length > 0) {
+      setScrapedContext({ url: firstUrl ?? '', markdown: md })
+    }
+  }
+  const sourceList = result.indexed.map((url) => `- ${url}`).join('\n')
+  const assistantMessage = [
+    'Indexed new sources into Axon.',
+    '',
+    sourceList,
+    '',
+    'Ask a follow-up question to use this fresh context.',
+  ].join('\n')
+  setChatHistoryTracked((prev) => [
+    ...prev,
+    createMessage({ role: 'assistant', content: assistantMessage }),
+  ])
+}
+
+/**
+ * Build the onEvent callback for streaming chat responses.
+ * Each event type is handled in a focused branch, updating the accumulator
+ * and calling the appropriate state setters.
+ */
+function makeStreamEventHandler(
+  acc: StreamAccumulator,
+  promptId: number,
+  inFlightRef: React.RefObject<number>,
+  assistantDraft: ChatMessage,
+  setStreamPhase: React.Dispatch<
+    React.SetStateAction<'started' | 'thinking' | 'finalizing' | null>
+  >,
+  setLiveToolUses: React.Dispatch<React.SetStateAction<PulseToolUse[]>>,
+  setChatHistoryTracked: (action: React.SetStateAction<ChatMessage[]>) => void,
+  updateChatMessage: (messageId: string, transform: (m: ChatMessage) => ChatMessage) => void,
+  onAcpConfigUpdate?: (options: AcpConfigOption[]) => void,
+): { handler: (event: ChatStreamEvent) => void; flush: () => void } {
+  let deltaFlushTimer: ReturnType<typeof setTimeout> | null = null
+  let pendingDeltaFlush = false
+
+  function ensureDraftAdded() {
+    if (!acc.draftAdded) {
+      acc.draftAdded = true
+      setChatHistoryTracked((prev) => [...prev, assistantDraft])
+    }
+  }
+
+  function flushDeltaToReact() {
+    deltaFlushTimer = null
+    pendingDeltaFlush = false
+    updateChatMessage(assistantDraft.id!, (m) => ({
+      ...m,
+      content: acc.partialText,
+      blocks: [...acc.partialBlocks],
+    }))
+  }
+
+  function scheduleDeltaFlush() {
+    if (pendingDeltaFlush) return
+    pendingDeltaFlush = true
+    deltaFlushTimer = setTimeout(flushDeltaToReact, 50)
+  }
+
+  function flush() {
+    if (deltaFlushTimer !== null) {
+      clearTimeout(deltaFlushTimer)
+      flushDeltaToReact()
+    }
+  }
+
+  const handler = (event: ChatStreamEvent) => {
+    if (inFlightRef.current !== promptId) return
+
+    if (event.type === 'status' && event.phase) {
+      setStreamPhase(event.phase)
+      return
+    }
+
+    if (event.type === 'thinking_content' && event.content) {
+      ensureDraftAdded()
+      const lastBlock = acc.partialBlocks[acc.partialBlocks.length - 1]
+      if (lastBlock?.type === 'thinking') {
+        acc.partialBlocks[acc.partialBlocks.length - 1] = {
+          type: 'thinking',
+          content: event.content,
+        }
+      } else {
+        acc.partialBlocks.push({ type: 'thinking', content: event.content })
+      }
+      updateChatMessage(assistantDraft.id!, (m) => ({ ...m, blocks: [...acc.partialBlocks] }))
+      return
+    }
+
+    if (event.type === 'assistant_delta' && event.delta) {
+      ensureDraftAdded()
+      acc.partialText += event.delta
+      const lastBlock = acc.partialBlocks[acc.partialBlocks.length - 1]
+      if (lastBlock?.type === 'text') {
+        acc.partialBlocks[acc.partialBlocks.length - 1] = {
+          ...lastBlock,
+          content: lastBlock.content + event.delta,
+        }
+      } else {
+        acc.partialBlocks.push({ type: 'text', content: event.delta })
+      }
+      // Throttle React updates: accumulate deltas, flush at most every 50ms
+      scheduleDeltaFlush()
+      return
+    }
+
+    if (event.type === 'tool_use' && event.tool) {
+      // Flush any pending text delta before adding tool use
+      flush()
+      ensureDraftAdded()
+      acc.partialTools.push(event.tool)
+      acc.partialBlocks.push({
+        type: 'tool_use',
+        name: event.tool.name,
+        input: event.tool.input,
+      })
+      setLiveToolUses([...acc.partialTools])
+      updateChatMessage(assistantDraft.id!, (m) => ({
+        ...m,
+        toolUses: [...acc.partialTools],
+        blocks: [...acc.partialBlocks],
+      }))
+      return
+    }
+
+    if (event.type === 'config_options_update' && event.configOptions) {
+      onAcpConfigUpdate?.(event.configOptions)
+    }
+  }
+
+  return { handler, flush }
+}
+
+/**
+ * Process the final chat response — update metadata, finalize the draft
+ * message, and handle doc operations / permissions.
+ */
+function finalizeStreamResponse(
+  data: Awaited<ReturnType<typeof runChatPrompt>>,
+  acc: StreamAccumulator,
+  cfg: PromptConfig,
+  setChatSessionId: React.Dispatch<React.SetStateAction<string | null>>,
+  setLastResponseLatencyMs: React.Dispatch<React.SetStateAction<number | null>>,
+  setLastResponseModel: React.Dispatch<React.SetStateAction<PulseModel | null>>,
+  setLastContextStats: React.Dispatch<
+    React.SetStateAction<{ contextCharsTotal: number; contextBudgetChars: number } | null>
+  >,
+  updateChatMessage: (messageId: string, transform: (m: ChatMessage) => ChatMessage) => void,
+  onApplyOperations: (ops: DocOperation[]) => void,
+  onPendingOps: (ops: DocOperation[] | null) => void,
+  onPendingValidation: (v: ValidationResult | null) => void,
+): void {
+  if (data.sessionId) setChatSessionId(data.sessionId)
+  if (data.metadata) {
+    setLastResponseLatencyMs(data.metadata.elapsedMs)
+    setLastResponseModel(data.metadata.model)
+    setLastContextStats({
+      contextCharsTotal: data.metadata.contextCharsTotal,
+      contextBudgetChars: data.metadata.contextBudgetChars,
+    })
+  }
+
+  updateChatMessage(acc.assistantDraftId!, (m) => ({
+    ...m,
+    content: data.text,
+    citations: data.citations,
+    operations: data.operations,
+    toolUses: data.toolUses,
+    blocks: data.blocks,
+  }))
+
+  if (data.operations.length > 0) {
+    const permission = checkPermission(cfg.permissionLevel, data.operations, {
+      isCurrentDoc: true,
+      currentDocMarkdown: cfg.documentMarkdown,
+    })
+    if (permission.allowed && !permission.requiresConfirmation) {
+      onApplyOperations(data.operations)
+    } else if (permission.allowed && permission.requiresConfirmation) {
+      const validation = validateDocOperations(data.operations, cfg.documentMarkdown)
+      onPendingOps(data.operations)
+      onPendingValidation(validation)
+    }
+  }
+}
+
+/**
+ * Handle errors during prompt execution — recover partial content when
+ * possible, otherwise display the error in-place.
+ */
+function handlePromptError(
+  err: unknown,
+  acc: StreamAccumulator,
+  trimmed: string,
+  showRequestNotice: (msg: string) => void,
+  updateChatMessage: (messageId: string, transform: (m: ChatMessage) => ChatMessage) => void,
+  setChatHistoryTracked: (action: React.SetStateAction<ChatMessage[]>) => void,
+  createMessage: (partial: Omit<ChatMessage, 'id' | 'createdAt'>) => ChatMessage,
+): void {
+  if (err instanceof Error && err.name === 'AbortError') {
+    showRequestNotice('Request stopped. Partial response preserved.')
+    return
+  }
+  const parsedPartial =
+    acc.draftAdded && acc.assistantDraftId ? parseClaudeAssistantPayload(acc.partialText) : null
+  const message = err instanceof Error ? err.message : 'Unknown error'
+  if (parsedPartial?.text && acc.assistantDraftId) {
+    updateChatMessage(acc.assistantDraftId, (m) => ({ ...m, content: parsedPartial.text }))
+  } else if (acc.draftAdded && acc.assistantDraftId) {
+    updateChatMessage(acc.assistantDraftId, (m) => ({
+      ...m,
+      content: message,
+      isError: true,
+      retryPrompt: trimmed,
+    }))
+  } else {
+    setChatHistoryTracked((prev) => [
+      ...prev,
+      createMessage({
+        role: 'assistant',
+        content: message,
+        isError: true,
+        retryPrompt: trimmed,
+      }),
+    ])
+  }
+}
+
+// ── Main hook ───────────────────────────────────────────────────────────────
+
 export function usePulseChat({
   documentMarkdown,
   permissionLevel,
@@ -51,6 +352,7 @@ export function usePulseChat({
   onApplyOperations,
   onPendingOps,
   onPendingValidation,
+  onAcpConfigUpdate,
   effort,
   maxTurns,
   maxBudgetUsd,
@@ -77,7 +379,6 @@ export function usePulseChat({
   } | null>(null)
   const [streamPhase, setStreamPhase] = useState<'started' | 'thinking' | 'finalizing' | null>(null)
   const [liveToolUses, setLiveToolUses] = useState<PulseToolUse[]>([])
-  const [acpConfigOptions, setAcpConfigOptions] = useState<AcpConfigOption[]>([])
   const { notice: requestNotice, showNotice: showRequestNotice } = useTimedNotice()
 
   const chatHistoryRef = useRef<ChatMessage[]>([])
@@ -88,9 +389,9 @@ export function usePulseChat({
   const lastCmdInputRef = useRef('')
   const lastSubmittedPromptRef = useRef<{ text: string; atMs: number } | null>(null)
 
-  // Refs for frequently-changing values used inside handlePrompt — avoids
+  // Ref for frequently-changing values used inside handlePrompt — avoids
   // recreating the callback on every keystroke or streaming update (CQ-3).
-  const configRef = useRef({
+  const configRef = useRef<PromptConfig>({
     chatSessionId,
     documentMarkdown,
     activeThreadSources,
@@ -108,24 +409,26 @@ export function usePulseChat({
     allowedTools,
     disallowedTools,
   })
-  configRef.current = {
-    chatSessionId,
-    documentMarkdown,
-    activeThreadSources,
-    scrapedContext,
-    permissionLevel,
-    agent,
-    model,
-    effort,
-    maxTurns,
-    maxBudgetUsd,
-    appendSystemPrompt,
-    disableSlashCommands,
-    noSessionPersistence,
-    fallbackModel,
-    allowedTools,
-    disallowedTools,
-  }
+
+  // Keep the ref in sync — single assignment instead of re-creating the object
+  // on every render when no values changed. The ref is only read inside
+  // handlePrompt, which captures it by reference.
+  configRef.current.chatSessionId = chatSessionId
+  configRef.current.documentMarkdown = documentMarkdown
+  configRef.current.activeThreadSources = activeThreadSources
+  configRef.current.scrapedContext = scrapedContext
+  configRef.current.permissionLevel = permissionLevel
+  configRef.current.agent = agent
+  configRef.current.model = model
+  configRef.current.effort = effort
+  configRef.current.maxTurns = maxTurns
+  configRef.current.maxBudgetUsd = maxBudgetUsd
+  configRef.current.appendSystemPrompt = appendSystemPrompt
+  configRef.current.disableSlashCommands = disableSlashCommands
+  configRef.current.noSessionPersistence = noSessionPersistence
+  configRef.current.fallbackModel = fallbackModel
+  configRef.current.allowedTools = allowedTools
+  configRef.current.disallowedTools = disallowedTools
 
   const setChatHistoryTracked = useCallback((action: React.SetStateAction<ChatMessage[]>) => {
     if (typeof action === 'function') {
@@ -244,48 +547,27 @@ export function usePulseChat({
       }))
       const intent = detectPulsePromptIntent(trimmed)
 
-      // Hoisted so the catch block can recover structured content from streaming deltas.
-      let partialText = ''
-      let draftAdded = false
-      let assistantDraftId: string | undefined
+      const acc: StreamAccumulator = {
+        partialText: '',
+        draftAdded: false,
+        assistantDraftId: undefined,
+        partialTools: [],
+        partialBlocks: [],
+      }
 
       try {
         if (intent.kind === 'source') {
-          const result = await runSourcePrompt(intent.urls, controller.signal)
-          if (inFlightPromptRef.current !== promptId) return
-          setIndexedSources((prev) => {
-            const next = [...prev]
-            for (const url of result.indexed) {
-              if (!next.includes(url)) next.push(url)
-            }
-            return next.slice(-200)
-          })
-          setActiveThreadSources((prev) => {
-            const merged = [...prev]
-            for (const url of result.indexed) {
-              if (!merged.includes(url)) merged.push(url)
-            }
-            return merged.slice(-200)
-          })
-          if (result.markdownBySrc && Object.keys(result.markdownBySrc).length > 0) {
-            const firstUrl = result.indexed[0]
-            const md = firstUrl ? result.markdownBySrc[firstUrl] : undefined
-            if (md && md.length > 0) {
-              setScrapedContext({ url: firstUrl ?? '', markdown: md })
-            }
-          }
-          const sourceList = result.indexed.map((url) => `- ${url}`).join('\n')
-          const assistantMessage = [
-            'Indexed new sources into Axon.',
-            '',
-            sourceList,
-            '',
-            'Ask a follow-up question to use this fresh context.',
-          ].join('\n')
-          setChatHistoryTracked((prev) => [
-            ...prev,
-            createMessage({ role: 'assistant', content: assistantMessage }),
-          ])
+          await handleSourceIntent(
+            intent.urls,
+            controller.signal,
+            promptId,
+            inFlightPromptRef,
+            setIndexedSources,
+            setActiveThreadSources,
+            setScrapedContext,
+            setChatHistoryTracked,
+            createMessage,
+          )
           return
         }
 
@@ -296,83 +578,26 @@ export function usePulseChat({
           toolUses: [],
           blocks: [],
         })
-        assistantDraftId = assistantDraft.id
-
-        const partialTools: PulseToolUse[] = []
-        const partialBlocks: PulseMessageBlock[] = []
-        function ensureDraftAdded() {
-          if (!draftAdded) {
-            draftAdded = true
-            setChatHistoryTracked((prev) => [...prev, assistantDraft])
-          }
-        }
+        acc.assistantDraftId = assistantDraft.id
 
         const cfg = configRef.current
+        const { handler: onEvent, flush: flushStream } = makeStreamEventHandler(
+          acc,
+          promptId,
+          inFlightPromptRef,
+          assistantDraft,
+          setStreamPhase,
+          setLiveToolUses,
+          setChatHistoryTracked,
+          updateChatMessage,
+          onAcpConfigUpdate,
+        )
+
         const data = await runChatPrompt({
           prompt: boundedPrompt,
           conversationHistory,
           signal: controller.signal,
-          onEvent: (event: ChatStreamEvent) => {
-            if (inFlightPromptRef.current !== promptId) return
-            if (event.type === 'status' && event.phase) {
-              setStreamPhase(event.phase)
-              return
-            }
-            if (event.type === 'thinking_content' && event.content) {
-              ensureDraftAdded()
-              // Partial-message update: update the last thinking block in-place to avoid
-              // stacking multiple "Reasoning" boxes as the thinking grows incrementally.
-              const lastBlock = partialBlocks[partialBlocks.length - 1]
-              if (lastBlock?.type === 'thinking') {
-                partialBlocks[partialBlocks.length - 1] = {
-                  type: 'thinking',
-                  content: event.content,
-                }
-              } else {
-                partialBlocks.push({ type: 'thinking', content: event.content })
-              }
-              updateChatMessage(assistantDraft.id!, (m) => ({ ...m, blocks: [...partialBlocks] }))
-              return
-            }
-            if (event.type === 'assistant_delta' && event.delta) {
-              ensureDraftAdded()
-              partialText += event.delta
-              const lastBlock = partialBlocks[partialBlocks.length - 1]
-              if (lastBlock?.type === 'text') {
-                partialBlocks[partialBlocks.length - 1] = {
-                  ...lastBlock,
-                  content: lastBlock.content + event.delta,
-                }
-              } else {
-                partialBlocks.push({ type: 'text', content: event.delta })
-              }
-              updateChatMessage(assistantDraft.id!, (m) => ({
-                ...m,
-                content: partialText,
-                blocks: [...partialBlocks],
-              }))
-              return
-            }
-            if (event.type === 'tool_use' && event.tool) {
-              ensureDraftAdded()
-              partialTools.push(event.tool)
-              partialBlocks.push({
-                type: 'tool_use',
-                name: event.tool.name,
-                input: event.tool.input,
-              })
-              setLiveToolUses([...partialTools])
-              updateChatMessage(assistantDraft.id!, (m) => ({
-                ...m,
-                toolUses: [...partialTools],
-                blocks: [...partialBlocks],
-              }))
-              return
-            }
-            if (event.type === 'config_options_update' && event.configOptions) {
-              setAcpConfigOptions(event.configOptions)
-            }
-          },
+          onEvent,
           chatSessionId: cfg.chatSessionId,
           documentMarkdown: cfg.documentMarkdown,
           activeThreadSources: cfg.activeThreadSources,
@@ -392,71 +617,37 @@ export function usePulseChat({
         })
 
         if (inFlightPromptRef.current !== promptId) return
-        ensureDraftAdded()
-        if (data.sessionId) setChatSessionId(data.sessionId)
-        if (data.metadata) {
-          setLastResponseLatencyMs(data.metadata.elapsedMs)
-          setLastResponseModel(data.metadata.model)
-          setLastContextStats({
-            contextCharsTotal: data.metadata.contextCharsTotal,
-            contextBudgetChars: data.metadata.contextBudgetChars,
-          })
+        // Flush any throttled deltas before finalizing
+        flushStream()
+        if (!acc.draftAdded) {
+          acc.draftAdded = true
+          setChatHistoryTracked((prev) => [...prev, assistantDraft])
         }
 
-        updateChatMessage(assistantDraft.id!, (m) => ({
-          ...m,
-          content: data.text,
-          citations: data.citations,
-          operations: data.operations,
-          toolUses: data.toolUses,
-          blocks: data.blocks,
-        }))
-
-        if (data.operations.length > 0) {
-          const permission = checkPermission(cfg.permissionLevel, data.operations, {
-            isCurrentDoc: true,
-            currentDocMarkdown: cfg.documentMarkdown,
-          })
-          if (permission.allowed && !permission.requiresConfirmation) {
-            onApplyOperations(data.operations)
-          } else if (permission.allowed && permission.requiresConfirmation) {
-            const validation = validateDocOperations(data.operations, cfg.documentMarkdown)
-            onPendingOps(data.operations)
-            onPendingValidation(validation)
-          }
-        }
+        finalizeStreamResponse(
+          data,
+          acc,
+          cfg,
+          setChatSessionId,
+          setLastResponseLatencyMs,
+          setLastResponseModel,
+          setLastContextStats,
+          updateChatMessage,
+          onApplyOperations,
+          onPendingOps,
+          onPendingValidation,
+        )
       } catch (err: unknown) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          showRequestNotice('Request stopped. Partial response preserved.')
-          return
-        }
         if (inFlightPromptRef.current !== promptId) return
-        // If Claude streamed JSON before the error, extract the text instead of showing raw JSON.
-        const parsedPartial =
-          draftAdded && assistantDraftId ? parseClaudeAssistantPayload(partialText) : null
-        const message = err instanceof Error ? err.message : 'Unknown error'
-        if (parsedPartial?.text && assistantDraftId) {
-          // Recovered the real response text from streaming deltas — show it cleanly.
-          updateChatMessage(assistantDraftId, (m) => ({ ...m, content: parsedPartial.text }))
-        } else if (draftAdded && assistantDraftId) {
-          // Draft is in history with raw streaming content — replace it with the error in-place.
-          updateChatMessage(assistantDraftId, (m) => ({
-            ...m,
-            content: message,
-            isError: true,
-            retryPrompt: trimmed,
-          }))
-        } else {
-          setChatHistoryTracked((prev) => [
-            ...prev,
-            createMessage({
-              role: 'assistant',
-              content: message,
-              isError: true,
-              retryPrompt: trimmed,
-            }),
-          ])
-        }
+        handlePromptError(
+          err,
+          acc,
+          trimmed,
+          showRequestNotice,
+          updateChatMessage,
+          setChatHistoryTracked,
+          createMessage,
+        )
       } finally {
         if (activePromptAbortRef.current === controller) activePromptAbortRef.current = null
         if (inFlightPromptRef.current === promptId) {
@@ -468,6 +659,7 @@ export function usePulseChat({
     },
     [
       createMessage,
+      onAcpConfigUpdate,
       onApplyOperations,
       onPendingOps,
       onPendingValidation,
@@ -506,8 +698,6 @@ export function usePulseChat({
     lastContextStats,
     streamPhase,
     liveToolUses,
-    acpConfigOptions,
-    setAcpConfigOptions,
     requestNotice,
     handlePrompt,
     handleCancelPrompt,

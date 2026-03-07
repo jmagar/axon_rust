@@ -201,7 +201,7 @@ function McpContent() {
       {servers.map((s) => (
         <Link
           key={s.name}
-          href="/mcp"
+          href="/settings/mcp"
           className="flex items-center justify-between rounded px-2 py-1.5 transition-colors hover:bg-[var(--surface-float)]"
         >
           <span className="flex min-w-0 items-center gap-1.5">
@@ -248,7 +248,7 @@ export function LandingCards() {
       >
         <FilesContent />
       </Card>
-      <Card icon={<Network />} title="MCP" href="/mcp" storageKey="axon.landing.card.mcp">
+      <Card icon={<Network />} title="MCP" href="/settings/mcp" storageKey="axon.landing.card.mcp">
         <McpContent />
       </Card>
     </div>

@@ -1,6 +1,7 @@
 'use client'
 
 import {
+  Bot,
   Brain,
   ChevronLeft,
   ChevronRight,
@@ -10,7 +11,9 @@ import {
   FolderOpen,
   Layers,
   MessageSquare,
+  Network,
   ScrollText,
+  Settings2,
   TerminalSquare,
 } from 'lucide-react'
 import Link from 'next/link'
@@ -46,6 +49,9 @@ const PAGE_LINKS = [
   { href: '/terminal', label: 'Terminal', icon: <TerminalSquare className="size-4" /> },
   { href: '/evaluate', label: 'Evaluate', icon: <Columns2 className="size-4" /> },
   { href: '/cortex/status', label: 'Cortex', icon: <Brain className="size-4" /> },
+  { href: '/settings/mcp', label: 'MCP Servers', icon: <Network className="size-4" /> },
+  { href: '/agents', label: 'Agents', icon: <Bot className="size-4" /> },
+  { href: '/settings', label: 'Settings', icon: <Settings2 className="size-4" /> },
 ]
 
 function SectionContent({

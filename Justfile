@@ -131,11 +131,11 @@ rebuild:
 
 # ── Web UI (axum built-in server) ─────────────────────────────────
 
-serve port="3939":
-    {{rust_dev_env}}; cargo run --locked --bin axon -- serve --port {{port}}
+serve port="49000":
+    {{rust_dev_env}}; AXON_SERVE_HOST=0.0.0.0 cargo run --locked --bin axon -- serve --port {{port}}
 
-serve-release port="3939":
-    {{rust_dev_env}}; cargo run --release --locked --bin axon -- serve --port {{port}}
+serve-release port="49000":
+    {{rust_dev_env}}; AXON_SERVE_HOST=0.0.0.0 cargo run --release --locked --bin axon -- serve --port {{port}}
 
 # ── Web UI (Next.js dashboard) ────────────────────────────────────
 
@@ -153,16 +153,28 @@ web-format:
 
 # ── Full stack ────────────────────────────────────────────────────
 
-# Kill any running axon serve or Next.js dev processes
+# Kill any running axon serve, mcp, workers, or Next.js dev processes
 stop:
-    -pkill -f 'axon.*serve' 2>/dev/null || true
+    -pkill -f 'axon.*(serve|mcp|crawl worker|embed worker|extract worker)' 2>/dev/null || true
     -pkill -f 'next dev' 2>/dev/null || true
-    @echo "Stopped running servers"
+    @echo "Stopped running servers and workers"
 
-# Start infra, axum server, and Next.js dev server (all foreground)
+# Start workers only (crawl, embed, extract)
+workers:
+    {{rust_dev_env}}; cargo run --locked --bin axon -- crawl worker &
+    {{rust_dev_env}}; cargo run --locked --bin axon -- embed worker &
+    {{rust_dev_env}}; cargo run --locked --bin axon -- extract worker &
+    wait
+
+# Start infra, axum server, MCP server, workers, and Next.js dev server (all foreground)
 dev:
     just stop
-    docker compose up -d
-    {{rust_dev_env}}; cargo run --locked --bin axon -- serve --port 3939 &
+    sleep 1
+    docker compose up -d axon-postgres axon-redis axon-rabbitmq axon-qdrant axon-chrome
+    {{rust_dev_env}}; AXON_SERVE_HOST=0.0.0.0 cargo run --locked --bin axon -- serve --port 49000 &
+    {{rust_dev_env}}; AXON_MCP_HTTP_PORT=8001 cargo run --locked --bin axon -- mcp &
+    {{rust_dev_env}}; cargo run --locked --bin axon -- crawl worker &
+    {{rust_dev_env}}; cargo run --locked --bin axon -- embed worker &
+    {{rust_dev_env}}; cargo run --locked --bin axon -- extract worker &
     cd apps/web && pnpm dev &
     wait

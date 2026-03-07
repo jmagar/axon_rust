@@ -148,7 +148,7 @@ Profile stored in `localStorage` key `axon.web.neural-canvas.profile`. Options: 
 
 ```bash
 # Backend URL (where Rust axon-workers serve HTTP/WS)
-AXON_BACKEND_URL=http://localhost:49000     # default: http://localhost:3939
+AXON_BACKEND_URL=http://localhost:49000     # env: AXON_BACKEND_URL
 
 # Override WS URL for the client (optional — defaults to /ws path)
 NEXT_PUBLIC_AXON_WS_URL=

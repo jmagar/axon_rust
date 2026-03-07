@@ -75,13 +75,9 @@ function stringArray(value: unknown): string[] {
   return value.filter((v): v is string => typeof v === 'string')
 }
 
+/** @deprecated Paths are now unified via AXON_DATA_DIR — no rewriting needed. */
 export function normalizeOutputDirForWeb(outputDir: string | null): string | null {
-  if (!outputDir) return null
-  const fromPrefix = '/app/.cache/axon-rust/output'
-  if (!outputDir.startsWith(fromPrefix)) return outputDir
-  const webOutputDir = process.env.AXON_OUTPUT_DIR || '/axon-output'
-  const suffix = outputDir.slice(fromPrefix.length)
-  return `${webOutputDir}${suffix}`
+  return outputDir || null
 }
 
 async function readCrawlManifest(outputDir: string): Promise<CrawlMarkdownFile[]> {

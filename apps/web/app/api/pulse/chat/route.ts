@@ -217,6 +217,20 @@ export async function POST(request: Request) {
     }
 
     const req = parsed.data
+
+    // Server-side validation for toolsRestrict matching the backend TOOL_ENTRY_RE contract.
+    // Zod already applies a regex, but this is defense-in-depth against any schema drift.
+    const TOOL_ENTRY_RE = /^[a-zA-Z0-9_:*-]+$/
+    if (req.toolsRestrict && !TOOL_ENTRY_RE.test(req.toolsRestrict)) {
+      return apiError(400, 'Invalid tool restriction pattern', { code: 'invalid_tools_restrict' })
+    }
+
+    console.log(
+      '[pulse/chat] request received: agent=%s model=%s prompt_len=%d',
+      req.agent,
+      req.model,
+      req.prompt.length,
+    )
     // last_event_id / lastEventId — now validated through Zod instead of raw body cast
     const lastEventId = req.last_event_id ?? req.lastEventId
 
@@ -462,9 +476,7 @@ export async function POST(request: Request) {
           wsFlags.session_id = req.sessionId
         }
         wsFlags.agent = req.agent
-        if (req.agent === 'claude') {
-          wsFlags.model = req.model
-        } else if (req.model !== 'default') {
+        if (req.model && req.model !== 'default') {
           wsFlags.model = req.model
         }
 
@@ -474,9 +486,26 @@ export async function POST(request: Request) {
           flags: wsFlags,
           signal: request.signal,
           onJson: (payload) => {
+            const payloadType =
+              payload && typeof payload === 'object' && !Array.isArray(payload)
+                ? (payload as Record<string, unknown>).type
+                : undefined
+            console.log(
+              '[pulse/chat] onJson event:',
+              payloadType,
+              payload && typeof payload === 'object'
+                ? `keys=${Object.keys(payload as object).join(',')}`
+                : typeof payload,
+            )
             handlePulsePayload(payload)
           },
           onDone: ({ exit_code }) => {
+            console.log(
+              '[pulse/chat] onDone: exit_code=%d parserResult=%dchars deltaCount=%d',
+              exit_code,
+              parserState.result.length,
+              parserState.deltaCount,
+            )
             if (terminalHandled || closed) return
             terminalHandled = true
             cleanup()
@@ -502,6 +531,7 @@ export async function POST(request: Request) {
             safeClose()
           },
           onError: ({ message }) => {
+            console.error('[pulse/chat] onError:', message)
             if (terminalHandled || closed) return
             terminalHandled = true
             cleanup()
@@ -512,6 +542,10 @@ export async function POST(request: Request) {
             )
           },
         }).catch((error: unknown) => {
+          console.error(
+            '[pulse/chat] WS transport catch:',
+            error instanceof Error ? error.message : String(error),
+          )
           if (terminalHandled || closed) return
           terminalHandled = true
           cleanup()

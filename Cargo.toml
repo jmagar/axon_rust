@@ -1,6 +1,6 @@
 [package]
 name = "axon"
-version = "0.7.3"
+version = "0.7.4"
 edition = "2024"
 rust-version = "1.87"
 description = "Web crawl, scrape, embed, and query CLI backed by a self-hosted RAG stack"
@@ -67,7 +67,7 @@ reflink-copy = "0.1"
 dotenvy = "0.15"
 rmcp = { version = "0.17.0", features = ["server", "macros", "transport-io", "transport-streamable-http-server", "schemars"] }
 html5gum = "0.5"
-agent-client-protocol = "0.9.5"
+agent-client-protocol = "0.10.0"
 
 [profile.release]
 opt-level = 3

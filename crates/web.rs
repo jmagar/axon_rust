@@ -86,6 +86,10 @@ pub async fn start_server(port: u16, cfg: Arc<Config>) -> Result<(), Box<dyn Err
         .merge(download_routes);
 
     let host = std::env::var("AXON_SERVE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    log_info(&format!(
+        "Axon web UI starting with AXON_SERVE_HOST={} port={}",
+        host, port
+    ));
     let addr: SocketAddr = format!("{host}:{port}")
         .parse()
         .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], port)));

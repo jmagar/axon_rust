@@ -1,6 +1,6 @@
 use crate::crates::core::config::Config;
 use crate::crates::jobs::extract::start_extract_job;
-use crate::crates::services::events::{ServiceEvent, emit};
+use crate::crates::services::events::{LogLevel, ServiceEvent, emit};
 use crate::crates::services::types::{ExtractJobResult, ExtractStartResult};
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -33,7 +33,7 @@ pub async fn extract_start(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("enqueueing extract job for {} URL(s)", urls.len()),
         },
     );
@@ -43,7 +43,7 @@ pub async fn extract_start(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("enqueued extract job: {job_id}"),
         },
     );

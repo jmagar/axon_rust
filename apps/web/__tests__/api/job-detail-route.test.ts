@@ -59,11 +59,11 @@ describe('job detail route', () => {
     expect(body.type).toBe('refresh')
   })
 
-  it('normalizes crawl output_dir to AXON_OUTPUT_DIR mount', async () => {
-    process.env.AXON_OUTPUT_DIR = '/axon-output'
+  it('normalizeOutputDirForWeb passes through unified paths', async () => {
     const mod = await import('@/app/api/jobs/[id]/route')
-    expect(mod.normalizeOutputDirForWeb('/app/.cache/axon-rust/output/domains/x/sync')).toBe(
-      '/axon-output/domains/x/sync',
+    expect(mod.normalizeOutputDirForWeb('/data/axon/output/domains/x/sync')).toBe(
+      '/data/axon/output/domains/x/sync',
     )
+    expect(mod.normalizeOutputDirForWeb(null)).toBeNull()
   })
 })

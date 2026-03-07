@@ -13,7 +13,7 @@ Current canonical WebSocket contract documentation lives in [`docs/API.md`](API.
 ## Usage
 
 ```bash
-axon serve              # default port 3939
+axon serve              # default port 49000
 axon serve --port 8080  # custom port
 ```
 

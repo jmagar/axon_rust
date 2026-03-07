@@ -2,7 +2,7 @@
 
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { MessageCircle, Send, Square, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PulseToolUse } from '@/lib/pulse/types'
 import type { ChatMessage } from '@/lib/pulse/workspace-persistence'
 import {
@@ -166,18 +166,24 @@ export function PulseChatPane({
     }
   }, [sourceListOpen])
 
+  // Track the last message content length to detect streaming updates
+  const lastScrolledAtRef = useRef(0)
   useEffect(() => {
     const node = scrollRef.current
     if (!node) return
     if (isNearBottom) {
-      node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
+      // Throttle scroll-to-bottom during streaming: max once per 120ms
+      const now = Date.now()
+      if (now - lastScrolledAtRef.current < 120) return
+      lastScrolledAtRef.current = now
+      node.scrollTo({ top: node.scrollHeight, behavior: 'instant' })
       setShowJumpToLatest(false)
     } else if (messages.length > 0) {
       setShowJumpToLatest(true)
     }
   }, [isNearBottom, messages])
 
-  async function handleCopyError(content: string, messageId: string) {
+  const handleCopyError = useCallback(async (content: string, messageId: string) => {
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(content)
@@ -209,7 +215,7 @@ export function PulseChatPane({
         })
       }, 1400)
     }
-  }
+  }, [])
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -454,9 +460,7 @@ export function PulseChatPane({
                     index={virtualRow.index}
                     onRetry={onRetry}
                     copyStatus={copyStatuses.get(messageKey) ?? 'idle'}
-                    onCopyError={(content) => {
-                      void handleCopyError(content, messageKey)
-                    }}
+                    onCopyError={handleCopyError}
                   />
                 </div>
               )
@@ -472,9 +476,7 @@ export function PulseChatPane({
                 index={index}
                 onRetry={onRetry}
                 copyStatus={copyStatuses.get(messageKey) ?? 'idle'}
-                onCopyError={(content) => {
-                  void handleCopyError(content, messageKey)
-                }}
+                onCopyError={handleCopyError}
               />
             )
           })

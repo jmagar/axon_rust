@@ -1,6 +1,6 @@
 use crate::crates::core::config::Config;
 use crate::crates::ingest;
-use crate::crates::services::events::{ServiceEvent, emit};
+use crate::crates::services::events::{LogLevel, ServiceEvent, emit};
 use crate::crates::services::types::IngestResult;
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -29,7 +29,7 @@ pub async fn ingest_github(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("ingesting github repo: {repo_slug}"),
         },
     );
@@ -39,7 +39,7 @@ pub async fn ingest_github(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("github ingest complete: {chunks} chunks"),
         },
     );
@@ -63,7 +63,7 @@ pub async fn ingest_reddit(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("ingesting reddit target: {target}"),
         },
     );
@@ -73,7 +73,7 @@ pub async fn ingest_reddit(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("reddit ingest complete: {chunks} chunks"),
         },
     );
@@ -97,7 +97,7 @@ pub async fn ingest_youtube(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("ingesting youtube: {url}"),
         },
     );
@@ -107,7 +107,7 @@ pub async fn ingest_youtube(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("youtube ingest complete: {chunks} chunks"),
         },
     );
@@ -131,7 +131,7 @@ pub async fn ingest_sessions(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: "ingesting session exports".to_string(),
         },
     );
@@ -141,7 +141,7 @@ pub async fn ingest_sessions(
     emit(
         &tx,
         ServiceEvent::Log {
-            level: "info".to_string(),
+            level: LogLevel::Info,
             message: format!("sessions ingest complete: {chunks} chunks"),
         },
     );

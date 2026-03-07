@@ -18,10 +18,7 @@ export type PulseChatStreamEvent = PulseChatStreamEventPayload & {
 }
 
 function createEventId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  return `pulse-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  return crypto.randomUUID()
 }
 
 export function createPulseChatStreamEvent(

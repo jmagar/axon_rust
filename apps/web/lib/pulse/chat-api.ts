@@ -54,7 +54,11 @@ async function readNdjsonStream(
   response: Response,
   onEvent?: (event: ChatStreamEvent) => void,
 ): Promise<PulseChatResponse> {
-  const reader = response.body!.getReader()
+  const body = response.body
+  if (!body) {
+    throw new Error('Response body is null — cannot stream NDJSON')
+  }
+  const reader = body.getReader()
   const decoder = new TextDecoder()
   let remainder = ''
   let doneResponse: PulseChatResponse | null = null
