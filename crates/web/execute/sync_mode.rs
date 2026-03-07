@@ -1,14 +1,1007 @@
-use super::context::ExecCommandContext;
-use super::exe::strip_ansi;
-use super::files;
-use super::ws_send::{
-    send_command_output_json, send_command_output_line, send_done_dual, send_error_dual,
+use crate::crates::core::config::{Config, ConfigOverrides};
+use crate::crates::services::acp as acp_svc;
+use crate::crates::services::events::{LogLevel, ServiceEvent};
+use crate::crates::services::map as map_svc;
+use crate::crates::services::query as query_svc;
+use crate::crates::services::scrape as scrape_svc;
+use crate::crates::services::search as search_svc;
+use crate::crates::services::system as system_svc;
+use crate::crates::services::types::{
+    AcpAdapterCommand, AcpMcpServerConfig, AcpPromptTurnRequest, AcpSessionProbeRequest, AskResult,
+    DoctorResult, DomainsResult, MapOptions, MapResult, Pagination, QueryResult, ResearchResult,
+    RetrieveOptions, RetrieveResult, ScrapeResult, SearchOptions, SearchResult, SourcesResult,
+    StatsResult, StatusResult,
 };
 use serde_json::json;
+use std::env;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 
+use super::context::ExecCommandContext;
+use super::events::{CommandContext, WsEventV2, serialize_v2_event};
+use super::exe::strip_ansi;
+use super::files;
+use super::ws_send::{send_command_output_line, send_done_dual, send_error_dual};
+
+/// Typed error alias for service call wrappers — erased to `String` only at the WS boundary.
+type SvcError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+/// Modes dispatched directly through service functions (no subprocess).
+///
+/// This constant is the authoritative list consumed by tests and must stay in
+/// sync with [`ServiceMode`].  At runtime `classify_sync_direct` uses
+/// `ServiceMode::from_str` directly, so this constant is dead in non-test
+/// builds — the `allow` below silences the warning intentionally.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) const DIRECT_SYNC_MODES: &[&str] = &[
+    "scrape",
+    "map",
+    "query",
+    "retrieve",
+    "ask",
+    "search",
+    "research",
+    "stats",
+    "sources",
+    "domains",
+    "doctor",
+    "status",
+    "pulse_chat",
+    "pulse_chat_probe",
+];
+
+/// Owned parameters extracted from the WS request before any `.await`.
+///
+/// All fields are owned so the containing future is `Send + 'static`.
+/// Visibility is `pub(super)` so `execute.rs` can pass the opaque value from
+/// `classify_sync_direct` to `handle_sync_direct` without inspecting its fields.
+///
+/// `cfg` is kept as `Arc<Config>` (not a plain `Config`) so that the
+/// `call_*` service wrappers can clone the `Arc` into `async move` blocks
+/// and borrow from the Arc-owned data without exposing a lifetime parameter
+/// to `tokio::task::spawn`'s `Send + 'static` check.
+pub(super) struct DirectParams {
+    mode: ServiceMode,
+    input: String,
+    cfg: Arc<Config>,
+    limit: usize,
+    offset: usize,
+    max_points: Option<usize>,
+    agent: PulseChatAgent,
+    session_id: Option<String>,
+    model: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PulseChatAgent {
+    Claude,
+    Codex,
+    Gemini,
+}
+
+impl PulseChatAgent {
+    fn from_flag(value: Option<&str>) -> Self {
+        match value {
+            Some(raw) if raw.eq_ignore_ascii_case("codex") => Self::Codex,
+            Some(raw) if raw.eq_ignore_ascii_case("gemini") => Self::Gemini,
+            _ => Self::Claude,
+        }
+    }
+}
+
+/// Classified service mode — replaces `mode: String` in `DirectParams` so the
+/// async state machine never holds a `&str` borrow across `.await` points.
+///
+/// The `match mode.as_str()` scrutinee in `dispatch_service` would otherwise
+/// create an `&str` borrow that the Rust async state machine includes in every
+/// generated `Future::poll` state variant, causing an HRTB `Send` diagnostic
+/// when the future is submitted to `tokio::task::spawn`.
+///
+/// By classifying the mode synchronously (before the first `.await`) we drop
+/// the `&str` borrow before any suspension point, satisfying the
+/// `Send + 'static` bound.
+#[derive(Debug, Clone, Copy)]
+enum ServiceMode {
+    Scrape,
+    Map,
+    Query,
+    Retrieve,
+    Ask,
+    Search,
+    Research,
+    Stats,
+    Sources,
+    Domains,
+    Doctor,
+    Status,
+    PulseChat,
+    PulseChatProbe,
+}
+
+impl ServiceMode {
+    /// Classify a mode string.  Returns `None` for unknown modes.
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "scrape" => Some(Self::Scrape),
+            "map" => Some(Self::Map),
+            "query" => Some(Self::Query),
+            "retrieve" => Some(Self::Retrieve),
+            "ask" => Some(Self::Ask),
+            "search" => Some(Self::Search),
+            "research" => Some(Self::Research),
+            "stats" => Some(Self::Stats),
+            "sources" => Some(Self::Sources),
+            "domains" => Some(Self::Domains),
+            "doctor" => Some(Self::Doctor),
+            "status" => Some(Self::Status),
+            "pulse_chat" => Some(Self::PulseChat),
+            "pulse_chat_probe" => Some(Self::PulseChatProbe),
+            _ => None,
+        }
+    }
+}
+
+/// Extract a `usize` from a flags JSON value, falling back to `default`.
+fn flag_usize(flags: &serde_json::Value, key: &str, default: usize) -> usize {
+    flags
+        .get(key)
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(default)
+}
+
+/// Extract an optional `usize` from a flags JSON value.
+fn flag_opt_usize(flags: &serde_json::Value, key: &str) -> Option<usize> {
+    flags.get(key).and_then(|v| v.as_u64()).map(|n| n as usize)
+}
+
+/// Delimiter for `AXON_ACP_ADAPTER_ARGS`.
+///
+/// The env var is parsed as a pipe-delimited list (e.g. `--flag|value|--stdio`).
+/// Empty segments are ignored.
+const ACP_ADAPTER_ARGS_DELIMITER: char = '|';
+
+/// Parse pipe-delimited adapter args from `AXON_ACP_ADAPTER_ARGS`.
+fn parse_acp_adapter_args(raw: &str) -> Vec<String> {
+    raw.split(ACP_ADAPTER_ARGS_DELIMITER)
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn resolve_acp_adapter_command_from_values(
+    cmd_value: Option<&str>,
+    args_value: Option<&str>,
+) -> Result<AcpAdapterCommand, String> {
+    let program = cmd_value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "missing required env var AXON_ACP_ADAPTER_CMD for pulse_chat".to_string()
+        })?;
+
+    let program =
+        resolve_local_executable_path(program, args_value).unwrap_or_else(|| program.to_string());
+    let args = args_value.map(parse_acp_adapter_args).unwrap_or_default();
+
+    Ok(AcpAdapterCommand {
+        program,
+        args,
+        cwd: None,
+    })
+}
+
+/// Resolve ACP adapter command and args for `pulse_chat`.
+///
+/// Values are parsed from `Config` fields sourced from environment parsing:
+/// - `Config::acp_adapter_cmd` from `AXON_ACP_ADAPTER_CMD` (required)
+/// - `Config::acp_adapter_args` from `AXON_ACP_ADAPTER_ARGS` (optional)
+fn candidate_local_executable_paths(program: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if program.contains(std::path::MAIN_SEPARATOR)
+        || (cfg!(windows) && program.contains('/'))
+        || Path::new(program).is_absolute()
+    {
+        candidates.push(PathBuf::from(program));
+        return candidates;
+    }
+
+    if let Some(path_var) = env::var_os("PATH") {
+        candidates.extend(env::split_paths(&path_var).map(|dir| dir.join(program)));
+    }
+
+    if let Some(home) = env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        candidates.push(home.join(".local/bin").join(program));
+        candidates.push(home.join(".cargo/bin").join(program));
+    }
+
+    candidates.push(PathBuf::from("/usr/local/bin").join(program));
+    candidates.push(PathBuf::from("/usr/bin").join(program));
+    candidates
+}
+
+fn resolve_local_executable_path(program: &str, args_value: Option<&str>) -> Option<String> {
+    let path = Path::new(program);
+    if path.is_absolute() && path.exists() {
+        return Some(program.to_string());
+    }
+
+    if let Some(found) = candidate_local_executable_paths(program)
+        .into_iter()
+        .find(|candidate| candidate.exists())
+        .map(|candidate| candidate.to_string_lossy().into_owned())
+    {
+        return Some(found);
+    }
+
+    let looks_like_codex = program.contains("codex")
+        || args_value
+            .map(|args| args.to_ascii_lowercase().contains("codex"))
+            .unwrap_or(false);
+
+    if looks_like_codex {
+        return candidate_local_executable_paths("codex")
+            .into_iter()
+            .find(|candidate| candidate.exists())
+            .map(|candidate| candidate.to_string_lossy().into_owned());
+    }
+
+    let looks_like_gemini = program.contains("gemini")
+        || args_value
+            .map(|args| args.to_ascii_lowercase().contains("gemini"))
+            .unwrap_or(false);
+
+    if looks_like_gemini {
+        return candidate_local_executable_paths("gemini")
+            .into_iter()
+            .find(|candidate| candidate.exists())
+            .map(|candidate| candidate.to_string_lossy().into_owned());
+    }
+
+    None
+}
+
+/// Read MCP server configs from `AXON_DATA_DIR/axon/config.json` (or
+/// `~/.config/axon/config.json` fallback). Returns an empty vec on any error.
+async fn read_axon_mcp_servers() -> Vec<AcpMcpServerConfig> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AxonConfig {
+        #[serde(default)]
+        mcp_servers: std::collections::HashMap<String, McpServerEntry>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct McpServerEntry {
+        command: Option<String>,
+        args: Option<Vec<String>>,
+        env: Option<std::collections::HashMap<String, String>>,
+        url: Option<String>,
+    }
+
+    let config_path = if let Ok(data_dir) = env::var("AXON_DATA_DIR") {
+        PathBuf::from(data_dir).join("axon/config.json")
+    } else if let Ok(home) = env::var("HOME") {
+        PathBuf::from(home).join(".config/axon/config.json")
+    } else {
+        return vec![];
+    };
+
+    let raw = match tokio::fs::read_to_string(&config_path).await {
+        Ok(raw) => raw,
+        Err(_) => return vec![],
+    };
+
+    let config: AxonConfig = match serde_json::from_str(&raw) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            log::warn!(
+                "[pulse_chat] failed to parse {}: {e}",
+                config_path.display()
+            );
+            return vec![];
+        }
+    };
+
+    config
+        .mcp_servers
+        .into_iter()
+        .map(|(name, entry)| {
+            if let Some(url) = entry.url {
+                AcpMcpServerConfig::Http { name, url }
+            } else {
+                AcpMcpServerConfig::Stdio {
+                    name,
+                    command: entry.command.unwrap_or_default(),
+                    args: entry.args.unwrap_or_default(),
+                    env: entry.env.unwrap_or_default().into_iter().collect(),
+                }
+            }
+        })
+        .collect()
+}
+
+fn resolve_acp_adapter_command(
+    cfg: &Config,
+    agent: PulseChatAgent,
+) -> Result<AcpAdapterCommand, String> {
+    let (cmd_env_key, args_env_key) = match agent {
+        PulseChatAgent::Claude => (
+            "AXON_ACP_CLAUDE_ADAPTER_CMD",
+            "AXON_ACP_CLAUDE_ADAPTER_ARGS",
+        ),
+        PulseChatAgent::Codex => ("AXON_ACP_CODEX_ADAPTER_CMD", "AXON_ACP_CODEX_ADAPTER_ARGS"),
+        PulseChatAgent::Gemini => (
+            "AXON_ACP_GEMINI_ADAPTER_CMD",
+            "AXON_ACP_GEMINI_ADAPTER_ARGS",
+        ),
+    };
+
+    let cmd_override = env::var(cmd_env_key).ok();
+    let args_override = env::var(args_env_key).ok();
+
+    resolve_acp_adapter_command_from_values(
+        cmd_override.as_deref().or(cfg.acp_adapter_cmd.as_deref()),
+        args_override.as_deref().or(cfg.acp_adapter_args.as_deref()),
+    )
+}
+
+/// Build a per-request `Config` wrapped in `Arc` by applying collection + limit
+/// overrides from flags.
+///
+/// The returned `Arc<Config>` is used in `DirectParams` so that `call_*` wrappers
+/// can clone the `Arc` into `async move` blocks.  Borrows from Arc-owned data
+/// (`&*cfg`) are confined to each wrapper's own state machine and do not generate
+/// HRTB `for<'a> &'a Config: Send` constraints visible to `tokio::spawn`.
+fn derive_cfg(context: &ExecCommandContext, flags: &serde_json::Value) -> Arc<Config> {
+    let mut overrides = ConfigOverrides::default();
+
+    if let Some(col) = flags
+        .get("collection")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        overrides.collection = Some(col.to_string());
+    }
+    if let Some(limit) = flag_opt_usize(flags, "limit") {
+        overrides.limit = Some(limit);
+    }
+
+    let mut cfg = context.cfg.apply_overrides(&overrides);
+
+    if let Some(cmd) = env::var("AXON_ACP_CLAUDE_ADAPTER_CMD")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    {
+        cfg.acp_adapter_cmd = Some(cmd);
+    }
+    if let Some(args) = env::var("AXON_ACP_CLAUDE_ADAPTER_ARGS")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    {
+        cfg.acp_adapter_args = Some(args);
+    }
+
+    Arc::new(cfg)
+}
+
+/// Extract all parameters from `context` and `flags` into owned values before
+/// any `.await`. This ensures the containing future is `Send + 'static`.
+///
+/// Returns `None` when `context.mode` is not a recognised `ServiceMode` —
+/// callers should treat that as "not handled".
+fn extract_params(context: &ExecCommandContext, flags: &serde_json::Value) -> Option<DirectParams> {
+    // Classify the mode synchronously.  The `&str` borrow from `.as_str()` is
+    // dropped at the end of this expression — it never escapes into any async
+    // state machine.
+    let mode = ServiceMode::from_str(context.mode.as_str())?;
+
+    let cfg = derive_cfg(context, flags);
+    let limit = flag_usize(flags, "limit", cfg.search_limit);
+    let offset = flag_usize(flags, "offset", 0);
+    let max_points = flag_opt_usize(flags, "limit");
+    let agent = PulseChatAgent::from_flag(flags.get("agent").and_then(serde_json::Value::as_str));
+    let session_id = flags
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string);
+    let model = flags
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string);
+    Some(DirectParams {
+        mode,
+        input: context.input.clone(),
+        cfg,
+        limit,
+        offset,
+        max_points,
+        agent,
+        session_id,
+        model,
+    })
+}
+
+/// Send a JSON output event, taking all parameters by owned value to avoid
+/// holding borrows across `.await` points in the async state machine.
+async fn send_json_owned(tx: mpsc::Sender<String>, ctx: CommandContext, data: serde_json::Value) {
+    if let Some(v2) = serialize_v2_event(WsEventV2::CommandOutputJson { ctx, data }) {
+        let _ = tx.send(v2).await;
+    }
+}
+
+/// Send a `command.done` event, taking all parameters by owned value.
+async fn send_done_owned(
+    tx: mpsc::Sender<String>,
+    ctx: CommandContext,
+    exit_code: i32,
+    elapsed_ms: Option<u64>,
+) {
+    use super::events::{CommandDonePayload, serialize_v2_event};
+    if let Some(v2) = serialize_v2_event(WsEventV2::CommandDone {
+        ctx,
+        payload: CommandDonePayload {
+            exit_code,
+            elapsed_ms,
+        },
+    }) {
+        let _ = tx.send(v2).await;
+    }
+}
+
+/// Send a `command.error` event, taking all parameters by owned value.
+async fn send_error_owned(
+    tx: mpsc::Sender<String>,
+    ctx: CommandContext,
+    message: String,
+    elapsed_ms: Option<u64>,
+) {
+    use super::events::{CommandErrorPayload, serialize_v2_event};
+    if let Some(v2) = serialize_v2_event(WsEventV2::CommandError {
+        ctx,
+        payload: CommandErrorPayload {
+            message,
+            elapsed_ms,
+        },
+    }) {
+        let _ = tx.send(v2).await;
+    }
+}
+
+// ── Service call wrappers ─────────────────────────────────────────────────────
+//
+// Each wrapper returns `Pin<Box<dyn Future<Output=…> + Send + 'static>>`.
+//
+// Why boxing is required
+// ──────────────────────
+// Service functions take `&Config` and `&str` parameters.  When an `async fn`
+// with such parameters is awaited inside a future submitted to
+// `tokio::task::spawn`, rustc generates Higher-Ranked Trait Bound (HRTB)
+// constraints of the form `for<'a> &'a Config: Send` and `for<'a> &'a str: Send`.
+// These constraints are always true at runtime (`Config: Sync`, `str: Sync`),
+// but rustc's current HRTB solver cannot prove them in this context
+// (rust-lang/rust#96865) and emits "implementation of `Send` is not general
+// enough".
+//
+// The fix: wrap each service call in `Box::pin(async move { … })`.
+// • The `async move` block captures `cfg: Arc<Config>` and `input: String`
+//   by value.  Both types are `'static`.
+// • Inside the block, `&*cfg` and `input.as_str()` borrow data owned by the
+//   closure itself — the lifetimes are fully determined and `'static`-adjacent.
+// • `Box::pin` erases the concrete future type into `Pin<Box<dyn Future + Send
+//   + 'static>>`.  Type erasure eliminates the lifetime parameters that trigger
+//   the HRTB check.
+// • The returned boxed future is `Send + 'static` by construction, satisfying
+//   `tokio::task::spawn`.
+//
+// `Arc<Config>` (not `Config`) is used so `.clone()` inside each wrapper is a
+// cheap reference-count bump, not a full struct copy.
+
+fn call_scrape(
+    cfg: Arc<Config>,
+    url: String,
+) -> Pin<Box<dyn Future<Output = Result<ScrapeResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        scrape_svc::scrape(&cfg, &url)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
+}
+
+fn call_map(
+    cfg: Arc<Config>,
+    url: String,
+    opts: MapOptions,
+) -> Pin<Box<dyn Future<Output = Result<MapResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        map_svc::discover(&cfg, &url, opts, None)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
+}
+
+fn call_query(
+    cfg: Arc<Config>,
+    text: String,
+    pagination: Pagination,
+) -> Pin<Box<dyn Future<Output = Result<QueryResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        query_svc::query(&cfg, &text, pagination)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
+}
+
+fn call_retrieve(
+    cfg: Arc<Config>,
+    url: String,
+    opts: RetrieveOptions,
+) -> Pin<Box<dyn Future<Output = Result<RetrieveResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        query_svc::retrieve(&cfg, &url, opts)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
+}
+
+fn call_ask(
+    cfg: Arc<Config>,
+    question: String,
+) -> Pin<Box<dyn Future<Output = Result<AskResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        query_svc::ask(&cfg, &question, None)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
+}
+
+fn call_search(
+    cfg: Arc<Config>,
+    query: String,
+    opts: SearchOptions,
+) -> Pin<Box<dyn Future<Output = Result<SearchResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        search_svc::search(&cfg, &query, opts, None)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
+}
+
+fn call_research(
+    cfg: Arc<Config>,
+    query: String,
+    opts: SearchOptions,
+) -> Pin<Box<dyn Future<Output = Result<ResearchResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        search_svc::research(&cfg, &query, opts, None)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
+}
+
+fn call_stats(
+    cfg: Arc<Config>,
+) -> Pin<Box<dyn Future<Output = Result<StatsResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        system_svc::stats(&cfg)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
+}
+
+fn call_sources(
+    cfg: Arc<Config>,
+    pagination: Pagination,
+) -> Pin<Box<dyn Future<Output = Result<SourcesResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        system_svc::sources(&cfg, pagination)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
+}
+
+fn call_domains(
+    cfg: Arc<Config>,
+    pagination: Pagination,
+) -> Pin<Box<dyn Future<Output = Result<DomainsResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        system_svc::domains(&cfg, pagination)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
+}
+
+fn call_doctor(
+    cfg: Arc<Config>,
+) -> Pin<Box<dyn Future<Output = Result<DoctorResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        system_svc::doctor(&cfg)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
+}
+
+fn call_status(
+    cfg: Arc<Config>,
+) -> Pin<Box<dyn Future<Output = Result<StatusResult, SvcError>> + Send + 'static>> {
+    Box::pin(async move {
+        system_svc::full_status(&cfg)
+            .await
+            .map_err(|e| -> SvcError { format!("{e}").into() })
+    })
+}
+
+/// Classify a mode string and extract all request parameters into owned values.
+///
+/// This is the **only** place in the direct-dispatch path where a `String` is
+/// borrowed as `&str` — the call to `ServiceMode::from_str` and the
+/// `extract_params` helpers.  By doing all classification here, in a plain
+/// (non-async) function, no `&str` or `&ExecCommandContext` borrow ever enters
+/// an async state machine, which is the root cause of Rust's HRTB `Send` false
+/// positives when spawning with `tokio::task::spawn`.
+///
+/// Returns `None` when the mode is not a recognised `DIRECT_SYNC_MODES` entry.
+pub(super) fn classify_sync_direct(
+    mode: &str,
+    input: &str,
+    flags: &serde_json::Value,
+    cfg: Arc<Config>,
+    ws_ctx: &CommandContext,
+) -> Option<DirectParams> {
+    // Classify synchronously — borrow of `mode` is dropped after this call.
+    ServiceMode::from_str(mode)?;
+
+    // Build a synthetic context just to drive extract_params.
+    let context = ExecCommandContext {
+        exec_id: ws_ctx.exec_id.clone(),
+        mode: mode.to_string(),
+        input: input.to_string(),
+        flags: flags.clone(),
+        cfg,
+    };
+    extract_params(&context, flags)
+}
+
+/// Execute a pre-classified direct-dispatch request.
+///
+/// All parameters are fully owned — no `String → &str` conversion happens
+/// inside this `async fn`, so the generated `Future` satisfies `Send + 'static`
+/// and can be submitted to `tokio::task::spawn` without triggering Rust's HRTB
+/// `Send` false positive.
+pub(super) async fn handle_sync_direct(
+    params: DirectParams,
+    tx: mpsc::Sender<String>,
+    ws_ctx: CommandContext,
+    permission_responders: acp_svc::PermissionResponderMap,
+) {
+    let start = Instant::now();
+
+    // dispatch_service takes full ownership — no borrows cross any .await.
+    let svc_result =
+        dispatch_service(params, tx.clone(), ws_ctx.clone(), permission_responders).await;
+    let elapsed_ms = Some(start.elapsed().as_millis() as u64);
+
+    match svc_result {
+        Ok(()) => send_done_owned(tx, ws_ctx, 0, elapsed_ms).await,
+        Err(e) => send_error_owned(tx, ws_ctx, e.to_string(), elapsed_ms).await,
+    }
+}
+
+/// Send a single ACP `ServiceEvent` to the WS channel.
+async fn dispatch_acp_event(
+    event: ServiceEvent,
+    tx: &mpsc::Sender<String>,
+    ws_ctx: &CommandContext,
+) {
+    match event {
+        ServiceEvent::Log { level, message } => {
+            let truncated: String = message.chars().take(200).collect();
+            match level {
+                LogLevel::Info => log::info!("[pulse_chat] {truncated}"),
+                LogLevel::Warn => log::warn!("[pulse_chat] {truncated}"),
+                LogLevel::Error => log::error!("[pulse_chat] {truncated}"),
+            }
+            send_json_owned(
+                tx.clone(),
+                ws_ctx.clone(),
+                json!({"type": "status", "level": level, "message": message}),
+            )
+            .await;
+        }
+        ServiceEvent::AcpBridge { event } => {
+            let payload = super::events::acp_bridge_event_payload(&event);
+            let event_type = payload
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            // Only log non-streaming events at debug to avoid flooding.
+            if !matches!(
+                event_type,
+                "assistant_delta" | "thinking_content" | "user_delta"
+            ) {
+                log::info!("[pulse_chat] ACP event: type={event_type}");
+            }
+            send_json_owned(tx.clone(), ws_ctx.clone(), payload).await;
+        }
+    }
+}
+
+/// Drive the ACP event loop shared by `pulse_chat` and `pulse_chat_probe`.
+///
+/// Polls `task` and `event_rx` concurrently; forwards each `ServiceEvent` to
+/// the WS channel as it arrives.  Returns after the task completes and the
+/// event channel is drained.
+async fn run_acp_event_loop(
+    mut task: tokio::task::JoinHandle<Result<(), String>>,
+    mut event_rx: mpsc::Receiver<ServiceEvent>,
+    tx: mpsc::Sender<String>,
+    ws_ctx: CommandContext,
+    task_name: &'static str,
+) -> Result<(), String> {
+    loop {
+        tokio::select! {
+            join_result = &mut task => {
+                let run_result = join_result
+                    .map_err(|e| format!("failed to join {task_name} task: {e}"))?;
+                run_result?;
+                while let Ok(event) = event_rx.try_recv() {
+                    dispatch_acp_event(event, &tx, &ws_ctx).await;
+                }
+                break;
+            }
+            maybe_event = event_rx.recv() => {
+                match maybe_event {
+                    Some(event) => dispatch_acp_event(event, &tx, &ws_ctx).await,
+                    None => {
+                        let run_result = (&mut task)
+                            .await
+                            .map_err(|e| format!("failed to join {task_name} task: {e}"))?;
+                        run_result?;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Handle the `pulse_chat` service mode: start a prompt-turn ACP session and
+/// stream events back over the WS channel.
+#[allow(clippy::too_many_arguments)]
+async fn handle_pulse_chat(
+    cfg: Arc<Config>,
+    input: String,
+    session_id: Option<String>,
+    model: Option<String>,
+    agent: PulseChatAgent,
+    tx: mpsc::Sender<String>,
+    ws_ctx: CommandContext,
+    permission_responders: acp_svc::PermissionResponderMap,
+) -> Result<(), String> {
+    log::info!(
+        "[pulse_chat] starting: agent={:?} session_id={:?} model={:?} input_len={}",
+        agent,
+        session_id,
+        model,
+        input.len()
+    );
+    let (event_tx, event_rx) = mpsc::channel::<ServiceEvent>(256);
+    let adapter = resolve_acp_adapter_command(&cfg, agent)?;
+    log::info!(
+        "[pulse_chat] adapter resolved: program={} args={:?}",
+        adapter.program,
+        adapter.args
+    );
+    let scaffold = acp_svc::AcpClientScaffold::new(adapter);
+    let mcp_servers = read_axon_mcp_servers().await;
+    if !mcp_servers.is_empty() {
+        log::info!(
+            "[pulse_chat] passing {} MCP server(s) to ACP session",
+            mcp_servers.len()
+        );
+    }
+    let req = AcpPromptTurnRequest {
+        session_id,
+        prompt: vec![input],
+        model,
+        mcp_servers,
+    };
+    let cwd = env::current_dir().map_err(|e| e.to_string())?;
+    log::info!("[pulse_chat] cwd={}", cwd.display());
+    let task = tokio::spawn(async move {
+        let result = scaffold
+            .start_prompt_turn(&req, cwd, Some(event_tx), permission_responders)
+            .await
+            .map_err(|e| e.to_string());
+        match &result {
+            Ok(()) => log::info!("[pulse_chat] prompt turn completed"),
+            Err(e) => log::error!("[pulse_chat] prompt turn failed: {e}"),
+        }
+        result
+    });
+    let loop_result = run_acp_event_loop(task, event_rx, tx, ws_ctx, "pulse_chat").await;
+    if let Err(e) = &loop_result {
+        log::error!("[pulse_chat] event loop failed: {e}");
+    }
+    loop_result
+}
+
+/// Handle the `pulse_chat_probe` service mode: probe an existing session and
+/// stream events back over the WS channel.
+async fn handle_pulse_chat_probe(
+    cfg: Arc<Config>,
+    session_id: Option<String>,
+    model: Option<String>,
+    agent: PulseChatAgent,
+    tx: mpsc::Sender<String>,
+    ws_ctx: CommandContext,
+    permission_responders: acp_svc::PermissionResponderMap,
+) -> Result<(), String> {
+    let (event_tx, event_rx) = mpsc::channel::<ServiceEvent>(256);
+    let adapter = resolve_acp_adapter_command(&cfg, agent)?;
+    let scaffold = acp_svc::AcpClientScaffold::new(adapter);
+    let req = AcpSessionProbeRequest { session_id, model };
+    let cwd = env::current_dir().map_err(|e| e.to_string())?;
+    let task = tokio::spawn(async move {
+        scaffold
+            .start_session_probe(&req, cwd, Some(event_tx), permission_responders)
+            .await
+            .map_err(|e| e.to_string())
+    });
+    run_acp_event_loop(task, event_rx, tx, ws_ctx, "pulse_chat_probe").await
+}
+
+/// Inner dispatch — routes a pre-classified `ServiceMode` to the appropriate
+/// service call and streams the result back over the WS channel.
+///
+/// Uses a `ServiceMode` enum rather than `match mode.as_str()` to prevent any
+/// `&str` borrow from entering the async state machine, which would trigger an
+/// HRTB `Send` diagnostic when the future is submitted to `tokio::task::spawn`.
+async fn dispatch_service(
+    params: DirectParams,
+    tx: mpsc::Sender<String>,
+    ws_ctx: CommandContext,
+    permission_responders: acp_svc::PermissionResponderMap,
+) -> Result<(), SvcError> {
+    let DirectParams {
+        mode,
+        input,
+        cfg,
+        limit,
+        offset,
+        max_points,
+        agent,
+        session_id,
+        model,
+    } = params;
+
+    match mode {
+        ServiceMode::Scrape => {
+            let result = call_scrape(cfg, input).await?;
+            send_json_owned(tx.clone(), ws_ctx.clone(), result.payload).await;
+            files::send_scrape_file(tx, ws_ctx).await;
+        }
+        ServiceMode::Map => {
+            let result = call_map(cfg, input, MapOptions { limit, offset }).await?;
+            send_json_owned(tx, ws_ctx, result.payload).await;
+        }
+        ServiceMode::Query => {
+            let result = call_query(cfg, input, Pagination { limit, offset }).await?;
+            send_json_owned(tx, ws_ctx, json!({ "results": result.results })).await;
+        }
+        ServiceMode::Retrieve => {
+            let result = call_retrieve(cfg, input, RetrieveOptions { max_points }).await?;
+            send_json_owned(tx, ws_ctx, json!({ "chunks": result.chunks })).await;
+        }
+        ServiceMode::Ask => {
+            let result = call_ask(cfg, input).await?;
+            send_json_owned(tx, ws_ctx, result.payload).await;
+        }
+        ServiceMode::Search => {
+            let opts = SearchOptions {
+                limit,
+                offset,
+                time_range: None,
+            };
+            let result = call_search(cfg, input, opts).await?;
+            send_json_owned(tx, ws_ctx, json!({ "results": result.results })).await;
+        }
+        ServiceMode::Research => {
+            let opts = SearchOptions {
+                limit,
+                offset,
+                time_range: None,
+            };
+            let result = call_research(cfg, input, opts).await?;
+            send_json_owned(tx, ws_ctx, result.payload).await;
+        }
+        ServiceMode::Stats => {
+            let result = call_stats(cfg).await?;
+            send_json_owned(tx, ws_ctx, result.payload).await;
+        }
+        ServiceMode::Sources => {
+            let result = call_sources(cfg, Pagination { limit, offset }).await?;
+            let urls_json: Vec<serde_json::Value> = result
+                .urls
+                .into_iter()
+                .map(|(u, c)| json!({"url": u, "chunks": c}))
+                .collect();
+            let data = json!({
+                "count": result.count,
+                "limit": result.limit,
+                "offset": result.offset,
+                "urls": urls_json,
+            });
+            send_json_owned(tx, ws_ctx, data).await;
+        }
+        ServiceMode::Domains => {
+            let result = call_domains(cfg, Pagination { limit, offset }).await?;
+            let domains_json: Vec<serde_json::Value> = result
+                .domains
+                .into_iter()
+                .map(|d| json!({"domain": d.domain, "vectors": d.vectors}))
+                .collect();
+            let data = json!({
+                "limit": result.limit,
+                "offset": result.offset,
+                "domains": domains_json,
+            });
+            send_json_owned(tx, ws_ctx, data).await;
+        }
+        ServiceMode::Doctor => {
+            let result = call_doctor(cfg).await?;
+            send_json_owned(tx, ws_ctx, result.payload).await;
+        }
+        ServiceMode::Status => {
+            let result = call_status(cfg).await?;
+            send_json_owned(tx, ws_ctx, result.payload).await;
+        }
+        ServiceMode::PulseChat => {
+            handle_pulse_chat(
+                cfg,
+                input,
+                session_id,
+                model,
+                agent,
+                tx,
+                ws_ctx,
+                permission_responders,
+            )
+            .await?;
+        }
+        ServiceMode::PulseChatProbe => {
+            handle_pulse_chat_probe(
+                cfg,
+                session_id,
+                model,
+                agent,
+                tx,
+                ws_ctx,
+                permission_responders,
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Subprocess-backed sync handler — used for modes not yet wired to direct dispatch.
+///
+/// Reads stdout/stderr from the child process and streams events to the WS
+/// sender. Screenshot JSON payloads are accumulated and forwarded as
+/// artifact entries after the process exits.
 pub(super) async fn handle_sync_command(
     mut child: tokio::process::Child,
     context: &ExecCommandContext,
@@ -47,7 +1040,7 @@ pub(super) async fn handle_sync_command(
                     if is_screenshot {
                         screenshot_jsons.push(parsed.clone());
                     }
-                    send_command_output_json(&stdout_tx, &stdout_ctx, parsed).await;
+                    send_json_owned(stdout_tx.clone(), stdout_ctx.clone(), parsed).await;
                 }
                 Ok(_) | Err(_) => {
                     send_command_output_line(&stdout_tx, &stdout_ctx, clean).await;
@@ -58,7 +1051,7 @@ pub(super) async fn handle_sync_command(
         if !saw_json_line
             && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(stdout_accum.trim())
         {
-            send_command_output_json(&stdout_tx, &stdout_ctx, parsed).await;
+            send_json_owned(stdout_tx, stdout_ctx, parsed).await;
         }
 
         screenshot_jsons
@@ -96,9 +1089,6 @@ pub(super) async fn handle_sync_command(
         Ok(exit) => {
             let code = exit.code().unwrap_or(-1);
             if code == 0 {
-                if context.mode == "scrape" {
-                    files::send_scrape_file(tx, &ws_ctx).await;
-                }
                 if context.mode == "screenshot" {
                     files::send_screenshot_files_from_json(&screenshot_jsons, tx, &ws_ctx).await;
                 }
@@ -110,5 +1100,257 @@ pub(super) async fn handle_sync_command(
         Err(e) => {
             send_error_dual(tx, &ws_ctx, format!("wait failed: {e}"), None).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_sync_modes_not_in_async_modes() {
+        use crate::crates::web::execute::constants::ASYNC_MODES;
+        for mode in DIRECT_SYNC_MODES {
+            assert!(
+                !ASYNC_MODES.contains(mode),
+                "mode '{mode}' must not be in both DIRECT_SYNC_MODES and ASYNC_MODES"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_sync_modes_all_in_allowed_modes() {
+        use crate::crates::web::execute::constants::ALLOWED_MODES;
+        for mode in DIRECT_SYNC_MODES {
+            assert!(
+                ALLOWED_MODES.contains(mode),
+                "mode '{mode}' in DIRECT_SYNC_MODES must also be in ALLOWED_MODES"
+            );
+        }
+    }
+
+    #[test]
+    fn flag_usize_returns_default_on_missing_key() {
+        let flags = serde_json::json!({});
+        assert_eq!(flag_usize(&flags, "limit", 10), 10);
+    }
+
+    #[test]
+    fn flag_usize_returns_value_when_present() {
+        let flags = serde_json::json!({"limit": 42});
+        assert_eq!(flag_usize(&flags, "limit", 10), 42);
+    }
+
+    #[test]
+    fn flag_opt_usize_returns_none_on_missing_key() {
+        let flags = serde_json::json!({});
+        assert_eq!(flag_opt_usize(&flags, "limit"), None);
+    }
+
+    #[test]
+    fn flag_opt_usize_returns_some_when_present() {
+        let flags = serde_json::json!({"limit": 7});
+        assert_eq!(flag_opt_usize(&flags, "limit"), Some(7));
+    }
+
+    #[test]
+    fn derive_cfg_applies_collection_override() {
+        let base = Config::default();
+        let context = ExecCommandContext {
+            exec_id: "test".to_string(),
+            mode: "query".to_string(),
+            input: "test".to_string(),
+            flags: serde_json::Value::Null,
+            cfg: Arc::new(base),
+        };
+        let flags = serde_json::json!({"collection": "my_custom_col"});
+        let cfg = derive_cfg(&context, &flags);
+        assert_eq!(cfg.collection, "my_custom_col");
+    }
+
+    #[test]
+    fn derive_cfg_ignores_empty_collection() {
+        let base = Config::default();
+        let original_collection = base.collection.clone();
+        let context = ExecCommandContext {
+            exec_id: "test".to_string(),
+            mode: "query".to_string(),
+            input: "test".to_string(),
+            flags: serde_json::Value::Null,
+            cfg: Arc::new(base),
+        };
+        let flags = serde_json::json!({"collection": ""});
+        let cfg = derive_cfg(&context, &flags);
+        assert_eq!(cfg.collection, original_collection);
+    }
+
+    #[test]
+    fn extract_params_populates_limit_and_offset() {
+        let base = Config::default();
+        let context = ExecCommandContext {
+            exec_id: "test".to_string(),
+            mode: "query".to_string(),
+            input: "rust async".to_string(),
+            flags: serde_json::Value::Null,
+            cfg: Arc::new(base),
+        };
+        let flags = serde_json::json!({"limit": 25, "offset": 5});
+        let params = extract_params(&context, &flags).expect("query is a recognised mode");
+        assert_eq!(params.limit, 25);
+        assert_eq!(params.offset, 5);
+        assert_eq!(params.input, "rust async");
+        assert!(matches!(params.mode, ServiceMode::Query));
+        assert_eq!(params.agent, PulseChatAgent::Claude);
+        assert_eq!(params.session_id, None);
+        assert_eq!(params.model, None);
+    }
+
+    #[test]
+    fn extract_params_populates_session_id_for_pulse_chat() {
+        let base = Config::default();
+        let context = ExecCommandContext {
+            exec_id: "test".to_string(),
+            mode: "pulse_chat".to_string(),
+            input: "hello".to_string(),
+            flags: serde_json::Value::Null,
+            cfg: Arc::new(base),
+        };
+        let flags = serde_json::json!({"session_id": "session-123"});
+        let params = extract_params(&context, &flags).expect("pulse_chat is a recognised mode");
+        assert_eq!(params.agent, PulseChatAgent::Claude);
+        assert_eq!(params.session_id.as_deref(), Some("session-123"));
+        assert_eq!(params.model, None);
+    }
+
+    #[test]
+    fn extract_params_reads_codex_agent_for_pulse_chat() {
+        let base = Config::default();
+        let context = ExecCommandContext {
+            exec_id: "test".to_string(),
+            mode: "pulse_chat".to_string(),
+            input: "hello".to_string(),
+            flags: serde_json::Value::Null,
+            cfg: Arc::new(base),
+        };
+        let flags = serde_json::json!({"agent": "codex"});
+        let params = extract_params(&context, &flags).expect("pulse_chat is a recognised mode");
+        assert_eq!(params.agent, PulseChatAgent::Codex);
+        assert_eq!(params.model, None);
+    }
+
+    #[test]
+    fn extract_params_reads_model_for_pulse_chat() {
+        let base = Config::default();
+        let context = ExecCommandContext {
+            exec_id: "test".to_string(),
+            mode: "pulse_chat".to_string(),
+            input: "hello".to_string(),
+            flags: serde_json::Value::Null,
+            cfg: Arc::new(base),
+        };
+        let flags = serde_json::json!({"agent": "codex", "model": "o3"});
+        let params = extract_params(&context, &flags).expect("pulse_chat is a recognised mode");
+        assert_eq!(params.agent, PulseChatAgent::Codex);
+        assert_eq!(params.model.as_deref(), Some("o3"));
+    }
+
+    #[test]
+    fn extract_params_reads_gemini_agent_for_pulse_chat() {
+        let base = Config::default();
+        let context = ExecCommandContext {
+            exec_id: "test".to_string(),
+            mode: "pulse_chat".to_string(),
+            input: "hello".to_string(),
+            flags: serde_json::Value::Null,
+            cfg: Arc::new(base),
+        };
+        let flags = serde_json::json!({"agent": "gemini"});
+        let params = extract_params(&context, &flags).expect("pulse_chat is a recognised mode");
+        assert_eq!(params.agent, PulseChatAgent::Gemini);
+        assert_eq!(params.model, None);
+    }
+
+    #[test]
+    fn extract_params_reads_gemini_agent_with_model() {
+        let base = Config::default();
+        let context = ExecCommandContext {
+            exec_id: "test".to_string(),
+            mode: "pulse_chat".to_string(),
+            input: "hello".to_string(),
+            flags: serde_json::Value::Null,
+            cfg: Arc::new(base),
+        };
+        let flags = serde_json::json!({"agent": "gemini", "model": "gemini-3-pro-preview"});
+        let params = extract_params(&context, &flags).expect("pulse_chat is a recognised mode");
+        assert_eq!(params.agent, PulseChatAgent::Gemini);
+        assert_eq!(params.model.as_deref(), Some("gemini-3-pro-preview"));
+    }
+
+    #[test]
+    fn extract_params_returns_none_for_unknown_mode() {
+        let base = Config::default();
+        let context = ExecCommandContext {
+            exec_id: "test".to_string(),
+            mode: "unknown_mode".to_string(),
+            input: "some input".to_string(),
+            flags: serde_json::Value::Null,
+            cfg: Arc::new(base),
+        };
+        let flags = serde_json::json!({});
+        assert!(extract_params(&context, &flags).is_none());
+    }
+
+    #[test]
+    fn service_mode_from_str_roundtrip() {
+        for mode in DIRECT_SYNC_MODES {
+            assert!(
+                ServiceMode::from_str(mode).is_some(),
+                "ServiceMode::from_str(\"{mode}\") should return Some"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_acp_adapter_args_uses_pipe_delimiter_and_trims_segments() {
+        let parsed = parse_acp_adapter_args(" --stdio | --model | gemini-3-flash-preview |  ");
+        assert_eq!(parsed, vec!["--stdio", "--model", "gemini-3-flash-preview"]);
+    }
+
+    #[test]
+    fn parse_acp_adapter_args_returns_empty_for_blank_input() {
+        let parsed = parse_acp_adapter_args("   |   || ");
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn resolve_acp_adapter_command_reads_required_cmd_and_optional_args() {
+        let cmd = resolve_acp_adapter_command_from_values(
+            Some("/usr/local/bin/acp-adapter-test"),
+            Some("--stdio|--model|gpt-5-mini"),
+        )
+        .expect("env values should resolve");
+        assert_eq!(cmd.program, "/usr/local/bin/acp-adapter-test");
+        assert_eq!(cmd.args, vec!["--stdio", "--model", "gpt-5-mini"]);
+        assert_eq!(cmd.cwd, None);
+    }
+
+    #[test]
+    fn resolve_acp_adapter_command_requires_non_empty_cmd() {
+        let err = resolve_acp_adapter_command_from_values(Some("   "), None)
+            .expect_err("blank cmd should fail");
+        assert!(
+            err.contains("AXON_ACP_ADAPTER_CMD"),
+            "error should mention missing/invalid env var: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_acp_adapter_command_requires_cmd_env_var() {
+        let err = resolve_acp_adapter_command_from_values(None, None)
+            .expect_err("missing cmd should fail");
+        assert!(
+            err.contains("AXON_ACP_ADAPTER_CMD"),
+            "error should mention missing/invalid env var: {err}"
+        );
     }
 }

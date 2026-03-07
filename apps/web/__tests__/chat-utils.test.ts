@@ -3,7 +3,6 @@ import {
   computeMessageVirtualWindow,
   formatStreamPhaseLabel,
   MESSAGE_ESTIMATED_HEIGHT,
-  MESSAGE_OVERSCAN,
   MESSAGE_VIRTUAL_THRESHOLD,
 } from '@/components/pulse/chat-utils'
 

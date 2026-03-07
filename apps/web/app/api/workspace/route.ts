@@ -4,7 +4,8 @@ import { type NextRequest, NextResponse } from 'next/server'
 
 // AXON_WORKSPACE inside the axon-web container is /workspace (bind-mounted from host)
 const WORKSPACE_ROOT = process.env.AXON_WORKSPACE ?? '/workspace'
-// Claude CLI config dir inside the axon-web container (node user's home)
+// Claude CLI config dir — container default is /home/node/.claude (node user's home).
+// For local dev, set CLAUDE_CONFIG to your host ~/.claude directory.
 const CLAUDE_ROOT = path.resolve(process.env.CLAUDE_CONFIG ?? '/home/node/.claude')
 const CLAUDE_PREFIX = '__claude'
 

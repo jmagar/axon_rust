@@ -13,6 +13,38 @@ interface ApiResponse {
   error?: string
 }
 
+interface SourceRow {
+  url: string
+  chunks: number
+}
+
+const normalizeSources = (data: SourcesResult | null): SourceRow[] => {
+  if (!data) return []
+
+  if ('urls' in data && Array.isArray(data.urls)) {
+    return data.urls
+      .map((entry) => {
+        if (Array.isArray(entry)) {
+          const [url, chunks] = entry
+          return { url: String(url), chunks: Number(chunks) || 0 }
+        }
+        if (entry && typeof entry === 'object') {
+          const row = entry as { url?: unknown; chunks?: unknown }
+          return {
+            url: String(row.url ?? ''),
+            chunks: Number(row.chunks) || 0,
+          }
+        }
+        return { url: '', chunks: 0 }
+      })
+      .filter((row) => row.url.length > 0)
+  }
+
+  return Object.entries(data)
+    .map(([url, chunks]) => ({ url, chunks: Number(chunks) || 0 }))
+    .sort((a, b) => b.chunks - a.chunks)
+}
+
 export function SourcesDashboard() {
   const searchParams = useSearchParams()
   const [data, setData] = useState<SourcesResult | null>(null)
@@ -50,11 +82,10 @@ export function SourcesDashboard() {
   }, [])
 
   const rows = useMemo(() => {
-    if (!data) return []
-    const entries = Object.entries(data).sort((a, b) => b[1] - a[1])
+    const entries = normalizeSources(data)
     if (!query.trim()) return entries
     const q = query.toLowerCase()
-    return entries.filter(([url]) => url.toLowerCase().includes(q))
+    return entries.filter(({ url }) => url.toLowerCase().includes(q))
   }, [data, query])
 
   const virtualizer = useVirtualizer({
@@ -72,7 +103,7 @@ export function SourcesDashboard() {
         <h1 className="text-[18px] font-bold tracking-tight text-[var(--text-primary)]">Sources</h1>
         {data && (
           <span className="rounded-full bg-[rgba(135,175,255,0.12)] px-2 py-0.5 text-[10px] font-semibold text-[var(--axon-primary)]">
-            {Object.keys(data).length.toLocaleString()} URLs
+            {rows.length.toLocaleString()} URLs
           </span>
         )}
         <div className="flex-1" />
@@ -129,7 +160,7 @@ export function SourcesDashboard() {
         >
           <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
             {virtualizer.getVirtualItems().map((vItem) => {
-              const [url, count] = rows[vItem.index] ?? ['', 0]
+              const row = rows[vItem.index] ?? { url: '', chunks: 0 }
               return (
                 <div
                   key={vItem.key}
@@ -145,10 +176,10 @@ export function SourcesDashboard() {
                   className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-2 hover:bg-[var(--surface-float)]"
                 >
                   <span className="flex-1 truncate font-mono text-[11px] text-[var(--text-secondary)]">
-                    {url}
+                    {row.url}
                   </span>
                   <span className="flex-shrink-0 rounded bg-[rgba(135,175,255,0.1)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--axon-primary)]">
-                    {count}
+                    {row.chunks}
                   </span>
                 </div>
               )
@@ -157,8 +188,14 @@ export function SourcesDashboard() {
         </div>
       )}
 
-      {!loading && !error && rows.length === 0 && query && (
+      {!loading && !error && !!data && rows.length === 0 && query && (
         <p className="text-center text-[12px] text-[var(--text-dim)]">No results for "{query}"</p>
+      )}
+
+      {!loading && !error && !data && (
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-base)] px-4 py-3 text-[12px] text-[var(--text-dim)]">
+          Sources payload is empty. Try Refresh.
+        </div>
       )}
     </div>
   )

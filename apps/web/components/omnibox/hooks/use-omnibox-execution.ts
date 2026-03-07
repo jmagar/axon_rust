@@ -34,12 +34,20 @@ export function useOmniboxExecution({
 }: UseOmniboxExecutionInput) {
   const { send } = useAxonWs()
   const { currentJobId, currentMode } = useWsExecutionState()
-  const { workspaceMode, workspaceContext, pulseModel, pulsePermissionLevel } =
-    useWsWorkspaceState()
+  const {
+    workspaceMode,
+    workspaceContext,
+    workspaceResumeSessionId,
+    pulseAgent,
+    pulseModel,
+    pulsePermissionLevel,
+    acpConfigOptions,
+  } = useWsWorkspaceState()
   const {
     startExecution,
     activateWorkspace,
     submitWorkspacePrompt,
+    setPulseAgent,
     setPulseModel,
     setPulsePermissionLevel,
   } = useWsMessageActions()
@@ -64,6 +72,14 @@ export function useOmniboxExecution({
       if (!trimmedInput && !NO_INPUT_MODES.has(execMode)) return
       const shouldRunCommand = shouldRunCommandForInput(execMode, trimmedInput)
       if (!shouldRunCommand) {
+        console.log(
+          '[omnibox] pulse path — mode:',
+          execMode,
+          'workspaceMode:',
+          workspaceMode,
+          'input:',
+          trimmedInput.slice(0, 80),
+        )
         if (workspaceMode !== 'pulse') {
           activateWorkspace('pulse')
         }
@@ -151,8 +167,11 @@ export function useOmniboxExecution({
     completionStatus,
     workspaceMode,
     workspaceContext,
+    workspaceResumeSessionId,
+    pulseAgent,
     pulseModel,
     pulsePermissionLevel,
+    acpConfigOptions,
     currentMode,
     currentJobId,
     setIsProcessing,
@@ -160,6 +179,7 @@ export function useOmniboxExecution({
     setStatusType,
     setOptionValues,
     setCompletionStatus,
+    setPulseAgent,
     setPulseModel,
     setPulsePermissionLevel,
     execute,

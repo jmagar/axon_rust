@@ -39,8 +39,11 @@ export function Omnibox() {
           contextUtilizationPercent={state.contextUtilizationPercent}
           workspaceMode={state.workspaceMode}
           workspaceContext={state.workspaceContext}
+          workspaceResumeSessionId={state.workspaceResumeSessionId}
+          pulseAgent={state.pulseAgent}
           pulseModel={state.pulseModel}
           pulsePermissionLevel={state.pulsePermissionLevel}
+          acpConfigOptions={state.acpConfigOptions}
           currentMode={state.currentMode}
           isProcessingWithCurrentMode={state.isProcessingWithCurrentMode}
           inputRef={state.inputRef}
@@ -51,6 +54,7 @@ export function Omnibox() {
           setToolsOpen={state.setToolsOpen}
           setIsFocused={state.setIsFocused}
           setMentionTipSeen={state.setMentionTipSeen}
+          setPulseAgent={state.setPulseAgent}
           setPulseModel={state.setPulseModel}
           setPulsePermissionLevel={state.setPulsePermissionLevel}
           execute={state.execute}

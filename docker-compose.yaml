@@ -30,7 +30,7 @@ services:
     image: postgres:17-alpine
     container_name: axon-postgres
     ports:
-      - "127.0.0.1:53432:5432"  # homelab-only: not exposed to network
+      - "127.0.0.1:53432:5432"
     volumes:
       - ${AXON_DATA_DIR:-./data}/axon/postgres:/var/lib/postgresql/data
     healthcheck:
@@ -50,7 +50,7 @@ services:
     container_name: axon-redis
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-changeme}"]
     ports:
-      - "127.0.0.1:53379:6379"  # homelab-only: not exposed to network
+      - "127.0.0.1:53379:6379"
     volumes:
       - ${AXON_DATA_DIR:-./data}/axon/redis:/data
     healthcheck:
@@ -68,7 +68,7 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-axon}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-axonrabbit}
     ports:
-      - "127.0.0.1:45535:5672"  # homelab-only: not exposed to network
+      - "127.0.0.1:45535:5672"
     volumes:
       - ${AXON_DATA_DIR:-./data}/axon/rabbitmq:/var/lib/rabbitmq
       - ./docker/rabbitmq/20-axon.conf:/etc/rabbitmq/conf.d/20-axon.conf:ro
@@ -84,8 +84,8 @@ services:
     image: qdrant/qdrant:v1.13.1
     container_name: axon-qdrant
     ports:
-      - "127.0.0.1:53333:6333"  # homelab-only: not exposed to network
-      - "127.0.0.1:53334:6334"  # gRPC — homelab-only
+      - "127.0.0.1:53333:6333"
+      - "127.0.0.1:53334:6334"  # gRPC
     volumes:
       - ${AXON_DATA_DIR:-./data}/axon/qdrant:/qdrant/storage
     healthcheck:
@@ -112,9 +112,9 @@ services:
     env_file: []  # no app secrets needed in the browser container
     shm_size: "2gb"
     ports:
-      - "127.0.0.1:9222:9222"  # CDP proxy — local dev access
-      - "127.0.0.1:9223:9223"  # raw Chrome DevTools — direct CDP access
-      - "127.0.0.1:6000:6000"  # management API — local dev access
+      - "127.0.0.1:9222:9222"  # CDP proxy
+      - "127.0.0.1:9223:9223"  # raw Chrome DevTools
+      - "127.0.0.1:6000:6000"  # management API
     environment:
       # Rewrite the hostname in /json/version WebSocket URLs so that other
       # containers on the axon network receive a resolvable address.
@@ -155,8 +155,10 @@ services:
     environment:
       RUST_LOG: "info"
       HOME: /home/axon
-      AXON_OUTPUT_DIR: /app/.cache/axon-rust/output
-      AXON_CHROME_DIAGNOSTICS_DIR: /app/.cache/chrome-diagnostics
+      AXON_DATA_DIR: /data
+      AXON_OUTPUT_DIR: /data/axon/output
+      AXON_MCP_ARTIFACT_DIR: /data/axon/artifacts
+      AXON_CHROME_DIAGNOSTICS_DIR: /data/axon/chrome-diagnostics
       AXON_ENFORCE_IMAGE_SHA: ${AXON_ENFORCE_IMAGE_SHA:-false}
     depends_on:
       axon-postgres:
@@ -170,7 +172,8 @@ services:
       axon-chrome:
         condition: service_started  # Chrome unhealthy (GPU crash etc.) must not block workers
     ports:
-      - "127.0.0.1:49000:49000"   # axon serve (HTTP + WebSocket)
+      - "49000:49000"             # axon serve (HTTP + WebSocket)
+      - "8001:8001"               # MCP HTTP transport
     deploy:
       resources:
         limits:
@@ -191,14 +194,24 @@ services:
       start_period: 30s
     volumes:
       - ./:/repo:ro
-      - ${AXON_DATA_DIR:-./data}/axon/worker:/app/.cache/axon-rust/output
+      - ${AXON_DATA_DIR:-./data}/axon/output:/data/axon/output
+      - ${AXON_DATA_DIR:-./data}/axon/artifacts:/data/axon/artifacts
       - ${AXON_DATA_DIR:-./data}/axon/logs:/app/logs
-      - ${AXON_DATA_DIR:-./data}/axon/chrome-diagnostics:/app/.cache/chrome-diagnostics
+      - ${AXON_DATA_DIR:-./data}/axon/chrome-diagnostics:/data/axon/chrome-diagnostics
       # Session history mounts — required for `axon sessions` ingest worker.
       # Set HOST_HOME in .env to your home directory (e.g. /home/yourname).
       - ${HOST_HOME:-${HOME}}/.claude/projects:/home/axon/.claude/projects
       - ${HOST_HOME:-${HOME}}/.codex/sessions:/home/axon/.codex/sessions
       - ${HOST_HOME:-${HOME}}/.gemini:/home/axon/.gemini
+      # ACP adapter auth/config mounts — required for pulse_chat adapter handshake.
+      # Both files are mounted read-only at staging paths; 17-materialize-claude-credentials
+      # copies them into /home/axon/.claude/ owned by axon so the adapter can read and refresh
+      # tokens without touching the host files' ownership or permissions.
+      - ${HOST_HOME:-${HOME}}/.claude.json:/run/host-claude/claude.json:ro
+      - ${HOST_HOME:-${HOME}}/.claude/.credentials.json:/run/host-claude/.credentials.json:ro
+      - ${HOST_HOME:-${HOME}}/.codex/auth.json:/run/host-codex/auth.json:ro
+      - ${HOST_HOME:-${HOME}}/.codex/config.toml:/run/host-codex/config.toml:ro
+      - ${HOST_HOME:-${HOME}}/.codex/models_cache.json:/run/host-codex/models_cache.json:ro
 
   axon-web:
     <<: *common-service
@@ -221,7 +234,8 @@ services:
       AXON_BACKEND_URL: "http://axon-workers:49000"
       NEXT_PUBLIC_AXON_PORT: "49000"
       AXON_WORKSPACE: /workspace
-      AXON_OUTPUT_DIR: /axon-output  # same host dir as axon-workers output, ro-mounted at /axon-output
+      AXON_DATA_DIR: /data
+      AXON_OUTPUT_DIR: /data/axon/output
       AXON_BIN: ${AXON_BIN:-}        # override binary path for /api/cortex/* routes (see .env.example)
       # Set WATCHPACK_POLLING=true in .env if file-watch events don't propagate
     volumes:
@@ -229,9 +243,16 @@ services:
       - ./apps/web:/app               # bind-mount source for hot reload
       - /app/node_modules             # anonymous vol: preserves container's node_modules
       - /app/.next                    # anonymous vol: preserves Next.js build cache
-      - ${AXON_DATA_DIR:-./data}/axon/worker:/axon-output:ro  # axon scrape/crawl output (read-only)
+      - ${AXON_DATA_DIR:-./data}/axon/output:/data/axon/output:ro
       - ${AXON_DATA_DIR:-./data}/axon/claude:/home/node/.claude
       - ${HOST_HOME:-${HOME}}/.claude.json:/home/node/.claude.json  # auth file — separate from config dir
+      # ACP adapter credential staging — mounted read-only at staging paths;
+      # 16-materialize-agent-credentials copies them into /home/node/{.claude,.codex}/
+      # owned by node so `claude agents` and codex CLI can read/refresh OAuth tokens.
+      - ${HOST_HOME:-${HOME}}/.claude/.credentials.json:/run/host-claude/.credentials.json:ro
+      - ${HOST_HOME:-${HOME}}/.codex/auth.json:/run/host-codex/auth.json:ro
+      - ${HOST_HOME:-${HOME}}/.codex/config.toml:/run/host-codex/config.toml:ro
+      - ${HOST_HOME:-${HOME}}/.codex/models_cache.json:/run/host-codex/models_cache.json:ro
       # Uncomment to mount host SSH keys (opt-in — exposes keys to the container):
       # - ${HOST_HOME:-${HOME}}/.ssh:/home/node/.ssh:ro
       - ${AXON_WORKSPACE:-${HOME}/workspace}:/workspace

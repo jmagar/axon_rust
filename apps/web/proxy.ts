@@ -103,7 +103,14 @@ function isAllowedOrigin(req: NextRequest): boolean {
     return true
   }
 
-  const requestOrigin = `${req.nextUrl.protocol}//${req.nextUrl.host}`.toLowerCase()
+  const forwardedProto = req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase()
+  const forwardedHost = req.headers.get('x-forwarded-host')?.split(',')[0]?.trim().toLowerCase()
+  // Only use forwarded headers when BOTH are present; mixing them produces an
+  // http://external-host origin that never matches the browser's https:// Origin.
+  const useForwarded = !!(forwardedProto && forwardedHost)
+  const proto = useForwarded ? forwardedProto : req.nextUrl.protocol.replace(':', '')
+  const host = useForwarded ? forwardedHost : req.nextUrl.host
+  const requestOrigin = `${proto}://${host}`.toLowerCase()
   return normalizedOrigin === requestOrigin
 }
 
@@ -114,7 +121,13 @@ function extractToken(req: NextRequest): string {
   }
 
   const key = req.headers.get('x-api-key')
-  return key?.trim() ?? ''
+  if (key?.trim()) return key.trim()
+
+  const ALLOW_QUERY_TOKEN = process.env.AXON_WEB_ALLOW_QUERY_TOKEN === 'true'
+  if (ALLOW_QUERY_TOKEN) {
+    return req.nextUrl.searchParams.get('token')?.trim() ?? ''
+  }
+  return ''
 }
 
 function constantTimeEqual(a: string, b: string): boolean {

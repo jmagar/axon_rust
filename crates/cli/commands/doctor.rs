@@ -405,7 +405,8 @@ pub async fn build_doctor_report(cfg: &Config) -> Result<Value, Box<dyn Error>> 
 }
 
 pub async fn run_doctor(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let report = build_doctor_report(cfg).await?;
+    let result = crate::crates::services::system::doctor(cfg).await?;
+    let report = result.payload;
     if cfg.json_output {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {

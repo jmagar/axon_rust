@@ -1,7 +1,7 @@
 use super::AxonMcpServer;
 use super::common::{
-    internal_error, invalid_params, parse_job_id, parse_limit, parse_offset, parse_response_mode,
-    respond_with_mode,
+    invalid_params, logged_internal_error, parse_job_id, parse_limit, parse_offset,
+    parse_response_mode, respond_with_mode,
 };
 use crate::crates::core::http::validate_url;
 use crate::crates::jobs::refresh::{
@@ -22,7 +22,7 @@ impl AxonMcpServer {
     ) -> Result<AxonToolResponse, ErrorData> {
         let (json, text) = crate::crates::cli::commands::status::status_full(self.cfg.as_ref())
             .await
-            .map_err(|e| internal_error(e.to_string()))?;
+            .map_err(|e| logged_internal_error("operation", e))?;
 
         Ok(AxonToolResponse::ok(
             "status",
@@ -50,7 +50,7 @@ impl AxonMcpServer {
                 }
                 let id = start_refresh_job(self.cfg.as_ref(), &urls)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "refresh",
                     "start",
@@ -61,7 +61,7 @@ impl AxonMcpServer {
                 let id = parse_job_id(req.job_id.as_ref())?;
                 let job = get_refresh_job(self.cfg.as_ref(), id)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 respond_with_mode(
                     "refresh",
                     "status",
@@ -74,7 +74,7 @@ impl AxonMcpServer {
                 let id = parse_job_id(req.job_id.as_ref())?;
                 let canceled = cancel_refresh_job(self.cfg.as_ref(), id)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "refresh",
                     "cancel",
@@ -86,7 +86,7 @@ impl AxonMcpServer {
                 let offset = parse_offset(req.offset);
                 let jobs = list_refresh_jobs(self.cfg.as_ref(), limit, offset as i64)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 respond_with_mode(
                     "refresh",
                     "list",
@@ -98,7 +98,7 @@ impl AxonMcpServer {
             RefreshSubaction::Cleanup => {
                 let deleted = cleanup_refresh_jobs(self.cfg.as_ref())
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "refresh",
                     "cleanup",
@@ -108,7 +108,7 @@ impl AxonMcpServer {
             RefreshSubaction::Clear => {
                 let deleted = clear_refresh_jobs(self.cfg.as_ref())
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "refresh",
                     "clear",
@@ -118,7 +118,7 @@ impl AxonMcpServer {
             RefreshSubaction::Recover => {
                 let recovered = recover_stale_refresh_jobs(self.cfg.as_ref())
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "refresh",
                     "recover",
@@ -140,7 +140,7 @@ impl AxonMcpServer {
                 let limit = parse_limit(req.limit, 20);
                 let schedules = list_refresh_schedules(self.cfg.as_ref(), limit)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 respond_with_mode(
                     "refresh",
                     "schedule",
@@ -175,7 +175,7 @@ impl AxonMcpServer {
                     },
                 )
                 .await
-                .map_err(|e| internal_error(e.to_string()))?;
+                .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "refresh",
                     "schedule",
@@ -188,7 +188,7 @@ impl AxonMcpServer {
                 })?;
                 let deleted = delete_refresh_schedule(self.cfg.as_ref(), &name)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "refresh",
                     "schedule",
@@ -202,7 +202,7 @@ impl AxonMcpServer {
                 let enabled = sub == "enable";
                 let updated = set_refresh_schedule_enabled(self.cfg.as_ref(), &name, enabled)
                     .await
-                    .map_err(|e| internal_error(e.to_string()))?;
+                    .map_err(|e| logged_internal_error("operation", e))?;
                 Ok(AxonToolResponse::ok(
                     "refresh",
                     "schedule",

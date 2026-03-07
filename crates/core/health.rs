@@ -40,6 +40,13 @@ pub fn browser_diagnostics_pattern() -> BrowserDiagnosticsPattern {
     let output_dir = env::var("AXON_CHROME_DIAGNOSTICS_DIR")
         .ok()
         .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            env::var("AXON_DATA_DIR")
+                .ok()
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty())
+                .map(|d| format!("{d}/axon/chrome-diagnostics"))
+        })
         .unwrap_or_else(|| DIAGNOSTICS_DIR_DEFAULT.to_string());
 
     BrowserDiagnosticsPattern {

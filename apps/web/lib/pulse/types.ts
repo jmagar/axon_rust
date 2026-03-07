@@ -28,8 +28,27 @@ export type DocOperation = z.infer<typeof DocOperationSchema>
 export const PulsePermissionLevel = z.enum(['plan', 'accept-edits', 'bypass-permissions'])
 export type PulsePermissionLevel = z.infer<typeof PulsePermissionLevel>
 
-export const PulseModel = z.enum(['sonnet', 'opus', 'haiku'])
+export const AcpConfigSelectValue = z.object({
+  value: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+})
+export type AcpConfigSelectValue = z.infer<typeof AcpConfigSelectValue>
+
+export const AcpConfigOption = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  category: z.string().optional(),
+  currentValue: z.string(),
+  options: z.array(AcpConfigSelectValue),
+})
+export type AcpConfigOption = z.infer<typeof AcpConfigOption>
+
+export const PulseModel = z.string().optional()
 export type PulseModel = z.infer<typeof PulseModel>
+export const PulseAgent = z.enum(['claude', 'codex', 'gemini'])
+export type PulseAgent = z.infer<typeof PulseAgent>
 
 export const PulseChatRequestSchema = z.object({
   prompt: z.string().min(1).max(8000),
@@ -52,7 +71,8 @@ export const PulseChatRequestSchema = z.object({
     .max(50)
     .default([]),
   permissionLevel: PulsePermissionLevel.default('accept-edits'),
-  model: PulseModel.default('sonnet'),
+  agent: PulseAgent.default('claude'),
+  model: PulseModel,
   effort: z.enum(['low', 'medium', 'high']).default('medium'),
   maxTurns: z.number().int().min(0).max(100).default(0),
   maxBudgetUsd: z.number().min(0).max(1000).default(0),
@@ -78,14 +98,25 @@ export const PulseChatRequestSchema = z.object({
   /** --tools: restrict which built-in tools are available */
   toolsRestrict: z
     .string()
-    .regex(/^[a-zA-Z0-9,\-.:]*$/, 'toolsRestrict contains invalid characters')
+    .regex(/^[a-zA-Z0-9_:*-]+$/, 'toolsRestrict contains invalid characters')
     .optional(),
-  /** Stream replay: resume from this event ID (supports both camelCase and snake_case). */
+  /** Stream replay: resume from this event ID. */
   lastEventId: z.string().max(128).optional(),
+  /** @deprecated Use `lastEventId` instead. Kept for backward compatibility with existing callers. */
   last_event_id: z.string().max(128).optional(),
 })
 
 export type PulseChatRequest = z.infer<typeof PulseChatRequestSchema>
+
+/** ACP permission request received from the Rust backend during tool execution. */
+export interface AcpPermissionRequest {
+  sessionId: string
+  toolCallId: string
+  /** Available permission option IDs (e.g. 'option-allow-once', 'option-reject-always'). */
+  options: string[]
+  /** Tool name resolved from the most recent tool_use event, if available. */
+  toolName?: string
+}
 
 export interface PulseCitation {
   url: string
@@ -98,11 +129,22 @@ export interface PulseCitation {
 export interface PulseToolUse {
   name: string
   input: Record<string, unknown>
+  toolCallId?: string
+  status?: string
+  content?: string
 }
 
 export type PulseMessageBlock =
   | { type: 'text'; content: string }
-  | { type: 'tool_use'; name: string; input: Record<string, unknown>; result?: string }
+  | {
+      type: 'tool_use'
+      name: string
+      input: Record<string, unknown>
+      result?: string
+      toolCallId?: string
+      status?: string
+      content?: string
+    }
   | { type: 'thinking'; content: string }
 
 export interface PulseChatResponse {
@@ -114,6 +156,7 @@ export interface PulseChatResponse {
   blocks: PulseMessageBlock[]
   metadata?: {
     model: PulseModel
+    agent?: PulseAgent
     elapsedMs: number
     contextCharsTotal: number
     contextBudgetChars: number

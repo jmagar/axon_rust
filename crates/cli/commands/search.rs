@@ -1,6 +1,11 @@
+use crate::crates::cli::commands::common::parse_service_time_range;
 use crate::crates::core::config::Config;
-use crate::crates::core::logging::{log_done, log_warn};
+use crate::crates::core::logging::log_done;
+#[cfg(test)]
+use crate::crates::core::logging::log_warn;
 use crate::crates::core::ui::{muted, primary, print_phase};
+use crate::crates::services::search as search_service;
+use crate::crates::services::types::SearchOptions as ServiceSearchOptions;
 use spider_agent::{Agent, SearchOptions, TimeRange};
 use std::error::Error;
 
@@ -55,8 +60,15 @@ pub async fn run_search(cfg: &Config) -> Result<(), Box<dyn Error>> {
         print_phase("◐", "Searching", &query);
     }
 
-    let time_range = parse_search_time_range(cfg.search_time_range.as_deref());
-    let results = search_results(cfg, &query, cfg.search_limit, 0, time_range).await?;
+    // Route data-fetch through the services layer.
+    let opts = ServiceSearchOptions {
+        limit: cfg.search_limit,
+        offset: 0,
+        time_range: parse_service_time_range(cfg.search_time_range.as_deref()),
+    };
+    let results = search_service::search(cfg, &query, opts, None)
+        .await?
+        .results;
 
     if cfg.json_output {
         println!(
@@ -94,7 +106,8 @@ pub async fn run_search(cfg: &Config) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// TODO: This function is duplicated in research.rs. Extract to commands/common.rs as a shared helper.
+// Only used in tests via `use super::*` in the test module.
+#[cfg(test)]
 fn parse_search_time_range(value: Option<&str>) -> Option<TimeRange> {
     match value.map(str::trim).filter(|v| !v.is_empty()) {
         Some("day") => Some(TimeRange::Day),

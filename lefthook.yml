@@ -3,6 +3,8 @@ pre-commit:
   commands:
     env-guard:
       run: ./scripts/check_env_staged.sh
+    dockerignore-guard:
+      run: ./scripts/check_dockerignore_guards.sh
     claude-symlinks:
       run: ./scripts/check_claude_symlinks.sh
     pg-advisory-lock-ban:

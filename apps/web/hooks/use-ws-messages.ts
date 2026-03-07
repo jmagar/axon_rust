@@ -1,8 +1,13 @@
 'use client'
 
+import { usePathname } from 'next/navigation'
 import type React from 'react'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useAxonWs } from '@/hooks/use-axon-ws'
+import { getAcpModelConfigOption } from '@/lib/pulse/acp-config'
+import { probePulseConfigOptions } from '@/lib/pulse/config-api'
+import type { AcpConfigOption } from '@/lib/pulse/types'
+import { PulseAgent, PulsePermissionLevel } from '@/lib/pulse/types'
 import type { CrawlFile, WsLifecycleEntry, WsServerMsg } from '@/lib/ws-protocol'
 import { handleWsMessage } from './ws-messages/handlers'
 import { makeInitialRuntimeState, reduceRuntimeState } from './ws-messages/runtime'
@@ -10,6 +15,7 @@ import type {
   CancelResponseState,
   CrawlProgress,
   LogLine,
+  PulseWorkspaceAgent,
   PulseWorkspaceModel,
   PulseWorkspacePermission,
   RecentRun,
@@ -72,6 +78,7 @@ export type {
   CancelResponseState,
   CrawlProgress,
   LogLine,
+  PulseWorkspaceAgent,
   PulseWorkspaceModel,
   PulseWorkspacePermission,
   RecentRun,
@@ -79,7 +86,57 @@ export type {
   WorkspaceContextState,
 }
 
+// ── localStorage helpers ────────────────────────────────────────────────────
+
+const LS_WORKSPACE_MODE = 'axon.web.workspace-mode'
+const LS_PULSE_AGENT = 'axon.web.pulse-agent'
+const LS_PULSE_MODEL = 'axon.web.pulse-model'
+const LS_PULSE_PERMISSION = 'axon.web.pulse-permission'
+
+const VALID_AGENTS = new Set(PulseAgent.options)
+const VALID_PERMISSIONS = new Set(PulsePermissionLevel.options)
+
+function safeGetItem(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function safeSetItem(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // Ignore storage errors (quota exceeded, private browsing, etc.)
+  }
+}
+
+function safeRemoveItem(key: string): void {
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+/**
+ * Validate a raw localStorage string against a known set of allowed values.
+ * Returns the validated value or the fallback if invalid/missing.
+ */
+function validateStoredEnum<T extends string>(
+  raw: string | null,
+  allowed: Set<string>,
+  fallback: T,
+): T {
+  if (raw && allowed.has(raw)) return raw as T
+  return fallback
+}
+
+// ── Provider hook ───────────────────────────────────────────────────────────
+
 export function useWsMessagesProvider() {
+  const pathname = usePathname()
   const { subscribe, send } = useAxonWs()
   const [markdownContent, setMarkdownContent] = useState('')
   const [logLines, setLogLines] = useState<LogLine[]>([])
@@ -109,10 +166,18 @@ export function useWsMessagesProvider() {
   const [workspaceMode, setWorkspaceMode] = useState<string | null>('pulse')
   const [workspacePrompt, setWorkspacePrompt] = useState<string | null>(null)
   const [workspacePromptVersion, setWorkspacePromptVersion] = useState(0)
+  const [workspaceResumeSessionId, setWorkspaceResumeSessionId] = useState<string | null>(null)
+  const [workspaceResumeVersion, setWorkspaceResumeVersion] = useState(0)
   const [workspaceContext, setWorkspaceContext] = useState<WorkspaceContextState | null>(null)
+
+  // ACP-related state — grouped together since they are logically coupled
+  // and frequently updated as a set (agent change triggers config probe,
+  // config probe updates options, options influence model selection).
+  const [pulseAgent, setPulseAgent] = useState<PulseWorkspaceAgent>('claude')
   const [pulseModel, setPulseModel] = useState<PulseWorkspaceModel>('sonnet')
   const [pulsePermissionLevel, setPulsePermissionLevel] =
     useState<PulseWorkspacePermission>('accept-edits')
+  const [acpConfigOptions, setAcpConfigOptions] = useState<AcpConfigOption[]>([])
 
   const selectedFileRef = useRef<string | null>(null)
   const crawlFilesRef = useRef<CrawlFile[]>([])
@@ -188,55 +253,74 @@ export function useWsMessagesProvider() {
     [],
   )
 
-  useEffect(() => {
-    try {
-      if (workspaceMode === null) {
-        window.localStorage.removeItem('axon.web.workspace-mode')
-      } else {
-        window.localStorage.setItem('axon.web.workspace-mode', workspaceMode)
-      }
-    } catch {
-      // Ignore storage errors.
-    }
-  }, [workspaceMode])
+  // ── localStorage: read on mount (once) ──────────────────────────────────
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem('axon.web.workspace-mode')
-      if (stored) setWorkspaceMode(stored)
-    } catch {
-      /* ignore */
-    }
+    const storedMode = safeGetItem(LS_WORKSPACE_MODE)
+    if (storedMode) setWorkspaceMode(storedMode)
+
+    const storedAgent = validateStoredEnum(
+      safeGetItem(LS_PULSE_AGENT),
+      VALID_AGENTS,
+      'claude' as PulseWorkspaceAgent,
+    )
+    setPulseAgent(storedAgent)
+
+    const storedModel = safeGetItem(LS_PULSE_MODEL)
+    if (storedModel && storedModel.length > 0) setPulseModel(storedModel)
+
+    const storedPermission = validateStoredEnum(
+      safeGetItem(LS_PULSE_PERMISSION),
+      VALID_PERMISSIONS,
+      'accept-edits' as PulseWorkspacePermission,
+    )
+    setPulsePermissionLevel(storedPermission)
   }, [])
 
-  useEffect(() => {
-    try {
-      const m = localStorage.getItem('axon.web.pulse-model') as PulseWorkspaceModel
-      if (m && ['sonnet', 'opus', 'haiku'].includes(m)) setPulseModel(m)
-      const p = localStorage.getItem('axon.web.pulse-permission') as PulseWorkspacePermission
-      if (p && ['plan', 'accept-edits', 'bypass-permissions'].includes(p)) {
-        setPulsePermissionLevel(p)
-      }
-    } catch {
-      /* ignore */
-    }
-  }, [])
+  // ── localStorage: consolidated write effect ─────────────────────────────
 
   useEffect(() => {
-    try {
-      localStorage.setItem('axon.web.pulse-model', pulseModel)
-    } catch {
-      /* ignore */
+    if (workspaceMode === null) {
+      safeRemoveItem(LS_WORKSPACE_MODE)
+    } else {
+      safeSetItem(LS_WORKSPACE_MODE, workspaceMode)
     }
-  }, [pulseModel])
+    safeSetItem(LS_PULSE_AGENT, pulseAgent)
+    safeSetItem(LS_PULSE_MODEL, pulseModel ?? '')
+    safeSetItem(LS_PULSE_PERMISSION, pulsePermissionLevel)
+  }, [workspaceMode, pulseAgent, pulseModel, pulsePermissionLevel])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pulseModel is read inside but intentionally excluded — re-probing on model change would create an infinite loop since the probe itself can set the model
   useEffect(() => {
-    try {
-      localStorage.setItem('axon.web.pulse-permission', pulsePermissionLevel)
-    } catch {
-      /* ignore */
+    if (pathname?.startsWith('/reboot')) {
+      setAcpConfigOptions([])
+      return
     }
-  }, [pulsePermissionLevel])
+
+    let cancelled = false
+
+    void probePulseConfigOptions({ agent: pulseAgent })
+      .then((options) => {
+        if (cancelled) return
+        setAcpConfigOptions(options)
+
+        if (options.length === 0) return
+        const modelConfig = getAcpModelConfigOption(options)
+        if (!modelConfig || modelConfig.options.length === 0) return
+        const hasCurrent = modelConfig.options.some((option) => option.value === pulseModel)
+        if (hasCurrent) return
+        setPulseModel(modelConfig.currentValue || modelConfig.options[0]!.value)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        console.warn('[pulse] config probe failed', error)
+        setAcpConfigOptions([])
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [pathname, pulseAgent])
 
   const setCurrentJobIdTracked = useCallback((jobId: string | null) => {
     currentJobIdRef.current = jobId
@@ -368,8 +452,24 @@ export function useWsMessagesProvider() {
   const submitWorkspacePrompt = useCallback((prompt: string) => {
     setWorkspaceMode('pulse')
     setHasResults(true)
+    setWorkspaceResumeSessionId(null)
+    setWorkspaceResumeVersion(0)
     setWorkspacePrompt(prompt)
     setWorkspacePromptVersion((prev) => prev + 1)
+  }, [])
+
+  const resumeWorkspaceSession = useCallback((sessionId: string) => {
+    setWorkspaceMode('pulse')
+    setHasResults(true)
+    setWorkspacePrompt(null)
+    setWorkspacePromptVersion(0)
+    setWorkspaceResumeSessionId(sessionId)
+    setWorkspaceResumeVersion((prev) => prev + 1)
+  }, [])
+
+  const clearWorkspaceResumeSession = useCallback(() => {
+    setWorkspaceResumeSessionId(null)
+    setWorkspaceResumeVersion(0)
   }, [])
 
   const deactivateWorkspace = useCallback(() => {
@@ -377,13 +477,11 @@ export function useWsMessagesProvider() {
     currentInputRef.current = ''
     setCurrentMode('')
     setWorkspaceMode(null)
-    try {
-      window.localStorage.removeItem('axon.web.workspace-mode')
-    } catch {
-      // Ignore storage errors.
-    }
+    safeRemoveItem(LS_WORKSPACE_MODE)
     setWorkspacePrompt(null)
     setWorkspacePromptVersion(0)
+    setWorkspaceResumeSessionId(null)
+    setWorkspaceResumeVersion(0)
     setWorkspaceContext(null)
   }, [])
 
@@ -437,27 +535,39 @@ export function useWsMessagesProvider() {
       workspaceMode,
       workspacePrompt,
       workspacePromptVersion,
+      workspaceResumeSessionId,
+      workspaceResumeVersion,
       workspaceContext,
+      pulseAgent,
       pulseModel,
       pulsePermissionLevel,
+      acpConfigOptions,
     }),
     [
       workspaceMode,
       workspacePrompt,
       workspacePromptVersion,
+      workspaceResumeSessionId,
+      workspaceResumeVersion,
       workspaceContext,
+      pulseAgent,
       pulseModel,
       pulsePermissionLevel,
+      acpConfigOptions,
     ],
   )
 
   const actions = useMemo<WsMessagesActions>(
     () => ({
       selectFile,
+      setPulseAgent,
       setPulseModel,
       setPulsePermissionLevel,
+      setAcpConfigOptions,
       activateWorkspace,
       submitWorkspacePrompt,
+      resumeWorkspaceSession,
+      clearWorkspaceResumeSession,
       deactivateWorkspace,
       updateWorkspaceContext,
       startExecution,
@@ -466,6 +576,8 @@ export function useWsMessagesProvider() {
       selectFile,
       activateWorkspace,
       submitWorkspacePrompt,
+      resumeWorkspaceSession,
+      clearWorkspaceResumeSession,
       deactivateWorkspace,
       updateWorkspaceContext,
       startExecution,

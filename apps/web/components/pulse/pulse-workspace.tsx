@@ -3,6 +3,7 @@
 import { BookOpen, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
 import dynamic from 'next/dynamic'
 import { usePulseWorkspaceBehavior } from '@/hooks/use-pulse-workspace'
+import { PermissionModal } from './permission-modal'
 import { PulseChatPane } from './pulse-chat-pane'
 import { PulseMobilePaneSwitcher } from './pulse-mobile-pane-switcher'
 import { PulseOpConfirmation } from './pulse-op-confirmation'
@@ -24,7 +25,7 @@ export function PulseWorkspace() {
   const ws = usePulseWorkspaceBehavior()
 
   return (
-    <div className={`flex h-full flex-col${!ws.isDesktop ? ' pt-11' : ''}`}>
+    <div className={`flex h-full min-h-0 flex-col${!ws.isDesktop ? ' pt-11' : ''}`}>
       {/* Fixed mobile header — title + SRC + pane switcher */}
       {!ws.isDesktop && ws.chatHistory.length > 0 && (
         <div className="fixed left-0 right-0 top-0 z-[9] flex h-11 items-center gap-2 border-b border-[var(--border-subtle)] bg-[rgba(3,7,18,0.45)] pl-3 pr-28 backdrop-blur-lg lg:hidden">
@@ -64,10 +65,10 @@ export function PulseWorkspace() {
         />
       )}
 
-      <div className="flex flex-1 overflow-hidden bg-[rgba(10,18,35,0.42)]">
+      <div className="flex min-h-0 flex-1 overflow-hidden bg-[rgba(10,18,35,0.42)]">
         <div
           ref={ws.splitContainerRef}
-          className="flex h-full min-w-0 flex-1 flex-col gap-1.5 p-1.5 lg:flex-row lg:gap-0"
+          className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-1.5 p-1.5 lg:flex-row lg:gap-0"
         >
           {/* Chat panel */}
           <div
@@ -111,6 +112,8 @@ export function PulseWorkspace() {
                   sourcesExpanded={ws.sourcesExpanded}
                   onSourcesExpandedChange={ws.setSourcesExpanded}
                   requestNotice={ws.requestNotice}
+                  resumeSessionId={ws.resumeSessionId}
+                  onClearResumeSession={ws.clearResumeSession}
                 />
                 {ws.pendingOps && ws.pendingValidation && (
                   <PulseOpConfirmation
@@ -125,6 +128,14 @@ export function PulseWorkspace() {
                       ws.setPendingOps(null)
                       ws.setPendingValidation(null)
                     }}
+                  />
+                )}
+                {ws.pendingPermission && (
+                  <PermissionModal
+                    request={ws.pendingPermission}
+                    autoApprove={ws.autoApprovePermissions}
+                    onRespond={ws.handlePermissionResponse}
+                    onDismiss={ws.handlePermissionDismiss}
                   />
                 )}
                 {ws.isDesktop && (

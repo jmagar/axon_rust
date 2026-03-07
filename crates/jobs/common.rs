@@ -147,22 +147,25 @@ pub(crate) fn parse_dotenv_content(content: &str) -> HashMap<String, String> {
 }
 
 #[cfg(test)]
+fn read_dotenv_map() -> HashMap<String, String> {
+    let Ok(content) = fs::read_to_string(".env") else {
+        return HashMap::new();
+    };
+    parse_dotenv_content(&content)
+}
+
+#[cfg(test)]
+fn non_empty_env(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
+
+#[cfg(test)]
+fn non_empty_map(map: &HashMap<String, String>, name: &str) -> Option<String> {
+    map.get(name).cloned().filter(|v| !v.trim().is_empty())
+}
+
+#[cfg(test)]
 pub(crate) fn resolve_test_pg_url() -> Option<String> {
-    fn read_dotenv_map() -> HashMap<String, String> {
-        let Ok(content) = fs::read_to_string(".env") else {
-            return HashMap::new();
-        };
-        parse_dotenv_content(&content)
-    }
-
-    fn non_empty_env(name: &str) -> Option<String> {
-        env::var(name).ok().filter(|v| !v.trim().is_empty())
-    }
-
-    fn non_empty_map(map: &HashMap<String, String>, name: &str) -> Option<String> {
-        map.get(name).cloned().filter(|v| !v.trim().is_empty())
-    }
-
     static RESOLVED_TEST_PG_URL: LazyLock<Option<String>> = LazyLock::new(|| {
         let explicit = non_empty_env("AXON_TEST_PG_URL");
         if let Some(url) = explicit {
@@ -185,24 +188,42 @@ pub(crate) fn resolve_test_pg_url() -> Option<String> {
 
 #[cfg(test)]
 pub(crate) fn resolve_test_amqp_url() -> Option<String> {
+    let explicit = non_empty_env("AXON_TEST_AMQP_URL");
+    if let Some(url) = explicit {
+        return Some(crate::crates::core::config::parse::normalize_local_service_url(url));
+    }
+    let dotenv = read_dotenv_map();
+    if let Some(url) = non_empty_map(&dotenv, "AXON_TEST_AMQP_URL") {
+        return Some(crate::crates::core::config::parse::normalize_local_service_url(url));
+    }
     // Do not fall through to AXON_AMQP_URL — that is the production broker.
-    env::var("AXON_TEST_AMQP_URL")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
+    None
 }
 
 #[cfg(test)]
 pub(crate) fn resolve_test_redis_url() -> Option<String> {
-    env::var("AXON_TEST_REDIS_URL")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
+    let explicit = non_empty_env("AXON_TEST_REDIS_URL");
+    if let Some(url) = explicit {
+        return Some(crate::crates::core::config::parse::normalize_local_service_url(url));
+    }
+    let dotenv = read_dotenv_map();
+    if let Some(url) = non_empty_map(&dotenv, "AXON_TEST_REDIS_URL") {
+        return Some(crate::crates::core::config::parse::normalize_local_service_url(url));
+    }
+    None
 }
 
 #[cfg(test)]
 pub(crate) fn resolve_test_qdrant_url() -> Option<String> {
-    env::var("AXON_TEST_QDRANT_URL")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
+    let explicit = non_empty_env("AXON_TEST_QDRANT_URL");
+    if let Some(url) = explicit {
+        return Some(crate::crates::core::config::parse::normalize_local_service_url(url));
+    }
+    let dotenv = read_dotenv_map();
+    if let Some(url) = non_empty_map(&dotenv, "AXON_TEST_QDRANT_URL") {
+        return Some(crate::crates::core::config::parse::normalize_local_service_url(url));
+    }
+    None
 }
 
 #[cfg(test)]

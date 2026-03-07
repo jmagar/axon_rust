@@ -14,10 +14,13 @@ export function usePulseAutosave(
   documentMarkdown: string,
   documentTitle: string,
   docFilename?: string | null,
+  tabId?: string,
 ) {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [savedFilename, setSavedFilename] = useState<string | null>(docFilename ?? null)
+  const [savedTabId, setSavedTabId] = useState<string | null>(null)
   const filenameRef = useRef<string | null>(docFilename ?? null)
+  const tabIdRef = useRef<string | null>(tabId ?? null)
   // Caches createdAt/updatedAt/tags/collections from last save response — sent back on updates
   // so updatePulseDoc can skip the file read and detect concurrent edits.
   const docMetaRef = useRef<DocMeta | null>(null)
@@ -26,10 +29,15 @@ export function usePulseAutosave(
   const idleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedSnapshotRef = useRef('')
 
+  // Keep tabIdRef in sync so the save closure captures the right tab at trigger time
+  useEffect(() => {
+    tabIdRef.current = tabId ?? null
+  }, [tabId])
+
   // Sync refs when docFilename prop changes (e.g. loading a different file).
   // Only wipe docMetaRef and the snapshot guard when the filename actually changes to a
   // different value — preserves cached metadata when docFilename syncs back the same
-  // value that was already set by the first save (savedFilename → currentDocFilename → prop).
+  // value that was already set by the first save (savedFilename -> currentDocFilename -> prop).
   useEffect(() => {
     const incoming = docFilename ?? null
     if (incoming !== filenameRef.current) {
@@ -48,6 +56,8 @@ export function usePulseAutosave(
     const snapshot = `${documentTitle}\n---\n${documentMarkdown}`
     if (snapshot === lastSavedSnapshotRef.current) return
     autosaveTimerRef.current = setTimeout(() => {
+      // Capture the tab ID at the moment the save fires (not at effect time)
+      const capturedTabId = tabIdRef.current
       void (async () => {
         if (autosaveAbortRef.current) {
           autosaveAbortRef.current.abort()
@@ -90,6 +100,7 @@ export function usePulseAutosave(
             if (data.filename) {
               filenameRef.current = data.filename
               setSavedFilename(data.filename)
+              setSavedTabId(capturedTabId)
             }
             // Cache full metadata for next save
             if (data.createdAt && data.updatedAt && data.tags && data.collections) {
@@ -133,5 +144,5 @@ export function usePulseAutosave(
     }
   }, [])
 
-  return { saveStatus, savedFilename }
+  return { saveStatus, savedFilename, savedTabId }
 }

@@ -1,9 +1,8 @@
 'use client'
 
-import { ChevronDown, ChevronRight, Clock, FolderOpen, Network } from 'lucide-react'
+import { ChevronDown, ChevronRight, FolderOpen, Network } from 'lucide-react'
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
-import { type SessionSummary, useRecentSessions } from '@/hooks/use-recent-sessions'
 import { apiFetch } from '@/lib/api-fetch'
 
 // ---------------------------------------------------------------------------
@@ -109,76 +108,6 @@ function Dim({ children }: { children: React.ReactNode }) {
 }
 
 // ---------------------------------------------------------------------------
-// Sessions card
-// ---------------------------------------------------------------------------
-
-function formatRelativeTime(mtimeMs: number): string {
-  const diff = Math.floor((Date.now() - mtimeMs) / 60_000)
-  if (diff < 1) return 'just now'
-  if (diff < 60) return `${diff}m ago`
-  const h = Math.floor(diff / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
-}
-
-function SessionRow({
-  session,
-  onLoad,
-}: {
-  session: SessionSummary
-  onLoad: (id: string) => Promise<boolean>
-}) {
-  const [loading, setLoading] = useState(false)
-
-  async function handleClick() {
-    if (loading) return
-    setLoading(true)
-    try {
-      await onLoad(session.id)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={() => void handleClick()}
-      disabled={loading}
-      className="flex w-full items-center justify-between rounded px-2 py-1.5 text-left transition-colors disabled:opacity-50 hover:bg-[var(--surface-float)] hover:text-[var(--text-primary)]"
-    >
-      <div className="min-w-0 flex-1">
-        {session.project !== 'tmp' && (
-          <span className="block truncate text-[10px] font-semibold text-[rgba(255,135,175,0.7)]">
-            {session.project}
-          </span>
-        )}
-        <span className="block truncate text-[11px] text-[rgba(220,230,245,0.8)]">
-          {session.preview ??
-            (session.filename.length > 28 ? `${session.filename.slice(0, 28)}…` : session.filename)}
-        </span>
-      </div>
-      <span className="ml-2 shrink-0 text-[10px] text-[rgba(175,215,255,0.3)]">
-        {loading ? '…' : formatRelativeTime(session.mtimeMs)}
-      </span>
-    </button>
-  )
-}
-
-function SessionsContent() {
-  const { sessions, isLoading, loadSession } = useRecentSessions()
-  if (isLoading) return <Dim>Loading…</Dim>
-  if (sessions.length === 0) return <Dim>No recent sessions</Dim>
-  return (
-    <div className="flex flex-col gap-0.5">
-      {sessions.slice(0, 4).map((s) => (
-        <SessionRow key={s.id} session={s} onLoad={loadSession} />
-      ))}
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
 // Files card
 // ---------------------------------------------------------------------------
 
@@ -272,7 +201,7 @@ function McpContent() {
       {servers.map((s) => (
         <Link
           key={s.name}
-          href="/mcp"
+          href="/settings/mcp"
           className="flex items-center justify-between rounded px-2 py-1.5 transition-colors hover:bg-[var(--surface-float)]"
         >
           <span className="flex min-w-0 items-center gap-1.5">
@@ -310,10 +239,7 @@ function McpContent() {
 
 export function LandingCards() {
   return (
-    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-      <Card icon={<Clock />} title="Sessions" storageKey="axon.landing.card.sessions">
-        <SessionsContent />
-      </Card>
+    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
       <Card
         icon={<FolderOpen />}
         title="Files"
@@ -322,7 +248,7 @@ export function LandingCards() {
       >
         <FilesContent />
       </Card>
-      <Card icon={<Network />} title="MCP" href="/mcp" storageKey="axon.landing.card.mcp">
+      <Card icon={<Network />} title="MCP" href="/settings/mcp" storageKey="axon.landing.card.mcp">
         <McpContent />
       </Card>
     </div>

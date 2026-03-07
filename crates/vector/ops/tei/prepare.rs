@@ -52,7 +52,7 @@ pub(super) async fn prepare_embed_docs(
     if docs.len() == 1 && !Path::new(input).exists() && input.starts_with("http") {
         let client = http_client()?.clone();
         let html = fetch_html(&client, input).await?;
-        docs = vec![(input.to_string(), to_markdown(&html))];
+        docs = vec![(input.to_string(), to_markdown(&html, None))];
     }
     let input_is_dir = Path::new(input).is_dir();
     let mut prepared = Vec::new();

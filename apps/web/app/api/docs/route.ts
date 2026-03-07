@@ -4,7 +4,12 @@ import { createInterface } from 'node:readline'
 import { type NextRequest, NextResponse } from 'next/server'
 
 // Normalize once — strips trailing slashes, resolves canonical path
-const OUTPUT_ROOT = path.resolve(process.env.AXON_OUTPUT_DIR ?? '/axon-output')
+const OUTPUT_ROOT = path.resolve(
+  process.env.AXON_OUTPUT_DIR ??
+    (process.env.AXON_DATA_DIR
+      ? path.join(process.env.AXON_DATA_DIR, 'axon/output')
+      : '.cache/axon-rust/output'),
+)
 const MAX_WALK_DEPTH = 8
 
 export interface DocEntry {

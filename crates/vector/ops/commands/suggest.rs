@@ -370,7 +370,7 @@ async fn discover_suggestions_with_context(
     Ok((accepted, rejected_existing, content, ctx))
 }
 
-pub(crate) async fn discover_crawl_suggestions(
+pub async fn discover_crawl_suggestions(
     cfg: &Config,
     focus: &str,
     desired: usize,

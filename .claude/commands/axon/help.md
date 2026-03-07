@@ -1,25 +1,12 @@
 ---
-description: Show Axon help and action usage
-argument-hint: [command]
-allowed-tools: mcp__axon__axon
+description: Show Axon help and available actions
+allowed-tools: mcp__axon__axon, Bash
 ---
 
-# Axon Help
+Use `mcp__axon__axon` directly:
 
-Call the Axon MCP tool (`axon`) with:
-- `action: "help"`
-- map `$ARGUMENTS` to schema fields
+```json
+{ "action": "help" }
+```
 
-## Instructions
-
-1. Execute using the Axon MCP tool (`axon`) with action/subaction routing and mapped arguments.
-2. If no arguments are provided, use top-level help.
-3. Parse the output to highlight available commands and usage examples.
-4. Present the most relevant next command for the user’s goal.
-
-## Expected Output
-
-The command returns CLI help text including:
-- available commands
-- option flags
-- usage patterns
+Returns the live action map — every action, valid subactions, and server defaults. Present actions grouped by type (direct vs lifecycle vs artifacts). Suggest the most relevant action for the user's goal.

@@ -8,7 +8,7 @@ mod thin_refetch;
 mod url_utils;
 
 use crate::crates::core::config::{Config, RenderMode};
-use crate::crates::core::content::build_transform_config;
+use crate::crates::core::content::{build_selector_config, build_transform_config};
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::crawl::manifest::ManifestEntry;
 use collector::{CollectorConfig, collect_crawl_pages};
@@ -51,6 +51,12 @@ pub struct CrawlSummary {
 
 pub fn should_fallback_to_chrome(summary: &CrawlSummary, max_pages: u32, cfg: &Config) -> bool {
     if summary.markdown_files == 0 {
+        return true;
+    }
+    // A single-page crawl does not provide enough HTTP-only signal to judge
+    // whether the captured content is complete, so give AutoSwitch one Chrome
+    // retry even if the page is not technically "thin".
+    if summary.pages_seen == 1 {
         return true;
     }
     let thin_ratio = if summary.pages_seen == 0 {
@@ -303,6 +309,7 @@ pub async fn run_crawl_once(
             transform_cfg,
             progress_tx,
             previous_manifest,
+            selector_config: build_selector_config(cfg),
             chrome_ws_url: inline_chrome_ws_url,
             chrome_timeout_secs: cfg.chrome_network_idle_timeout_secs,
             output_dir: output_dir.to_path_buf(),
@@ -370,6 +377,7 @@ pub async fn run_sitemap_only(
             transform_cfg,
             progress_tx: None,
             previous_manifest,
+            selector_config: build_selector_config(cfg),
             // Sitemap-only crawl: no inline Chrome rendering (HTTP-only path).
             chrome_ws_url: None,
             chrome_timeout_secs: cfg.chrome_network_idle_timeout_secs,

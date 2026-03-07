@@ -12,7 +12,15 @@ use std::error::Error;
 const WATCHDOG_RECLAIM_PREFIX: &str = "watchdog reclaimed stale running ";
 
 pub async fn run_status(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    run_status_impl(cfg).await
+    if cfg.json_output {
+        // JSON path: route through the service layer for a stable payload shape.
+        let result = crate::crates::services::system::full_status(cfg).await?;
+        println!("{}", serde_json::to_string_pretty(&result.payload)?);
+    } else {
+        // Human path: use the detailed per-job renderer for rich terminal output.
+        run_status_impl(cfg).await?;
+    }
+    Ok(())
 }
 
 pub async fn status_snapshot(cfg: &Config) -> Result<serde_json::Value, Box<dyn Error>> {
@@ -71,24 +79,13 @@ struct StatusJobs {
 
 async fn run_status_impl(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let jobs = load_status_jobs(cfg).await?;
-
-    if cfg.json_output {
-        presentation::emit_status_json(
-            &jobs.crawl,
-            &jobs.extract,
-            &jobs.embed,
-            &jobs.ingest,
-            &jobs.refresh,
-        )?;
-    } else {
-        presentation::emit_status_human(
-            &jobs.crawl,
-            &jobs.extract,
-            &jobs.embed,
-            &jobs.ingest,
-            &jobs.refresh,
-        );
-    }
+    presentation::emit_status_human(
+        &jobs.crawl,
+        &jobs.extract,
+        &jobs.embed,
+        &jobs.ingest,
+        &jobs.refresh,
+    );
     Ok(())
 }
 

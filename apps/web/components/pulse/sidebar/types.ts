@@ -1,4 +1,4 @@
-export type SidebarSectionId = 'extracted' | 'workspace'
+export type SidebarSectionId = 'extracted' | 'history' | 'workspace'
 
 export interface SidebarSection {
   id: SidebarSectionId

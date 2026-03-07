@@ -270,6 +270,10 @@ pub struct StatsRequest {}
 pub struct ScrapeRequest {
     pub url: Option<String>,
     pub response_mode: Option<ResponseMode>,
+    /// CSS selector to scope content extraction (e.g. "article, main, .content").
+    pub root_selector: Option<String>,
+    /// CSS selector to exclude elements from extraction (e.g. ".sidebar, .ads").
+    pub exclude_selector: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]

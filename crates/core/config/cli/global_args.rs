@@ -256,6 +256,14 @@ pub(in crate::crates::core::config) struct GlobalArgs {
     #[arg(global = true, long)]
     pub(in crate::crates::core::config) chrome_wait_for_selector: Option<String>,
 
+    /// CSS selector to scope content extraction (e.g. "article, main, .content"). Default: none.
+    #[arg(global = true, long)]
+    pub(in crate::crates::core::config) root_selector: Option<String>,
+
+    /// CSS selector to exclude elements from extraction (e.g. ".sidebar, .ads"). Default: none.
+    #[arg(global = true, long)]
+    pub(in crate::crates::core::config) exclude_selector: Option<String>,
+
     /// Capture full-page PNG screenshots during Chrome crawl.
     #[arg(global = true, long, action = ArgAction::Set, default_value_t = false)]
     pub(in crate::crates::core::config) chrome_screenshot: bool,

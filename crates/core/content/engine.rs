@@ -124,7 +124,7 @@ async fn collect_page_results(
                     return (page_url, Err("fallback limiter closed".to_string()));
                 }
             };
-            let markdown = to_markdown(&html_owned);
+            let markdown = to_markdown(&html_owned, None);
             let res = extract_items_fallback(
                 &client_c, &api_url_c, &api_key_c, &model_c, &prompt_c, &page_url, &markdown,
             )

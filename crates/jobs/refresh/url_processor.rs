@@ -29,16 +29,25 @@ pub(crate) struct RefreshUrlContext<'a> {
 /// non-existent paths, falls back to manual component-level normalization which
 /// catches traversal attempts like `/base/../../../etc` even when the path does
 /// not yet exist on disk.
+/// Make a path absolute by prepending CWD if it is relative.
+fn make_absolute(p: &Path) -> std::path::PathBuf {
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(p)
+    }
+}
+
 pub(crate) async fn validate_output_dir(
     output_dir: &Path,
     base_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let canonical_output = tokio::fs::canonicalize(output_dir)
         .await
-        .unwrap_or_else(|_| normalize_path(output_dir));
+        .unwrap_or_else(|_| normalize_path(&make_absolute(output_dir)));
     let canonical_base = tokio::fs::canonicalize(base_dir)
         .await
-        .unwrap_or_else(|_| normalize_path(base_dir));
+        .unwrap_or_else(|_| normalize_path(&make_absolute(base_dir)));
     if !canonical_output.starts_with(&canonical_base) {
         return Err(format!(
             "output_dir path traversal rejected: {} is outside base {}",

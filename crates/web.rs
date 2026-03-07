@@ -1,10 +1,12 @@
 mod docker_stats;
 mod download;
-mod execute;
+pub mod execute;
 mod pack;
 mod shell;
 
+use crate::crates::core::config::Config;
 use crate::crates::core::logging::log_info;
+use crate::crates::services::acp::PermissionResponderMap;
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Query, State};
@@ -29,6 +31,12 @@ pub(crate) struct AppState {
     /// Same token used by the Next.js proxy for /api/* routes.
     /// None = gate disabled (open WS, trusted-network deployments only).
     api_token: Option<String>,
+    /// Base server config — shared across all connections.
+    ///
+    /// Tasks 5.2 and 5.3 will use this to drive direct service dispatch
+    /// instead of spawning a subprocess.  Carried as `Arc` so WS handler
+    /// tasks can clone a cheap reference without copying the whole struct.
+    pub(crate) cfg: Arc<Config>,
 }
 
 /// Query parameters for the `/ws` upgrade request.
@@ -40,7 +48,7 @@ struct WsQuery {
 // ── Server startup ────────────────────────────────────────────────────────────
 
 /// Start the axum server on the given port, running until interrupted.
-pub async fn start_server(port: u16) -> Result<(), Box<dyn Error>> {
+pub async fn start_server(port: u16, cfg: Arc<Config>) -> Result<(), Box<dyn Error>> {
     let (stats_tx, _) = broadcast::channel::<String>(64);
     let job_dirs: Arc<DashMap<String, PathBuf>> = Arc::new(DashMap::new());
 
@@ -56,6 +64,7 @@ pub async fn start_server(port: u16) -> Result<(), Box<dyn Error>> {
         stats_tx: stats_tx.clone(),
         job_dirs: job_dirs.clone(),
         api_token,
+        cfg,
     });
 
     // Spawn Docker stats poller in background
@@ -78,6 +87,10 @@ pub async fn start_server(port: u16) -> Result<(), Box<dyn Error>> {
         .merge(download_routes);
 
     let host = std::env::var("AXON_SERVE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    log_info(&format!(
+        "Axon web UI starting with AXON_SERVE_HOST={} port={}",
+        host, port
+    ));
     let addr: SocketAddr = format!("{host}:{port}")
         .parse()
         .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], port)));
@@ -219,6 +232,12 @@ struct WsClientMsg {
     id: String,
     #[serde(default)]
     path: String,
+    /// Permission response: the tool_call_id being responded to.
+    #[serde(default)]
+    tool_call_id: String,
+    /// Permission response: the chosen option_id.
+    #[serde(default)]
+    option_id: String,
 }
 
 async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
@@ -233,8 +252,17 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
     // Per-connection state: current async job ID for cancel support
     let crawl_job_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
+    // Per-connection state: permission response channels for active ACP sessions.
+    // Shared between the execute task (which inserts senders) and the WS read
+    // loop (which routes frontend permission_response messages to them).
+    let permission_responders: PermissionResponderMap =
+        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+
     // Shared job_dirs registry for registering completed jobs
     let job_dirs = state.job_dirs.clone();
+
+    // Base config — cloned once per connection, then cheaply per-command via Arc
+    let conn_cfg = state.cfg.clone();
 
     // Subscribe to Docker stats broadcast
     let mut stats_rx = state.stats_tx.subscribe();
@@ -298,13 +326,18 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                 "execute" => {
                     let tx = exec_tx.clone();
                     let job_id = crawl_job_id.clone();
+                    let cmd_cfg = conn_cfg.clone();
+                    let perm_map = permission_responders.clone();
+                    // Move owned Strings into the spawned future.  handle_command
+                    // takes owned String/Value so no &str borrow escapes the spawn
+                    // boundary, satisfying the `Send + 'static` bound for
+                    // tokio::spawn.
+                    let exec_mode = client_msg.mode.clone();
+                    let exec_input = client_msg.input.clone();
+                    let exec_flags = client_msg.flags.clone();
                     tokio::spawn(async move {
                         execute::handle_command(
-                            &client_msg.mode,
-                            &client_msg.input,
-                            &client_msg.flags,
-                            tx,
-                            job_id,
+                            exec_mode, exec_input, exec_flags, tx, job_id, cmd_cfg, perm_map,
                         )
                         .await;
                     });
@@ -313,6 +346,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                     let tx = exec_tx.clone();
                     let job_id_arc = crawl_job_id.clone();
                     let cancel_mode = client_msg.mode.clone();
+                    let cancel_cfg = conn_cfg.clone();
                     tokio::spawn(async move {
                         // Use stored async job ID if available, fall back to client-provided ID
                         let stored = job_id_arc.lock().await.clone();
@@ -324,9 +358,20 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                             }
                         });
                         if let Some(id) = id {
-                            execute::handle_cancel(&cancel_mode, &id, tx).await;
+                            execute::handle_cancel(&cancel_mode, &id, tx, cancel_cfg).await;
                         }
                     });
+                }
+                "permission_response" => {
+                    let tool_call_id = client_msg.tool_call_id;
+                    let option_id = client_msg.option_id;
+                    if !tool_call_id.is_empty() && !option_id.is_empty() {
+                        if let Ok(mut map) = permission_responders.lock() {
+                            if let Some(sender) = map.remove(&tool_call_id) {
+                                let _ = sender.send(option_id);
+                            }
+                        }
+                    }
                 }
                 "read_file" => {
                     if !client_msg.path.is_empty() {

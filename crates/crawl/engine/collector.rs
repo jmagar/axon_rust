@@ -2,11 +2,14 @@ use super::thin_refetch::{
     RefetchResult, THIN_REFETCH_CONCURRENCY, render_html_with_chrome, write_refetch_results,
 };
 use super::{CrawlSummary, canonicalize_url_for_dedupe, is_excluded_url_path};
+use crate::crates::core::content::clean_markdown_whitespace;
 use crate::crates::core::content::url_to_filename;
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::crawl::manifest::ManifestEntry;
 use sha2::{Digest, Sha256};
-use spider_transformations::transformation::content::{TransformInput, transform_content_input};
+use spider_transformations::transformation::content::{
+    SelectorConfiguration, TransformInput, transform_content_input,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -24,6 +27,8 @@ pub(super) struct CollectorConfig {
     pub transform_cfg: &'static spider_transformations::transformation::content::TransformConfig,
     pub progress_tx: Option<Sender<CrawlSummary>>,
     pub previous_manifest: HashMap<String, ManifestEntry>,
+    /// Optional CSS selectors for content scoping (root_selector / exclude_selector).
+    pub selector_config: Option<SelectorConfiguration>,
     /// Pre-resolved Chrome WebSocket URL for inline thin-page re-rendering.
     /// When `Some`, thin pages are immediately re-rendered with Chrome while
     /// the HTTP crawl loop continues receiving more pages — no second pass.
@@ -69,11 +74,11 @@ pub(super) fn process_page(
         content: html_bytes,
         screenshot_bytes: None,
         encoding: None,
-        selector_config: None,
+        selector_config: col.selector_config.as_ref(),
         ignore_tags: None,
     };
     let markdown = transform_content_input(input, col.transform_cfg);
-    let trimmed = markdown.trim().to_string();
+    let trimmed = clean_markdown_whitespace(markdown.trim());
     let chars = trimmed.len();
 
     if chars < col.min_chars {
@@ -271,11 +276,11 @@ async fn apply_page_outcome(
                 content: html_bytes,
                 screenshot_bytes: None,
                 encoding: None,
-                selector_config: None,
+                selector_config: col.selector_config.as_ref(),
                 ignore_tags: None,
             };
             let markdown = transform_content_input(input, col.transform_cfg);
-            let trimmed = markdown.trim().to_string();
+            let trimmed = clean_markdown_whitespace(markdown.trim());
             if !trimmed.is_empty() {
                 let mut hasher = Sha256::new();
                 hasher.update(trimmed.as_bytes());

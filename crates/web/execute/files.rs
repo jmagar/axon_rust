@@ -34,13 +34,20 @@ async fn send_artifact_list_v2(
 }
 
 /// Resolve the output directory for reading crawl results.
-/// Checks `AXON_WORKER_OUTPUT_DIR` first (host path to Docker bind mount),
-/// then `AXON_OUTPUT_DIR`, then the default relative path.
+/// Priority: `AXON_OUTPUT_DIR` → `$AXON_DATA_DIR/axon/output` → `.cache/axon-rust/output`.
 pub fn output_dir() -> PathBuf {
-    std::env::var("AXON_WORKER_OUTPUT_DIR")
-        .or_else(|_| std::env::var("AXON_OUTPUT_DIR"))
+    std::env::var("AXON_OUTPUT_DIR")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(".cache/axon-rust/output"))
+        .or_else(|| {
+            std::env::var("AXON_DATA_DIR")
+                .ok()
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty())
+                .map(|d| PathBuf::from(d).join("axon/output"))
+        })
+        .unwrap_or_else(|| PathBuf::from(".cache/axon-rust/output"))
 }
 
 /// Find the most recently modified `.md` file in a directory.
@@ -63,12 +70,17 @@ async fn newest_md_file(dir: &Path) -> Option<PathBuf> {
 }
 
 /// Send a single scraped markdown file to the frontend.
-pub(super) async fn send_scrape_file(tx: &mpsc::Sender<String>, ctx: &CommandContext) {
+///
+/// Takes `tx` and `ctx` by owned value so callers can pass them without
+/// creating borrows that cross `.await` points in the async state machine.
+/// Both types are cheap to clone — `mpsc::Sender` is a reference-counted
+/// handle and `CommandContext` contains three short `String` fields.
+pub(super) async fn send_scrape_file(tx: mpsc::Sender<String>, ctx: CommandContext) {
     let md_dir = output_dir().join("scrape-markdown");
     match newest_md_file(&md_dir).await {
         Some(path) => match tokio::fs::read_to_string(&path).await {
             Ok(content) => {
-                send_artifact_content_dual(tx, ctx, path.to_string_lossy().into_owned(), content)
+                send_artifact_content_dual(&tx, &ctx, path.to_string_lossy().into_owned(), content)
                     .await;
             }
             Err(e) => {
@@ -129,6 +141,10 @@ pub(super) async fn send_screenshot_files_from_json(
 
 /// Send the crawl manifest file list to the frontend from a job output directory.
 /// When `job_id` is provided, it is included in the `crawl_files` message for download routes.
+// Retained for future use when crawl status polling is wired to the manifest.
+// Previously called from polling.rs (now removed). Will be reactivated when
+// the crawl status command returns manifest info via direct service dispatch.
+#[allow(dead_code)]
 pub(super) async fn send_crawl_manifest(
     job_dir: &Path,
     tx: &mpsc::Sender<String>,

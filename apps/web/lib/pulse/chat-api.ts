@@ -6,6 +6,8 @@
 import { apiFetch } from '@/lib/api-fetch'
 import { parsePulseChatStreamChunk } from '@/lib/pulse/chat-stream'
 import type {
+  AcpConfigOption,
+  PulseAgent,
   PulseChatResponse,
   PulseModel,
   PulsePermissionLevel,
@@ -14,11 +16,25 @@ import type {
 } from '@/lib/pulse/types'
 
 export interface ChatStreamEvent {
-  type: 'status' | 'assistant_delta' | 'tool_use' | 'thinking_content'
+  type:
+    | 'status'
+    | 'assistant_delta'
+    | 'tool_use'
+    | 'tool_use_update'
+    | 'thinking_content'
+    | 'config_options_update'
+    | 'permission_request'
   phase?: 'started' | 'thinking' | 'finalizing'
   delta?: string
   tool?: PulseToolUse
   content?: string
+  configOptions?: AcpConfigOption[]
+  toolCallId?: string
+  status?: string
+  toolName?: string
+  /** ACP permission request fields */
+  sessionId?: string
+  permissionOptions?: string[]
 }
 
 export interface RunChatPromptOptions {
@@ -31,6 +47,7 @@ export interface RunChatPromptOptions {
   activeThreadSources: string[]
   scrapedContext: { url: string; markdown: string } | null
   permissionLevel: PulsePermissionLevel
+  agent: PulseAgent
   model: PulseModel
   effort?: string
   maxTurns?: number
@@ -50,7 +67,11 @@ async function readNdjsonStream(
   response: Response,
   onEvent?: (event: ChatStreamEvent) => void,
 ): Promise<PulseChatResponse> {
-  const reader = response.body!.getReader()
+  const body = response.body
+  if (!body) {
+    throw new Error('Response body is null — cannot stream NDJSON')
+  }
+  const reader = body.getReader()
   const decoder = new TextDecoder()
   let remainder = ''
   let doneResponse: PulseChatResponse | null = null
@@ -80,6 +101,29 @@ async function readNdjsonStream(
       }
       if (event.type === 'tool_use') {
         onEvent?.({ type: 'tool_use', tool: event.tool })
+        continue
+      }
+      if (event.type === 'tool_use_update') {
+        onEvent?.({
+          type: 'tool_use_update',
+          toolCallId: event.toolCallId,
+          status: event.status,
+          content: event.content,
+          toolName: event.toolName,
+        })
+        continue
+      }
+      if (event.type === 'config_options_update') {
+        onEvent?.({ type: 'config_options_update', configOptions: event.configOptions })
+        continue
+      }
+      if (event.type === 'permission_request') {
+        onEvent?.({
+          type: 'permission_request',
+          sessionId: event.sessionId,
+          toolCallId: event.toolCallId,
+          permissionOptions: event.options,
+        })
         continue
       }
       if (event.type === 'error') {
@@ -127,6 +171,7 @@ export async function runChatPrompt(opts: RunChatPromptOptions): Promise<PulseCh
     activeThreadSources,
     scrapedContext,
     permissionLevel,
+    agent,
     model,
     effort,
     maxTurns,
@@ -155,6 +200,7 @@ export async function runChatPrompt(opts: RunChatPromptOptions): Promise<PulseCh
       scrapedContext: scrapedContext ?? undefined,
       conversationHistory,
       permissionLevel,
+      agent,
       model,
       effort,
       maxTurns,

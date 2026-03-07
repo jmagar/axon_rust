@@ -64,7 +64,7 @@ The central state object. Populated once by `into_config()` and passed as `&Conf
 | Auto-switch | `auto_switch_thin_ratio` (0.60), `auto_switch_min_pages` (10) |
 | Spider tuning | `url_whitelist`, `block_assets`, `max_page_bytes`, `redirect_policy_strict`, `bypass_csp`, `accept_invalid_certs`, `custom_headers` |
 | Job watchdog | `watchdog_stale_timeout_secs` (300), `watchdog_confirm_secs` (60) |
-| Web UI | `serve_port` (default 3939) |
+| Web UI | `serve_port` (default 49000, env: `AXON_SERVE_PORT`) |
 
 **Debug redacts secrets:** `Config`'s `fmt::Debug` replaces `pg_url`, `redis_url`, `amqp_url`, `github_token`, `reddit_client_id`, `reddit_client_secret`, `openai_api_key`, `tavily_api_key` with `[REDACTED]`.
 

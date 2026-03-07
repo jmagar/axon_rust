@@ -12,24 +12,6 @@ use crate::crates::jobs::ingest::IngestJob;
 use crate::crates::jobs::refresh::RefreshJob;
 use chrono::{DateTime, Utc};
 
-pub(super) fn emit_status_json(
-    crawl_jobs: &[CrawlJob],
-    extract_jobs: &[ExtractJob],
-    embed_jobs: &[EmbedJob],
-    ingest_jobs: &[IngestJob],
-    refresh_jobs: &[RefreshJob],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let payload = status_payload(
-        crawl_jobs,
-        extract_jobs,
-        embed_jobs,
-        ingest_jobs,
-        refresh_jobs,
-    );
-    println!("{}", serde_json::to_string_pretty(&payload)?);
-    Ok(())
-}
-
 pub(super) fn emit_status_human(
     crawl_jobs: &[CrawlJob],
     extract_jobs: &[ExtractJob],

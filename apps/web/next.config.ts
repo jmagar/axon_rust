@@ -1,7 +1,7 @@
 import type { NextConfig } from 'next'
 
 const axonBackendUrl =
-  process.env.AXON_BACKEND_URL || `http://localhost:${process.env.NEXT_PUBLIC_AXON_PORT || '3939'}`
+  process.env.AXON_BACKEND_URL || `http://localhost:${process.env.NEXT_PUBLIC_AXON_PORT || '49000'}`
 const isDev = process.env.NODE_ENV !== 'production'
 
 const securityHeaders = [

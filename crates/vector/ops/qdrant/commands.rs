@@ -90,20 +90,32 @@ pub async fn run_retrieve_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
 
 pub async fn run_sources_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let facet_limit = env_usize_clamped("AXON_SOURCES_FACET_LIMIT", 100_000, 1, 1_000_000);
-    let sources = qdrant_url_facets(cfg, facet_limit).await?;
+    let pagination = crate::crates::services::types::Pagination {
+        limit: facet_limit,
+        offset: 0,
+    };
+    let result = crate::crates::services::system::sources(cfg, pagination).await?;
+    let url_count = result.urls.len();
     if cfg.json_output {
-        let by_url: BTreeMap<String, usize> = sources.into_iter().collect();
-        println!("{}", serde_json::to_string_pretty(&by_url)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "count": result.count,
+                "limit": result.limit,
+                "offset": result.offset,
+                "urls": result.urls,
+            }))?
+        );
     } else {
         println!("{}", primary("Sources"));
-        for (url, chunks) in &sources {
+        for (url, chunks) in &result.urls {
             println!(
                 "  • {} {}",
                 accent(url),
                 muted(&format!("(chunks: {chunks})"))
             );
         }
-        if sources.len() == facet_limit {
+        if url_count == facet_limit {
             println!(
                 "{}",
                 muted(&format!(
@@ -120,14 +132,16 @@ pub async fn sources_payload(
     limit: usize,
     offset: usize,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
-    let sources = qdrant_url_facets(cfg, (limit + offset).clamp(1, 500)).await?;
+    let facet_cap = env_usize_clamped("AXON_SOURCES_FACET_LIMIT", 100_000, 1, 1_000_000);
+    let fetch = limit.saturating_add(offset).max(1).min(facet_cap);
+    let sources = qdrant_url_facets(cfg, fetch).await?;
     let total = sources.len();
-    let urls = sources
+    let urls: Vec<serde_json::Value> = sources
         .into_iter()
         .skip(offset)
         .take(limit)
-        .map(|(url, _chunks)| url)
-        .collect::<Vec<_>>();
+        .map(|(url, chunks)| serde_json::json!({"url": url, "chunks": chunks}))
+        .collect();
     Ok(serde_json::json!({
         "count": total,
         "limit": limit,
@@ -141,7 +155,9 @@ pub async fn domains_payload(
     limit: usize,
     offset: usize,
 ) -> Result<serde_json::Value, Box<dyn Error>> {
-    let domains = qdrant_domain_facets(cfg, (limit + offset).clamp(1, 500)).await?;
+    let facet_cap = env_usize_clamped("AXON_DOMAINS_FACET_LIMIT", 100_000, 1, 1_000_000);
+    let fetch = limit.saturating_add(offset).max(1).min(facet_cap);
+    let domains = qdrant_domain_facets(cfg, fetch).await?;
     let values = domains
         .into_iter()
         .skip(offset)
@@ -195,9 +211,18 @@ fn render_fast_domain_results(
 
 async fn try_fast_domains(cfg: &Config) -> Result<bool, Box<dyn Error>> {
     let facet_limit = env_usize_clamped("AXON_DOMAINS_FACET_LIMIT", 100_000, 1, 1_000_000);
-    match qdrant_domain_facets(cfg, facet_limit).await {
-        Ok(domains) => {
-            render_fast_domain_results(cfg, domains)?;
+    let pagination = crate::crates::services::types::Pagination {
+        limit: facet_limit,
+        offset: 0,
+    };
+    match crate::crates::services::system::domains(cfg, pagination).await {
+        Ok(result) => {
+            let pairs: Vec<(String, usize)> = result
+                .domains
+                .into_iter()
+                .map(|f| (f.domain, f.vectors))
+                .collect();
+            render_fast_domain_results(cfg, pairs)?;
             Ok(true)
         }
         Err(err) => {

@@ -1,12 +1,32 @@
 # Changelog
-Last Modified: 2026-03-04 (session: post-v0.4.0 stabilization + release prep; CI/test hardening; WS/API token docs and compose/docker updates; services-layer execution plan hardening; v0.4.1)
+Last Modified: 2026-03-07 (session: v0.8.0 — Zed alignment + ACP permission plumbing)
 
-## [Unreleased] — feat/sidebar
+## [Unreleased] — feat/services-layer-refactor
 
-This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`).
+This section documents commits on `feat/services-layer-refactor` relative to `main` (`51a2c9c8`).
 
 ### Highlights
 
+- **Zed alignment + ACP permission plumbing (v0.8.0)** — 5 parallel agents implemented Zed-aligned patterns: session list/resume (`use-pulse-sessions.ts`, `session-store.ts`), tool call terminal rendering (`tool-call-terminal.tsx`), permission modal UI (`permission-modal.tsx`), process exit monitoring, targeted entry updates; `PermissionResponderMap` type wired through WS handler → execute bridge → ACP bridge client using `std::sync::Mutex` + `tokio::sync::oneshot` for cross-runtime communication; `permission_response` WS message type added with `tool_call_id`/`option_id` fields; 60s auto-approve timeout fallback prevents session hangs; `AXON_ACP_AUTO_APPROVE` env var controls behavior (default `true`); 3 pre-existing TS build errors fixed (`route.ts` model type, `claude-stream-types.ts` model lookup, `pulse-chat-helpers.ts` agent type); reboot page scaffolding added; shadcn accordion/collapsible/hover-card/button-group components added
+
+- **CSS selector scoping + markdown cleanup (v0.7.5)** — new `--root-selector` and `--exclude-selector` CLI flags thread `SelectorConfiguration` through all crawl/scrape/embed/sitemap/refresh paths; `build_selector_config()` constructs the config from `Config` fields; `clean_markdown_whitespace()` collapses excessive newlines (3+→2) and horizontal spaces (2+→1) post-transform, applied in collector, cdp_render, thin_refetch, and to_markdown; MCP `ScrapeRequest` gains `root_selector`/`exclude_selector` fields; Pulse debug logging added to omnibox execution, handlePrompt, and workspace prompt dispatch
+
+- **ACP comprehensive review fixes (v0.7.4)** — 30 unique findings fixed across security, performance, and code quality: model argument injection guard (`validate_model_string`), env allowlist in `spawn_adapter` (env_clear + 12 vars), 5-minute adapter lifecycle timeout, `LogLevel` enum replacing raw strings (30+ call sites), `try_send` event loss logging, double mutex → single lock, `std::fs` → `tokio::fs`, dead code removal, duplicate function merge, `Serialize` derives on all ACP types with serde rename, hand-rolled JSON → `serde_json::to_value`, channel capacity 32→256, `toolsRestrict` regex tightened to match backend `TOOL_ENTRY_RE`, `--dangerously-skip-permissions` gated behind `AXON_ALLOW_SKIP_PERMISSIONS`, `response.body!` null guard, localStorage Zod validation, `handlePrompt` split 268→155 lines, dual config state unified, config probe caching (60s TTL), 5 localStorage effects consolidated to 2
+
+- **Regression tests for ACP env isolation (v0.7.3)** — `tests/services_acp_spawn_env.rs` (3 tests) locks in `spawn_adapter()` env stripping: `CLAUDECODE`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` must never leak to child process; uses process-level `Mutex` to serialize env mutations; `#![allow(unsafe_code)]` at file scope with `#[allow(clippy::await_holding_lock)]` per test; credentials staged into `axon-web` via `16-materialize-agent-credentials` cont-init.d
+
+- **Pulse Chat local dev fixed (v0.7.2)** — two root causes identified and fixed: (1) `CLAUDECODE` env var inherited from parent Claude Code session blocked `claude-agent-acp` from spawning the `claude` CLI ("Claude Code cannot be launched inside another Claude Code session") — fixed by `command.env_remove("CLAUDECODE")` in `spawn_adapter()`; (2) `acp.rs` was double-wrapping `assistant_text` in a JSON object before passing it as `AcpTurnResultEvent.result`, causing `parseClaudeAssistantPayload` to extract raw JSON instead of the assistant's text — fixed by passing `assistant_text` directly; added `17-materialize-claude-credentials` cont-init.d for Docker credential staging; `docker-compose.yaml` mounts host Claude credentials read-only into workers container; `constants.rs` updated with Pulse Chat WS mode constant
+
+- **Services layer refactor complete (v0.5.0)** — `crates/services/` is now the single source of business logic; CLI/MCP/WS are thin transport adapters; `crawl`/`extract`/`embed` modes use fire-and-forget direct service enqueue (no subprocess); `github`/`reddit`/`youtube` remain on subprocess fallback due to `!Send` constraint; `polling.rs` deleted; 971 tests passing
+- **PR review threads fully resolved (v0.7.1)** — all 154 review threads on `feat/services-layer-refactor` addressed across 10 batches; fixes cover security hardening (env mutation serialization, port binding to localhost), stale React ref cleanup (`isBackgroundRef` on background error), `AbortController` dedup via `tabsRef`, trivial wrapper removal (`map_map_payload` inlined), and a range of typed errors, fail-fast mappers, probe uniqueness, MCP error sanitization, and flag validation
+- **Pulse ACP agent selection + routing (v0.7.0)** — Pulse UI now supports selecting `claude`/`codex`; selection persists in workspace state/localStorage; `/api/pulse/chat` forwards `agent` to ws flags; `pulse_chat` sync mode resolves per-agent ACP adapter env overrides (`AXON_ACP_CLAUDE_ADAPTER_*`, `AXON_ACP_CODEX_ADAPTER_*`) with fallback to shared `AXON_ACP_ADAPTER_*`; replay cache key now includes `agent` to prevent cross-agent replay collisions
+- **Scrape/embed stabilization** — fixed scrape page selection and constrained embed operations to the current run for deterministic indexing behavior
+- **Release v0.6.0** — web workspace/sidebar updates landed with TEI retry behavior hardening and release/documentation refresh
+- **Editor tab bar + tabs hook** — new `apps/web/components/editor-tab-bar.tsx`, `apps/web/hooks/use-tabs.ts`, `apps/web/lib/pending-tab.ts`, `apps/web/lib/result-to-markdown.ts` for multi-tab editor UX
+- **CmdK palette improvements** — `CmdKOutput`, `CmdKPalette`, `cmdk-palette-dialog.tsx`, `cmdk-palette-types.ts` updated for better JSON/output display
+- **MCP common.rs expansion** — `crates/mcp/server/common.rs` (+99 lines) with shared helpers; `handlers_system.rs` updated
+- **Scripts + docker hardening** — `scripts/cache-guard.sh`, `scripts/check_docker_context_size.sh`, `scripts/check_dockerignore_guards.sh` added; `docker-compose.yaml`, `.dockerignore`, `scripts/rebuild-fresh.sh`, `lefthook.yml`, `Justfile` updated
+- **Docs updated** — `docs/MCP-TOOL-SCHEMA.md`, `docs/OPERATIONS.md`, `docs/TESTING.md`, `README.md`, `.env.example` refreshed
 - **Post-v0.4.0 stabilization** — fixed MCP OAuth smoke env handling and serialized crawl DB tests to reduce flakes; fixed 4 failing CI checks; pinned Vitest timezone (`TZ=UTC`) and refreshed snapshots for deterministic test output
 - **Release prep + execution hardening (v0.4.1)** — updated web/container/docs env wiring and token guidance (`AXON_WEB_API_TOKEN`/`NEXT_PUBLIC_AXON_API_TOKEN`), refreshed Docker/compose defaults, and fully hardened the services-layer refactor execution plan with strict preflight, safety rails, and parallel-worker dispatch protocol
 - **Full codebase security & quality review (v0.4.0)** — comprehensive 5-phase review covering 244 Rust + 424 TypeScript files; 40 Phase 1 findings (3 Critical, 7 High, 17 Medium, 13 Low) + 17 CodeRabbit findings all addressed; WS OAuth bearer token gating added; all `format!` SQL → parameterized queries (H-03); `Secret<T>` wrapper with `[REDACTED]` debug; `ConfigOverrides` + sub-config scaffolding (A-H-01); `Config::test_default()` (CR-Q); ANTHROPIC_API_KEY + CLAUDE_* passthrough in child env allowlist (H-02/CR-D); `spawn_blocking` replaces `block_in_place` in MCP ask handler (CR-E); token rotation race fixed (CR-F); OAuth state capacity caps (H-05/CR-K); `apply_overrides` returns new `Config` (CR-M); `ServiceUrls` Debug redacts secrets (CR-L); migration table for `axon_session_ingest_state` (CR-B); arch docs for A-H-01/A-M-01/A-M-04/A-M-08
@@ -70,7 +90,54 @@ This section documents commits on `feat/sidebar` relative to `main` (`51a2c9c8`)
 
 | Commit | Type | Message |
 |---|---|---|
-| *(this commit)* | chore(release) | v0.4.1; stage pending web/docker/docs updates; harden services-layer refactor execution plan and dispatch safety |
+| `pending` | feat | Zed alignment patterns + ACP permission plumbing (v0.8.0) |
+| `24e25081` | feat | add --root-selector/--exclude-selector + clean_markdown_whitespace (v0.7.5) |
+| `9c38b0fa` | refactor | split monolith-violating files (route.ts, use-pulse-chat.ts) |
+| `8d4603b7` | feat | address all ACP review findings (v0.7.4) |
+| `4d3d2a9a` | feat | address all ACP review findings (v0.7.4) |
+| `edabb90a` | test | regression tests for ACP env isolation (v0.7.3) |
+| `7368ddb7` | fix | stage claude/codex credentials into axon-web container |
+| `107d2a6c` | fix | remove pulse_chat direct-dispatch flags from ALLOWED_FLAGS |
+| `a017bb28` | chore | v0.7.1 — address all PR review threads (batches 1-10) |
+| `2ae80ede` | fix | address PR review batch 10 — thread-safety, stale ref, and cleanup |
+| `98f0d817` | fix | address remaining CodeRabbit review comments (batch 9) |
+| `b464c3ab` | fix | address frontend PR review comments (batch 8) |
+| `cb708b2a` | fix | decouple services layer from CLI commands (screenshot + map) |
+| `68ff42c9` | fix | bind infra ports to localhost, fix nginx CORS, pin TEI retry env vars in tests |
+| `e2f8bd90` | fix | address PR review batch 5 — typed errors, fail-fast mappers, probe uniqueness |
+| `e933160c` | fix | address PR review feedback (batch 4 - frontend) |
+| `5359faba` | fix | address PR review feedback (batch 3) |
+| `2ad79b93` | fix | address PR review feedback (batch 2) |
+| `6fde4d77` | fix | address PR review threads — dead code, render modes, service hardening |
+| `54075260` | fix(review) | arrow fns, session id, proxy headers, pulse chat, chunk fix, dispatch split |
+| `b787c7ba` | fix(review) | mode ref routing, log visibility, facet limit clamps |
+| `e7b3e249` | fix(review) | address PR comments — MCP error sanitization, event field names, cancel safety, flag validation |
+| `477f44a0` | fix(pr) | address review comments — security, correctness, and flag propagation |
+| `de90c337` | feat(release) | v0.7.0; Pulse agent selector (claude/codex), ACP adapter routing, ws/api wiring, replay-key hardening |
+| `baf24e5e` | fix(scrape) | select requested page and scope embed to current run |
+| `4d5b0cb5` | feat(release) | v0.6.0 — web workspace/sidebar updates + TEI retry fixes |
+| `f90d123a` | feat(release) | v0.5.0 — services-layer refactor complete + editor tabs + CmdK + scripts |
+| `4e5144a3` | chore(web) | remove dead code from services layer refactor |
+| `14b62d49` | feat(web) | fire-and-forget async dispatch and cancel via services |
+| `476ad35b` | feat(web) | replace sync subprocess execution with direct service dispatch |
+| `fe83d0a9` | fix(web) | replace dead Some(other) arm with unreachable! in render_mode match |
+| `ed2bd90d` | refactor(web) | plumb base Config and ws override mapping for direct service dispatch |
+| `dae2b0b1` | test(mcp) | pin map_retrieve_result data contract — chunk_count in wrapper element |
+| `e93df53e` | fix(mcp) | correct retrieve chunk_count and research error class |
+| `fb485043` | fix(mcp) | preserve sources wire contract — urls remains string[] in MCP response |
+| `03996f72` | fix(mcp) | use option mapper helpers in system and query handlers |
+| `38f0a53d` | refactor(mcp) | rewire handlers to use services layer |
+| `d146571f` | refactor(mcp) | add request-to-service option mappers |
+| `e4f81653` | fix(services) | address quality review issues from Wave 2 |
+| `7f91caf2` | refactor(cli) | route system/stats/doctor/status handlers through services |
+| `196ab300` | refactor(cli) | route query scrape search lifecycle and ingest handlers through services |
+| `a802ff87` | feat(services) | implement query services (query/retrieve/ask/evaluate/suggest) |
+| `c76fe394` | feat(services) | implement scrape/map/search/research services |
+| `5a6f0393` | feat(services) | implement system services (sources/domains/stats/doctor/status/dedupe) |
+| `475aa3da` | feat(services) | scaffold services module and events/types base |
+| `cd42ee57` | docs(plan) | record baseline verification for services refactor |
+| `58c66e29` | fix(docker) | expose service ports and restore external MCP reachability |
+| *(prev)* | chore(release) | v0.4.1; stage pending web/docker/docs updates; harden services-layer refactor execution plan and dispatch safety |
 | `b71fd7fd` | test | fix mcp-oauth-smoke missing env vars and serialize crawl DB tests |
 | `25e2287f` | fix(ci) | fix 4 failing CI checks |
 | `05238113` | fix(web) | set TZ=UTC in vitest config and update snapshot timestamps |

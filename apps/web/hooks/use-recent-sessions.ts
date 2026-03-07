@@ -21,53 +21,82 @@ interface ParsedMessage {
 interface SessionContentResponse {
   project: string
   filename: string
+  sessionId: string
   messages: ParsedMessage[]
 }
 
-const MAX_SESSION_MESSAGES = 50
-
-function buildHandoffPrompt(project: string, messages: ParsedMessage[]): string {
-  const capped = messages.slice(-MAX_SESSION_MESSAGES)
-  const header = `I'm loading a previous Claude Code session from project: **${project}**. Here is the conversation history:`
-  const body = capped.map((m) => `### ${m.role.toUpperCase()}:\n${m.content}`).join('\n\n')
-  return `${header}\n\n${body}`
+function dedupeSessions(list: SessionSummary[]): SessionSummary[] {
+  const seen = new Map<string, SessionSummary>()
+  for (const session of list) {
+    const key = session.filename
+    const existing = seen.get(key)
+    if (!existing) {
+      seen.set(key, session)
+      continue
+    }
+    if (session.mtimeMs > existing.mtimeMs) {
+      seen.set(key, session)
+      continue
+    }
+    if (session.mtimeMs === existing.mtimeMs) {
+      if (existing.project === 'tmp' && session.project !== 'tmp') {
+        seen.set(key, session)
+      }
+    }
+  }
+  return Array.from(seen.values()).sort((a, b) => b.mtimeMs - a.mtimeMs)
 }
 
 export function useRecentSessions() {
-  const { submitWorkspacePrompt } = useWsMessageActions()
+  const { resumeWorkspaceSession } = useWsMessageActions()
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    apiFetch('/api/sessions/list')
-      .then((r) => r.json() as Promise<SessionSummary[]>)
-      .then((data) => {
-        if (!cancelled) setSessions(Array.isArray(data) ? data : [])
+  const reload = useCallback(async () => {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 8_000)
+    setIsLoading(true)
+    setError(null)
+    try {
+      const response = await apiFetch('/api/sessions/list', {
+        signal: controller.signal,
       })
-      .catch(() => {
-        if (!cancelled) setSessions([])
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false)
-      })
-    return () => {
-      cancelled = true
+      if (!response.ok) {
+        setSessions([])
+        setError(`Failed to load sessions (${response.status})`)
+        return
+      }
+      const data = (await response.json()) as SessionSummary[]
+      setSessions(Array.isArray(data) ? dedupeSessions(data) : [])
+    } catch {
+      setSessions([])
+      setError('Failed to load sessions')
+    } finally {
+      clearTimeout(timeout)
+      setIsLoading(false)
     }
   }, [])
 
+  useEffect(() => {
+    void reload()
+  }, [reload])
+
   const loadSession = useCallback(
     async (id: string): Promise<boolean> => {
-      const r = await apiFetch(`/api/sessions/${id}`)
-      if (!r.ok) return false
-      const data = (await r.json()) as SessionContentResponse
-      if (data.messages.length === 0) return false
-      const prompt = buildHandoffPrompt(data.project, data.messages)
-      submitWorkspacePrompt(prompt)
-      return true
+      try {
+        const r = await apiFetch(`/api/sessions/${id}`)
+        if (!r.ok) return false
+        const data = (await r.json()) as SessionContentResponse
+        if (!data.sessionId) return false
+        resumeWorkspaceSession(data.sessionId)
+        return true
+      } catch {
+        return false
+      }
     },
-    [submitWorkspacePrompt],
+    [resumeWorkspaceSession],
   )
 
-  return { sessions, isLoading, loadSession }
+  return { sessions, isLoading, error, loadSession, reload }
 }

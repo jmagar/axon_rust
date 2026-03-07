@@ -1,4 +1,9 @@
-import type { PulseModel, PulsePermissionLevel } from '@/lib/pulse/types'
+import type {
+  AcpConfigOption,
+  PulseAgent,
+  PulseModel,
+  PulsePermissionLevel,
+} from '@/lib/pulse/types'
 import type { WsLifecycleEntry, WsServerMsg } from '@/lib/ws-protocol'
 
 export interface LogLine {
@@ -46,7 +51,8 @@ export interface WorkspaceContextState {
   contextCharsTotal: number
   contextBudgetChars: number
   lastLatencyMs: number
-  model: 'sonnet' | 'opus' | 'haiku'
+  agent: PulseWorkspaceAgent
+  model: PulseWorkspaceModel
   permissionLevel: 'plan' | 'accept-edits' | 'bypass-permissions'
   saveStatus?: 'idle' | 'saving' | 'saved' | 'error'
 }
@@ -55,6 +61,8 @@ export interface WorkspaceContextState {
 export type PulseWorkspaceModel = PulseModel
 /** @deprecated Use PulsePermissionLevel from @/lib/pulse/types directly */
 export type PulseWorkspacePermission = PulsePermissionLevel
+/** @deprecated Use PulseAgent from @/lib/pulse/types directly */
+export type PulseWorkspaceAgent = PulseAgent
 
 export interface WsMessagesRuntimeState {
   currentJobId: string | null
@@ -108,13 +116,21 @@ export interface WsMessagesContextValue {
   workspaceMode: string | null
   workspacePrompt: string | null
   workspacePromptVersion: number
+  workspaceResumeSessionId: string | null
+  workspaceResumeVersion: number
   workspaceContext: WorkspaceContextState | null
   pulseModel: PulseWorkspaceModel
   pulsePermissionLevel: PulseWorkspacePermission
+  acpConfigOptions: AcpConfigOption[]
+  pulseAgent: PulseWorkspaceAgent
+  setPulseAgent: (agent: PulseWorkspaceAgent) => void
   setPulseModel: (model: PulseWorkspaceModel) => void
   setPulsePermissionLevel: (level: PulseWorkspacePermission) => void
+  setAcpConfigOptions: (options: AcpConfigOption[]) => void
   activateWorkspace: (mode: string) => void
   submitWorkspacePrompt: (prompt: string) => void
+  resumeWorkspaceSession: (sessionId: string) => void
+  clearWorkspaceResumeSession: () => void
   deactivateWorkspace: () => void
   updateWorkspaceContext: (context: WorkspaceContextState | null) => void
   startExecution: (mode: string, input?: string, options?: { preserveWorkspace?: boolean }) => void
@@ -144,17 +160,25 @@ export interface WsMessagesWorkspaceState {
   workspaceMode: WsMessagesContextValue['workspaceMode']
   workspacePrompt: WsMessagesContextValue['workspacePrompt']
   workspacePromptVersion: WsMessagesContextValue['workspacePromptVersion']
+  workspaceResumeSessionId: WsMessagesContextValue['workspaceResumeSessionId']
+  workspaceResumeVersion: WsMessagesContextValue['workspaceResumeVersion']
   workspaceContext: WsMessagesContextValue['workspaceContext']
   pulseModel: WsMessagesContextValue['pulseModel']
   pulsePermissionLevel: WsMessagesContextValue['pulsePermissionLevel']
+  pulseAgent: WsMessagesContextValue['pulseAgent']
+  acpConfigOptions: WsMessagesContextValue['acpConfigOptions']
 }
 
 export interface WsMessagesActions {
   selectFile: WsMessagesContextValue['selectFile']
+  setPulseAgent: WsMessagesContextValue['setPulseAgent']
   setPulseModel: WsMessagesContextValue['setPulseModel']
   setPulsePermissionLevel: WsMessagesContextValue['setPulsePermissionLevel']
+  setAcpConfigOptions: WsMessagesContextValue['setAcpConfigOptions']
   activateWorkspace: WsMessagesContextValue['activateWorkspace']
   submitWorkspacePrompt: WsMessagesContextValue['submitWorkspacePrompt']
+  resumeWorkspaceSession: WsMessagesContextValue['resumeWorkspaceSession']
+  clearWorkspaceResumeSession: WsMessagesContextValue['clearWorkspaceResumeSession']
   deactivateWorkspace: WsMessagesContextValue['deactivateWorkspace']
   updateWorkspaceContext: WsMessagesContextValue['updateWorkspaceContext']
   startExecution: WsMessagesContextValue['startExecution']

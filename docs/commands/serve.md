@@ -15,7 +15,7 @@ All global flags apply. Key flags for this command:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port <n>` | `3939` | Port for the serve backend. |
+| `--port <n>` | `49000` | Port for the serve backend. Env: `AXON_SERVE_PORT`. |
 
 Host binding is controlled by `AXON_SERVE_HOST` (default `127.0.0.1`).
 
@@ -29,11 +29,11 @@ Host binding is controlled by `AXON_SERVE_HOST` (default `127.0.0.1`).
 ## Examples
 
 ```bash
-# Default localhost bind on :3939
+# Default localhost bind on :49000
 axon serve
 
 # Custom port
-axon serve --port 49000
+axon serve --port 8080
 
 # Bind all interfaces (for reverse proxy/container use)
 AXON_SERVE_HOST=0.0.0.0 axon serve --port 49000

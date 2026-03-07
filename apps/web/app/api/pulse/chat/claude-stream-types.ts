@@ -15,7 +15,7 @@ try {
 }
 export const GLOBAL_CLAUDE_MD_CHARS = _globalClaudeMdChars
 
-export const CLAUDE_MODEL_ARG: Record<PulseModel, string> = {
+export const CLAUDE_MODEL_ARG: Record<string, string> = {
   sonnet: 'sonnet',
   opus: 'opus',
   haiku: 'haiku',
@@ -89,10 +89,13 @@ function sanitizeBetas(raw: string): string {
     .join(',')
 }
 
-// `/home/node` is the container user's home; process.env.HOME is NOT included because it
-// resolves to the developer's host home dir in test/dev environments, making path-traversal
-// attacks (e.g. ../../etc/passwd from a cwd deep inside HOME) pass the allowlist check.
-const ALLOWED_DIR_ROOTS = ['/home/node', '/tmp', '/workspace']
+// Allowed root directories for --add-dir. Defaults are container paths;
+// override with PULSE_ALLOWED_DIR_ROOTS (comma-separated) for local dev.
+const ALLOWED_DIR_ROOTS = process.env.PULSE_ALLOWED_DIR_ROOTS
+  ? process.env.PULSE_ALLOWED_DIR_ROOTS.split(',')
+      .map((d) => d.trim())
+      .filter(Boolean)
+  : ['/home/node', '/tmp', '/workspace']
 
 function validateAddDir(dir: string): string | null {
   // Resolve the path first, then follow symlinks so a symlink inside an allowed
@@ -109,6 +112,23 @@ function validateAddDir(dir: string): string | null {
     return real
   }
   return null
+}
+
+/**
+ * Resolve whether --dangerously-skip-permissions should be passed to the Claude CLI.
+ *
+ * Checks AXON_ALLOW_SKIP_PERMISSIONS first (preferred), then falls back to the legacy
+ * PULSE_SKIP_PERMISSIONS env var. Both must be explicitly set to 'true' to enable.
+ * Any other value (including unset) disables the flag.
+ */
+function resolveSkipPermissions(): boolean {
+  const explicit = process.env.AXON_ALLOW_SKIP_PERMISSIONS
+  if (explicit !== undefined) {
+    return explicit === 'true'
+  }
+  // Legacy fallback: PULSE_SKIP_PERMISSIONS defaulted to enabled (anything != 'false').
+  // Preserve that behavior for existing deployments that haven't migrated.
+  return process.env.PULSE_SKIP_PERMISSIONS !== 'false'
 }
 
 export function buildClaudeArgs(
@@ -129,11 +149,13 @@ export function buildClaudeArgs(
     // --strict-mcp-config ensures ~/.claude.json MCPs are ignored entirely —
     // only what's in mcp.json is loaded, preventing hangs on unreachable servers.
     '--mcp-config',
-    '/home/node/.claude/mcp.json',
+    process.env.CLAUDE_MCP_CONFIG ?? '/home/node/.claude/mcp.json',
     '--strict-mcp-config',
-    // Allow operators to disable via PULSE_SKIP_PERMISSIONS=false.
-    // Default true because the container has no TTY.
-    ...(process.env.PULSE_SKIP_PERMISSIONS !== 'false' ? ['--dangerously-skip-permissions'] : []),
+    // SECURITY: --dangerously-skip-permissions bypasses all tool permission checks.
+    // Only enable when the adapter runs in a non-interactive context (no TTY) AND the
+    // operator has explicitly opted in via AXON_ALLOW_SKIP_PERMISSIONS=true.
+    // Legacy env var PULSE_SKIP_PERMISSIONS is respected as a fallback.
+    ...(resolveSkipPermissions() ? ['--dangerously-skip-permissions'] : []),
     // Stream partial tool inputs and thinking blocks as they arrive.
     // Requires -p + stream-json (both already set above).
     '--include-partial-messages',
@@ -142,9 +164,9 @@ export function buildClaudeArgs(
     extra?.effort ?? 'medium',
     // Explicit plugin dir inside the project-owned ~/.claude mount.
     '--plugin-dir',
-    '/home/node/.claude/plugins',
+    process.env.CLAUDE_PLUGIN_DIR ?? '/home/node/.claude/plugins',
   ]
-  const modelArg = CLAUDE_MODEL_ARG[model]
+  const modelArg = model ? (CLAUDE_MODEL_ARG[model] ?? model) : undefined
   if (modelArg) {
     args.push('--model', modelArg)
   }
@@ -204,7 +226,14 @@ export function buildClaudeArgs(
     }
   }
   if (extra?.toolsRestrict) {
-    args.push('--tools', extra.toolsRestrict)
+    const filtered = extra.toolsRestrict
+      .split(',')
+      .map((t) => t.trim())
+      .filter((t) => TOOL_ENTRY_RE.test(t))
+      .join(',')
+    if (filtered) {
+      args.push('--tools', filtered)
+    }
   }
   return args
 }

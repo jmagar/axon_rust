@@ -4,5 +4,6 @@ pub mod crawl;
 pub mod ingest;
 pub mod jobs;
 pub mod mcp;
+pub mod services;
 pub mod vector;
 pub mod web;

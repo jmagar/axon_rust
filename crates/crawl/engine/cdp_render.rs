@@ -4,7 +4,7 @@
 //! using `Page.setContent()` — no second HTTP request. Used by the collector
 //! to recover thin pages while the HTTP crawl is still in progress.
 
-use crate::crates::core::content::build_transform_config;
+use crate::crates::core::content::{build_transform_config, clean_markdown_whitespace};
 use crate::crates::core::logging::log_warn;
 use futures_util::{SinkExt, StreamExt};
 use spider_transformations::transformation::content::{TransformInput, transform_content_input};
@@ -367,7 +367,7 @@ pub(super) async fn render_html_with_chrome(
         ignore_tags: None,
     };
     let markdown = transform_content_input(input, transform_cfg);
-    let trimmed = markdown.trim().to_string();
+    let trimmed = clean_markdown_whitespace(markdown.trim());
 
     if trimmed.len() < min_chars {
         None

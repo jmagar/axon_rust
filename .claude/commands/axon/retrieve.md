@@ -1,24 +1,15 @@
 ---
 description: Retrieve full document from vector database by URL
-argument-hint: <url> [--collection name]
-allowed-tools: mcp__axon__axon
+argument-hint: <url>
+allowed-tools: mcp__axon__axon, Bash
 ---
 
-# Retrieve Full Document
+Use `mcp__axon__axon` directly:
 
-Call the Axon MCP tool (`axon`) with:
-- `action: "retrieve"`
-- map `$ARGUMENTS` to schema fields
+```json
+{ "action": "retrieve", "url": "<url from $ARGUMENTS>" }
+```
 
-## Instructions
+Optional: `max_points` (int), `response_mode`.
 
-1. Execute using the Axon MCP tool (`axon`) with action/subaction routing and mapped arguments.
-2. Parse reconstructed content, metadata, and chunk count.
-3. Present full content and completeness signals.
-
-## Expected Output
-
-The command returns:
-- reconstructed document content
-- source URL and metadata
-- chunk reassembly details
+Present reconstructed content, chunk count, and source metadata. If no chunks found, suggest scraping or crawling the URL first.

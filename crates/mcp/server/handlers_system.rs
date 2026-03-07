@@ -1,8 +1,9 @@
 use super::AxonMcpServer;
 use super::common::{
-    MCP_TOOL_SCHEMA_URI, ensure_artifact_root, internal_error, invalid_params, line_count,
-    parse_limit_usize, parse_offset, parse_response_mode, resolve_artifact_output_path,
-    respond_with_mode, sha256_hex, validate_artifact_path,
+    MCP_TOOL_SCHEMA_URI, artifact_root, ensure_artifact_root, invalid_params, line_count,
+    logged_internal_error, parse_limit_usize, parse_offset, parse_response_mode,
+    resolve_artifact_output_path, respond_with_mode, sha256_hex, to_pagination,
+    validate_artifact_path,
 };
 use crate::crates::cli::commands::screenshot::{
     spider_screenshot_with_options, url_to_screenshot_filename,
@@ -12,8 +13,7 @@ use crate::crates::mcp::schema::{
     ArtifactsRequest, ArtifactsSubaction, AxonToolResponse, DoctorRequest, DomainsRequest,
     HelpRequest, ScreenshotRequest, SourcesRequest, StatsRequest,
 };
-use crate::crates::vector::ops::qdrant::{domains_payload, sources_payload};
-use crate::crates::vector::ops::stats_payload;
+use crate::crates::services::system;
 use rmcp::ErrorData;
 use std::fs;
 
@@ -39,7 +39,7 @@ impl AxonMcpServer {
         let bytes =
             spider_screenshot_with_options(&self.cfg, &normalized, width, height, full_page)
                 .await
-                .map_err(|e| internal_error(e.to_string()))?;
+                .map_err(|e| logged_internal_error("operation", e))?;
 
         let path = if let Some(output) = req.output {
             resolve_artifact_output_path(&output)?
@@ -51,11 +51,11 @@ impl AxonMcpServer {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
-                .map_err(|e| internal_error(e.to_string()))?;
+                .map_err(|e| logged_internal_error("operation", e))?;
         }
         tokio::fs::write(&path, &bytes)
             .await
-            .map_err(|e| internal_error(e.to_string()))?;
+            .map_err(|e| logged_internal_error("operation", e))?;
 
         Ok(AxonToolResponse::ok(
             "screenshot",
@@ -79,7 +79,7 @@ impl AxonMcpServer {
             .as_deref()
             .ok_or_else(|| invalid_params("path is required for artifacts operations"))?;
         let path = validate_artifact_path(path)?;
-        let text = fs::read_to_string(&path).map_err(|e| internal_error(e.to_string()))?;
+        let text = fs::read_to_string(&path).map_err(|e| logged_internal_error("operation", e))?;
 
         match req.subaction {
             ArtifactsSubaction::Head => {
@@ -194,7 +194,7 @@ impl AxonMcpServer {
                 ],
                 "defaults": {
                     "response_mode": "path",
-                    "artifact_dir": ".cache/axon-mcp"
+                    "artifact_dir": artifact_root()
                 }
             }),
         )
@@ -204,23 +204,29 @@ impl AxonMcpServer {
         &self,
         _req: DoctorRequest,
     ) -> Result<AxonToolResponse, ErrorData> {
-        let payload = crate::crates::cli::commands::doctor::build_doctor_report(self.cfg.as_ref())
+        let result = system::doctor(self.cfg.as_ref())
             .await
-            .map_err(|e| internal_error(e.to_string()))?;
-
-        Ok(AxonToolResponse::ok("doctor", "doctor", payload))
+            .map_err(|e| logged_internal_error("operation", e))?;
+        Ok(AxonToolResponse::ok("doctor", "doctor", result.payload))
     }
 
     pub(super) async fn handle_domains(
         &self,
         req: DomainsRequest,
     ) -> Result<AxonToolResponse, ErrorData> {
-        let limit = parse_limit_usize(req.limit, 25, 500);
-        let offset = parse_offset(req.offset);
+        let pagination = to_pagination(req.limit.or(Some(25)), req.offset);
         let response_mode = parse_response_mode(req.response_mode);
-        let payload = domains_payload(self.cfg.as_ref(), limit, offset)
+        let result = system::domains(self.cfg.as_ref(), pagination)
             .await
-            .map_err(|e| internal_error(e.to_string()))?;
+            .map_err(|e| logged_internal_error("operation", e))?;
+        let payload = serde_json::json!({
+            "limit": result.limit,
+            "offset": result.offset,
+            "domains": result.domains.iter().map(|d| serde_json::json!({
+                "domain": d.domain,
+                "vectors": d.vectors,
+            })).collect::<Vec<_>>(),
+        });
         respond_with_mode("domains", "domains", response_mode, "domains", payload)
     }
 
@@ -228,12 +234,18 @@ impl AxonMcpServer {
         &self,
         req: SourcesRequest,
     ) -> Result<AxonToolResponse, ErrorData> {
-        let limit = parse_limit_usize(req.limit, 25, 500);
-        let offset = parse_offset(req.offset);
+        let pagination = to_pagination(req.limit.or(Some(25)), req.offset);
         let response_mode = parse_response_mode(req.response_mode);
-        let payload = sources_payload(self.cfg.as_ref(), limit, offset)
+        let result = system::sources(self.cfg.as_ref(), pagination)
             .await
-            .map_err(|e| internal_error(e.to_string()))?;
+            .map_err(|e| logged_internal_error("operation", e))?;
+        let payload = serde_json::json!({
+            "count": result.count,
+            "limit": result.limit,
+            "offset": result.offset,
+            // Wire contract: urls is string[] (chunk counts are service-layer internal)
+            "urls": result.urls.iter().map(|(url, _chunks)| url).collect::<Vec<_>>(),
+        });
         respond_with_mode("sources", "sources", response_mode, "sources", payload)
     }
 
@@ -241,10 +253,9 @@ impl AxonMcpServer {
         &self,
         _req: StatsRequest,
     ) -> Result<AxonToolResponse, ErrorData> {
-        let stats = stats_payload(self.cfg.as_ref())
+        let result = system::stats(self.cfg.as_ref())
             .await
-            .map_err(|e| internal_error(e.to_string()))?;
-
-        Ok(AxonToolResponse::ok("stats", "stats", stats))
+            .map_err(|e| logged_internal_error("operation", e))?;
+        Ok(AxonToolResponse::ok("stats", "stats", result.payload))
     }
 }

@@ -2,7 +2,7 @@
 # One repo-relative path per line, no globs.
 # Add a ticket/date in comments when possible, then remove quickly.
 # Temporary file-level exceptions for monolith policy.
-# One repo-relative path per line, no globs. 
+# One repo-relative path per line, no globs.
 # Every entry MUST have an expiry date — CI fails without one.
 # Max 7 days out. Expired entries also fail CI.
 #
@@ -17,3 +17,18 @@ crates/mcp/server/oauth_google/helpers.rs  # expires: 2026-03-11
 
 # expires: 2026-03-11 — evaluate.rs 901L: run_parallel_answers_streaming (188L) needs splitting
 crates/vector/ops/commands/evaluate.rs  # expires: 2026-03-11
+
+# expires: 2026-03-12 — ACP rollout; split pending in follow-up.
+crates/services/acp.rs  # expires: 2026-03-12
+crates/web/execute/sync_mode.rs  # expires: 2026-03-12
+
+# expires: 2026-03-12 — pre-existing size from services-layer-refactor PR; split pending.
+apps/web/app/jobs/[id]/page.tsx  # expires: 2026-03-12
+apps/web/hooks/use-ws-messages.ts  # expires: 2026-03-12
+apps/web/components/pulse/pulse-chat-pane.tsx  # expires: 2026-03-12
+
+# expires: 2026-03-14 — Zed alignment: reboot shell + WS handler; split pending.
+apps/web/components/reboot/reboot-shell.tsx  # expires: 2026-03-14
+crates/web.rs  # expires: 2026-03-14
+apps/web/components/reboot/lobe-shell.tsx  # expires: 2026-03-14
+apps/web/components/reboot/workflow-shell.tsx  # expires: 2026-03-14

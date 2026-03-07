@@ -7,6 +7,14 @@ cd "$repo_root"
 sha="$(git rev-parse HEAD)"
 echo "Rebuilding axon-web + axon-workers at git SHA: $sha"
 
+if [[ "${AXON_AUTO_CACHE_GUARD:-true}" == "true" ]]; then
+  "$repo_root/scripts/cache-guard.sh" prune
+fi
+
+if [[ "${AXON_ENFORCE_DOCKER_CONTEXT_PROBE:-true}" == "true" ]]; then
+  "$repo_root/scripts/check_docker_context_size.sh"
+fi
+
 AXON_GIT_SHA="$sha" docker compose up -d --build --force-recreate axon-workers axon-web
 
 echo

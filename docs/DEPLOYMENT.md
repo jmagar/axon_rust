@@ -59,10 +59,20 @@ Ensure `.env` is never committed. `.env.example` remains tracked.
 docker compose build
 ```
 
-1. Start stack:
+1. Start infrastructure (workers and web run locally, not in Docker):
 
 ```bash
-docker compose up -d
+docker compose up -d axon-postgres axon-redis axon-rabbitmq axon-qdrant axon-chrome
+```
+
+Then start workers and web locally:
+
+```bash
+# Each in a separate terminal
+cargo run --bin axon -- crawl worker
+cargo run --bin axon -- embed worker
+cargo run --bin axon -- extract worker
+cd apps/web && pnpm dev
 ```
 
 1. Verify health:
@@ -81,13 +91,17 @@ docker compose ps
 
 1. Observe workers:
 
+Workers run in the foreground locally — output is in the terminal directly. For infra logs:
+
 ```bash
-docker compose logs --tail=200 axon-workers
+docker compose logs --tail=200 axon-postgres axon-redis axon-rabbitmq axon-qdrant
 ```
 
 ## Validation Checklist
 
-- All containers report healthy.
+- All infra containers report healthy (postgres, redis, rabbitmq, qdrant, chrome).
+- Worker processes are running in their terminals.
+- Web frontend is reachable at http://localhost:49010.
 - `doctor` passes critical services.
 - At least one sync command succeeds (`scrape`).
 - At least one async command enqueues and reaches terminal state.
@@ -113,8 +127,10 @@ docker compose down
 
 ```bash
 docker compose build
-docker compose up -d
+docker compose up -d axon-postgres axon-redis axon-rabbitmq axon-qdrant axon-chrome
 ```
+
+Restart workers and web locally as in the standard deploy procedure.
 
 1. Re-run validation checklist.
 

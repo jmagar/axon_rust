@@ -54,6 +54,8 @@ axon refresh schedule worker
 axon refresh schedule run-due [--batch N]
 ```
 
+`refresh schedule` is a compatibility surface backed by top-level watch definitions (`task_type=refresh`). You can continue using the same commands/scripts; schedule rows are bridged to watch scheduler state.
+
 `refresh schedule add` requires at least one of:
 
 - `[seed_url]`
@@ -101,3 +103,4 @@ axon refresh schedule run-due --batch 50 --json
 - `refresh worker` is the refresh job consumer lane.
 - `refresh schedule worker` is the scheduler loop that periodically runs due-schedule sweeps.
 - `schedule run-due` dispatches due schedules immediately and reports claimed/dispatched/skipped/failed counts.
+- For new automation, prefer `axon watch ...` for scheduler-first workflows and treat `refresh schedule` as a compatibility alias.

@@ -196,6 +196,12 @@ export function DoctorDashboard() {
           )}
         </>
       )}
+
+      {!loading && !error && !data && (
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-base)] px-4 py-3 text-[12px] text-[var(--text-dim)]">
+          Doctor payload is empty. Try Refresh.
+        </div>
+      )}
     </div>
   )
 }

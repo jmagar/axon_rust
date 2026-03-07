@@ -216,7 +216,9 @@ interface PaletteDialogProps {
   handleSelectMode: (mode: ModeDefinition) => void
   handleExecute: () => void
   closeToIdle: () => void
+  minimizeToBackground: () => void
   cancelAndClose: () => void
+  handleOpenInEditor: () => void
 }
 
 export function PaletteDialog({
@@ -228,9 +230,13 @@ export function PaletteDialog({
   handleSelectMode,
   handleExecute,
   closeToIdle,
+  minimizeToBackground,
   cancelAndClose,
+  handleOpenInEditor,
 }: PaletteDialogProps) {
-  const onBackdropClick = state.phase === 'running' ? cancelAndClose : closeToIdle
+  // Running: backdrop dismiss minimizes to background (keeps job alive)
+  // Done/select/input: backdrop closes
+  const onBackdropClick = state.phase === 'running' ? minimizeToBackground : closeToIdle
 
   return (
     <>
@@ -292,6 +298,7 @@ export function PaletteDialog({
             mode={state.selectedMode}
             lines={state.lines}
             jsonCount={state.jsonCount}
+            capturedJson={state.capturedJson}
             progress={state.progress}
             exitCode={state.exitCode}
             errorMsg={state.errorMsg}
@@ -299,6 +306,8 @@ export function PaletteDialog({
             jobId={state.jobId}
             onDismiss={closeToIdle}
             onCancel={cancelAndClose}
+            onMinimize={minimizeToBackground}
+            onOpenInEditor={handleOpenInEditor}
             phase={state.phase}
           />
         )}

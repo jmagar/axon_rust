@@ -47,7 +47,7 @@ export function ToggleRow({
   id: string
   label: string
   description: string
-  cliFlag: string
+  cliFlag?: string
   checked: boolean
   onChange: (v: boolean) => void
 }) {
@@ -59,10 +59,15 @@ export function ToggleRow({
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-medium text-[var(--text-secondary)]">{label}</p>
         <p className="mt-0.5 text-[11px] text-[var(--text-dim)]">
-          {description}{' '}
-          <code className="rounded bg-[rgba(175,215,255,0.07)] px-1 py-0.5 font-mono text-[10px] text-[var(--text-muted)]">
-            {cliFlag}
-          </code>
+          {description}
+          {cliFlag && (
+            <>
+              {' '}
+              <code className="rounded bg-[rgba(175,215,255,0.07)] px-1 py-0.5 font-mono text-[10px] text-[var(--text-muted)]">
+                {cliFlag}
+              </code>
+            </>
+          )}
         </p>
       </div>
       <button

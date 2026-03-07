@@ -154,6 +154,30 @@ RUN set -eux; \
     echo "${ytdlp_sha512}  /usr/local/bin/yt-dlp" | sha512sum --check; \
     chmod +x /usr/local/bin/yt-dlp
 
+# Install ACP adapters as standalone binaries (no Node.js runtime required).
+ARG CLAUDE_ACP_VERSION=0.19.2
+ARG CODEX_ACP_VERSION=0.9.5
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) \
+        claude_asset="claude-agent-acp-linux-x64.tar.gz"; \
+        codex_asset="codex-acp-${CODEX_ACP_VERSION}-x86_64-unknown-linux-gnu.tar.gz" ;; \
+      arm64) \
+        claude_asset="claude-agent-acp-linux-arm64.tar.gz"; \
+        codex_asset="codex-acp-${CODEX_ACP_VERSION}-aarch64-unknown-linux-gnu.tar.gz" ;; \
+      *) echo "Unsupported arch: $arch"; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/claude-agent-acp.tar.gz \
+      "https://github.com/zed-industries/claude-agent-acp/releases/download/v${CLAUDE_ACP_VERSION}/${claude_asset}"; \
+    tar -xzf /tmp/claude-agent-acp.tar.gz -C /tmp; \
+    install -m 0755 /tmp/claude-agent-acp /usr/local/bin/claude-agent-acp; \
+    curl -fsSL -o /tmp/codex-acp.tar.gz \
+      "https://github.com/zed-industries/codex-acp/releases/download/v${CODEX_ACP_VERSION}/${codex_asset}"; \
+    tar -xzf /tmp/codex-acp.tar.gz -C /tmp; \
+    install -m 0755 /tmp/codex-acp /usr/local/bin/codex-acp; \
+    rm -rf /tmp/claude-agent-acp.tar.gz /tmp/codex-acp.tar.gz /tmp/claude-agent-acp /tmp/codex-acp
+
 COPY --from=builder /usr/local/bin/axon-release /usr/local/bin/axon
 
 COPY docker/s6/cont-init.d/ /etc/cont-init.d/
@@ -165,6 +189,7 @@ RUN groupadd -r axon && useradd -r -g axon -u 1001 -d /home/axon -m axon \
     && find /etc/s6-overlay/s6-rc.d -type f -name run -exec chmod +x {} + \
     && find /etc/s6-overlay/s6-rc.d -type f -name finish -exec chmod +x {} + \
     && chmod +x /usr/local/bin/healthcheck-workers.sh \
+    && mkdir -p /home/axon/.claude /home/axon/.codex /home/axon/.gemini \
     && mkdir -p \
         /var/log/axon/crawl-worker \
         /var/log/axon/batch-worker \
@@ -174,7 +199,7 @@ RUN groupadd -r axon && useradd -r -g axon -u 1001 -d /home/axon -m axon \
         /var/log/axon/claude-session \
         /var/log/axon/claude-watcher \
         /app/logs \
-    && chown -R axon:axon /var/log/axon /app
+    && chown -R axon:axon /var/log/axon /app /home/axon
 
 # NOTE: s6-overlay v3 requires root for /init (PID 1) to manage process
 # supervision. Workers drop privileges via s6-setuidgid in their run scripts.

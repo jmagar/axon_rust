@@ -9,10 +9,8 @@ import {
   CheckCircle2,
   Clock,
   ExternalLink,
-  RotateCcw,
 } from 'lucide-react'
 import Link from 'next/link'
-import { useState } from 'react'
 import type { Job, JobStatus, JobType, StatusCounts } from '@/app/api/jobs/route'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -73,6 +71,10 @@ const TYPE_STYLES: Record<JobType, { chip: string; dot: string }> = {
   ingest: {
     chip: 'text-[#fb7185] bg-[rgba(251,113,133,0.1)] border border-[rgba(251,113,133,0.25)]',
     dot: '#fb7185',
+  },
+  refresh: {
+    chip: 'text-[#34d399] bg-[rgba(52,211,153,0.1)] border border-[rgba(52,211,153,0.25)]',
+    dot: '#34d399',
   },
 }
 
@@ -244,24 +246,13 @@ export function SkeletonRow() {
       <td className="px-3 py-2.5">
         <div className={`${shimmer} h-3 w-16`} />
       </td>
-      <td className="px-3 py-2.5">
-        <div className={`${shimmer} h-5 w-14 rounded`} />
-      </td>
     </tr>
   )
 }
 
 // ── 5. JOB ROW with hover actions ────────────────────────────────────────────
 
-export function JobRow({
-  job,
-  onCancel,
-}: {
-  job: Job
-  onCancel: (id: string, type: JobType) => void
-}) {
-  const [hovered, setHovered] = useState(false)
-  const canCancel = job.status === 'pending' || job.status === 'running'
+export function JobRow({ job }: { job: Job }) {
   const { relative, absolute } = formatRelativeTime(job.startedAt)
   const truncated = smartTruncate(job.target)
 
@@ -269,8 +260,6 @@ export function JobRow({
     <tr
       className="group border-b border-[var(--border-subtle)] transition-colors duration-100 hover:bg-[rgba(135,175,255,0.04)]"
       title={job.errorText ?? undefined}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
     >
       <td className="px-3 py-2.5">
         <TypeChip type={job.type} />
@@ -304,40 +293,6 @@ export function JobRow({
         title={absolute}
       >
         {relative}
-      </td>
-      <td className="w-20 px-3 py-2.5">
-        <div
-          className={`flex items-center gap-0.5 transition-opacity duration-150 ${hovered ? 'opacity-100' : 'opacity-0'}`}
-        >
-          {canCancel && (
-            <button
-              type="button"
-              onClick={() => onCancel(job.id, job.type)}
-              className="rounded p-1 text-[var(--text-dim)] transition-colors hover:bg-[rgba(255,135,175,0.12)] hover:text-[var(--axon-secondary)] focus-visible:outline-2 focus-visible:outline-[var(--focus-ring-color)] focus-visible:outline-offset-1"
-              title="Cancel job"
-              aria-label="Cancel job"
-            >
-              <Ban className="size-3.5" />
-            </button>
-          )}
-          {job.status === 'failed' && (
-            <button
-              type="button"
-              className="rounded p-1 text-[var(--text-dim)] transition-colors hover:bg-[rgba(251,191,36,0.12)] hover:text-[#fbbf24] focus-visible:outline-2 focus-visible:outline-[var(--focus-ring-color)] focus-visible:outline-offset-1"
-              title="Retry (not yet supported)"
-              aria-label="Retry job"
-            >
-              <RotateCcw className="size-3.5" />
-            </button>
-          )}
-          <Link
-            href={`/jobs/${job.id}`}
-            className="rounded p-1 text-[var(--text-dim)] transition-colors hover:bg-[rgba(135,175,255,0.1)] hover:text-[var(--axon-primary)]"
-            title="View details"
-          >
-            <ExternalLink className="size-3.5" />
-          </Link>
-        </div>
       </td>
     </tr>
   )

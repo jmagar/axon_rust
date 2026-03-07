@@ -2,7 +2,10 @@ use super::super::cli::{Cli, CliCommand, RefreshScheduleSubcommand, RefreshSubco
 use super::super::types::{CommandKind, Config, EvaluateResponsesMode, RedditSort, RedditTime};
 use super::docker::normalize_local_service_url;
 use super::excludes;
-use super::helpers::{parse_viewport, positional_from_job, positional_from_refresh_subcommand};
+use super::helpers::{
+    parse_viewport, positional_from_job, positional_from_refresh_subcommand,
+    positional_from_watch_subcommand,
+};
 use super::performance;
 use std::env;
 
@@ -24,7 +27,7 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
     let mut sessions_codex = false;
     let mut sessions_gemini = false;
     let mut sessions_project = None;
-    let mut serve_port = 3939u16;
+    let mut serve_port = 49000u16;
     let (command, positional) = match cli.command {
         CliCommand::Scrape(args) => (CommandKind::Scrape, args.positional_urls),
         CliCommand::Crawl(args) => (
@@ -33,6 +36,14 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
                 positional_from_job(job)
             } else {
                 args.positional_urls
+            },
+        ),
+        CliCommand::Watch(args) => (
+            CommandKind::Watch,
+            if let Some(action) = args.action {
+                positional_from_watch_subcommand(action)
+            } else {
+                vec!["list".to_string()]
             },
         ),
         CliCommand::Refresh(args) => (
@@ -329,6 +340,14 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
             .openai_model
             .or_else(|| env::var("OPENAI_MODEL").ok())
             .unwrap_or_default(),
+        acp_adapter_cmd: env::var("AXON_ACP_ADAPTER_CMD")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
+        acp_adapter_args: env::var("AXON_ACP_ADAPTER_ARGS")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
         tavily_api_key: env::var("TAVILY_API_KEY").ok().unwrap_or_default(),
         ask_diagnostics,
         evaluate_responses_mode,
@@ -411,6 +430,8 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
         },
         redirect_policy_strict: global.redirect_policy_strict,
         chrome_wait_for_selector: global.chrome_wait_for_selector,
+        root_selector: global.root_selector,
+        exclude_selector: global.exclude_selector,
         chrome_screenshot: global.chrome_screenshot,
         research_depth: global.research_depth,
         search_time_range: global.search_time_range,
@@ -452,6 +473,17 @@ pub(super) fn into_config(cli: Cli) -> Result<Config, String> {
     }
     cfg.crawl_broadcast_buffer_min = ps.broadcast_buffer_min;
     cfg.crawl_broadcast_buffer_max = ps.broadcast_buffer_max;
+
+    // Derive output_dir from AXON_DATA_DIR when still at the clap default.
+    // This unifies local dev and Docker: both write to $AXON_DATA_DIR/axon/output.
+    if cfg.output_dir == std::path::Path::new(".cache/axon-rust/output") {
+        if let Ok(data_dir) = env::var("AXON_DATA_DIR") {
+            let data_dir = data_dir.trim();
+            if !data_dir.is_empty() {
+                cfg.output_dir = std::path::PathBuf::from(data_dir).join("axon/output");
+            }
+        }
+    }
 
     Ok(cfg)
 }

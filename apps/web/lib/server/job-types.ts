@@ -1,4 +1,4 @@
-export const JOB_TYPES = ['crawl', 'extract', 'embed', 'ingest'] as const
+export const JOB_TYPES = ['crawl', 'extract', 'embed', 'ingest', 'refresh'] as const
 export type JobType = (typeof JOB_TYPES)[number]
 
 export const JOB_STATUSES = ['pending', 'running', 'completed', 'failed', 'canceled'] as const

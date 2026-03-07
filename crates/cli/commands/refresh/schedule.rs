@@ -10,6 +10,7 @@ use crate::crates::jobs::refresh::{
     delete_refresh_schedule, list_refresh_schedules, mark_refresh_schedule_ran_with_pool,
     set_refresh_schedule_enabled, start_refresh_job_with_pool,
 };
+use crate::crates::jobs::watch::{WatchDefCreate, create_watch_def, list_watch_defs};
 use chrono::{Duration, Utc};
 use std::error::Error;
 use tokio::time::Duration as TokioDuration;
@@ -161,6 +162,22 @@ async fn handle_refresh_schedule_add(cfg: &Config) -> Result<(), Box<dyn Error>>
         next_run_at,
     };
     let created = create_refresh_schedule(cfg, &schedule).await?;
+    let watch_payload = serde_json::json!({
+        "seed_url": created.seed_url,
+        "urls": created.urls_json,
+    });
+    create_watch_def(
+        cfg,
+        &WatchDefCreate {
+            name: created.name.clone(),
+            task_type: "refresh".to_string(),
+            task_payload: watch_payload,
+            every_seconds: created.every_seconds,
+            enabled: created.enabled,
+            next_run_at: created.next_run_at,
+        },
+    )
+    .await?;
 
     if cfg.json_output {
         println!("{}", serde_json::to_string_pretty(&created)?);
@@ -177,7 +194,30 @@ async fn handle_refresh_schedule_add(cfg: &Config) -> Result<(), Box<dyn Error>>
 }
 
 async fn handle_refresh_schedule_list(cfg: &Config) -> Result<(), Box<dyn Error>> {
-    let schedules = list_refresh_schedules(cfg, 200).await?;
+    let (watch_defs, legacy_schedules) =
+        tokio::try_join!(list_watch_defs(cfg, 500), list_refresh_schedules(cfg, 200))?;
+    let mut seen = std::collections::HashSet::new();
+    let mut schedules: Vec<serde_json::Value> = watch_defs
+        .into_iter()
+        .filter(|w| w.task_type == "refresh")
+        .map(|w| {
+            seen.insert(w.name.clone());
+            serde_json::json!({
+                "name": w.name,
+                "enabled": w.enabled,
+                "every_seconds": w.every_seconds,
+            })
+        })
+        .collect();
+    for s in legacy_schedules {
+        if !seen.contains(&s.name) {
+            schedules.push(serde_json::json!({
+                "name": s.name,
+                "enabled": s.enabled,
+                "every_seconds": s.every_seconds,
+            }));
+        }
+    }
     if cfg.json_output {
         println!("{}", serde_json::to_string_pretty(&schedules)?);
         return Ok(());
@@ -190,7 +230,15 @@ async fn handle_refresh_schedule_list(cfg: &Config) -> Result<(), Box<dyn Error>
     }
 
     for schedule in schedules {
-        let status = if schedule.enabled {
+        let enabled = schedule
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let name = schedule
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<unknown>");
+        let status = if enabled {
             status_text("running")
         } else {
             status_text("paused")
@@ -198,7 +246,7 @@ async fn handle_refresh_schedule_list(cfg: &Config) -> Result<(), Box<dyn Error>
         println!(
             "  {} {} {}",
             symbol_for_status("pending"),
-            accent(&schedule.name),
+            accent(name),
             status
         );
     }

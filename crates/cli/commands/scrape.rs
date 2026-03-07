@@ -1,7 +1,7 @@
 use super::common::parse_urls;
 use crate::crates::core::config::{Config, RenderMode, ScrapeFormat};
 use crate::crates::core::content::{
-    extract_meta_description, find_between, to_markdown, url_to_filename,
+    build_selector_config, extract_meta_description, find_between, to_markdown, url_to_filename,
 };
 use crate::crates::core::http::{normalize_url, ssrf_blacklist_patterns, validate_url};
 use crate::crates::core::logging::log_done;
@@ -9,10 +9,11 @@ use crate::crates::core::ui::{muted, primary, print_option, print_phase};
 use crate::crates::vector::ops::embed_path_native;
 use futures_util::future::join_all;
 use spider::compact_str::CompactString;
-use spider::page::Page;
 use spider::website::Website;
 use std::error::Error;
 use std::time::Duration;
+use tokio::time::sleep;
+use uuid::Uuid;
 
 /// Build a Spider Website configured for a single-page scrape.
 ///
@@ -80,6 +81,151 @@ fn build_scrape_website(cfg: &Config, url: &str) -> Result<Website, Box<dyn Erro
     Ok(website)
 }
 
+#[derive(Debug)]
+struct ScrapedPage {
+    url: String,
+    html: String,
+    status_code: u16,
+}
+
+fn canonical_url_for_match(input: &str) -> String {
+    input
+        .split('#')
+        .next()
+        .unwrap_or(input)
+        .split('?')
+        .next()
+        .unwrap_or(input)
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
+fn host_from_url(input: &str) -> Option<&str> {
+    let (_, rest) = input.split_once("://")?;
+    Some(rest.split('/').next().unwrap_or(rest))
+}
+
+fn last_path_segment(input: &str) -> Option<&str> {
+    let without_fragment = input.split('#').next().unwrap_or(input);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
+    without_query.split('/').rfind(|s| !s.is_empty())
+}
+
+fn page_matches_requested_url(requested_url: &str, page_url: &str) -> bool {
+    let requested_canon = canonical_url_for_match(requested_url);
+    let page_canon = canonical_url_for_match(page_url);
+    if requested_canon == page_canon {
+        return true;
+    }
+
+    // docs.rs and similar doc hosts often redirect `/latest/.../foo.html` to
+    // a concrete version path while preserving the terminal file name.
+    if let (Some(req_host), Some(page_host), Some(req_last), Some(page_last)) = (
+        host_from_url(&requested_canon),
+        host_from_url(&page_canon),
+        last_path_segment(&requested_canon),
+        last_path_segment(&page_canon),
+    ) {
+        return req_host.eq_ignore_ascii_case(page_host)
+            && req_last.eq_ignore_ascii_case(page_last)
+            && req_last.contains(".html");
+    }
+
+    false
+}
+
+fn pick_best_page_for_url(
+    requested_url: &str,
+    mut candidates: Vec<ScrapedPage>,
+) -> Option<ScrapedPage> {
+    if let Some(index) = candidates
+        .iter()
+        .position(|p| page_matches_requested_url(requested_url, &p.url))
+    {
+        return Some(candidates.swap_remove(index));
+    }
+    candidates.into_iter().next()
+}
+
+async fn direct_fetch_requested_page(
+    cfg: &Config,
+    requested_url: &str,
+) -> Result<ScrapedPage, Box<dyn Error>> {
+    let mut builder = reqwest::Client::builder();
+    if let Some(timeout_ms) = cfg.request_timeout_ms {
+        builder = builder.timeout(Duration::from_millis(timeout_ms));
+    }
+    if cfg.accept_invalid_certs {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+    if let Some(ua) = cfg.chrome_user_agent.as_deref() {
+        builder = builder.user_agent(ua);
+    }
+    if let Some(proxy) = cfg.chrome_proxy.as_deref().filter(|p| !p.trim().is_empty()) {
+        builder = builder.proxy(reqwest::Proxy::all(proxy)?);
+    }
+    if !cfg.custom_headers.is_empty() {
+        let mut map = reqwest::header::HeaderMap::new();
+        for raw in &cfg.custom_headers {
+            if let Some((k, v)) = raw.split_once(": ") {
+                if let (Ok(name), Ok(val)) = (
+                    reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                    reqwest::header::HeaderValue::from_str(v),
+                ) {
+                    map.insert(name, val);
+                }
+            }
+        }
+        if !map.is_empty() {
+            builder = builder.default_headers(map);
+        }
+    }
+    // Validate each redirect target through the SSRF blacklist so a public URL
+    // cannot redirect to a private/internal address and bypass the guard.
+    // Preserve reqwest's default redirect cap (10) to prevent infinite loops.
+    builder = builder.redirect(reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 10 {
+            return attempt.error("too many redirects");
+        }
+        let url = attempt.url().as_str().to_string();
+        if validate_url(&url).is_err() {
+            attempt.error(format!("SSRF: redirect to blocked URL {url}"))
+        } else {
+            attempt.follow()
+        }
+    }));
+    let client = builder.build()?;
+    let attempts = cfg.fetch_retries.saturating_add(1).max(1);
+    let mut last_err: Option<String> = None;
+    for attempt in 1..=attempts {
+        match client.get(requested_url).send().await {
+            Ok(resp) => {
+                let status_code = resp.status().as_u16();
+                let html = resp.text().await?;
+                return Ok(ScrapedPage {
+                    url: requested_url.to_string(),
+                    html,
+                    status_code,
+                });
+            }
+            Err(err) => {
+                last_err = Some(err.to_string());
+                if attempt < attempts {
+                    sleep(Duration::from_millis(cfg.retry_backoff_ms)).await;
+                }
+            }
+        }
+    }
+    Err(format!(
+        "direct fetch fallback failed for {requested_url}: {}",
+        last_err.unwrap_or_else(|| "unknown error".to_string())
+    )
+    .into())
+}
+
 /// Fetch a single page from a configured Spider `Website`.
 ///
 /// Uses explicit `subscribe()` + `crawl_raw()`/`crawl()` instead of Spider's
@@ -87,22 +233,53 @@ fn build_scrape_website(cfg: &Config, url: &str) -> Result<Website, Box<dyn Erro
 /// `scrape_raw()` uses a biased-select internally: for fast single-page fetches
 /// the done channel fires before the page receiver gets a turn, so `get_pages()`
 /// comes back empty. Owning the subscription ourselves avoids this race entirely.
-async fn fetch_single_page(cfg: &Config, website: &mut Website) -> Result<Page, Box<dyn Error>> {
+async fn fetch_single_page(
+    cfg: &Config,
+    website: &mut Website,
+    requested_url: &str,
+) -> Result<ScrapedPage, Box<dyn Error>> {
     let mut rx = website
         .subscribe(16)
         .ok_or("failed to subscribe to spider broadcast")?;
     // Spawn the collector BEFORE the crawl so it is ready to receive the broadcast.
-    let collect: tokio::task::JoinHandle<Option<Page>> =
-        tokio::spawn(async move { rx.recv().await.ok() });
+    let collect: tokio::task::JoinHandle<Vec<ScrapedPage>> = tokio::spawn(async move {
+        let mut pages = Vec::new();
+        while let Ok(page) = rx.recv().await {
+            pages.push(ScrapedPage {
+                url: page.get_url().to_string(),
+                html: page.get_html(),
+                status_code: page.status_code.as_u16(),
+            });
+        }
+        pages
+    });
     match cfg.render_mode {
         RenderMode::Http | RenderMode::AutoSwitch => website.crawl_raw().await,
         RenderMode::Chrome => website.crawl().await,
     }
     website.unsubscribe();
-    collect
+    let mut candidates = collect
         .await
-        .map_err(|e| format!("page collector panicked: {e}"))?
-        .ok_or_else(|| "spider returned no page for this URL".into())
+        .map_err(|e| format!("page collector panicked: {e}"))?;
+
+    // Include any pages retained by Spider internals and prefer a URL that
+    // matches the requested target over whichever page arrived first.
+    if let Some(pages) = website.get_pages() {
+        candidates.extend(pages.iter().map(|page| ScrapedPage {
+            url: page.get_url().to_string(),
+            html: page.get_html(),
+            status_code: page.status_code.as_u16(),
+        }));
+    }
+    let Some(selected) = pick_best_page_for_url(requested_url, candidates) else {
+        return direct_fetch_requested_page(cfg, requested_url).await;
+    };
+
+    if page_matches_requested_url(requested_url, &selected.url) {
+        Ok(selected)
+    } else {
+        direct_fetch_requested_page(cfg, requested_url).await
+    }
 }
 
 /// Build the canonical 5-field JSON response for a scraped page.
@@ -114,7 +291,7 @@ fn build_scrape_json(url: &str, html: &str, status_code: u16) -> serde_json::Val
     serde_json::json!({
         "url": url,
         "status_code": status_code,
-        "markdown": to_markdown(html),
+        "markdown": to_markdown(html, None),
         "title": find_between(html, "<title>", "</title>").unwrap_or(""),
         "description": extract_meta_description(html).unwrap_or_default(),
     })
@@ -133,7 +310,7 @@ pub(crate) fn select_output(
     status_code: u16,
 ) -> Result<String, Box<dyn Error>> {
     match format {
-        ScrapeFormat::Markdown => Ok(to_markdown(html)),
+        ScrapeFormat::Markdown => Ok(to_markdown(html, None)),
         ScrapeFormat::Html | ScrapeFormat::RawHtml => Ok(html.to_string()),
         ScrapeFormat::Json => Ok(serde_json::to_string_pretty(&build_scrape_json(
             url,
@@ -148,11 +325,10 @@ pub async fn scrape_payload(cfg: &Config, url: &str) -> Result<serde_json::Value
     validate_url(&normalized)?;
 
     let mut website = build_scrape_website(cfg, &normalized)?;
-    let page = fetch_single_page(cfg, &mut website).await?;
-
-    let html = page.get_html();
-    let status_code = page.status_code.as_u16();
-    if !page.status_code.is_success() {
+    let page = fetch_single_page(cfg, &mut website, &normalized).await?;
+    let html = page.html;
+    let status_code = page.status_code;
+    if !(200..300).contains(&status_code) {
         return Err(format!("scrape failed: HTTP {} for {}", status_code, normalized).into());
     }
 
@@ -187,11 +363,15 @@ pub async fn run_scrape(cfg: &Config) -> Result<(), Box<dyn Error>> {
     }
 
     // Phase 2: embed all collected markdowns in one batch (single embed_path_native call).
-    // Running this after Phase 1 avoids the bug where concurrent scrape_one calls each
-    // call embed_path_native on the shared dir, causing every subsequent call to re-embed
-    // all previously written files (O(n²) embed work).
+    // Important: write this run's files into an isolated directory so `scrape --embed`
+    // only indexes current outputs, not every historical file in scrape-markdown.
     if cfg.embed && !to_embed.is_empty() {
-        let embed_dir = cfg.output_dir.join("scrape-markdown");
+        let run_id = Uuid::new_v4().to_string();
+        let embed_dir = cfg
+            .output_dir
+            .join("scrape-markdown")
+            .join("runs")
+            .join(run_id);
         tokio::fs::create_dir_all(&embed_dir).await?;
         for (normalized, markdown) in &to_embed {
             tokio::fs::write(embed_dir.join(url_to_filename(normalized, 1)), markdown).await?;
@@ -237,17 +417,17 @@ async fn scrape_one(cfg: &Config, url: &str) -> Result<Option<(String, String)>,
     validate_url(&normalized)?;
 
     let mut website = build_scrape_website(cfg, &normalized)?;
-    let page = fetch_single_page(cfg, &mut website).await?;
-
-    let html = page.get_html();
-    let status_code = page.status_code.as_u16();
+    let page = fetch_single_page(cfg, &mut website, &normalized).await?;
+    let html = page.html;
+    let status_code = page.status_code;
 
     // Surface non-success HTTP codes as errors so callers can handle them.
-    if !page.status_code.is_success() {
+    if !(200..300).contains(&status_code) {
         return Err(format!("scrape failed: HTTP {} for {}", status_code, normalized).into());
     }
 
-    let markdown = to_markdown(&html);
+    let sel_cfg = build_selector_config(cfg);
+    let markdown = to_markdown(&html, sel_cfg.as_ref());
     let output = select_output(cfg.format, &normalized, &html, status_code)?;
 
     if cfg.json_output {
@@ -554,6 +734,38 @@ mod tests {
             "JSON output must contain exactly 5 fields, got: {:?}",
             obj.keys().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_page_matches_requested_url_exact_match() {
+        assert!(page_matches_requested_url(
+            "https://example.com/docs/trait.Client.html",
+            "https://example.com/docs/trait.Client.html"
+        ));
+    }
+
+    #[test]
+    fn test_page_matches_requested_url_ignores_query_and_fragment() {
+        assert!(page_matches_requested_url(
+            "https://example.com/docs/trait.Client.html",
+            "https://example.com/docs/trait.Client.html?x=1#section"
+        ));
+    }
+
+    #[test]
+    fn test_page_matches_requested_url_accepts_docs_redirect_filename_match() {
+        assert!(page_matches_requested_url(
+            "https://docs.rs/agent-client-protocol/latest/agent_client_protocol/trait.Client.html",
+            "https://docs.rs/agent-client-protocol/0.9.5/agent_client_protocol/trait.Client.html"
+        ));
+    }
+
+    #[test]
+    fn test_page_matches_requested_url_rejects_different_terminal_page() {
+        assert!(!page_matches_requested_url(
+            "https://docs.rs/agent-client-protocol/latest/agent_client_protocol/trait.Client.html",
+            "https://docs.rs/releases"
+        ));
     }
 
     // -----------------------------------------------------------------------

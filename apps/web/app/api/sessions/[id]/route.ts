@@ -17,6 +17,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({
       project: session.project,
       filename: session.filename,
+      sessionId: session.filename,
       messages,
     })
   } catch {

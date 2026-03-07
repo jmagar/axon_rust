@@ -1,27 +1,18 @@
 ---
 description: Inspect Axon artifact files (head, grep, wc, read)
-argument-hint: <head|grep|wc|read> <path> [pattern] [--limit N] [--offset N]
-allowed-tools: mcp__axon__axon
+argument-hint: <head|grep|wc|read> <path> [pattern]
+allowed-tools: mcp__axon__axon, Bash
 ---
 
-# Inspect Artifact Files
+Use `mcp__axon__axon` directly:
 
-Call the Axon MCP tool (`axon`) with:
-- `action: "artifacts"`
-- `subaction: "head|grep|wc|read"` from `$ARGUMENTS`
-- map remaining `$ARGUMENTS` to schema fields (`path`, `pattern`, `limit`, `offset`)
+```json
+{ "action": "artifacts", "subaction": "head", "path": "<artifact-path>", "limit": 20 }
+{ "action": "artifacts", "subaction": "read", "path": "<artifact-path>" }
+{ "action": "artifacts", "subaction": "wc", "path": "<artifact-path>" }
+{ "action": "artifacts", "subaction": "grep", "path": "<artifact-path>", "pattern": "<regex>" }
+```
 
-## Instructions
+Optional: `limit` (int), `offset` (int).
 
-1. Execute using the Axon MCP tool (`axon`) with action/subaction routing and mapped arguments.
-2. Route operations by subaction (`head|grep|wc|read`).
-3. For `grep`, require a search pattern.
-4. Present concise file insights and preserve exact match lines for grep.
-
-## Expected Output
-
-The command returns:
-- file inspection output
-- line/word/byte counts (wc)
-- filtered lines (grep)
-- sampled or full content (head/read)
+Parse `$ARGUMENTS`: first arg is subaction, second is path, third (for grep) is pattern. Paths are relative to artifact root (`.cache/axon-mcp/`).

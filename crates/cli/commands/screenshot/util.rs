@@ -1,47 +1,9 @@
 use crate::crates::core::config::Config;
 use std::error::Error;
 
-/// Sanitize a URL into a safe filename component.
-///
-/// Strips the scheme, replaces non-alphanumeric chars with hyphens,
-/// collapses runs of hyphens, trims edges, and truncates to 120 chars.
-pub(crate) fn url_to_screenshot_filename(url: &str, idx: usize) -> String {
-    let stripped = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .unwrap_or(url);
-
-    let sanitized: String = stripped
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-
-    // Collapse consecutive hyphens and trim leading/trailing hyphens.
-    let mut collapsed = String::with_capacity(sanitized.len());
-    let mut prev_hyphen = true; // Start true to trim leading hyphens.
-    for c in sanitized.chars() {
-        if c == '-' {
-            if !prev_hyphen {
-                collapsed.push('-');
-            }
-            prev_hyphen = true;
-        } else {
-            collapsed.push(c);
-            prev_hyphen = false;
-        }
-    }
-    let collapsed = collapsed.trim_end_matches('-');
-
-    // Truncate to a reasonable filename length.
-    let max_name = 120;
-    let name = if collapsed.len() > max_name {
-        &collapsed[..max_name]
-    } else {
-        collapsed
-    };
-
-    format!("{idx:04}-{name}.png")
-}
+// Re-export from crawl module; the canonical implementation lives there so both
+// CLI and the services layer share the same logic without a CLI dependency.
+pub(crate) use crate::crates::crawl::screenshot::url_to_screenshot_filename;
 
 /// Validate that Chrome is configured before attempting a screenshot.
 pub(super) fn require_chrome(cfg: &Config) -> Result<(), Box<dyn Error>> {

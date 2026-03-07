@@ -2,7 +2,7 @@
 
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { MessageCircle, Send, Square, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PulseToolUse } from '@/lib/pulse/types'
 import type { ChatMessage } from '@/lib/pulse/workspace-persistence'
 import {
@@ -32,6 +32,8 @@ interface PulseChatPaneProps {
   sourcesExpanded: boolean
   onSourcesExpandedChange: (expanded: boolean) => void
   requestNotice?: string | null
+  resumeSessionId?: string | null
+  onClearResumeSession?: () => void
 }
 
 export function PulseChatPane({
@@ -47,6 +49,8 @@ export function PulseChatPane({
   sourcesExpanded,
   onSourcesExpandedChange: _onSourcesExpandedChange,
   requestNotice,
+  resumeSessionId,
+  onClearResumeSession,
 }: PulseChatPaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const sourceListRef = useRef<HTMLDivElement>(null)
@@ -59,7 +63,7 @@ export function PulseChatPane({
     new Map(),
   )
   const [sourceListScrollTop, setSourceListScrollTop] = useState(0)
-  const activeSources = useMemo(() => activeThreadSources, [activeThreadSources])
+  const activeSources = activeThreadSources
   const latestAssistantCitations = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const msg = messages[i]
@@ -107,23 +111,27 @@ export function PulseChatPane({
     }
   }, [])
 
-  function scrollToBottom() {
+  function scrollToBottom(instant?: boolean) {
     const node = scrollRef.current
     if (!node) return
-    node.scrollTop = node.scrollHeight
+    node.scrollTo({ top: node.scrollHeight, behavior: instant ? 'instant' : 'smooth' })
     setShowJumpToLatest(false)
   }
 
+  // Restore scroll position once on mount — after that, the auto-scroll effect takes over.
+  const hasRestoredScrollRef = useRef(false)
   useEffect(() => {
+    if (hasRestoredScrollRef.current) return
     const node = scrollRef.current
-    if (!node) return
+    if (!node || messages.length === 0) return
+    hasRestoredScrollRef.current = true
     try {
       const saved = Number(window.localStorage.getItem(CHAT_SCROLL_STORAGE_KEY) ?? 0)
       if (Number.isFinite(saved) && saved > 0) {
         node.scrollTop = saved
         const nearBottom = node.scrollHeight - (saved + node.clientHeight) < 42
         setIsNearBottom(nearBottom)
-        setShowJumpToLatest(!nearBottom && messages.length > 0)
+        setShowJumpToLatest(!nearBottom)
       }
     } catch {
       // Ignore storage restore failures.
@@ -162,18 +170,24 @@ export function PulseChatPane({
     }
   }, [sourceListOpen])
 
+  // Track the last message content length to detect streaming updates
+  const lastScrolledAtRef = useRef(0)
   useEffect(() => {
     const node = scrollRef.current
     if (!node) return
     if (isNearBottom) {
-      node.scrollTop = node.scrollHeight
+      // Throttle scroll-to-bottom during streaming: max once per 120ms
+      const now = Date.now()
+      if (now - lastScrolledAtRef.current < 120) return
+      lastScrolledAtRef.current = now
+      node.scrollTo({ top: node.scrollHeight, behavior: 'instant' })
       setShowJumpToLatest(false)
     } else if (messages.length > 0) {
       setShowJumpToLatest(true)
     }
   }, [isNearBottom, messages])
 
-  async function handleCopyError(content: string, messageId: string) {
+  const handleCopyError = useCallback(async (content: string, messageId: string) => {
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(content)
@@ -205,14 +219,31 @@ export function PulseChatPane({
         })
       }, 1400)
     }
-  }
+  }, [])
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       {(requestNotice ||
+        resumeSessionId ||
         (sourcesExpanded && (activeSources.length > 0 || latestAssistantCitations.length > 0)) ||
         (sourceListOpen && activeSources.length > 0)) && (
         <div className="border-b border-[var(--border-subtle)] bg-[linear-gradient(120deg,rgba(175,215,255,0.05),rgba(255,135,175,0.03))] px-3 py-2">
+          {resumeSessionId && (
+            <div className="mt-1 flex items-center justify-between gap-2 rounded border border-[rgba(175,215,255,0.3)] bg-[rgba(175,215,255,0.08)] px-1.5 py-1 ui-meta text-[var(--text-secondary)]">
+              <span className="truncate">
+                Resumed session: <code>{resumeSessionId}</code>
+              </span>
+              {onClearResumeSession && (
+                <button
+                  type="button"
+                  onClick={onClearResumeSession}
+                  className="shrink-0 rounded border border-[var(--border-subtle)] px-1.5 py-0.5 text-[10px] text-[var(--text-dim)] hover:text-[var(--text-primary)]"
+                >
+                  Clear resume
+                </button>
+              )}
+            </div>
+          )}
           {requestNotice && (
             <div className="mt-1 rounded border border-[rgba(255,192,134,0.3)] bg-[rgba(255,192,134,0.08)] px-1.5 py-1 ui-meta text-[var(--axon-warning)]">
               {requestNotice}
@@ -361,7 +392,7 @@ export function PulseChatPane({
             }, 150)
           })
         }}
-        className="flex min-h-0 flex-1 flex-col space-y-2.5 overflow-y-auto px-3 py-2.5"
+        className="flex min-h-0 flex-1 flex-col space-y-2.5 overflow-y-auto overscroll-y-contain px-3 py-2.5"
       >
         {messages.length === 0 ? (
           <div className="flex h-full items-center justify-center p-6">
@@ -371,13 +402,27 @@ export function PulseChatPane({
                 <MessageCircle className="relative size-10 text-[var(--axon-primary)]" />
               </div>
               <div className="space-y-1.5">
-                <h2 className="font-display text-base font-semibold text-[var(--text-primary)]">
-                  Start a conversation
-                </h2>
-                <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
-                  Ask Claude to write, analyze, or explore. Paste a URL in the omnibox to run a tool
-                  on a webpage.
-                </p>
+                {resumeSessionId ? (
+                  <>
+                    <h2 className="font-display text-base font-semibold text-[var(--text-primary)]">
+                      Session Resumed
+                    </h2>
+                    <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
+                      Continuing session <code>{resumeSessionId}</code>. Send a message in the
+                      omnibox to continue this thread.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h2 className="font-display text-base font-semibold text-[var(--text-primary)]">
+                      Start a conversation
+                    </h2>
+                    <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
+                      Ask Claude to write, analyze, or explore. Paste a URL in the omnibox to run a
+                      tool on a webpage.
+                    </p>
+                  </>
+                )}
               </div>
               <div className="flex flex-wrap justify-center gap-2 pt-1">
                 <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border-subtle)] bg-[rgba(135,175,255,0.08)] px-2.5 py-1 text-xs text-[var(--axon-primary)]">
@@ -419,9 +464,7 @@ export function PulseChatPane({
                     index={virtualRow.index}
                     onRetry={onRetry}
                     copyStatus={copyStatuses.get(messageKey) ?? 'idle'}
-                    onCopyError={(content) => {
-                      void handleCopyError(content, messageKey)
-                    }}
+                    onCopyError={handleCopyError}
                   />
                 </div>
               )
@@ -437,9 +480,7 @@ export function PulseChatPane({
                 index={index}
                 onRetry={onRetry}
                 copyStatus={copyStatuses.get(messageKey) ?? 'idle'}
-                onCopyError={(content) => {
-                  void handleCopyError(content, messageKey)
-                }}
+                onCopyError={handleCopyError}
               />
             )
           })
@@ -477,7 +518,7 @@ export function PulseChatPane({
         {showJumpToLatest && (
           <button
             type="button"
-            onClick={scrollToBottom}
+            onClick={() => scrollToBottom()}
             className="ui-chip sticky bottom-2 ml-auto inline-flex items-center rounded-full border border-[rgba(175,215,255,0.28)] bg-[rgba(10,18,35,0.72)] px-2 py-1 text-[var(--text-dim)] shadow-[0_4px_12px_rgba(3,7,18,0.32)]"
           >
             Jump to latest

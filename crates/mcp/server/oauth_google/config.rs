@@ -53,11 +53,12 @@ impl GoogleOAuthConfig {
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
         let redirect_policy = match std::env::var("GOOGLE_OAUTH_REDIRECT_POLICY")
-            .unwrap_or_else(|_| "loopback_only".to_string())
+            .unwrap_or_else(|_| "loopback_or_https".to_string())
             .to_ascii_lowercase()
             .as_str()
         {
             "any" => RedirectPolicy::Any,
+            "loopback_or_https" => RedirectPolicy::LoopbackOrHttps,
             _ => RedirectPolicy::LoopbackOnly,
         };
 

@@ -5,6 +5,7 @@
  */
 
 import type {
+  PulseAgent,
   PulseChatResponse,
   PulseMessageBlock,
   PulseModel,
@@ -29,6 +30,7 @@ export interface ChatMessage {
 
 export type PersistedPulseWorkspaceState = {
   permissionLevel: PulsePermissionLevel
+  agent: PulseAgent
   model: PulseModel
   documentMarkdown: string
   chatHistory: ChatMessage[]
@@ -71,10 +73,10 @@ export function parsePersistedWorkspaceState(
     if (typeof parsed.documentTitle !== 'string' || typeof parsed.documentMarkdown !== 'string') {
       return null
     }
+    const agent: PulseAgent =
+      parsed.agent === 'codex' || parsed.agent === 'claude' ? parsed.agent : 'claude'
     const model: PulseModel =
-      parsed.model === 'opus' || parsed.model === 'haiku' || parsed.model === 'sonnet'
-        ? parsed.model
-        : 'sonnet'
+      typeof parsed.model === 'string' && parsed.model.length > 0 ? parsed.model : 'sonnet'
     const permissionLevel: PulsePermissionLevel =
       parsed.permissionLevel === 'plan' ||
       parsed.permissionLevel === 'accept-edits' ||
@@ -95,6 +97,7 @@ export function parsePersistedWorkspaceState(
     if (!showChat && !showEditor) showChat = true
     return {
       permissionLevel,
+      agent,
       model,
       documentMarkdown: parsed.documentMarkdown,
       chatHistory: Array.isArray(parsed.chatHistory) ? parsed.chatHistory.slice(-250) : [],
@@ -111,9 +114,7 @@ export function parsePersistedWorkspaceState(
       lastResponseLatencyMs:
         typeof parsed.lastResponseLatencyMs === 'number' ? parsed.lastResponseLatencyMs : null,
       lastResponseModel:
-        parsed.lastResponseModel === 'sonnet' ||
-        parsed.lastResponseModel === 'opus' ||
-        parsed.lastResponseModel === 'haiku'
+        typeof parsed.lastResponseModel === 'string' && parsed.lastResponseModel.length > 0
           ? parsed.lastResponseModel
           : null,
       showChat,

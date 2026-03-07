@@ -1,26 +1,25 @@
 ---
 description: Crawl websites with lifecycle job controls
-argument-hint: <url> [options] | status <job-id> | cancel <job-id> | errors <job-id> | list | cleanup | clear | recover | worker
-allowed-tools: mcp__axon__axon
+argument-hint: <url> | status <job-id> | cancel <job-id> | list | cleanup | clear | recover
+allowed-tools: mcp__axon__axon, Bash
 ---
 
-# Crawl Website Content
+Use `mcp__axon__axon` directly.
 
-Call the Axon MCP tool (`axon`) with:
-- `action: "crawl"`
-- `subaction: "start|status|cancel|errors|list|cleanup|clear|recover|worker"` from `$ARGUMENTS`
-- map remaining `$ARGUMENTS` to schema fields
+**Start:**
+```json
+{ "action": "crawl", "urls": ["<url from $ARGUMENTS>"] }
+```
+Optional start fields: `max_pages`, `max_depth`, `include_subdomains`, `respect_robots`, `discover_sitemaps`, `render_mode` ("http"|"chrome"|"auto_switch"), `delay_ms`, `response_mode`.
 
-## Instructions
+**Lifecycle:**
+```json
+{ "action": "crawl", "subaction": "status", "job_id": "<uuid>" }
+{ "action": "crawl", "subaction": "cancel", "job_id": "<uuid>" }
+{ "action": "crawl", "subaction": "list", "limit": 10 }
+{ "action": "crawl", "subaction": "cleanup" }
+{ "action": "crawl", "subaction": "clear" }
+{ "action": "crawl", "subaction": "recover" }
+```
 
-1. Execute using the Axon MCP tool (`axon`) with action/subaction routing and mapped arguments.
-2. Handle both start and lifecycle operations (`status|cancel|errors|list|cleanup|clear|recover|worker`).
-3. Parse job ID, status transitions, progress, and errors.
-4. Present crawl coverage summary and failures.
-
-## Expected Output
-
-The command returns:
-- crawl job identifiers
-- lifecycle status/progress
-- URL/page results and crawl stats
+Parse `$ARGUMENTS`: URL → start, `status|cancel` + UUID → lifecycle, `list|cleanup|clear|recover` → management.

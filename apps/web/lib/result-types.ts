@@ -124,14 +124,38 @@ export interface MapResult {
 }
 
 // ---------------------------------------------------------------------------
-// sources: key-value map {url: count}
+// sources: legacy key-value map {url: count} OR paged payload
 // ---------------------------------------------------------------------------
-export type SourcesResult = Record<string, number>
+export interface SourcesRow {
+  url: string
+  chunks: number
+}
+
+export interface SourcesPagedResult {
+  count: number
+  limit: number
+  offset: number
+  urls: SourcesRow[]
+}
+
+export type SourcesResult = Record<string, number> | SourcesPagedResult
 
 // ---------------------------------------------------------------------------
-// domains: key-value map {domain: count} or {domain: [url_count, vector_count]}
+// domains: legacy key-value map or paged payload
 // ---------------------------------------------------------------------------
-export type DomainsResult = Record<string, number | [number, number]>
+export interface DomainsRow {
+  domain: string
+  vectors: number
+  urls?: number
+}
+
+export interface DomainsPagedResult {
+  domains: DomainsRow[]
+  limit: number
+  offset: number
+}
+
+export type DomainsResult = Record<string, number | [number, number]> | DomainsPagedResult
 
 // ---------------------------------------------------------------------------
 // stats: single object

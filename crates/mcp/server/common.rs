@@ -1,25 +1,22 @@
 use super::AxonMcpServer;
-use crate::crates::cli::commands::scrape::scrape_payload as cli_scrape_payload;
 use crate::crates::core::config::{Config, RenderMode};
 use crate::crates::mcp::schema::{
     AxonToolResponse, CrawlRequest, McpRenderMode, ResponseMode, SearchTimeRange,
 };
+use crate::crates::services::types::{
+    MapOptions, Pagination, RetrieveOptions, SearchOptions, ServiceTimeRange,
+};
 use rmcp::ErrorData;
 use sha2::{Digest, Sha256};
-use spider_agent::TimeRange;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use uuid::Uuid;
 
 pub(super) const MCP_TOOL_SCHEMA_URI: &str = "axon://schema/mcp-tool";
+const MCP_ARTIFACT_DIR_ENV: &str = "AXON_MCP_ARTIFACT_DIR";
 
 impl AxonMcpServer {
-    pub(super) async fn scrape_payload(&self, url: &str) -> Result<serde_json::Value, ErrorData> {
-        cli_scrape_payload(self.cfg.as_ref(), url)
-            .await
-            .map_err(|e| internal_error(e.to_string()))
-    }
-
     pub(super) fn parse_viewport(
         viewport: Option<&str>,
         fallback_w: u32,
@@ -50,6 +47,13 @@ pub(super) fn internal_error(msg: impl Into<String>) -> ErrorData {
     ErrorData::internal_error(msg.into(), None)
 }
 
+/// Log the raw error server-side and return a generic MCP error so internal
+/// details (DSNs, file paths, stack traces) are never forwarded to clients.
+pub(super) fn logged_internal_error(context: &str, e: impl std::fmt::Display) -> ErrorData {
+    tracing::error!("{context}: {e}");
+    internal_error(format!("{context} failed"))
+}
+
 pub(super) fn parse_job_id(job_id: Option<&String>) -> Result<Uuid, ErrorData> {
     let raw = job_id.ok_or_else(|| invalid_params("job_id is required for this subaction"))?;
     Uuid::parse_str(raw).map_err(|e| invalid_params(format!("invalid job_id: {e}")))
@@ -76,13 +80,72 @@ pub(super) fn paginate_vec<T: Clone>(items: &[T], offset: usize, limit: usize) -
 }
 
 pub(super) fn artifact_root() -> PathBuf {
-    PathBuf::from(".cache/axon-mcp")
+    std::env::var(MCP_ARTIFACT_DIR_ENV)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("AXON_DATA_DIR")
+                .ok()
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty())
+                .map(|d| PathBuf::from(d).join("axon/artifacts"))
+        })
+        .unwrap_or_else(|| PathBuf::from(".cache/axon-mcp"))
+}
+
+fn fallback_artifact_root() -> PathBuf {
+    std::env::temp_dir().join("axon-mcp")
+}
+
+fn ensure_dir(path: &Path) -> Result<(), std::io::Error> {
+    fs::create_dir_all(path)
+}
+
+fn is_writable(path: &Path) -> bool {
+    use std::fs::OpenOptions;
+    let probe = path.join(format!(
+        ".axon-write-probe-{}-{}",
+        std::process::id(),
+        Uuid::new_v4().simple()
+    ));
+    match OpenOptions::new().write(true).create_new(true).open(&probe) {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 pub(super) fn ensure_artifact_root() -> Result<PathBuf, ErrorData> {
     let root = artifact_root();
-    fs::create_dir_all(&root).map_err(|e| internal_error(e.to_string()))?;
-    Ok(root)
+    if ensure_dir(&root).is_ok() && is_writable(&root) {
+        return Ok(root);
+    }
+    let fallback = fallback_artifact_root();
+    if fallback != root {
+        if let Err(fallback_err) = ensure_dir(&fallback) {
+            return Err(internal_error(format!(
+                "artifact dir '{}' is not writable; fallback '{}' also failed ({fallback_err})",
+                root.display(),
+                fallback.display()
+            )));
+        }
+        if !is_writable(&fallback) {
+            return Err(internal_error(format!(
+                "artifact dir '{}' and fallback '{}' are both not writable",
+                root.display(),
+                fallback.display()
+            )));
+        }
+        return Ok(fallback);
+    }
+    Err(internal_error(format!(
+        "artifact dir '{}' is not writable",
+        root.display()
+    )))
 }
 
 pub(super) fn slugify(value: &str, max_len: usize) -> String {
@@ -167,9 +230,10 @@ pub(super) fn validate_artifact_path(raw: &str) -> Result<PathBuf, ErrorData> {
         }
     };
     if !canonical.starts_with(&root) {
-        return Err(invalid_params(
-            "artifact path must be inside .cache/axon-mcp",
-        ));
+        return Err(invalid_params(format!(
+            "artifact path must be inside {}",
+            root.display()
+        )));
     }
     Ok(canonical)
 }
@@ -180,9 +244,10 @@ pub(super) fn resolve_artifact_output_path(raw: &str) -> Result<PathBuf, ErrorDa
         return Err(invalid_params("output path cannot be empty"));
     }
     if candidate.is_absolute() {
-        return Err(invalid_params(
-            "output path must be relative to .cache/axon-mcp",
-        ));
+        return Err(invalid_params(format!(
+            "output path must be relative to {}",
+            ensure_artifact_root()?.display()
+        )));
     }
     if candidate.components().any(|c| {
         matches!(
@@ -301,11 +366,99 @@ pub(super) fn map_render_mode(mode: McpRenderMode) -> RenderMode {
     }
 }
 
-pub(super) fn map_search_time_range(range: &SearchTimeRange) -> TimeRange {
-    match range {
-        SearchTimeRange::Day => TimeRange::Day,
-        SearchTimeRange::Week => TimeRange::Week,
-        SearchTimeRange::Month => TimeRange::Month,
-        SearchTimeRange::Year => TimeRange::Year,
+/// Map MCP limit/offset params to service `Pagination`, clamping limit to [1, 500].
+pub fn to_pagination(limit: Option<usize>, offset: Option<usize>) -> Pagination {
+    Pagination {
+        limit: limit.unwrap_or(10).clamp(1, 500),
+        offset: offset.unwrap_or(0),
+    }
+}
+
+/// Map MCP limit/offset params to service `MapOptions`, clamping limit to [1, 500].
+pub fn to_map_options(limit: Option<usize>, offset: Option<usize>) -> MapOptions {
+    MapOptions {
+        limit: limit.unwrap_or(10).clamp(1, 500),
+        offset: offset.unwrap_or(0),
+    }
+}
+
+/// Map MCP `RetrieveOptions` (max_points field) to service `RetrieveOptions`.
+pub fn to_retrieve_options(max_points: Option<usize>) -> RetrieveOptions {
+    RetrieveOptions { max_points }
+}
+
+/// Map MCP `SearchTimeRange` enum to service `ServiceTimeRange`.
+pub fn to_service_time_range(tr: SearchTimeRange) -> ServiceTimeRange {
+    match tr {
+        SearchTimeRange::Day => ServiceTimeRange::Day,
+        SearchTimeRange::Week => ServiceTimeRange::Week,
+        SearchTimeRange::Month => ServiceTimeRange::Month,
+        SearchTimeRange::Year => ServiceTimeRange::Year,
+    }
+}
+
+/// Map MCP search params to service `SearchOptions`.
+pub fn to_search_options(
+    limit: Option<usize>,
+    offset: Option<usize>,
+    time_range: Option<SearchTimeRange>,
+) -> SearchOptions {
+    SearchOptions {
+        limit: limit.unwrap_or(10).clamp(1, 500),
+        offset: offset.unwrap_or(0),
+        time_range: time_range.map(to_service_time_range),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::sync::Mutex;
+    use tempfile::tempdir;
+
+    static ENV_CWD_LOCK: Mutex<()> = Mutex::new(());
+
+    #[allow(unsafe_code)]
+    #[test]
+    fn ensure_artifact_root_uses_env_override_when_set() {
+        let _guard = ENV_CWD_LOCK.lock().expect("lock poisoned");
+        let tmp = tempdir().expect("tempdir");
+        let override_path = tmp.path().join("custom-artifacts");
+        // SAFETY: guarded by ENV_CWD_LOCK; no concurrent env mutation in this module.
+        unsafe {
+            env::set_var(MCP_ARTIFACT_DIR_ENV, &override_path);
+        }
+
+        let root = ensure_artifact_root().expect("artifact root");
+        assert_eq!(root, override_path);
+        assert!(root.exists());
+
+        // SAFETY: guarded by ENV_CWD_LOCK; no concurrent env mutation in this module.
+        unsafe {
+            env::remove_var(MCP_ARTIFACT_DIR_ENV);
+        }
+    }
+
+    #[allow(unsafe_code)]
+    #[test]
+    fn ensure_artifact_root_falls_back_when_primary_root_is_invalid() {
+        let _guard = ENV_CWD_LOCK.lock().expect("lock poisoned");
+        // SAFETY: guarded by ENV_CWD_LOCK; no concurrent env mutation in this module.
+        unsafe {
+            env::remove_var(MCP_ARTIFACT_DIR_ENV);
+        }
+
+        let cwd_before = env::current_dir().expect("cwd");
+        let tmp = tempdir().expect("tempdir");
+        env::set_current_dir(tmp.path()).expect("chdir temp");
+        fs::write(tmp.path().join(".cache"), b"not-a-directory").expect("create file .cache");
+
+        let root = ensure_artifact_root().expect("artifact root fallback");
+        let expected_fallback = fallback_artifact_root();
+        assert_eq!(root, expected_fallback);
+        assert!(root.exists());
+
+        env::set_current_dir(cwd_before).expect("restore cwd");
     }
 }

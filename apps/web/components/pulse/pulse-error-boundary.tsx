@@ -40,6 +40,10 @@ export class PulseErrorBoundary extends Component<Props, State> {
         </div>
       )
     }
-    return <div key={this.state.resetKey}>{this.props.children}</div>
+    return (
+      <div key={this.state.resetKey} className="h-full">
+        {this.props.children}
+      </div>
+    )
   }
 }

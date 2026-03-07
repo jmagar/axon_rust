@@ -5,6 +5,7 @@ import { useAxonWs } from '@/hooks/use-axon-ws'
 import { usePulseAutosave } from '@/hooks/use-pulse-autosave'
 import { usePulseChat } from '@/hooks/use-pulse-chat'
 import { usePulsePersistence } from '@/hooks/use-pulse-persistence'
+import { usePulseSessions } from '@/hooks/use-pulse-sessions'
 import { usePulseSettings } from '@/hooks/use-pulse-settings'
 import { useSplitPane } from '@/hooks/use-split-pane'
 import {
@@ -12,9 +13,12 @@ import {
   useWsMessageActions,
   useWsWorkspaceState,
 } from '@/hooks/use-ws-messages'
+import { getAcpModelConfigOption } from '@/lib/pulse/acp-config'
 import type { ValidationResult } from '@/lib/pulse/doc-ops'
-import type { DocOperation, PulseModel, PulsePermissionLevel } from '@/lib/pulse/types'
+import type { AcpPermissionRequest, DocOperation, PulsePermissionLevel } from '@/lib/pulse/types'
 import { PULSE_WORKSPACE_STATE_KEY } from '@/lib/pulse/workspace-persistence'
+
+const ACTIVE_SESSION_ID_KEY = 'axon.web.pulse.active-session-id'
 
 /**
  * Encapsulates all behavioral wiring for the Pulse workspace:
@@ -24,10 +28,25 @@ import { PULSE_WORKSPACE_STATE_KEY } from '@/lib/pulse/workspace-persistence'
  */
 export function usePulseWorkspaceBehavior() {
   const { selectedFile, markdownContent } = useWsExecutionState()
-  const { workspacePrompt, workspacePromptVersion, pulseModel, pulsePermissionLevel } =
-    useWsWorkspaceState()
-  const { updateWorkspaceContext, setPulseModel, setPulsePermissionLevel } = useWsMessageActions()
-  const { subscribe } = useAxonWs()
+  const {
+    workspacePrompt,
+    workspacePromptVersion,
+    workspaceResumeSessionId,
+    workspaceResumeVersion,
+    pulseAgent,
+    pulseModel,
+    pulsePermissionLevel,
+    acpConfigOptions,
+  } = useWsWorkspaceState()
+  const {
+    updateWorkspaceContext,
+    setPulseAgent,
+    setPulseModel,
+    setPulsePermissionLevel,
+    setAcpConfigOptions,
+    clearWorkspaceResumeSession,
+  } = useWsMessageActions()
+  const { subscribe, send: wsSend } = useAxonWs()
 
   const [documentMarkdown, setDocumentMarkdown] = useState('')
   const [documentTitle, setDocumentTitle] = useState('Untitled')
@@ -35,7 +54,9 @@ export function usePulseWorkspaceBehavior() {
   const [pendingOps, setPendingOps] = useState<DocOperation[] | null>(null)
   const [pendingValidation, setPendingValidation] = useState<ValidationResult | null>(null)
   const [sourcesExpanded, setSourcesExpanded] = useState(false)
+  const [pendingPermission, setPendingPermission] = useState<AcpPermissionRequest | null>(null)
 
+  const agent = pulseAgent
   const model = pulseModel
   const permissionLevel = pulsePermissionLevel
 
@@ -70,11 +91,14 @@ export function usePulseWorkspaceBehavior() {
   const chat = usePulseChat({
     documentMarkdown,
     permissionLevel,
+    agent,
     model,
     subscribe,
     onApplyOperations: applyOperations,
     onPendingOps: setPendingOps,
     onPendingValidation: setPendingValidation,
+    onAcpConfigUpdate: setAcpConfigOptions,
+    onPermissionRequest: setPendingPermission,
     effort: pulseSettings.effort,
     maxTurns: pulseSettings.maxTurns,
     maxBudgetUsd: pulseSettings.maxBudgetUsd,
@@ -109,6 +133,19 @@ export function usePulseWorkspaceBehavior() {
     setLastResponseModel,
   } = chat
 
+  const handlePermissionResponse = useCallback(
+    (toolCallId: string, optionId: string) => {
+      // TODO: Wire permission response to Rust AcpBridgeClient when leaving container mode
+      wsSend({ type: 'permission_response', tool_call_id: toolCallId, option_id: optionId })
+      setPendingPermission(null)
+    },
+    [wsSend],
+  )
+
+  const handlePermissionDismiss = useCallback(() => {
+    setPendingPermission(null)
+  }, [])
+
   const latestCitationCount = useMemo(() => {
     for (let i = chatHistory.length - 1; i >= 0; i -= 1) {
       const msg = chatHistory[i]
@@ -121,6 +158,7 @@ export function usePulseWorkspaceBehavior() {
 
   const handleNewSession = useCallback(() => {
     handleCancelPrompt()
+    clearWorkspaceResumeSession()
     setChatHistory([])
     setDocumentMarkdown('')
     setDocumentTitle('Untitled')
@@ -134,6 +172,7 @@ export function usePulseWorkspaceBehavior() {
       // Ignore storage errors.
     }
   }, [
+    clearWorkspaceResumeSession,
     handleCancelPrompt,
     setChatHistory,
     setChatSessionId,
@@ -141,9 +180,27 @@ export function usePulseWorkspaceBehavior() {
     setActiveThreadSources,
   ])
 
+  useEffect(() => {
+    try {
+      if (chatSessionId) {
+        window.localStorage.setItem(ACTIVE_SESSION_ID_KEY, chatSessionId)
+      } else {
+        window.localStorage.removeItem(ACTIVE_SESSION_ID_KEY)
+      }
+      window.dispatchEvent(
+        new CustomEvent('axon:active-session-changed', {
+          detail: { sessionId: chatSessionId },
+        }),
+      )
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [chatSessionId])
+
   usePulsePersistence({
     data: {
       permissionLevel,
+      agent,
       model,
       documentMarkdown,
       chatHistory,
@@ -161,6 +218,7 @@ export function usePulseWorkspaceBehavior() {
     },
     setters: {
       setPulsePermissionLevel,
+      setPulseAgent,
       setPulseModel,
       setDocumentMarkdown,
       setChatHistory,
@@ -184,6 +242,19 @@ export function usePulseWorkspaceBehavior() {
     documentTitle,
     currentDocFilename,
   )
+
+  const { savedSessions, deleteSavedSession, reloadSavedSessions } = usePulseSessions({
+    chatSessionId,
+    chatHistory,
+    documentMarkdown,
+    documentTitle,
+  })
+
+  // Notify sidebar when saved sessions change so it can refresh its list.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: savedSessions is the trigger
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('axon:pulse-sessions-updated'))
+  }, [savedSessions])
 
   // Sync savedFilename back to currentDocFilename after the first save creates the file
   useEffect(() => {
@@ -215,6 +286,7 @@ export function usePulseWorkspaceBehavior() {
       contextCharsTotal: lastContextStats?.contextCharsTotal ?? 0,
       contextBudgetChars: lastContextStats?.contextBudgetChars ?? 0,
       lastLatencyMs: lastResponseLatencyMs ?? 0,
+      agent,
       model,
       permissionLevel,
       saveStatus,
@@ -226,10 +298,15 @@ export function usePulseWorkspaceBehavior() {
     lastResponseLatencyMs,
     lastContextStats,
     model,
+    agent,
     permissionLevel,
     saveStatus,
     updateWorkspaceContext,
   ])
+
+  const clearResumeSession = useCallback(() => {
+    clearWorkspaceResumeSession()
+  }, [clearWorkspaceResumeSession])
 
   // Cleanup workspace context on unmount
   useEffect(() => {
@@ -252,8 +329,11 @@ export function usePulseWorkspaceBehavior() {
           setPulsePermissionLevel(permissionByIndex[Number(key) - 1] ?? 'accept-edits')
           return
         }
-        const modelByIndex: PulseModel[] = ['sonnet', 'opus', 'haiku']
-        setPulseModel(modelByIndex[Number(key) - 1] ?? 'sonnet')
+        const modelConfig = getAcpModelConfigOption(acpConfigOptions)
+        if (!modelConfig || modelConfig.options.length === 0) return
+        const idx = Number(key) - 1
+        const option = modelConfig.options[idx]
+        if (option) setPulseModel(option.value)
         return
       }
       const isMod = event.metaKey || event.ctrlKey
@@ -275,7 +355,13 @@ export function usePulseWorkspaceBehavior() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [setPulseModel, setPulsePermissionLevel, splitPane.toggleChat, splitPane.toggleEditor])
+  }, [
+    acpConfigOptions,
+    setPulseModel,
+    setPulsePermissionLevel,
+    splitPane.toggleChat,
+    splitPane.toggleEditor,
+  ])
 
   // Workspace prompt handler
   const handlePromptRef = useRef(handlePrompt)
@@ -292,14 +378,51 @@ export function usePulseWorkspaceBehavior() {
     if (workspacePromptVersion <= lastHandledPromptVersionRef.current) return
     lastHandledPromptVersionRef.current = workspacePromptVersion
 
-    void handlePromptRef.current(workspacePrompt)
+    // New omnibox prompt should start in conversation-first view.
+    splitPane.setShowChat(true)
+    splitPane.setShowEditor(false)
+    splitPane.setMobilePane('chat')
 
-    return () => {
-      if (lastHandledPromptVersionRef.current === workspacePromptVersion) {
-        lastHandledPromptVersionRef.current = workspacePromptVersion - 1
-      }
-    }
-  }, [workspacePromptVersion, workspacePrompt])
+    void handlePromptRef.current(workspacePrompt)
+  }, [
+    workspacePromptVersion,
+    workspacePrompt,
+    splitPane.setMobilePane,
+    splitPane.setShowChat,
+    splitPane.setShowEditor,
+  ])
+
+  useEffect(() => {
+    if (workspaceResumeVersion === 0) return
+    if (!workspaceResumeSessionId) return
+
+    // Resume should not auto-send a prompt; just arm the chat session id.
+    handleCancelPrompt()
+    setChatSessionId(workspaceResumeSessionId)
+    setChatHistory([])
+    setDocumentMarkdown('')
+    setDocumentTitle('Untitled')
+    setCurrentDocFilename(null)
+    setIndexedSources([])
+    setActiveThreadSources([])
+    setPendingOps(null)
+    setPendingValidation(null)
+
+    splitPane.setShowChat(true)
+    splitPane.setShowEditor(false)
+    splitPane.setMobilePane('chat')
+  }, [
+    workspaceResumeVersion,
+    workspaceResumeSessionId,
+    handleCancelPrompt,
+    setChatSessionId,
+    setChatHistory,
+    setIndexedSources,
+    setActiveThreadSources,
+    splitPane.setShowChat,
+    splitPane.setShowEditor,
+    splitPane.setMobilePane,
+  ])
 
   return {
     // Document state
@@ -329,6 +452,21 @@ export function usePulseWorkspaceBehavior() {
     setActiveThreadSources,
     latestCitationCount,
     handleNewSession,
+    resumeSessionId: workspaceResumeSessionId,
+    clearResumeSession,
+    acpConfigOptions,
+    chatSessionId,
+    setChatSessionId,
+    setChatHistory,
+    savedSessions,
+    deleteSavedSession,
+    reloadSavedSessions,
+
+    // ACP permission state
+    pendingPermission,
+    handlePermissionResponse,
+    handlePermissionDismiss,
+    autoApprovePermissions: pulseSettings.autoApprovePermissions,
 
     // Layout (re-exported from useSplitPane)
     ...splitPane,

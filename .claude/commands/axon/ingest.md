@@ -1,26 +1,27 @@
 ---
 description: Ingest external sources with lifecycle job controls
-argument-hint: <source-type> <target> [options] | status <job-id> | cancel <job-id> | list | cleanup | clear | recover
-allowed-tools: mcp__axon__axon
+argument-hint: <github|reddit|youtube|sessions> <target> | status <job-id> | list | cleanup | clear | recover
+allowed-tools: mcp__axon__axon, Bash
 ---
 
-# Ingest External Sources
+Use `mcp__axon__axon` directly.
 
-Call the Axon MCP tool (`axon`) with:
-- `action: "ingest"`
-- `subaction: "start|status|cancel|list|cleanup|clear|recover"` from `$ARGUMENTS`
-- map remaining `$ARGUMENTS` to schema fields
+**Start:**
+```json
+{ "action": "ingest", "source_type": "github", "target": "owner/repo" }
+{ "action": "ingest", "source_type": "reddit", "target": "rust" }
+{ "action": "ingest", "source_type": "youtube", "target": "https://youtube.com/watch?v=..." }
+{ "action": "ingest", "source_type": "sessions", "target": "./exports" }
+```
 
-## Instructions
+**Lifecycle:**
+```json
+{ "action": "ingest", "subaction": "status", "job_id": "<uuid>" }
+{ "action": "ingest", "subaction": "cancel", "job_id": "<uuid>" }
+{ "action": "ingest", "subaction": "list", "limit": 10 }
+{ "action": "ingest", "subaction": "cleanup" }
+{ "action": "ingest", "subaction": "clear" }
+{ "action": "ingest", "subaction": "recover" }
+```
 
-1. Execute using the Axon MCP tool (`axon`) with action/subaction routing and mapped arguments.
-2. Handle both start and lifecycle operations (`status|cancel|list|cleanup|clear|recover`).
-3. Parse source metadata, job state, and ingest results.
-4. Present ingest summary and follow-up indexing status.
-
-## Expected Output
-
-The command returns:
-- ingest job identifiers
-- lifecycle status/progress
-- ingestion results and errors
+Parse `$ARGUMENTS`: first arg is `source_type`, second is `target`. Lifecycle keywords route to management subactions.

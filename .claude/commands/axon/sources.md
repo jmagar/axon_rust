@@ -1,24 +1,15 @@
 ---
 description: List indexed source URLs with chunk counts
-argument-hint: [--limit N] [--offset N]
-allowed-tools: mcp__axon__axon
+argument-hint: [--limit N]
+allowed-tools: mcp__axon__axon, Bash
 ---
 
-# List Indexed Sources
+Use `mcp__axon__axon` directly:
 
-Call the Axon MCP tool (`axon`) with:
-- `action: "sources"`
-- map `$ARGUMENTS` to schema fields
+```json
+{ "action": "sources", "limit": 20 }
+```
 
-## Instructions
+Optional: `limit` (int), `offset` (int), `response_mode`.
 
-1. Execute using the Axon MCP tool (`axon`) with action/subaction routing and mapped arguments.
-2. Parse source URLs and associated counts.
-3. Present key sources and any anomalies.
-
-## Expected Output
-
-The command returns source records including:
-- URL
-- title/domain metadata
-- chunk counts
+Present source URLs with chunk counts.

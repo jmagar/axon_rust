@@ -18,6 +18,7 @@ export interface PulseSettings {
   addDir: string // --add-dir (comma-separated directories)
   betas: string // --betas (comma-separated beta headers)
   toolsRestrict: string // --tools (restrict built-in tools)
+  autoApprovePermissions: boolean // Show permission modal as informational-only overlay
 }
 
 const SETTINGS_KEY = 'axon.web.pulse.settings.v1'
@@ -35,6 +36,7 @@ export const DEFAULT_PULSE_SETTINGS: PulseSettings = {
   addDir: '',
   betas: '',
   toolsRestrict: '',
+  autoApprovePermissions: true,
 }
 
 export function usePulseSettings() {
@@ -83,6 +85,10 @@ export function usePulseSettings() {
         betas: typeof parsed.betas === 'string' ? parsed.betas : prev.betas,
         toolsRestrict:
           typeof parsed.toolsRestrict === 'string' ? parsed.toolsRestrict : prev.toolsRestrict,
+        autoApprovePermissions:
+          typeof parsed.autoApprovePermissions === 'boolean'
+            ? parsed.autoApprovePermissions
+            : prev.autoApprovePermissions,
       }))
     } catch {
       // Ignore storage errors.

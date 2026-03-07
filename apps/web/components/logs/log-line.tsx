@@ -84,6 +84,8 @@ function fallbackColor(text: string): string {
 
 interface LogLineProps {
   entry: LogEntry
+  compact?: boolean
+  wrapLines?: boolean
 }
 
 function ServiceBadge({ service }: { service: string }) {
@@ -99,15 +101,17 @@ function ServiceBadge({ service }: { service: string }) {
   )
 }
 
-export function LogLine({ entry }: LogLineProps) {
+export function LogLine({ entry, compact = true, wrapLines = false }: LogLineProps) {
   const parsed = parseLine(entry.text)
+  const lineClasses = wrapLines ? 'break-words whitespace-pre-wrap' : 'break-all whitespace-nowrap'
+  const paddingBlock = compact ? '2px' : '5px'
 
   if (parsed) {
     const { time, level, module, message } = parsed
     return (
       <div
-        className="flex min-w-0 select-text items-baseline gap-2 break-all"
-        style={{ paddingBlock: '2px', lineHeight: 'var(--leading-copy)' }}
+        className={`flex min-w-0 select-text items-baseline gap-2 ${lineClasses}`}
+        style={{ paddingBlock, lineHeight: 'var(--leading-copy)' }}
       >
         {entry.service && <ServiceBadge service={entry.service} />}
 
@@ -133,8 +137,8 @@ export function LogLine({ entry }: LogLineProps) {
   // Unstructured line (docker system messages, pnpm output, etc.)
   return (
     <div
-      className={`flex min-w-0 select-text items-baseline gap-2 break-all ${fallbackColor(entry.text)}`}
-      style={{ paddingBlock: '2px', lineHeight: 'var(--leading-copy)' }}
+      className={`flex min-w-0 select-text items-baseline gap-2 ${lineClasses} ${fallbackColor(entry.text)}`}
+      style={{ paddingBlock, lineHeight: 'var(--leading-copy)' }}
     >
       {entry.service && <ServiceBadge service={entry.service} />}
       <span className="ui-mono min-w-0">{entry.text}</span>

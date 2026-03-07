@@ -5,6 +5,34 @@ import { ensureRepoRootEnvLoaded } from '@/lib/pulse/server-env'
 import type { SavedDocMeta } from '@/lib/pulse/storage'
 import { savePulseDoc, updatePulseDoc } from '@/lib/pulse/storage'
 
+/**
+ * Rewrite Docker-internal hostnames to localhost with mapped ports when
+ * running outside Docker (local dev). Mirrors the Rust CLI's
+ * `normalize_local_service_url()` logic.
+ */
+const DOCKER_HOST_MAP: Record<string, string> = {
+  'axon-qdrant:6333': '127.0.0.1:53333',
+  'axon-qdrant:6334': '127.0.0.1:53334',
+}
+
+function resolveLocalUrl(raw: string | undefined): string | undefined {
+  if (!raw) return raw
+  try {
+    const url = new URL(raw)
+    const hostPort = `${url.hostname}:${url.port || (url.protocol === 'https:' ? '443' : '80')}`
+    const mapped = DOCKER_HOST_MAP[hostPort]
+    if (mapped) {
+      const [host, port] = mapped.split(':')
+      url.hostname = host
+      url.port = port
+      return url.toString().replace(/\/$/, '')
+    }
+  } catch {
+    /* malformed URL — return as-is */
+  }
+  return raw
+}
+
 const SaveRequestSchema = z.object({
   title: z.string().min(1).max(200),
   markdown: z.string().max(200_000),
@@ -96,7 +124,7 @@ export async function POST(request: Request) {
 
     if (embed) {
       const teiUrl = process.env.TEI_URL
-      const qdrantUrl = process.env.QDRANT_URL
+      const qdrantUrl = resolveLocalUrl(process.env.QDRANT_URL)
       const collection = collections?.[0] ?? process.env.AXON_COLLECTION ?? 'cortex'
 
       if (teiUrl && qdrantUrl && markdown.trim()) {

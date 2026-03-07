@@ -3,6 +3,7 @@
 //! All variants of [`WsEventV2`] are serialized as JSON with a `"type"` tag
 //! and consumed by `apps/web`. Fields not constructed in Rust may still be
 //! active wire protocol members.
+use crate::crates::services::types::AcpBridgeEvent;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -122,4 +123,9 @@ pub enum WsEventV2 {
 
 pub(super) fn serialize_v2_event(event: WsEventV2) -> Option<String> {
     serde_json::to_string(&event).ok()
+}
+
+pub(super) fn acp_bridge_event_payload(event: &AcpBridgeEvent) -> Value {
+    serde_json::to_value(event)
+        .unwrap_or_else(|e| serde_json::json!({ "error": format!("serialization failed: {}", e) }))
 }

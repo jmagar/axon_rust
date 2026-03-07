@@ -34,6 +34,7 @@ describe('clampSplit', () => {
 describe('parsePersistedWorkspaceState', () => {
   const validState = {
     permissionLevel: 'accept-edits',
+    agent: 'claude',
     model: 'sonnet',
     documentMarkdown: '# Hello',
     chatHistory: [{ role: 'user', content: 'hi' }],
@@ -84,16 +85,17 @@ describe('parsePersistedWorkspaceState', () => {
     expect(result).not.toBeNull()
     expect(result!.model).toBe('sonnet')
     expect(result!.permissionLevel).toBe('accept-edits')
+    expect(result!.agent).toBe('claude')
     expect(result!.documentMarkdown).toBe('# Hello')
     expect(result!.documentTitle).toBe('Test Doc')
     expect(result!.showChat).toBe(true)
     expect(result!.showEditor).toBe(true)
   })
 
-  it('defaults model to sonnet for unknown value', () => {
+  it('accepts freeform model values', () => {
     const state = { ...validState, model: 'gpt-4' }
     const result = parsePersistedWorkspaceState(JSON.stringify(state))
-    expect(result!.model).toBe('sonnet')
+    expect(result!.model).toBe('gpt-4')
   })
 
   it('defaults permissionLevel to bypass-permissions for unknown value', () => {
@@ -102,8 +104,14 @@ describe('parsePersistedWorkspaceState', () => {
     expect(result!.permissionLevel).toBe('bypass-permissions')
   })
 
-  it('accepts all valid models', () => {
-    for (const model of ['sonnet', 'opus', 'haiku']) {
+  it('defaults agent to claude for unknown value', () => {
+    const state = { ...validState, agent: 'unknown' }
+    const result = parsePersistedWorkspaceState(JSON.stringify(state))
+    expect(result!.agent).toBe('claude')
+  })
+
+  it('accepts common model ids', () => {
+    for (const model of ['sonnet', 'opus', 'haiku', 'o3']) {
       const state = { ...validState, model }
       const result = parsePersistedWorkspaceState(JSON.stringify(state))
       expect(result!.model).toBe(model)
@@ -184,10 +192,10 @@ describe('parsePersistedWorkspaceState', () => {
     expect(result!.lastResponseLatencyMs).toBeNull()
   })
 
-  it('defaults lastResponseModel to null for unknown model', () => {
+  it('accepts freeform lastResponseModel', () => {
     const state = { ...validState, lastResponseModel: 'gpt-4' }
     const result = parsePersistedWorkspaceState(JSON.stringify(state))
-    expect(result!.lastResponseModel).toBeNull()
+    expect(result!.lastResponseModel).toBe('gpt-4')
   })
 
   it('handles missing chatHistory gracefully', () => {
@@ -226,6 +234,7 @@ describe('parsePersistedWorkspaceState', () => {
 describe('buildPersistedPayload', () => {
   const baseInput = {
     permissionLevel: 'accept-edits' as const,
+    agent: 'claude' as const,
     model: 'sonnet' as const,
     documentMarkdown: '# Hello',
     chatHistory: [{ role: 'user' as const, content: 'hi' }],
@@ -273,6 +282,7 @@ describe('buildPersistedPayload', () => {
   it('preserves all fields from input', () => {
     const result = buildPersistedPayload(baseInput)
     expect(result.permissionLevel).toBe('accept-edits')
+    expect(result.agent).toBe('claude')
     expect(result.model).toBe('sonnet')
     expect(result.documentMarkdown).toBe('# Hello')
     expect(result.documentTitle).toBe('Test Doc')

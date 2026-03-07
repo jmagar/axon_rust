@@ -414,7 +414,7 @@ pub async fn append_sitemap_backfill(
                 let Some(html) = html else {
                     return (url, None);
                 };
-                let md = to_markdown(&html);
+                let md = to_markdown(&html, None);
                 let trimmed = md.trim().to_string();
                 let markdown_chars = trimmed.len();
                 let is_thin = markdown_chars < min_chars;

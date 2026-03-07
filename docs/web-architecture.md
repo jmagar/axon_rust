@@ -31,7 +31,7 @@ Serves:
 
 Authentication: Token-based via `AXON_SHELL_WS_TOKEN` env var (checked in WebSocket upgrade handler).
 
-Started by: `docker/s6-rc.d/axon-workers/` (same process as the job workers, runs on port 49000).
+Started by: `cargo run --bin axon -- serve` (local process, runs on port 49000). In Docker this was managed by `docker/s6-rc.d/axon-workers/`.
 
 ### Server 2: Next.js dev server (port 49010)
 
@@ -44,7 +44,7 @@ Serves:
 
 Authentication: `AXON_WEB_API_TOKEN` enforced by `apps/web/proxy.ts` on all `/api/*` routes. Client attaches via `x-api-key` header.
 
-Started by: `docker/s6-rc.d/pnpm-dev/` (separate s6 service in axon-web container, port 49010).
+Started by: `cd apps/web && pnpm dev` (local process, port 49010). In Docker this was managed by `docker/s6-rc.d/pnpm-dev/` in the `axon-web` container.
 
 ### Communication Flow
 

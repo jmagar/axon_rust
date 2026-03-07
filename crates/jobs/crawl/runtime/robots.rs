@@ -226,7 +226,7 @@ pub(super) async fn append_robots_backfill(
             stats.failed += 1;
             continue;
         };
-        let markdown = to_markdown(&html);
+        let markdown = to_markdown(&html, None);
         let markdown_chars = markdown.chars().count();
         if markdown_chars < cfg.min_markdown_chars {
             summary.thin_pages += 1;

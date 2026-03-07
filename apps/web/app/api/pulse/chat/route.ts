@@ -1,25 +1,15 @@
-import { spawn } from 'node:child_process'
-import os from 'node:os'
+import { runAxonCommandWsStream } from '@/lib/axon-ws-exec'
 import {
   createPulseChatStreamEvent,
   encodePulseChatStreamEvent,
   type PulseChatStreamEvent,
 } from '@/lib/pulse/chat-stream'
-import { fallbackAssistantText, parseClaudeAssistantPayload } from '@/lib/pulse/claude-response'
 import { resolveConversationMemoryAnswer } from '@/lib/pulse/conversation-memory'
-import { checkPermission } from '@/lib/pulse/permissions'
 import { buildPulseSystemPrompt, retrieveFromCollections } from '@/lib/pulse/rag'
 import { ensureRepoRootEnvLoaded } from '@/lib/pulse/server-env'
-import {
-  DocOperationSchema,
-  type PulseChatRequest,
-  PulseChatRequestSchema,
-  type PulseChatResponse,
-  type PulseCitation,
-} from '@/lib/pulse/types'
+import { PulseChatRequestSchema } from '@/lib/pulse/types'
 import { apiError, makeErrorId } from '@/lib/server/api-error'
 import {
-  buildClaudeArgs,
   CLAUDE_TIMEOUT_MS,
   computeContextCharsTotal,
   GLOBAL_CLAUDE_MD_CHARS,
@@ -33,104 +23,26 @@ import {
   replayCache,
   upsertReplayEntry,
 } from './replay-cache'
-import { createStreamParserState, parseClaudeStreamLine } from './stream-parser'
+import {
+  buildDoneResponse,
+  buildPromptText,
+  patchToolResult,
+  recordAssistantDelta,
+  recordThinking,
+  truncateForLog,
+  upsertToolUse,
+} from './route-helpers'
+import { createStreamParserState, extractToolResultText } from './stream-parser'
 
-// ── Request preparation (extracted from POST for readability) ────────────────
+const DEFAULT_PULSE_CHAT_TIMEOUT_MS = CLAUDE_TIMEOUT_MS
 
-function buildPromptText(userPrompt: string): string {
-  return [
-    userPrompt,
-    '',
-    'Respond as JSON only with this exact shape:',
-    '{"text":"...","operations":[...]}',
-    'Allowed operation types and their required fields:',
-    '  replace_document: {"type":"replace_document","markdown":"<full doc content>"}',
-    '  append_markdown:  {"type":"append_markdown","markdown":"<content to append>"}',
-    '  insert_section:   {"type":"insert_section","heading":"<title>","markdown":"<content>","position":"top"|"bottom"}',
-    'IMPORTANT: use "markdown" (not "content") for the document text field.',
-    'If no operations are needed, return operations as an empty array.',
-  ].join('\n')
+function resolvePulseChatTimeoutMs(): number {
+  const raw = process.env.AXON_PULSE_CHAT_TIMEOUT_MS
+  if (!raw) return DEFAULT_PULSE_CHAT_TIMEOUT_MS
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_PULSE_CHAT_TIMEOUT_MS
+  return Math.floor(parsed)
 }
-
-function parseOperations(result: string): {
-  text: string
-  operations: PulseChatResponse['operations']
-} {
-  const parsedPayload = parseClaudeAssistantPayload(result)
-  if (!parsedPayload) {
-    return { text: fallbackAssistantText(result), operations: [] }
-  }
-
-  const operations: PulseChatResponse['operations'] = []
-  for (const op of parsedPayload.operations) {
-    const parsedOp = DocOperationSchema.safeParse(op)
-    if (parsedOp.success) {
-      operations.push(parsedOp.data)
-    }
-  }
-  return { text: parsedPayload.text, operations }
-}
-
-function buildDoneResponse(
-  req: PulseChatRequest,
-  citations: PulseCitation[],
-  parserState: ReturnType<typeof createStreamParserState>,
-  startedAt: number,
-  contextCharsTotal: number,
-  aborted: boolean,
-): Parameters<typeof createPulseChatStreamEvent>[0] {
-  const elapsed = Date.now() - startedAt
-  const telemetry = {
-    elapsedMs: elapsed,
-    contextCharsTotal,
-    contextBudgetChars: MODEL_CONTEXT_BUDGET_CHARS,
-    first_delta_ms: parserState.firstDeltaMs,
-    time_to_done_ms: elapsed,
-    delta_count: parserState.deltaCount,
-    aborted,
-  }
-
-  if (aborted) {
-    return {
-      type: 'done',
-      response: {
-        text: fallbackAssistantText(parserState.result),
-        sessionId: parserState.sessionId ?? undefined,
-        citations,
-        operations: [],
-        toolUses: parserState.toolUses,
-        blocks: parserState.blocks,
-        metadata: { model: req.model, ...telemetry },
-      },
-    }
-  }
-
-  let { text, operations } = parseOperations(parserState.result)
-
-  const permission = checkPermission(req.permissionLevel, operations, {
-    isCurrentDoc: true,
-    currentDocMarkdown: req.documentMarkdown,
-  })
-  if (!permission.allowed) {
-    operations = []
-    text = text || 'Operation blocked by permission policy.'
-  }
-
-  return {
-    type: 'done',
-    response: {
-      text,
-      sessionId: parserState.sessionId ?? undefined,
-      citations,
-      operations,
-      toolUses: parserState.toolUses,
-      blocks: parserState.blocks,
-      metadata: { model: req.model, ...telemetry },
-    },
-  }
-}
-
-// ── POST handler ─────────────────────────────────────────────────────────────
 
 export async function POST(request: Request) {
   ensureRepoRootEnvLoaded()
@@ -150,6 +62,20 @@ export async function POST(request: Request) {
     }
 
     const req = parsed.data
+
+    // Server-side validation for toolsRestrict matching the backend TOOL_ENTRY_RE contract.
+    // Zod already applies a regex, but this is defense-in-depth against any schema drift.
+    const TOOL_ENTRY_RE = /^[a-zA-Z0-9_:*-]+$/
+    if (req.toolsRestrict && !TOOL_ENTRY_RE.test(req.toolsRestrict)) {
+      return apiError(400, 'Invalid tool restriction pattern', { code: 'invalid_tools_restrict' })
+    }
+
+    console.log(
+      '[pulse/chat] request received: agent=%s model=%s prompt_len=%d',
+      req.agent,
+      req.model,
+      req.prompt.length,
+    )
     // last_event_id / lastEventId — now validated through Zod instead of raw body cast
     const lastEventId = req.last_event_id ?? req.lastEventId
 
@@ -161,7 +87,8 @@ export async function POST(request: Request) {
       scrapedContext: req.scrapedContext,
       conversationHistory: req.conversationHistory,
       permissionLevel: req.permissionLevel,
-      model: req.model,
+      agent: req.agent,
+      model: req.model ?? '',
     })
 
     pruneReplayCache(Date.now())
@@ -169,26 +96,6 @@ export async function POST(request: Request) {
     const citations = await retrieveFromCollections(req.prompt, req.selectedCollections, 4)
     const systemPrompt = buildPulseSystemPrompt(req, citations)
     const prompt = buildPromptText(req.prompt)
-
-    const args = buildClaudeArgs(prompt, systemPrompt, req.model, {
-      effort: req.effort,
-      maxTurns: req.maxTurns,
-      maxBudgetUsd: req.maxBudgetUsd,
-      appendSystemPrompt: req.appendSystemPrompt,
-      disableSlashCommands: req.disableSlashCommands,
-      noSessionPersistence: req.noSessionPersistence,
-      fallbackModel: req.fallbackModel,
-      allowedTools: req.allowedTools,
-      disallowedTools: req.disallowedTools,
-      addDir: req.addDir,
-      betas: req.betas,
-      toolsRestrict: req.toolsRestrict,
-    })
-    // Resume the previous Claude Code session when the client supplies one.
-    // Safe because cwd is always os.tmpdir() — no project CLAUDE.md is loaded.
-    if (req.sessionId) {
-      args.push('--resume', req.sessionId)
-    }
 
     const contextCharsTotal = computeContextCharsTotal({
       globalClaudeMdChars: GLOBAL_CLAUDE_MD_CHARS,
@@ -210,7 +117,8 @@ export async function POST(request: Request) {
         let aborted = request.signal.aborted
 
         let closed = false
-        let childHandled = false
+        let terminalHandled = false
+        const parserState = createStreamParserState()
         const safeClose = () => {
           if (closed) return
           closed = true
@@ -266,65 +174,17 @@ export async function POST(request: Request) {
 
         emit({ type: 'status', phase: 'started' })
 
-        // Build an explicit environment allowlist for the claude CLI child process.
-        // The child must NOT inherit server secrets (AXON_PG_URL, OPENAI_API_KEY,
-        // TAVILY_API_KEY, REDDIT_CLIENT_SECRET, AXON_WEB_API_TOKEN, etc.).
-        // Only pass variables the CLI legitimately needs to operate.
-        const CLAUDE_CHILD_ENV_ALLOWLIST = new Set([
-          'PATH',
-          'HOME',
-          'USER',
-          'SHELL',
-          'TERM',
-          'LANG',
-          'LC_ALL',
-          'NODE_ENV',
-          'AXON_WORKSPACE',
-          'TMPDIR',
-          'TMP',
-          'TEMP',
-          'XDG_RUNTIME_DIR',
-          'DBUS_SESSION_BUS_ADDRESS',
-          // Required for Claude CLI auth when ~/.claude/credentials.json is absent or expired.
-          // Do NOT add other service keys (OPENAI_API_KEY, TAVILY_API_KEY, etc.) here.
-          'ANTHROPIC_API_KEY',
-        ])
-        const childEnv = Object.fromEntries(
-          // Also pass through all CLAUDE_* vars (e.g. CLAUDE_CONFIG_DIR) so the CLI
-          // can locate its config directory and other runtime settings.
-          Object.entries(process.env).filter(
-            ([key]) => CLAUDE_CHILD_ENV_ALLOWLIST.has(key) || key.startsWith('CLAUDE_'),
-          ),
-        ) as NodeJS.ProcessEnv
-        const child = spawn('claude', args, {
-          cwd: process.env.AXON_WORKSPACE ?? os.tmpdir(),
-          env: childEnv,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        })
-
-        let stderr = ''
-        let stdoutRemainder = ''
-        const parserState = createStreamParserState()
-
         const abortHandler = () => {
           aborted = true
-          if (!closed) {
-            child.kill('SIGTERM')
-          }
         }
 
         request.signal.addEventListener('abort', abortHandler, { once: true })
 
         const cleanup = () => {
-          clearTimeout(timer)
           clearInterval(heartbeatInterval)
           request.signal.removeEventListener('abort', abortHandler)
           persistReplay()
         }
-
-        const timer = setTimeout(() => {
-          child.kill('SIGTERM')
-        }, CLAUDE_TIMEOUT_MS)
 
         const heartbeatInterval = setInterval(() => {
           if (closed) return
@@ -332,57 +192,221 @@ export async function POST(request: Request) {
           emit({ type: 'heartbeat', elapsed_ms: Date.now() - startedAt })
         }, HEARTBEAT_INTERVAL_MS)
 
-        child.stdout.on('data', (chunk: Buffer) => {
-          const chunkText = chunk.toString()
-          const combined = stdoutRemainder + chunkText
-          const lines = combined.split('\n')
-          stdoutRemainder = lines.pop() ?? ''
+        const emitMemoryFallbackDone = () => {
+          const memoryFallbackText = resolveConversationMemoryAnswer(
+            req.prompt,
+            req.conversationHistory,
+          )
+          if (!memoryFallbackText) return false
+          const elapsed = Date.now() - startedAt
+          emit({
+            type: 'done',
+            response: {
+              text: memoryFallbackText,
+              sessionId: parserState.sessionId ?? undefined,
+              citations,
+              operations: [],
+              toolUses: [],
+              blocks: [],
+              metadata: {
+                agent: req.agent,
+                model: req.model,
+                elapsedMs: elapsed,
+                contextCharsTotal,
+                contextBudgetChars: MODEL_CONTEXT_BUDGET_CHARS,
+                first_delta_ms: parserState.firstDeltaMs,
+                time_to_done_ms: elapsed,
+                delta_count: parserState.deltaCount,
+                aborted,
+                fallback_source: 'conversation_memory' as const,
+              },
+            },
+          })
+          safeClose()
+          return true
+        }
 
-          for (const line of lines) {
-            const result = parseClaudeStreamLine(line, parserState, startedAt)
-            if (result.kind === 'skip') continue
-            if (result.kind === 'result') continue // stored in parserState.result
-            if (result.kind === 'tool_result_patch') continue // already patched in parserState.blocks
-            if (result.kind === 'assistant_events') {
-              for (const ev of result.events) {
-                emit(ev)
+        const handlePulsePayload = (payload: unknown) => {
+          if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return
+          const data = payload as Record<string, unknown>
+          const sessionId =
+            typeof data.session_id === 'string'
+              ? data.session_id
+              : typeof data.sessionId === 'string'
+                ? data.sessionId
+                : null
+          if (sessionId) parserState.sessionId = sessionId
+
+          const type = typeof data.type === 'string' ? data.type : ''
+          switch (type) {
+            case 'status': {
+              const phase = data.phase
+              if (phase === 'thinking' || phase === 'finalizing') {
+                emit({ type: 'status', phase })
               }
+              return
             }
-          }
-        })
-
-        child.stderr.on('data', (chunk: Buffer) => {
-          if (stderr.length < 16_384) stderr += chunk.toString()
-        })
-
-        child.on('error', (error: Error) => {
-          if (childHandled || closed) return
-          childHandled = true
-          cleanup()
-          emitErrorAndClose(`Failed to start Claude CLI: ${error.message}`, 'pulse_chat_spawn')
-        })
-
-        child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
-          if (childHandled || closed) return
-          childHandled = true
-          cleanup()
-
-          // Flush any partial line that didn't end with a newline (e.g. the final `result` event).
-          if (stdoutRemainder.trim()) {
-            const flushResult = parseClaudeStreamLine(stdoutRemainder, parserState, startedAt)
-            stdoutRemainder = ''
-            if (flushResult.kind === 'assistant_events') {
-              for (const ev of flushResult.events) emit(ev)
+            case 'assistant_delta': {
+              const delta = typeof data.delta === 'string' ? data.delta : ''
+              if (!delta) return
+              recordAssistantDelta(parserState, delta, startedAt)
+              emit({ type: 'assistant_delta', delta })
+              return
             }
+            case 'thinking_content': {
+              const content =
+                typeof data.content === 'string'
+                  ? data.content
+                  : typeof data.delta === 'string'
+                    ? data.delta
+                    : ''
+              if (!content) return
+              recordThinking(parserState, content)
+              emit({ type: 'thinking_content', content })
+              return
+            }
+            case 'tool_use': {
+              const tool = data.tool
+              const toolObj =
+                tool && typeof tool === 'object' && !Array.isArray(tool)
+                  ? (tool as Record<string, unknown>)
+                  : null
+              const nameRaw = toolObj?.name ?? data.name ?? data.tool_call_id
+              const inputRaw = toolObj?.input ?? data.input
+              const name = typeof nameRaw === 'string' && nameRaw.length > 0 ? nameRaw : 'tool'
+              const input =
+                inputRaw && typeof inputRaw === 'object' && !Array.isArray(inputRaw)
+                  ? (inputRaw as Record<string, unknown>)
+                  : {}
+              const toolUseId =
+                typeof data.tool_call_id === 'string' ? data.tool_call_id : undefined
+              upsertToolUse(parserState, toolUseId, name, input)
+              emit({ type: 'tool_use', tool: { name, input } })
+              return
+            }
+            case 'tool_result': {
+              const toolUseId = typeof data.tool_call_id === 'string' ? data.tool_call_id : ''
+              if (!toolUseId) return
+              const resultText =
+                typeof data.result === 'string' ? data.result : extractToolResultText(data.content)
+              if (!resultText) return
+              patchToolResult(parserState, toolUseId, resultText)
+              return
+            }
+            case 'config_options_update':
+            case 'config_option_update': {
+              const configOptions = data.configOptions
+              if (Array.isArray(configOptions)) {
+                emit({ type: 'config_options_update', configOptions })
+              }
+              return
+            }
+            case 'permission_request': {
+              const toolCallId = typeof data.tool_call_id === 'string' ? data.tool_call_id : ''
+              const options = Array.isArray(data.options) ? (data.options as string[]) : []
+              if (toolCallId && options.length > 0) {
+                emit({
+                  type: 'permission_request',
+                  sessionId: sessionId ?? '',
+                  toolCallId,
+                  options,
+                })
+              }
+              return
+            }
+            case 'result': {
+              if (typeof data.result === 'string') {
+                parserState.result = data.result
+                return
+              }
+              if (data.result && typeof data.result === 'object') {
+                parserState.result = JSON.stringify(data.result)
+              }
+              return
+            }
+            default:
+              return
           }
+        }
 
-          if (signal && !aborted) {
-            emitErrorAndClose(
-              `Claude CLI terminated by signal ${signal}`,
-              'pulse_chat_terminated_signal',
+        const wsFlags: Record<string, string | boolean> = {}
+        if (req.sessionId) {
+          wsFlags.session_id = req.sessionId
+        }
+        wsFlags.agent = req.agent
+        if (req.model && req.model !== 'default') {
+          wsFlags.model = req.model
+        }
+
+        void runAxonCommandWsStream('pulse_chat', {
+          timeoutMs: resolvePulseChatTimeoutMs(),
+          input: prompt,
+          flags: wsFlags,
+          signal: request.signal,
+          onJson: (payload) => {
+            const payloadType =
+              payload && typeof payload === 'object' && !Array.isArray(payload)
+                ? (payload as Record<string, unknown>).type
+                : undefined
+            console.log(
+              '[pulse/chat] onJson event:',
+              payloadType,
+              payload && typeof payload === 'object'
+                ? `keys=${Object.keys(payload as object).join(',')}`
+                : typeof payload,
             )
-            return
-          }
+            handlePulsePayload(payload)
+          },
+          onDone: ({ exit_code }) => {
+            console.log(
+              '[pulse/chat] onDone: exit_code=%d parserResult=%dchars deltaCount=%d',
+              exit_code,
+              parserState.result.length,
+              parserState.deltaCount,
+            )
+            if (terminalHandled || closed) return
+            terminalHandled = true
+            cleanup()
+
+            if (aborted) {
+              emit(
+                buildDoneResponse(req, citations, parserState, startedAt, contextCharsTotal, true),
+              )
+              safeClose()
+              return
+            }
+
+            if (exit_code !== 0) {
+              if (emitMemoryFallbackDone()) return
+              emitErrorAndClose(`Pulse chat worker exited ${exit_code}`, 'pulse_chat_exit_nonzero')
+              return
+            }
+
+            emit({ type: 'status', phase: 'finalizing' })
+            emit(
+              buildDoneResponse(req, citations, parserState, startedAt, contextCharsTotal, false),
+            )
+            safeClose()
+          },
+          onError: ({ message }) => {
+            console.error('[pulse/chat] onError:', message)
+            if (terminalHandled || closed) return
+            terminalHandled = true
+            cleanup()
+            if (emitMemoryFallbackDone()) return
+            emitErrorAndClose(
+              `Pulse chat worker failed: ${truncateForLog(message)}`,
+              'pulse_chat_command_error',
+            )
+          },
+        }).catch((error: unknown) => {
+          console.error(
+            '[pulse/chat] WS transport catch:',
+            error instanceof Error ? error.message : String(error),
+          )
+          if (terminalHandled || closed) return
+          terminalHandled = true
+          cleanup()
 
           if (aborted) {
             emit(buildDoneResponse(req, citations, parserState, startedAt, contextCharsTotal, true))
@@ -390,62 +414,21 @@ export async function POST(request: Request) {
             return
           }
 
-          if (code !== 0) {
-            const cliErrorDetail = parserState.result || truncateForLog(stderr || stdoutRemainder)
-            console.error('[pulse/chat] Claude CLI exited', code, {
-              stderr: (stderr || '').slice(0, 500),
-              result: parserState.result.slice(0, 500),
-            })
-            const memoryFallbackText = resolveConversationMemoryAnswer(
-              req.prompt,
-              req.conversationHistory,
-            )
-            if (memoryFallbackText) {
-              const elapsed = Date.now() - startedAt
-              emit({
-                type: 'done',
-                response: {
-                  text: memoryFallbackText,
-                  sessionId: parserState.sessionId ?? undefined,
-                  citations,
-                  operations: [],
-                  toolUses: [],
-                  blocks: [],
-                  metadata: {
-                    model: req.model,
-                    elapsedMs: elapsed,
-                    contextCharsTotal,
-                    contextBudgetChars: MODEL_CONTEXT_BUDGET_CHARS,
-                    first_delta_ms: parserState.firstDeltaMs,
-                    time_to_done_ms: elapsed,
-                    delta_count: parserState.deltaCount,
-                    aborted,
-                    fallback_source: 'conversation_memory' as const,
-                  },
-                },
-              })
-              safeClose()
-              return
-            }
-            emitErrorAndClose(
-              `Claude CLI exited ${code}: ${cliErrorDetail}`,
-              'pulse_chat_exit_nonzero',
-            )
-            return
-          }
-
-          emit({ type: 'status', phase: 'finalizing' })
-          emit(buildDoneResponse(req, citations, parserState, startedAt, contextCharsTotal, false))
-          safeClose()
+          const message = error instanceof Error ? error.message : String(error)
+          if (emitMemoryFallbackDone()) return
+          emitErrorAndClose(
+            `Pulse chat worker transport error: ${truncateForLog(message)}`,
+            'pulse_chat_ws',
+          )
         })
       },
     })
-
     return new Response(stream, {
       headers: {
         'content-type': 'application/x-ndjson; charset=utf-8',
         'cache-control': 'no-cache, no-transform',
         connection: 'keep-alive',
+        'x-accel-buffering': 'no',
       },
     })
   } catch (error: unknown) {
@@ -454,9 +437,4 @@ export async function POST(request: Request) {
     console.error('[pulse/chat] unhandled error', { errorId, message, error })
     return apiError(500, 'Chat request failed', { code: 'pulse_chat_internal', errorId })
   }
-}
-
-function truncateForLog(input: string, max = 400): string {
-  if (input.length <= max) return input
-  return `${input.slice(0, max)}...`
 }

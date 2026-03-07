@@ -1,7 +1,40 @@
 use crate::crates::jobs::common::test_config;
 use crate::crates::vector::ops::tei::tei_client::tei_embed;
 use httpmock::{HttpMockResponse, MockServer};
+use std::env;
 use std::sync::{Arc, Mutex};
+
+/// Guard that restores (or removes) an env var on drop.
+///
+/// Use only inside tests annotated with `#[serial_test::serial]` to prevent concurrent
+/// env mutation across test threads.
+struct EnvGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+impl EnvGuard {
+    #[allow(unsafe_code)]
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = env::var(key).ok();
+        // SAFETY: caller must hold the serial_test lock (see #[serial] annotation) so no
+        // other test thread reads or writes env vars concurrently.
+        unsafe { env::set_var(key, value) };
+        EnvGuard { key, original }
+    }
+}
+impl Drop for EnvGuard {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        // SAFETY: same serial_test lock guarantees exclusive env access for the duration
+        // of the test and its cleanup.
+        unsafe {
+            match &self.original {
+                Some(v) => env::set_var(self.key, v),
+                None => env::remove_var(self.key),
+            }
+        }
+    }
+}
 
 /// Empty input slice must short-circuit before any HTTP call.
 #[tokio::test]
@@ -97,4 +130,84 @@ async fn tei_embed_splits_batch_on_413() {
         2,
         "must return two vectors (one per item after split)"
     );
+}
+
+/// Non-success HTTP responses (not just 429/503) should also retry.
+#[serial_test::serial]
+#[tokio::test]
+async fn tei_embed_retries_on_500() {
+    let server = MockServer::start_async().await;
+    let call_count = Arc::new(Mutex::new(0usize));
+    let cc = Arc::clone(&call_count);
+
+    server
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::POST).path("/embed");
+            then.respond_with(move |_req: &httpmock::HttpMockRequest| {
+                let mut count = cc.lock().unwrap();
+                *count += 1;
+                if *count == 1 {
+                    HttpMockResponse::builder()
+                        .status(500)
+                        .body("temporary failure")
+                        .build()
+                } else {
+                    HttpMockResponse::builder()
+                        .status(200)
+                        .header("content-type", "application/json")
+                        .body("[[0.9,0.8,0.7,0.6]]")
+                        .build()
+                }
+            });
+        })
+        .await;
+
+    let mut cfg = test_config("postgresql://dummy@127.0.0.1:1/dummy");
+    cfg.tei_url = server.base_url();
+
+    // Pin retry-related env vars so ambient overrides can't change test behavior.
+    let _retry_guard = EnvGuard::set("TEI_MAX_RETRIES", "5");
+    let _timeout_guard = EnvGuard::set("TEI_REQUEST_TIMEOUT_MS", "10000");
+
+    let inputs = vec!["retry-on-500".to_string()];
+    let result = tei_embed(&cfg, &inputs)
+        .await
+        .expect("tei_embed must succeed after retry on 500");
+    assert_eq!(result.len(), 1, "must return one embedding vector");
+}
+
+/// Hard client errors should fail fast (no retry storm).
+#[tokio::test]
+async fn tei_embed_fails_fast_on_404() {
+    let server = MockServer::start_async().await;
+    let call_count = Arc::new(Mutex::new(0usize));
+    let cc = Arc::clone(&call_count);
+
+    server
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::POST).path("/embed");
+            then.respond_with(move |_req: &httpmock::HttpMockRequest| {
+                let mut count = cc.lock().unwrap();
+                *count += 1;
+                HttpMockResponse::builder()
+                    .status(404)
+                    .body("not found")
+                    .build()
+            });
+        })
+        .await;
+
+    let mut cfg = test_config("postgresql://dummy@127.0.0.1:1/dummy");
+    cfg.tei_url = server.base_url();
+
+    let inputs = vec!["fail-fast-404".to_string()];
+    let err = tei_embed(&cfg, &inputs)
+        .await
+        .expect_err("tei_embed must fail fast on 404");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("status 404"),
+        "unexpected error message: {msg}"
+    );
+    assert_eq!(*call_count.lock().unwrap(), 1, "404 should not be retried");
 }

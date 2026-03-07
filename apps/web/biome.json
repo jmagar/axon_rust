@@ -18,6 +18,9 @@
         "useMediaCaption": "warn",
         "useSemanticElements": "off"
       },
+      "performance": {
+        "noImgElement": "off"
+      },
       "security": {
         "noDangerouslySetInnerHtml": "off"
       },

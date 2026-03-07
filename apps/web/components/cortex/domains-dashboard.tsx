@@ -3,7 +3,7 @@
 import { AlertCircle, Globe, RefreshCw } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/api-fetch'
-import type { DomainsResult } from '@/lib/result-types'
+import type { DomainsPagedResult, DomainsResult } from '@/lib/result-types'
 
 interface ApiResponse {
   ok: boolean
@@ -11,9 +11,46 @@ interface ApiResponse {
   error?: string
 }
 
+function isDomainsPagedResult(data: DomainsResult): data is DomainsPagedResult {
+  if (!('domains' in data)) return false
+  if (!Array.isArray(data.domains)) return false
+  return data.domains.every(
+    (row) =>
+      !!row &&
+      typeof row === 'object' &&
+      'domain' in row &&
+      typeof row.domain === 'string' &&
+      'vectors' in row,
+  )
+}
+
 function parseCount(v: number | [number, number]): { urls: number; vectors: number } {
   if (Array.isArray(v)) return { urls: v[0], vectors: v[1] }
   return { urls: 0, vectors: v }
+}
+
+interface DomainRow {
+  domain: string
+  urls: number
+  vectors: number
+}
+
+const normalizeDomains = (data: DomainsResult | null): DomainRow[] => {
+  if (!data) return []
+
+  if (isDomainsPagedResult(data)) {
+    return data.domains
+      .map((row) => ({
+        domain: row.domain,
+        urls: Number(row.urls ?? 0) || 0,
+        vectors: Number(row.vectors) || 0,
+      }))
+      .sort((a, b) => b.vectors - a.vectors)
+  }
+
+  return Object.entries(data)
+    .map(([domain, v]) => ({ domain, ...parseCount(v) }))
+    .sort((a, b) => b.vectors - a.vectors)
 }
 
 export function DomainsDashboard() {
@@ -46,10 +83,7 @@ export function DomainsDashboard() {
   }, [])
 
   const rows = useMemo(() => {
-    if (!data) return []
-    return Object.entries(data)
-      .map(([domain, v]) => ({ domain, ...parseCount(v) }))
-      .sort((a, b) => b.vectors - a.vectors)
+    return normalizeDomains(data)
   }, [data])
 
   const maxVectors = rows[0]?.vectors ?? 1
@@ -148,6 +182,12 @@ export function DomainsDashboard() {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {!loading && !error && !data && (
+        <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-base)] px-4 py-3 text-[12px] text-[var(--text-dim)]">
+          Domain stats are not available yet. Try Refresh.
         </div>
       )}
     </div>

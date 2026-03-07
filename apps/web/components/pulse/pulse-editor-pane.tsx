@@ -262,7 +262,7 @@ export function PulseEditorPane({
                 }, 200)
               }}
               variant="default"
-              className="min-h-0 flex-1"
+              className="min-h-0 flex-1 overscroll-y-contain"
             >
               <Editor variant="default" placeholder="Start writing, or ask Cortex to help..." />
               <FloatingToolbar />

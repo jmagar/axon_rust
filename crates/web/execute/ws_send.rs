@@ -10,19 +10,6 @@ pub(super) async fn send_command_start(tx: &mpsc::Sender<String>, context: &Exec
     }
 }
 
-pub(super) async fn send_command_output_json(
-    tx: &mpsc::Sender<String>,
-    context: &super::events::CommandContext,
-    data: serde_json::Value,
-) {
-    if let Some(v2) = serialize_v2_event(WsEventV2::CommandOutputJson {
-        ctx: context.clone(),
-        data,
-    }) {
-        let _ = tx.send(v2).await;
-    }
-}
-
 pub(super) async fn send_command_output_line(
     tx: &mpsc::Sender<String>,
     context: &super::events::CommandContext,

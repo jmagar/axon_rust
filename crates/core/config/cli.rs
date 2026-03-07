@@ -20,6 +20,7 @@ pub(super) enum CliCommand {
     Scrape(ScrapeArgs),
     Crawl(CrawlArgs),
     Refresh(RefreshArgs),
+    Watch(WatchArgs),
     Map(UrlArg),
     Extract(ExtractArgs),
     Search(TextArg),
@@ -50,7 +51,7 @@ pub(super) enum CliCommand {
 #[derive(Debug, Args)]
 pub(super) struct ServeArgs {
     /// Port to bind the web UI server on
-    #[arg(long, default_value_t = 3939)]
+    #[arg(long, env = "AXON_SERVE_PORT", default_value_t = 49000)]
     pub(super) port: u16,
 }
 
@@ -58,6 +59,58 @@ pub(super) struct ServeArgs {
 pub(super) struct ScrapeArgs {
     #[arg(value_name = "URL")]
     pub(super) positional_urls: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub(super) struct WatchArgs {
+    #[command(subcommand)]
+    pub(super) action: Option<WatchSubcommand>,
+}
+
+#[derive(Debug, Subcommand)]
+pub(super) enum WatchSubcommand {
+    Create {
+        name: String,
+        #[arg(long = "task-type")]
+        task_type: String,
+        #[arg(long = "every-seconds")]
+        every_seconds: i64,
+        #[arg(long = "task-payload")]
+        task_payload: Option<String>,
+    },
+    List,
+    Get {
+        id: String,
+    },
+    Update {
+        id: String,
+        #[arg(long = "every-seconds")]
+        every_seconds: Option<i64>,
+    },
+    #[command(name = "run-now")]
+    RunNow {
+        id: String,
+    },
+    Pause {
+        id: String,
+    },
+    Resume {
+        id: String,
+    },
+    Delete {
+        id: String,
+    },
+    History {
+        id: String,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    Artifacts {
+        run_id: String,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
 }
 
 #[derive(Debug, Args)]

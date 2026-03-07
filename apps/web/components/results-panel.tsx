@@ -103,10 +103,11 @@ export function ResultsPanel({ statsSlot }: ResultsPanelProps) {
     screenshotFiles,
     currentJobId,
   } = useWsExecutionState()
-  const { workspaceMode, workspacePromptVersion } = useWsWorkspaceState()
+  const { workspaceMode, workspacePromptVersion, workspaceResumeVersion } = useWsWorkspaceState()
   const { selectFile } = useWsMessageActions()
 
-  const isPulseWorkspace = workspaceMode === 'pulse' && workspacePromptVersion > 0
+  const isPulseWorkspace =
+    workspaceMode === 'pulse' && (workspacePromptVersion > 0 || workspaceResumeVersion > 0)
 
   const [activeTab, setActiveTab] = useState<TabId>('content')
   const contentScrollRef = useRef<HTMLDivElement>(null)

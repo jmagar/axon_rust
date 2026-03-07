@@ -1,8 +1,14 @@
 use super::events::{
     ArtifactEntry, CommandContext, JobProgressPayload, JobStatusPayload, WsEventV2,
 };
+use crate::crates::core::config::Config;
+use crate::crates::services::types::{
+    AcpBridgeEvent, AcpPermissionRequestEvent, AcpSessionUpdateEvent, AcpSessionUpdateKind,
+    AcpTurnResultEvent,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -263,6 +269,8 @@ async fn sync_single_line_json_emits_one_structured_event() {
         exec_id: "exec-dup-check".to_string(),
         mode: "query".to_string(),
         input: "test".to_string(),
+        flags: Value::Null,
+        cfg: Arc::new(Config::default()),
     };
 
     let child = Command::new("sh")
@@ -409,41 +417,8 @@ async fn artifact_list_emits_v2_only_via_screenshot_json_helper() {
     assert!(rx.try_recv().is_err());
 }
 
-#[test]
-fn async_polling_dual_emits_legacy_and_v2_status_progress() {
-    let ctx = sample_ctx();
-    let status_json = json!({
-        "status": "running",
-        "metrics": {
-            "pages_crawled": 3,
-            "pages_discovered": 10,
-            "phase": "fetching"
-        }
-    });
-
-    let messages =
-        super::polling::poll_messages_for_status("crawl", "job-123", "running", &status_json, &ctx);
-    let parsed = messages
-        .iter()
-        .map(|msg| serde_json::from_str::<Value>(msg).expect("valid message json"))
-        .collect::<Vec<_>>();
-
-    assert!(
-        parsed
-            .iter()
-            .any(|m| m.get("type").and_then(Value::as_str) == Some("crawl_progress"))
-    );
-    assert!(
-        parsed
-            .iter()
-            .any(|m| m.get("type").and_then(Value::as_str) == Some("job.status"))
-    );
-    assert!(
-        parsed
-            .iter()
-            .any(|m| m.get("type").and_then(Value::as_str) == Some("job.progress"))
-    );
-}
+// async_polling_dual_emits_legacy_and_v2_status_progress removed:
+// polling module was deleted in the fire-and-forget refactor (Task 5.3).
 
 #[test]
 fn cancel_ok_from_output_accepts_legacy_canceled_field() {
@@ -470,4 +445,122 @@ fn cancel_job_id_validation_accepts_only_uuid() {
     ));
     assert!(!super::is_valid_cancel_job_id("not-a-uuid"));
     assert!(!super::is_valid_cancel_job_id(""));
+}
+
+#[test]
+fn acp_session_update_maps_to_stream_friendly_output_json_payload() {
+    let payload = super::events::acp_bridge_event_payload(&AcpBridgeEvent::SessionUpdate(
+        AcpSessionUpdateEvent {
+            session_id: "session-123".to_string(),
+            kind: AcpSessionUpdateKind::AssistantDelta,
+            text_delta: Some("hello".to_string()),
+            tool_call_id: None,
+            tool_name: None,
+            tool_status: None,
+            tool_content: None,
+            tool_input: None,
+        },
+    ));
+
+    let event = WsEventV2::CommandOutputJson {
+        ctx: sample_ctx(),
+        data: payload,
+    };
+    let serialized = serde_json::to_value(event).expect("event should serialize");
+
+    assert_eq!(
+        serialized.get("type").and_then(Value::as_str),
+        Some("command.output.json")
+    );
+    assert_eq!(
+        serialized
+            .get("data")
+            .and_then(|data| data.get("data"))
+            .and_then(|data| data.get("type"))
+            .and_then(Value::as_str),
+        Some("assistant_delta")
+    );
+    assert_eq!(
+        serialized
+            .get("data")
+            .and_then(|data| data.get("data"))
+            .and_then(|data| data.get("delta"))
+            .and_then(Value::as_str),
+        Some("hello")
+    );
+}
+
+#[test]
+fn acp_permission_request_maps_to_stream_friendly_output_json_payload() {
+    let payload = super::events::acp_bridge_event_payload(&AcpBridgeEvent::PermissionRequest(
+        AcpPermissionRequestEvent {
+            session_id: "session-123".to_string(),
+            tool_call_id: "tool-9".to_string(),
+            option_ids: vec!["allow_once".to_string(), "deny".to_string()],
+        },
+    ));
+
+    let event = WsEventV2::CommandOutputJson {
+        ctx: sample_ctx(),
+        data: payload,
+    };
+    let serialized = serde_json::to_value(event).expect("event should serialize");
+
+    assert_eq!(
+        serialized.get("type").and_then(Value::as_str),
+        Some("command.output.json")
+    );
+    assert_eq!(
+        serialized
+            .get("data")
+            .and_then(|data| data.get("data"))
+            .and_then(|data| data.get("type"))
+            .and_then(Value::as_str),
+        Some("permission_request")
+    );
+    assert_eq!(
+        serialized
+            .get("data")
+            .and_then(|data| data.get("data"))
+            .and_then(|data| data.get("tool_call_id"))
+            .and_then(Value::as_str),
+        Some("tool-9")
+    );
+}
+
+#[test]
+fn acp_turn_result_maps_to_stream_friendly_output_json_payload() {
+    let payload =
+        super::events::acp_bridge_event_payload(&AcpBridgeEvent::TurnResult(AcpTurnResultEvent {
+            session_id: "session-xyz".to_string(),
+            stop_reason: "end_turn".to_string(),
+            result: "{\"text\":\"hello\",\"operations\":[]}".to_string(),
+        }));
+
+    let event = WsEventV2::CommandOutputJson {
+        ctx: sample_ctx(),
+        data: payload,
+    };
+    let serialized = serde_json::to_value(event).expect("event should serialize");
+
+    assert_eq!(
+        serialized.get("type").and_then(Value::as_str),
+        Some("command.output.json")
+    );
+    assert_eq!(
+        serialized
+            .get("data")
+            .and_then(|data| data.get("data"))
+            .and_then(|data| data.get("type"))
+            .and_then(Value::as_str),
+        Some("result")
+    );
+    assert_eq!(
+        serialized
+            .get("data")
+            .and_then(|data| data.get("data"))
+            .and_then(|data| data.get("session_id"))
+            .and_then(Value::as_str),
+        Some("session-xyz")
+    );
 }

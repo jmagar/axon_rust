@@ -1,6 +1,7 @@
 'use client'
 
 import dynamic from 'next/dynamic'
+import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DockerStats } from '@/components/docker-stats'
 import { LandingCards } from '@/components/landing-cards'
@@ -19,12 +20,16 @@ import { WsIndicator } from '@/components/ws-indicator'
 import { useAxonWs } from '@/hooks/use-axon-ws'
 import { MOBILE_PANE_STORAGE_KEY } from '@/hooks/use-split-pane'
 import { useWsMessages } from '@/hooks/use-ws-messages'
+import { setPendingTab } from '@/lib/pending-tab'
 import {
   DEFAULT_NEURAL_CANVAS_PROFILE,
   type NeuralCanvasProfile,
 } from '@/lib/pulse/neural-canvas-presets'
+import { resultToMarkdown } from '@/lib/result-to-markdown'
 import { getStorageItem, setStorageItem } from '@/lib/storage'
 import type { ContainerStats, WsServerMsg } from '@/lib/ws-protocol'
+
+const INLINE_RESULT_MODES = new Set(['ask', 'research', 'query', 'retrieve'])
 
 const NeuralCanvas = dynamic(() => import('@/components/neural-canvas'), {
   ssr: false,
@@ -33,12 +38,21 @@ const CANVAS_PROFILE_STORAGE_KEY = 'axon.web.neural-canvas.profile'
 const CANVAS_PROFILE_OPTIONS: NeuralCanvasProfile[] = ['current', 'subtle', 'cinematic', 'electric']
 
 export default function DashboardPage() {
+  const router = useRouter()
   const { subscribe } = useAxonWs()
   const canvasRef = useRef<NeuralCanvasHandle>(null)
-  const { isProcessing, hasResults, workspaceMode, workspacePromptVersion } = useWsMessages()
+  const {
+    isProcessing,
+    hasResults,
+    currentMode,
+    workspaceMode,
+    workspacePromptVersion,
+    workspaceResumeVersion,
+  } = useWsMessages()
   const [canvasProfile, setCanvasProfile] = useState<NeuralCanvasProfile>(
     DEFAULT_NEURAL_CANVAS_PROFILE,
   )
+  const omniboxDockRef = useRef<HTMLDivElement>(null)
   const [landingMobilePane, setLandingMobilePane] = useState<'chat' | 'editor'>('chat')
   const [landingEditorMarkdown, setLandingEditorMarkdown] = useState('')
 
@@ -88,6 +102,38 @@ export default function DashboardPage() {
     }
   }, [isProcessing])
 
+  // For inline-result modes (ask, research, query, retrieve): auto-open results in editor tab
+  const capturedJsonRef = useRef<unknown[]>([])
+  const currentModeRef = useRef(currentMode)
+  useEffect(() => {
+    currentModeRef.current = currentMode
+  }, [currentMode])
+  useEffect(() => {
+    if (isProcessing) capturedJsonRef.current = []
+  }, [isProcessing])
+  useEffect(() => {
+    return subscribe((msg: WsServerMsg) => {
+      if (msg.type === 'command.output.json') {
+        if (INLINE_RESULT_MODES.has(msg.data.ctx.mode)) {
+          capturedJsonRef.current = [...capturedJsonRef.current, msg.data.data]
+        }
+      } else if (msg.type === 'command.done') {
+        const mode = msg.data.ctx.mode
+        if (INLINE_RESULT_MODES.has(mode) && capturedJsonRef.current.length > 0) {
+          const markdown = resultToMarkdown(mode, capturedJsonRef.current)
+          if (markdown) {
+            const label = mode.charAt(0).toUpperCase() + mode.slice(1)
+            setPendingTab({ title: label, markdown })
+            router.push('/editor')
+          }
+        }
+        capturedJsonRef.current = []
+      } else if (msg.type === 'command.error') {
+        capturedJsonRef.current = []
+      }
+    })
+  }, [subscribe, router])
+
   const handleStats = useCallback(
     (data: {
       aggregate: { cpu_percent: number }
@@ -104,8 +150,28 @@ export default function DashboardPage() {
     [isProcessing],
   )
 
+  const isInlineMode = INLINE_RESULT_MODES.has(currentMode)
   const isPulseWorkspaceActive =
-    workspaceMode === 'pulse' && hasResults && workspacePromptVersion > 0
+    workspaceMode === 'pulse' &&
+    hasResults &&
+    (workspacePromptVersion > 0 || workspaceResumeVersion > 0)
+
+  // Measure the fixed omnibox dock and set a CSS variable so the workspace
+  // overlay stops above it instead of being clipped behind it.
+  useEffect(() => {
+    const node = omniboxDockRef.current
+    if (!node) return
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry) {
+        document.documentElement.style.setProperty(
+          '--omnibox-dock-h',
+          `${entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height}px`,
+        )
+      }
+    })
+    ro.observe(node)
+    return () => ro.disconnect()
+  }, [])
 
   return (
     <>
@@ -114,10 +180,12 @@ export default function DashboardPage() {
       {isPulseWorkspaceActive ? (
         /* Full-screen workspace — fixed overlay from sidebar right-edge to viewport edge */
         <div
-          className="fixed bottom-0 right-0 top-0 z-[3] overflow-hidden"
-          style={{ left: 'var(--sidebar-w, 260px)' }}
+          className="fixed right-0 top-0 z-[3] overflow-hidden pointer-events-none"
+          style={{ left: 'var(--sidebar-w, 260px)', bottom: 'var(--omnibox-dock-h, 72px)' }}
         >
-          <ResultsPanel statsSlot={<DockerStats onStats={handleStats} />} />
+          <div className="h-full pointer-events-auto">
+            <ResultsPanel statsSlot={<DockerStats onStats={handleStats} />} />
+          </div>
         </div>
       ) : (
         /* Landing / results — centered glass card */
@@ -159,13 +227,15 @@ export default function DashboardPage() {
                     />
                   </div>
                 )}
-                <div
-                  className={
-                    landingMobilePane === 'editor' && !hasResults ? 'hidden lg:block' : undefined
-                  }
-                >
-                  <ResultsPanel statsSlot={<DockerStats onStats={handleStats} />} />
-                </div>
+                {!isInlineMode && (
+                  <div
+                    className={
+                      landingMobilePane === 'editor' && !hasResults ? 'hidden lg:block' : undefined
+                    }
+                  >
+                    <ResultsPanel statsSlot={<DockerStats onStats={handleStats} />} />
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -187,6 +257,7 @@ export default function DashboardPage() {
       {/* Fixed bottom omnibox — only when Pulse workspace is active */}
       {isPulseWorkspaceActive && (
         <div
+          ref={omniboxDockRef}
           className="fixed bottom-0 right-0 z-20 px-2.5 pb-3 sm:px-3.5 sm:pb-4"
           style={{ left: 'var(--sidebar-w, 260px)' }}
         >

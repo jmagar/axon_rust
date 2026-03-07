@@ -3,31 +3,41 @@
 import type React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTimedNotice } from '@/hooks/use-timed-notice'
-import type { ChatStreamEvent } from '@/lib/pulse/chat-api'
-import { runChatPrompt, runSourcePrompt } from '@/lib/pulse/chat-api'
-import { parseClaudeAssistantPayload } from '@/lib/pulse/claude-response'
+import { runChatPrompt } from '@/lib/pulse/chat-api'
 import type { ValidationResult } from '@/lib/pulse/doc-ops'
-import { validateDocOperations } from '@/lib/pulse/doc-ops'
-import { checkPermission } from '@/lib/pulse/permissions'
 import { detectPulsePromptIntent } from '@/lib/pulse/prompt-intent'
 import type {
+  AcpConfigOption,
+  AcpPermissionRequest,
   DocOperation,
-  PulseMessageBlock,
+  PulseAgent,
   PulseModel,
   PulsePermissionLevel,
   PulseToolUse,
 } from '@/lib/pulse/types'
 import type { ChatMessage } from '@/lib/pulse/workspace-persistence'
 import type { WsServerMsg } from '@/lib/ws-protocol'
+import type { PromptConfig, StreamAccumulator } from './pulse-chat-helpers'
+import {
+  finalizeStreamResponse,
+  handlePromptError,
+  handleSourceIntent,
+  makeStreamEventHandler,
+} from './pulse-chat-helpers'
+
+// ── Types ───────────────────────────────────────────────────────────────────
 
 interface UsePulseChatInput {
   documentMarkdown: string
   permissionLevel: PulsePermissionLevel
+  agent: PulseAgent
   model: PulseModel
   subscribe: (handler: (msg: WsServerMsg) => void) => () => void
   onApplyOperations: (ops: DocOperation[]) => void
   onPendingOps: (ops: DocOperation[] | null) => void
   onPendingValidation: (v: ValidationResult | null) => void
+  onAcpConfigUpdate?: (options: AcpConfigOption[]) => void
+  onPermissionRequest?: (req: AcpPermissionRequest) => void
   effort?: string
   maxTurns?: number
   maxBudgetUsd?: number
@@ -39,14 +49,19 @@ interface UsePulseChatInput {
   disallowedTools?: string
 }
 
+// ── Main hook ───────────────────────────────────────────────────────────────
+
 export function usePulseChat({
   documentMarkdown,
   permissionLevel,
+  agent,
   model,
   subscribe,
   onApplyOperations,
   onPendingOps,
   onPendingValidation,
+  onAcpConfigUpdate,
+  onPermissionRequest,
   effort,
   maxTurns,
   maxBudgetUsd,
@@ -81,15 +96,17 @@ export function usePulseChat({
   const messageIdRef = useRef(0)
   const lastCmdModeRef = useRef('')
   const lastCmdInputRef = useRef('')
+  const lastSubmittedPromptRef = useRef<{ text: string; atMs: number } | null>(null)
 
-  // Refs for frequently-changing values used inside handlePrompt — avoids
+  // Ref for frequently-changing values used inside handlePrompt — avoids
   // recreating the callback on every keystroke or streaming update (CQ-3).
-  const configRef = useRef({
+  const configRef = useRef<PromptConfig>({
     chatSessionId,
     documentMarkdown,
     activeThreadSources,
     scrapedContext,
     permissionLevel,
+    agent,
     model,
     effort,
     maxTurns,
@@ -101,23 +118,26 @@ export function usePulseChat({
     allowedTools,
     disallowedTools,
   })
-  configRef.current = {
-    chatSessionId,
-    documentMarkdown,
-    activeThreadSources,
-    scrapedContext,
-    permissionLevel,
-    model,
-    effort,
-    maxTurns,
-    maxBudgetUsd,
-    appendSystemPrompt,
-    disableSlashCommands,
-    noSessionPersistence,
-    fallbackModel,
-    allowedTools,
-    disallowedTools,
-  }
+
+  // Keep the ref in sync — single assignment instead of re-creating the object
+  // on every render when no values changed. The ref is only read inside
+  // handlePrompt, which captures it by reference.
+  configRef.current.chatSessionId = chatSessionId
+  configRef.current.documentMarkdown = documentMarkdown
+  configRef.current.activeThreadSources = activeThreadSources
+  configRef.current.scrapedContext = scrapedContext
+  configRef.current.permissionLevel = permissionLevel
+  configRef.current.agent = agent
+  configRef.current.model = model
+  configRef.current.effort = effort
+  configRef.current.maxTurns = maxTurns
+  configRef.current.maxBudgetUsd = maxBudgetUsd
+  configRef.current.appendSystemPrompt = appendSystemPrompt
+  configRef.current.disableSlashCommands = disableSlashCommands
+  configRef.current.noSessionPersistence = noSessionPersistence
+  configRef.current.fallbackModel = fallbackModel
+  configRef.current.allowedTools = allowedTools
+  configRef.current.disallowedTools = disallowedTools
 
   const setChatHistoryTracked = useCallback((action: React.SetStateAction<ChatMessage[]>) => {
     if (typeof action === 'function') {
@@ -193,6 +213,17 @@ export function usePulseChat({
     async (prompt: string) => {
       const trimmed = prompt.trim()
       if (!trimmed) return
+      const now = Date.now()
+      const lastSubmitted = lastSubmittedPromptRef.current
+      if (
+        activePromptAbortRef.current &&
+        lastSubmitted &&
+        lastSubmitted.text === trimmed &&
+        now - lastSubmitted.atMs < 1500
+      ) {
+        return
+      }
+      lastSubmittedPromptRef.current = { text: trimmed, atMs: now }
 
       const promptId = inFlightPromptRef.current + 1
       inFlightPromptRef.current = promptId
@@ -203,7 +234,18 @@ export function usePulseChat({
       const controller = new AbortController()
       activePromptAbortRef.current = controller
 
-      setChatHistoryTracked((prev) => [...prev, createMessage({ role: 'user', content: trimmed })])
+      setChatHistoryTracked((prev) => {
+        const last = prev[prev.length - 1]
+        if (
+          last &&
+          last.role === 'user' &&
+          last.content === trimmed &&
+          now - (last.createdAt ?? 0) < 1500
+        ) {
+          return prev
+        }
+        return [...prev, createMessage({ role: 'user', content: trimmed })]
+      })
       setIsChatLoading(true)
       setStreamPhase('started')
       setLiveToolUses([])
@@ -214,48 +256,27 @@ export function usePulseChat({
       }))
       const intent = detectPulsePromptIntent(trimmed)
 
-      // Hoisted so the catch block can recover structured content from streaming deltas.
-      let partialText = ''
-      let draftAdded = false
-      let assistantDraftId: string | undefined
+      const acc: StreamAccumulator = {
+        partialText: '',
+        draftAdded: false,
+        assistantDraftId: undefined,
+        partialTools: [],
+        partialBlocks: [],
+      }
 
       try {
         if (intent.kind === 'source') {
-          const result = await runSourcePrompt(intent.urls, controller.signal)
-          if (inFlightPromptRef.current !== promptId) return
-          setIndexedSources((prev) => {
-            const next = [...prev]
-            for (const url of result.indexed) {
-              if (!next.includes(url)) next.push(url)
-            }
-            return next.slice(-200)
-          })
-          setActiveThreadSources((prev) => {
-            const merged = [...prev]
-            for (const url of result.indexed) {
-              if (!merged.includes(url)) merged.push(url)
-            }
-            return merged.slice(-200)
-          })
-          if (result.markdownBySrc && Object.keys(result.markdownBySrc).length > 0) {
-            const firstUrl = result.indexed[0]
-            const md = firstUrl ? result.markdownBySrc[firstUrl] : undefined
-            if (md && md.length > 0) {
-              setScrapedContext({ url: firstUrl ?? '', markdown: md })
-            }
-          }
-          const sourceList = result.indexed.map((url) => `- ${url}`).join('\n')
-          const assistantMessage = [
-            'Indexed new sources into Axon.',
-            '',
-            sourceList,
-            '',
-            'Ask a follow-up question to use this fresh context.',
-          ].join('\n')
-          setChatHistoryTracked((prev) => [
-            ...prev,
-            createMessage({ role: 'assistant', content: assistantMessage }),
-          ])
+          await handleSourceIntent(
+            intent.urls,
+            controller.signal,
+            promptId,
+            inFlightPromptRef,
+            setIndexedSources,
+            setActiveThreadSources,
+            setScrapedContext,
+            setChatHistoryTracked,
+            createMessage,
+          )
           return
         }
 
@@ -266,84 +287,33 @@ export function usePulseChat({
           toolUses: [],
           blocks: [],
         })
-        assistantDraftId = assistantDraft.id
-
-        const partialTools: PulseToolUse[] = []
-        const partialBlocks: PulseMessageBlock[] = []
-        function ensureDraftAdded() {
-          if (!draftAdded) {
-            draftAdded = true
-            setChatHistoryTracked((prev) => [...prev, assistantDraft])
-          }
-        }
+        acc.assistantDraftId = assistantDraft.id
 
         const cfg = configRef.current
+        const { handler: onEvent, flush: flushStream } = makeStreamEventHandler(
+          acc,
+          promptId,
+          inFlightPromptRef,
+          assistantDraft,
+          setStreamPhase,
+          setLiveToolUses,
+          setChatHistoryTracked,
+          updateChatMessage,
+          onAcpConfigUpdate,
+          onPermissionRequest,
+        )
+
         const data = await runChatPrompt({
           prompt: boundedPrompt,
           conversationHistory,
           signal: controller.signal,
-          onEvent: (event: ChatStreamEvent) => {
-            if (inFlightPromptRef.current !== promptId) return
-            if (event.type === 'status' && event.phase) {
-              setStreamPhase(event.phase)
-              return
-            }
-            if (event.type === 'thinking_content' && event.content) {
-              ensureDraftAdded()
-              // Partial-message update: update the last thinking block in-place to avoid
-              // stacking multiple "Reasoning" boxes as the thinking grows incrementally.
-              const lastBlock = partialBlocks[partialBlocks.length - 1]
-              if (lastBlock?.type === 'thinking') {
-                partialBlocks[partialBlocks.length - 1] = {
-                  type: 'thinking',
-                  content: event.content,
-                }
-              } else {
-                partialBlocks.push({ type: 'thinking', content: event.content })
-              }
-              updateChatMessage(assistantDraft.id!, (m) => ({ ...m, blocks: [...partialBlocks] }))
-              return
-            }
-            if (event.type === 'assistant_delta' && event.delta) {
-              ensureDraftAdded()
-              partialText += event.delta
-              const lastBlock = partialBlocks[partialBlocks.length - 1]
-              if (lastBlock?.type === 'text') {
-                partialBlocks[partialBlocks.length - 1] = {
-                  ...lastBlock,
-                  content: lastBlock.content + event.delta,
-                }
-              } else {
-                partialBlocks.push({ type: 'text', content: event.delta })
-              }
-              updateChatMessage(assistantDraft.id!, (m) => ({
-                ...m,
-                content: partialText,
-                blocks: [...partialBlocks],
-              }))
-              return
-            }
-            if (event.type === 'tool_use' && event.tool) {
-              ensureDraftAdded()
-              partialTools.push(event.tool)
-              partialBlocks.push({
-                type: 'tool_use',
-                name: event.tool.name,
-                input: event.tool.input,
-              })
-              setLiveToolUses([...partialTools])
-              updateChatMessage(assistantDraft.id!, (m) => ({
-                ...m,
-                toolUses: [...partialTools],
-                blocks: [...partialBlocks],
-              }))
-            }
-          },
+          onEvent,
           chatSessionId: cfg.chatSessionId,
           documentMarkdown: cfg.documentMarkdown,
           activeThreadSources: cfg.activeThreadSources,
           scrapedContext: cfg.scrapedContext,
           permissionLevel: cfg.permissionLevel,
+          agent: cfg.agent,
           model: cfg.model,
           effort: cfg.effort,
           maxTurns: cfg.maxTurns,
@@ -357,71 +327,37 @@ export function usePulseChat({
         })
 
         if (inFlightPromptRef.current !== promptId) return
-        ensureDraftAdded()
-        if (data.sessionId) setChatSessionId(data.sessionId)
-        if (data.metadata) {
-          setLastResponseLatencyMs(data.metadata.elapsedMs)
-          setLastResponseModel(data.metadata.model)
-          setLastContextStats({
-            contextCharsTotal: data.metadata.contextCharsTotal,
-            contextBudgetChars: data.metadata.contextBudgetChars,
-          })
+        // Flush any throttled deltas before finalizing
+        flushStream()
+        if (!acc.draftAdded) {
+          acc.draftAdded = true
+          setChatHistoryTracked((prev) => [...prev, assistantDraft])
         }
 
-        updateChatMessage(assistantDraft.id!, (m) => ({
-          ...m,
-          content: data.text,
-          citations: data.citations,
-          operations: data.operations,
-          toolUses: data.toolUses,
-          blocks: data.blocks,
-        }))
-
-        if (data.operations.length > 0) {
-          const permission = checkPermission(cfg.permissionLevel, data.operations, {
-            isCurrentDoc: true,
-            currentDocMarkdown: cfg.documentMarkdown,
-          })
-          if (permission.allowed && !permission.requiresConfirmation) {
-            onApplyOperations(data.operations)
-          } else if (permission.allowed && permission.requiresConfirmation) {
-            const validation = validateDocOperations(data.operations, cfg.documentMarkdown)
-            onPendingOps(data.operations)
-            onPendingValidation(validation)
-          }
-        }
+        finalizeStreamResponse(
+          data,
+          acc,
+          cfg,
+          setChatSessionId,
+          setLastResponseLatencyMs,
+          setLastResponseModel,
+          setLastContextStats,
+          updateChatMessage,
+          onApplyOperations,
+          onPendingOps,
+          onPendingValidation,
+        )
       } catch (err: unknown) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          showRequestNotice('Request stopped. Partial response preserved.')
-          return
-        }
         if (inFlightPromptRef.current !== promptId) return
-        // If Claude streamed JSON before the error, extract the text instead of showing raw JSON.
-        const parsedPartial =
-          draftAdded && assistantDraftId ? parseClaudeAssistantPayload(partialText) : null
-        const message = err instanceof Error ? err.message : 'Unknown error'
-        if (parsedPartial?.text && assistantDraftId) {
-          // Recovered the real response text from streaming deltas — show it cleanly.
-          updateChatMessage(assistantDraftId, (m) => ({ ...m, content: parsedPartial.text }))
-        } else if (draftAdded && assistantDraftId) {
-          // Draft is in history with raw streaming content — replace it with the error in-place.
-          updateChatMessage(assistantDraftId, (m) => ({
-            ...m,
-            content: message,
-            isError: true,
-            retryPrompt: trimmed,
-          }))
-        } else {
-          setChatHistoryTracked((prev) => [
-            ...prev,
-            createMessage({
-              role: 'assistant',
-              content: message,
-              isError: true,
-              retryPrompt: trimmed,
-            }),
-          ])
-        }
+        handlePromptError(
+          err,
+          acc,
+          trimmed,
+          showRequestNotice,
+          updateChatMessage,
+          setChatHistoryTracked,
+          createMessage,
+        )
       } finally {
         if (activePromptAbortRef.current === controller) activePromptAbortRef.current = null
         if (inFlightPromptRef.current === promptId) {
@@ -433,9 +369,11 @@ export function usePulseChat({
     },
     [
       createMessage,
+      onAcpConfigUpdate,
       onApplyOperations,
       onPendingOps,
       onPendingValidation,
+      onPermissionRequest,
       setChatHistoryTracked,
       showRequestNotice,
       updateChatMessage,

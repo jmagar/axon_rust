@@ -1,26 +1,24 @@
 ---
 description: Embed content with lifecycle job controls
-argument-hint: <input> [options] | status <job-id> | cancel <job-id> | list | cleanup | clear | recover
-allowed-tools: mcp__axon__axon
+argument-hint: <input> | status <job-id> | cancel <job-id> | list | cleanup | clear | recover
+allowed-tools: mcp__axon__axon, Bash
 ---
 
-# Embed Content
+Use `mcp__axon__axon` directly.
 
-Call the Axon MCP tool (`axon`) with:
-- `action: "embed"`
-- `subaction: "start|status|cancel|list|cleanup|clear|recover"` from `$ARGUMENTS`
-- map remaining `$ARGUMENTS` to schema fields
+**Start:**
+```json
+{ "action": "embed", "input": "<url-or-path from $ARGUMENTS>" }
+```
 
-## Instructions
+**Lifecycle:**
+```json
+{ "action": "embed", "subaction": "status", "job_id": "<uuid>" }
+{ "action": "embed", "subaction": "cancel", "job_id": "<uuid>" }
+{ "action": "embed", "subaction": "list", "limit": 10 }
+{ "action": "embed", "subaction": "cleanup" }
+{ "action": "embed", "subaction": "clear" }
+{ "action": "embed", "subaction": "recover" }
+```
 
-1. Execute using the Axon MCP tool (`axon`) with action/subaction routing and mapped arguments.
-2. Handle both start and lifecycle operations (`status|cancel|list|cleanup|clear|recover`).
-3. Parse embedding progress, vector write counts, and failures.
-4. Present final indexing summary.
-
-## Expected Output
-
-The command returns:
-- embed job identifiers
-- lifecycle status/progress
-- vector/indexing results and errors
+Parse `$ARGUMENTS`: content/URL/path → start, lifecycle keyword + UUID → management.

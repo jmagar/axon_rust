@@ -6,6 +6,12 @@ use super::super::robots::{RobotsBackfillStats, RobotsDiscoveryStats};
 use super::super::{read_manifest_urls, write_audit_diff};
 use super::job_context::JobExecutionContext;
 
+fn sorted_vec(values: &std::collections::HashSet<String>) -> Vec<String> {
+    let mut out: Vec<String> = values.iter().cloned().collect();
+    out.sort();
+    out
+}
+
 pub(super) struct CompletedResultContext {
     pub(super) summary: CrawlSummary,
     pub(super) final_summary: CrawlSummary,
@@ -43,6 +49,10 @@ pub(super) async fn build_completed_result(
         "md_created": result_ctx.final_summary.markdown_files,
         "thin_md": result_ctx.final_summary.thin_pages,
         "filtered_urls": filtered_urls,
+        "error_pages": result_ctx.final_summary.error_pages,
+        "waf_blocked_pages": result_ctx.final_summary.waf_blocked_pages,
+        "thin_urls": sorted_vec(&result_ctx.final_summary.thin_urls),
+        "waf_blocked_urls": sorted_vec(&result_ctx.final_summary.waf_blocked_urls),
         "pages_crawled": pages_crawled,
         "pages_discovered": pages_discovered,
         "crawl_stream_pages": result_ctx.summary.pages_seen,
@@ -59,4 +69,88 @@ pub(super) async fn build_completed_result(
         "audit_report_path": report_path.to_string_lossy(),
         "extraction_prompt": result_ctx.final_prompt,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crates::core::config::Config;
+    use crate::crates::crawl::manifest::ManifestEntry;
+    use std::collections::{HashMap, HashSet};
+
+    #[tokio::test]
+    async fn crawl_result_json_includes_artifact_url_lists_and_error_metrics() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest_path = temp.path().join("manifest.jsonl");
+        tokio::fs::write(
+            &manifest_path,
+            "{\"url\":\"https://example.com/a\",\"file_path\":\"markdown/a.md\",\"markdown_chars\":123,\"changed\":true}\n",
+        )
+        .await
+        .expect("write manifest");
+
+        let cfg = Config {
+            output_dir: temp.path().to_path_buf(),
+            ..Config::default()
+        };
+
+        let ctx = JobExecutionContext {
+            url: "https://example.com".to_string(),
+            job_cfg: cfg,
+            extraction_prompt: None,
+            previous_urls: HashSet::new(),
+            previous_manifest: HashMap::<String, ManifestEntry>::new(),
+            cache_source: None,
+        };
+
+        let mut thin_urls = HashSet::new();
+        thin_urls.insert("https://example.com/thin".to_string());
+        let mut waf_urls = HashSet::new();
+        waf_urls.insert("https://example.com/blocked".to_string());
+
+        let summary = CrawlSummary {
+            pages_seen: 1,
+            markdown_files: 1,
+            thin_pages: 0,
+            reused_pages: 0,
+            pages_discovered: 1,
+            elapsed_ms: 100,
+            thin_urls: HashSet::new(),
+            error_pages: 0,
+            waf_blocked_pages: 0,
+            waf_blocked_urls: HashSet::new(),
+        };
+        let final_summary = CrawlSummary {
+            pages_seen: 2,
+            markdown_files: 1,
+            thin_pages: 1,
+            reused_pages: 0,
+            pages_discovered: 2,
+            elapsed_ms: 200,
+            thin_urls,
+            error_pages: 3,
+            waf_blocked_pages: 4,
+            waf_blocked_urls: waf_urls,
+        };
+
+        let json = build_completed_result(
+            &ctx,
+            &manifest_path,
+            CompletedResultContext {
+                summary,
+                final_summary,
+                robots_backfill_stats: RobotsBackfillStats::default(),
+                robots_discovery_stats: RobotsDiscoveryStats::default(),
+                final_prompt: None,
+            },
+        )
+        .await
+        .expect("result json");
+
+        let obj = json.as_object().expect("json object");
+        assert!(obj.contains_key("thin_urls"));
+        assert!(obj.contains_key("waf_blocked_urls"));
+        assert!(obj.contains_key("error_pages"));
+        assert!(obj.contains_key("waf_blocked_pages"));
+    }
 }

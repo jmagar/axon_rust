@@ -43,18 +43,28 @@ cp .env.example .env
 
 ## Day 1 Startup
 
-### Full stack
+> **Local dev mode**: Workers and the web frontend run as local processes, not in Docker. Only infrastructure runs via Compose.
 
-```bash
-docker compose up -d
-docker compose ps
-```
-
-### Infrastructure only
+### Infrastructure (Docker)
 
 ```bash
 docker compose up -d axon-postgres axon-redis axon-rabbitmq axon-qdrant axon-chrome
 docker compose ps
+```
+
+### Workers (local processes)
+
+```bash
+# Each in its own terminal or tmux pane
+cargo run --bin axon -- crawl worker
+cargo run --bin axon -- embed worker
+cargo run --bin axon -- extract worker
+```
+
+### Web frontend (local process)
+
+```bash
+cd apps/web && pnpm dev    # → http://localhost:49010
 ```
 
 ### Verify service reachability
@@ -63,22 +73,25 @@ docker compose ps
 ./scripts/axon doctor
 ```
 
-### Tail workers
+### Tail worker output
+
+Workers run in the foreground locally — output goes to the terminal directly. For infra containers:
 
 ```bash
-docker compose logs -f axon-workers
+docker compose logs -f axon-postgres axon-redis axon-rabbitmq axon-qdrant
 ```
 
 ## Health Checks
 
-Expected healthy containers:
+Expected healthy Docker containers (infra only):
 
 - `axon-postgres`
 - `axon-redis`
 - `axon-rabbitmq`
 - `axon-qdrant`
 - `axon-chrome`
-- `axon-workers`
+
+Workers and web frontend are local processes — verify they are running in their respective terminals.
 
 Quick checks:
 
@@ -117,12 +130,7 @@ If any are unhealthy, inspect logs before restart.
 
 ### Jobs stuck in `pending`
 
-1. Confirm worker container health:
-
-```bash
-docker compose ps
-docker compose logs --tail=200 axon-workers
-```
+1. Confirm worker process is running (check your terminal/tmux pane).
 
 2. Confirm AMQP and DB reachable:
 
@@ -130,10 +138,10 @@ docker compose logs --tail=200 axon-workers
 ./scripts/axon doctor
 ```
 
-3. Restart worker service:
+3. Restart worker — kill the process and re-run:
 
 ```bash
-docker compose restart axon-workers
+cargo run --bin axon -- crawl worker
 ```
 
 ### Jobs stuck in `running`
@@ -185,11 +193,38 @@ Persistent data roots are under `${AXON_DATA_DIR}/axon/...`:
 - RabbitMQ data
 - Qdrant storage
 - Worker output and logs
+- MCP artifacts (`${AXON_DATA_DIR}/axon/artifacts` when `AXON_MCP_ARTIFACT_DIR` is set)
 
 Cleanup caution:
 
 - `clear` and aggressive cleanup commands are destructive.
 - Use `list` and `status` first.
+
+Cache and build-context guardrails:
+
+```bash
+# inspect local target/ + BuildKit cache sizes
+just cache-status
+
+# enforce size thresholds (prunes incremental/target and/or BuildKit cache)
+just cache-prune
+
+# run live Docker context-size probe for axon-workers + axon-web
+just docker-context-probe
+```
+
+Threshold tuning (optional):
+
+- `AXON_TARGET_MAX_GB` (default `30`)
+- `AXON_BUILDKIT_MAX_GB` (default `120`)
+- `AXON_WORKERS_CONTEXT_MAX_MB` (default `500`)
+- `AXON_WEB_CONTEXT_MAX_MB` (default `100`)
+- `AXON_CONTEXT_PROBE_TIMEOUT_SECS` (default `30`)
+
+`scripts/rebuild-fresh.sh` runs cache guard + context probe automatically unless disabled:
+
+- `AXON_AUTO_CACHE_GUARD=false`
+- `AXON_ENFORCE_DOCKER_CONTEXT_PROBE=false`
 
 ## Logs and Diagnostics
 

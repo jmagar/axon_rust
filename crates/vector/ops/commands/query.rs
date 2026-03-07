@@ -1,5 +1,7 @@
 use crate::crates::core::config::Config;
 use crate::crates::core::ui::{muted, primary};
+use crate::crates::services::query as query_service;
+use crate::crates::services::types::Pagination;
 use crate::crates::vector::ops::source_display::display_source;
 use crate::crates::vector::ops::{qdrant, ranking, tei};
 use std::error::Error;
@@ -81,7 +83,12 @@ pub async fn query_results(
 
 pub async fn run_query_native(cfg: &Config) -> Result<(), Box<dyn Error>> {
     let query = resolve_query_text(cfg).ok_or("query requires text")?;
-    let results = query_results(cfg, &query, cfg.search_limit.max(1), 0).await?;
+    // Route data-fetch through the services layer.
+    let opts = Pagination {
+        limit: cfg.search_limit.max(1),
+        offset: 0,
+    };
+    let results = query_service::query(cfg, &query, opts).await?.results;
     if results.is_empty() {
         if !cfg.json_output {
             println!("{}", primary(&format!("Query Results for \"{query}\"")));

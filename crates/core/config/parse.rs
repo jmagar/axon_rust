@@ -85,6 +85,129 @@ mod tests {
 
     #[allow(unsafe_code)]
     #[test]
+    fn parse_watch_create_with_every_and_type() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        const PG: &str = "AXON_PG_URL";
+        const REDIS: &str = "AXON_REDIS_URL";
+        const AMQP: &str = "AXON_AMQP_URL";
+
+        unsafe {
+            env::set_var(PG, "postgresql://axon:postgres@*********:53432/axon");
+            env::set_var(REDIS, "redis://*********:53379");
+            env::set_var(AMQP, "amqp://axon:axonrabbit@*********:45535/%2f");
+        }
+
+        let cli = super::Cli::parse_from([
+            "axon",
+            "watch",
+            "create",
+            "docs-refresh",
+            "--task-type",
+            "refresh",
+            "--every-seconds",
+            "300",
+        ]);
+        let cfg = super::build_config::into_config(cli).expect("watch create should parse");
+        assert!(matches!(cfg.command, CommandKind::Watch));
+        assert_eq!(
+            cfg.positional,
+            vec![
+                "create".to_string(),
+                "docs-refresh".to_string(),
+                "--task-type".to_string(),
+                "refresh".to_string(),
+                "--every-seconds".to_string(),
+                "300".to_string(),
+            ]
+        );
+
+        unsafe {
+            env::remove_var(PG);
+            env::remove_var(REDIS);
+            env::remove_var(AMQP);
+        }
+    }
+
+    #[allow(unsafe_code)]
+    #[test]
+    fn parse_watch_run_now() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        const PG: &str = "AXON_PG_URL";
+        const REDIS: &str = "AXON_REDIS_URL";
+        const AMQP: &str = "AXON_AMQP_URL";
+
+        unsafe {
+            env::set_var(PG, "postgresql://axon:postgres@*********:53432/axon");
+            env::set_var(REDIS, "redis://*********:53379");
+            env::set_var(AMQP, "amqp://axon:axonrabbit@*********:45535/%2f");
+        }
+
+        let cli = super::Cli::parse_from([
+            "axon",
+            "watch",
+            "run-now",
+            "11111111-1111-4111-8111-111111111111",
+        ]);
+        let cfg = super::build_config::into_config(cli).expect("watch run-now should parse");
+        assert!(matches!(cfg.command, CommandKind::Watch));
+        assert_eq!(
+            cfg.positional,
+            vec![
+                "run-now".to_string(),
+                "11111111-1111-4111-8111-111111111111".to_string(),
+            ]
+        );
+
+        unsafe {
+            env::remove_var(PG);
+            env::remove_var(REDIS);
+            env::remove_var(AMQP);
+        }
+    }
+
+    #[allow(unsafe_code)]
+    #[test]
+    fn parse_watch_history_with_limit() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        const PG: &str = "AXON_PG_URL";
+        const REDIS: &str = "AXON_REDIS_URL";
+        const AMQP: &str = "AXON_AMQP_URL";
+
+        unsafe {
+            env::set_var(PG, "postgresql://axon:postgres@*********:53432/axon");
+            env::set_var(REDIS, "redis://*********:53379");
+            env::set_var(AMQP, "amqp://axon:axonrabbit@*********:45535/%2f");
+        }
+
+        let cli = super::Cli::parse_from([
+            "axon",
+            "watch",
+            "history",
+            "11111111-1111-4111-8111-111111111111",
+            "--limit",
+            "25",
+        ]);
+        let cfg = super::build_config::into_config(cli).expect("watch history should parse");
+        assert!(matches!(cfg.command, CommandKind::Watch));
+        assert_eq!(
+            cfg.positional,
+            vec![
+                "history".to_string(),
+                "11111111-1111-4111-8111-111111111111".to_string(),
+                "--limit".to_string(),
+                "25".to_string(),
+            ]
+        );
+
+        unsafe {
+            env::remove_var(PG);
+            env::remove_var(REDIS);
+            env::remove_var(AMQP);
+        }
+    }
+
+    #[allow(unsafe_code)]
+    #[test]
     fn parse_refresh_schedule_add_rejects_missing_seed_url_and_urls() {
         let _guard = ENV_LOCK.lock().unwrap();
         const PG: &str = "AXON_PG_URL";

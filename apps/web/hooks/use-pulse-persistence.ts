@@ -2,7 +2,7 @@
 
 import type React from 'react'
 import { useCallback, useEffect, useRef } from 'react'
-import type { PulseModel, PulsePermissionLevel } from '@/lib/pulse/types'
+import type { PulseAgent, PulseModel, PulsePermissionLevel } from '@/lib/pulse/types'
 import type { ChatMessage } from '@/lib/pulse/workspace-persistence'
 import {
   buildPersistedPayload,
@@ -12,6 +12,7 @@ import {
 
 interface PersistenceData {
   permissionLevel: PulsePermissionLevel
+  agent: PulseAgent
   model: PulseModel
   documentMarkdown: string
   chatHistory: ChatMessage[]
@@ -30,6 +31,7 @@ interface PersistenceData {
 
 interface PersistenceSetters {
   setPulsePermissionLevel: (v: PulsePermissionLevel) => void
+  setPulseAgent: (v: PulseAgent) => void
   setPulseModel: (v: PulseModel) => void
   setDocumentMarkdown: (v: string) => void
   setChatHistory: (v: ChatMessage[]) => void
@@ -55,6 +57,7 @@ interface UsePulsePersistenceInput {
 export function usePulsePersistence({ data, setters, messageIdRef }: UsePulsePersistenceInput) {
   const {
     permissionLevel,
+    agent,
     model,
     documentMarkdown,
     chatHistory,
@@ -71,8 +74,6 @@ export function usePulsePersistence({ data, setters, messageIdRef }: UsePulsePer
     showEditor,
   } = data
   const {
-    setPulsePermissionLevel,
-    setPulseModel,
     setDocumentMarkdown,
     setChatHistory,
     setDocumentTitle,
@@ -102,8 +103,8 @@ export function usePulsePersistence({ data, setters, messageIdRef }: UsePulsePer
         hasHydratedRef.current = true
         return
       }
-      setPulsePermissionLevel(restored.permissionLevel)
-      setPulseModel(restored.model)
+      // Agent/model/permission are owned by dedicated localStorage keys in use-ws-messages.
+      // Do not let the older workspace blob overwrite current selections during rehydration.
       setDocumentMarkdown(restored.documentMarkdown)
       setChatHistory(restored.chatHistory)
       setDocumentTitle(restored.documentTitle)
@@ -138,8 +139,6 @@ export function usePulsePersistence({ data, setters, messageIdRef }: UsePulsePer
     setLastResponseLatencyMs,
     setLastResponseModel,
     setMobileSplitPercent,
-    setPulseModel,
-    setPulsePermissionLevel,
   ])
 
   const persistWorkspaceState = useCallback(() => {
@@ -147,6 +146,7 @@ export function usePulsePersistence({ data, setters, messageIdRef }: UsePulsePer
     try {
       const payload = buildPersistedPayload({
         permissionLevel,
+        agent,
         model,
         documentMarkdown,
         chatHistory,
@@ -180,6 +180,7 @@ export function usePulsePersistence({ data, setters, messageIdRef }: UsePulsePer
     lastResponseLatencyMs,
     lastResponseModel,
     mobileSplitPercent,
+    agent,
     model,
     permissionLevel,
   ])

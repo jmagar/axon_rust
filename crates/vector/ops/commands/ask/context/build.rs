@@ -186,18 +186,21 @@ async fn fetch_full_docs(
         return Ok(fetched_docs);
     }
     let cfg_arc = Arc::new(cfg.clone());
-    let mut fetch_stream = stream::iter(top_full_doc_indices.iter().enumerate().map(
-        |(order, &doc_idx)| {
-            let cfg_for_task = Arc::clone(&cfg_arc);
-            let url = reranked[doc_idx].url.clone();
-            async move {
-                let points =
-                    qdrant::qdrant_retrieve_by_url(&cfg_for_task, &url, Some(doc_chunk_limit))
-                        .await;
-                (order, url, points)
-            }
-        },
-    ))
+    // Collect owned `(order, doc_idx)` pairs before mapping to async tasks so
+    // the map closure receives `(usize, usize)` (no lifetime-parameterised
+    // `&usize`).  The reference pattern `|(order, &doc_idx)|` or even receiving
+    // `(usize, &usize)` causes an HRTB `FnOnce` diagnostic when the resulting
+    // future is verified for `Send + 'static` by `tokio::spawn`.
+    let tasks: Vec<(usize, usize)> = top_full_doc_indices.iter().copied().enumerate().collect();
+    let mut fetch_stream = stream::iter(tasks.into_iter().map(|(order, doc_idx)| {
+        let cfg_for_task = Arc::clone(&cfg_arc);
+        let url = reranked[doc_idx].url.clone();
+        async move {
+            let points =
+                qdrant::qdrant_retrieve_by_url(&cfg_for_task, &url, Some(doc_chunk_limit)).await;
+            (order, url, points)
+        }
+    }))
     .buffer_unordered(doc_fetch_concurrency);
     while let Some((order, url, points)) = fetch_stream.next().await {
         match points {

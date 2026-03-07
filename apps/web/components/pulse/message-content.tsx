@@ -9,6 +9,7 @@ import { formatMessageTime } from './chat-utils'
 import { DocOpBadge } from './doc-op-badge'
 import { PulseMarkdown } from './pulse-markdown'
 import { type BadgeTool, ToolCallBadge } from './tool-badge'
+import { ToolCallTerminal } from './tool-call-terminal'
 
 // ── Thinking block (collapsible reasoning display) ────────────────────────────
 
@@ -44,33 +45,57 @@ function ThinkingBlock({ content }: { content: string }) {
 
 // ── Block grouping (collapse consecutive tool calls into badge rows) ───────────
 
+interface TerminalTool {
+  name: string
+  toolCallId: string
+  input: Record<string, unknown>
+  content?: string
+  status?: string
+}
+
 type RenderGroup =
   | { kind: 'text'; content: string }
   | { kind: 'thinking'; content: string }
   | { kind: 'tools'; tools: BadgeTool[] }
+  | { kind: 'terminal'; tool: TerminalTool }
 
 export function groupBlocksForRender(blocks: PulseMessageBlock[]): RenderGroup[] {
   const result: RenderGroup[] = []
   let toolBatch: BadgeTool[] = []
 
+  function flushBatch() {
+    if (toolBatch.length > 0) {
+      result.push({ kind: 'tools', tools: toolBatch })
+      toolBatch = []
+    }
+  }
+
   for (const block of blocks) {
     if (block.type === 'tool_use') {
-      toolBatch.push({ name: block.name, input: block.input, result: block.result })
-    } else if (block.type === 'thinking') {
-      if (toolBatch.length > 0) {
-        result.push({ kind: 'tools', tools: toolBatch })
-        toolBatch = []
+      if (block.toolCallId) {
+        flushBatch()
+        result.push({
+          kind: 'terminal',
+          tool: {
+            name: block.name,
+            toolCallId: block.toolCallId,
+            input: block.input,
+            content: block.content,
+            status: block.status,
+          },
+        })
+      } else {
+        toolBatch.push({ name: block.name, input: block.input, result: block.result })
       }
+    } else if (block.type === 'thinking') {
+      flushBatch()
       result.push({ kind: 'thinking', content: block.content })
     } else if (block.type === 'text') {
-      if (toolBatch.length > 0) {
-        result.push({ kind: 'tools', tools: toolBatch })
-        toolBatch = []
-      }
+      flushBatch()
       result.push({ kind: 'text', content: block.content })
     }
   }
-  if (toolBatch.length > 0) result.push({ kind: 'tools', tools: toolBatch })
+  flushBatch()
   return result
 }
 
@@ -89,7 +114,7 @@ function parseHandoffLabel(content: string): string | null {
 
 // ── Message content renderer ───────────────────────────────────────────────────
 
-export function MessageContent({ msg }: { msg: ChatMessage }) {
+export const MessageContent = memo(function MessageContent({ msg }: { msg: ChatMessage }) {
   if (msg.isError) return null
 
   // Compact chip for session handoff messages
@@ -141,6 +166,18 @@ export function MessageContent({ msg }: { msg: ChatMessage }) {
               </p>
             )
           }
+          if (group.kind === 'terminal') {
+            return (
+              <ToolCallTerminal
+                key={`tool-${group.tool.toolCallId}`}
+                toolName={group.tool.name}
+                toolCallId={group.tool.toolCallId}
+                input={group.tool.input}
+                content={group.tool.content}
+                status={group.tool.status}
+              />
+            )
+          }
           return (
             <div key={i} className="flex flex-wrap gap-1">
               {group.tools.map((tool, j) => (
@@ -157,7 +194,7 @@ export function MessageContent({ msg }: { msg: ChatMessage }) {
     return <PulseMarkdown content={msg.content} />
   }
   return <p className="ui-copy whitespace-pre-wrap">{msg.content}</p>
-}
+})
 
 // ── Message bubble (full per-message card with header, content, doc-ops) ──────
 
@@ -166,7 +203,7 @@ interface MessageBubbleProps {
   index: number
   onRetry: (prompt: string) => void
   copyStatus: 'idle' | 'copied' | 'failed'
-  onCopyError: (content: string) => void
+  onCopyError: (content: string, messageId: string) => void
 }
 
 export const MessageBubble = memo(function MessageBubble({
@@ -229,7 +266,7 @@ export const MessageBubble = memo(function MessageBubble({
                 <button
                   type="button"
                   onClick={() => {
-                    onCopyError(msg.content)
+                    onCopyError(msg.content, msg.id ?? '')
                     setCopyAnim(true)
                     setTimeout(() => setCopyAnim(false), 1400)
                   }}

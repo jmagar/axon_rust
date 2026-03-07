@@ -16,7 +16,7 @@ Axon is a single CLI for crawl/scrape/extract plus local vector retrieval and Q&
 
 ## Features
 
-- Commands: `scrape`, `crawl`, `refresh`, `map`, `search`, `research`, `extract`, `embed`, `query`, `retrieve`, `ask`, `evaluate`, `suggest`, `github`, `ingest`, `reddit`, `youtube`, `sessions`, `screenshot`, `sources`, `domains`, `stats`, `status`, `doctor`, `dedupe`, `debug`, `mcp`, `serve`
+- Commands: `scrape`, `crawl`, `watch`, `refresh`, `map`, `search`, `research`, `extract`, `embed`, `query`, `retrieve`, `ask`, `evaluate`, `suggest`, `github`, `ingest`, `reddit`, `youtube`, `sessions`, `screenshot`, `sources`, `domains`, `stats`, `status`, `doctor`, `dedupe`, `debug`, `mcp`, `serve`
 - Async queue-backed jobs for `crawl`/`extract`/`embed`/`refresh`/ingest
 - **Surgical Incremental Crawling**: SHA-256 content hashing, Reflink/Hardlink storage reuse, and smart embedding skips for unchanged pages.
 - TEI embeddings + Qdrant vector storage
@@ -76,7 +76,7 @@ Transport status:
 - Stdio transport is not exposed.
 
 MCP defaults are context-safe:
-- Artifact-first responses (`response_mode=path`) written to `.cache/axon-mcp/`
+- Artifact-first responses (`response_mode=path`) written to `.cache/axon-mcp/` inside the running process/container (override with `AXON_MCP_ARTIFACT_DIR`; in Docker this is typically bind-mounted to `${AXON_DATA_DIR}/axon/artifacts`)
 - Inline responses are optional (`response_mode=inline|both`) and capped
 - Resource: `axon://schema/mcp-tool`
 - Primary MCP test path: `./scripts/test-mcp-tools-mcporter.sh`
@@ -88,8 +88,8 @@ MCP defaults are context-safe:
 cp .env.example .env
 # edit .env — set AXON_DATA_DIR, POSTGRES_PASSWORD, REDIS_PASSWORD, RABBITMQ_PASS, TEI_URL, OPENAI_*
 
-# 2) start stack
-docker compose up -d
+# 2) start infrastructure only (workers + web run locally, not in Docker)
+docker compose up -d axon-postgres axon-redis axon-rabbitmq axon-qdrant axon-chrome
 docker compose ps
 ```
 
@@ -182,9 +182,22 @@ Copy `.env.example` to `.env`. At minimum set the `[REQUIRED]` vars:
 | `AXON_NO_COLOR` | — | Disable ANSI color output when set |
 | `AXON_DOMAINS_DETAILED` | — | Enable detailed `domains` command output |
 | `AXON_EXTRACT_EST_COST_PER_1K_TOKENS` | — | Override extract cost estimate (USD/1K tokens) |
+| `AXON_MCP_ARTIFACT_DIR` | `.cache/axon-mcp` | MCP artifact output root in the runtime filesystem for `response_mode=path` (container path in Docker) |
 | `AXON_LOG_FILE` | `logs/axon.log` | Structured log file path (always on) |
 | `AXON_LOG_MAX_BYTES` | `10485760` | Max bytes per log file before rotation (10MB) |
 | `AXON_LOG_MAX_FILES` | `3` | Total log files to keep (`axon.log`, `.1`, `.2`) |
+
+### Optional Cache/Build Guardrails
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AXON_TARGET_MAX_GB` | `30` | `scripts/cache-guard.sh` threshold for local `target/` size before pruning |
+| `AXON_BUILDKIT_MAX_GB` | `120` | `scripts/cache-guard.sh` threshold for Docker BuildKit cache before `docker builder prune -af` |
+| `AXON_AUTO_CACHE_GUARD` | `true` | Run cache guard automatically in `scripts/rebuild-fresh.sh` |
+| `AXON_ENFORCE_DOCKER_CONTEXT_PROBE` | `true` | Run Docker context-size probe automatically in `scripts/rebuild-fresh.sh` |
+| `AXON_WORKERS_CONTEXT_MAX_MB` | `500` | Max allowed workers build context during probe |
+| `AXON_WEB_CONTEXT_MAX_MB` | `100` | Max allowed web build context during probe |
+| `AXON_CONTEXT_PROBE_TIMEOUT_SECS` | `30` | Timeout per service probe build |
 
 ### Web App Security (`apps/web`)
 
@@ -231,20 +244,21 @@ Notes:
   - Config/schema queries require at least one exact-page citation.
   - If gates fail, output is forced to structured insufficient-evidence format.
 
-## Worker Model (s6 Supervised)
+## Worker Model (Local Processes)
 
-`axon-workers` uses `s6-overlay` and runs four long-lived worker services in one container:
+Workers run as local processes, not in Docker. Start each in its own terminal or tmux pane:
 
-- `crawl-worker` -> `/usr/local/bin/axon crawl worker`
-- `extract-worker` -> `/usr/local/bin/axon extract worker`
-- `embed-worker` -> `/usr/local/bin/axon embed worker`
-- `ingest-worker` -> `/usr/local/bin/axon ingest worker`
-
-Startup loads `.env` via `docker/s6/cont-init.d/10-load-axon-env`. Health checks verify each worker process via s6-svstat. The container is resource-limited to 4 CPUs / 4 GB RAM with a 512 MB / 1 CPU reservation.
+```bash
+cargo run --bin axon -- crawl worker
+cargo run --bin axon -- embed worker
+cargo run --bin axon -- extract worker
+cargo run --bin axon -- ingest worker
+```
 
 Worker behavior notes:
 - Workers run startup stale-job reclaim sweeps plus periodic stale sweeps.
 - Stale timeout and confirmation window are tunable via `AXON_JOB_STALE_TIMEOUT_SECS` / `AXON_JOB_STALE_CONFIRM_SECS`.
+- Use `./scripts/axon` wrapper to auto-source `.env` before launching workers.
 
 ## Surgical Incremental Crawling
 
@@ -263,6 +277,7 @@ Axon implements a multi-layered incremental crawl mechanism to minimize network 
 | `scrape <url>...` | Scrape one or more URLs to markdown | No |
 | `crawl <url>...` | Full site crawl for one or more start URLs | Yes (default) |
 | `refresh <url>...` | Revalidate known URLs and update stored content/embeddings | Yes (default) |
+| `watch <subcommand>` | Define and run top-level recurring watches (currently refresh task dispatch) | No |
 | `map <url>` | Discover all URLs without scraping | No |
 | `extract <urls...>` | LLM-powered structured data extraction | Yes (default) |
 | `search <query>` | Web search via Tavily, auto-queues crawl jobs for results | No |
@@ -340,6 +355,19 @@ axon refresh schedule disable <name>
 axon refresh schedule delete <name>
 axon refresh schedule run-due [--batch <n>]
 ```
+
+`refresh schedule` is a compatibility interface backed by top-level watch definitions (`task_type=refresh`). Existing automation can keep using `axon refresh schedule ...` while new workflows can use `axon watch ...` directly.
+
+### Top-level Watch Subcommands
+
+```bash
+axon watch create <name> --task-type <type> --every-seconds <n> [--task-payload <json>]
+axon watch list
+axon watch run-now <watch_id>
+axon watch history <watch_id> [--limit <n>]
+```
+
+Current dispatch support in the worker loop is `task_type=refresh` (payload shape: `{"urls":["https://..."]}`).
 
 ### Job Subcommands (for github / reddit / youtube)
 
@@ -505,8 +533,8 @@ Concurrency tuned relative to available CPU cores:
 
 - `axon doctor` for service reachability (Postgres/Redis/AMQP/Qdrant/TEI/OpenAI)
 - `axon debug` to run doctor + LLM-assisted troubleshooting with your configured OpenAI-compatible endpoint
-- `docker compose logs -f axon-workers` to inspect worker failures
-- Jobs stuck in pending: ensure `axon-workers` is healthy and AMQP/Redis are reachable
+- Check your worker terminal output for failures (workers run locally, not in Docker)
+- Jobs stuck in pending: ensure worker processes are running and AMQP/Redis are reachable (`./scripts/axon doctor`)
 - Manually reclaim stale jobs if needed:
   - `axon crawl recover`
   - `axon extract recover`
@@ -641,8 +669,13 @@ When Chrome feature is compiled in, `crawl()` expects a Chrome instance. `crawl_
 ### TEI batch size / 413 handling
 `tei_embed()` in `vector/ops/tei.rs` auto-splits batches on HTTP 413 (Payload Too Large). Set `TEI_MAX_CLIENT_BATCH_SIZE` env var to control default chunk size (default: 64, effective max: 128).
 
-### TEI 429 / rate limiting
-On HTTP 429 or 503, `tei_embed()` retries up to 10 times with exponential backoff starting at 1s (1s, 2s, 4s … 512s) plus jitter. A saturated TEI queue will be retried for up to ~17 minutes before the job fails. No manual intervention needed for transient overload.
+### TEI retries / timeouts
+
+`tei_embed()` retries transient failures (transport errors, HTTP 429, and HTTP 5xx) with exponential backoff + jitter.
+- `TEI_MAX_RETRIES` controls max attempts per TEI request (default: 10, max: 20).
+- `TEI_REQUEST_TIMEOUT_MS` controls per-attempt request timeout (default: 30000, clamped 100..600000).
+- Hard client errors (HTTP 4xx except 429) fail fast (no retry storm).
+- HTTP 413 still triggers batch-splitting logic before retrying smaller chunks.
 
 ### Locale path prefix matching
 `--exclude-path-prefix` treats both `/` and `-` as word boundaries. Specifying `/ja` blocks both `/ja/docs` and `/ja-jp/docs` (IETF BCP 47 region subtags). Pass `none` to disable all locale filtering.
@@ -714,12 +747,22 @@ just watch-check
 
 # branch-level coverage report (lcov)
 just coverage-branch
+
+# inspect/trim local build caches
+just cache-status
+just cache-prune
+
+# enforce live Docker build-context size thresholds
+just docker-context-probe
 ```
 
 Notes:
 - `just` auto-enables `sccache` and `mold` if installed (`RUSTC_WRAPPER=sccache`, `-fuse-ld=mold`).
 - Worker E2E tests are marked `#[ignore]` and intended to run explicitly via `just test-infra`.
 - Build/test/check/clippy commands in local and CI paths are lockfile-strict (`--locked`).
+- `scripts/rebuild-fresh.sh` runs two guardrails by default before rebuilding:
+  - cache guard (`scripts/cache-guard.sh`)
+  - live Docker context probe (`scripts/check_docker_context_size.sh`)
 
 ### Manual CI Infra Lane
 

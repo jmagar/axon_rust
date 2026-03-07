@@ -93,7 +93,16 @@ fn malformed_json_fails_to_parse() {
 #[test]
 fn allowed_modes_contains_expected_safe_subcommands() {
     let modes = super::allowed_modes();
-    for expected in &["scrape", "crawl", "map", "query", "ask", "stats", "sources"] {
+    for expected in &[
+        "scrape",
+        "crawl",
+        "map",
+        "query",
+        "ask",
+        "stats",
+        "sources",
+        "pulse_chat",
+    ] {
         assert!(
             modes.contains(expected),
             "ALLOWED_MODES must contain '{expected}'"
@@ -316,13 +325,26 @@ fn build_args_strips_leading_dashes_from_url_input() {
 
 #[test]
 fn build_args_skips_wait_flag_for_async_modes() {
-    // The bridge manages polling itself for async modes — `--wait` must be suppressed.
+    // Direct async modes (fire-and-forget) suppress --wait since they enqueue and return.
     let flags = json!({"wait": true});
-    for async_mode in &["crawl", "extract", "embed", "github", "reddit", "youtube"] {
+    for async_mode in &["crawl", "extract", "embed"] {
         let args = super::build_args(async_mode, "test", &flags);
         assert!(
             !args.contains(&"--wait".to_string()),
             "async mode '{async_mode}' must suppress '--wait'"
+        );
+    }
+}
+
+#[test]
+fn build_args_allows_wait_flag_for_subprocess_async_modes() {
+    // github/reddit/youtube use subprocess fallback — --wait is passed through.
+    let flags = json!({"wait": true});
+    for mode in &["github", "reddit", "youtube"] {
+        let args = super::build_args(mode, "test", &flags);
+        assert!(
+            args.contains(&"--wait".to_string()),
+            "subprocess async mode '{mode}' must allow '--wait'"
         );
     }
 }
@@ -335,6 +357,93 @@ fn build_args_allows_wait_flag_for_sync_modes() {
         assert!(
             args.contains(&"--wait".to_string()),
             "sync mode '{sync_mode}' must allow '--wait'"
+        );
+    }
+}
+
+// ── Sync mode routing ─────────────────────────────────────────────────────────
+
+#[test]
+fn direct_sync_modes_are_not_async_modes() {
+    // A mode cannot be in both lists — that would create ambiguous routing.
+    let async_modes = super::async_modes();
+    for mode in super::direct_sync_modes() {
+        assert!(
+            !async_modes.contains(mode),
+            "mode '{mode}' must not appear in both direct_sync_modes and async_modes"
+        );
+    }
+}
+
+#[test]
+fn direct_sync_modes_all_present_in_allowed_modes() {
+    let allowed = super::allowed_modes();
+    for mode in super::direct_sync_modes() {
+        assert!(
+            allowed.contains(mode),
+            "direct_sync mode '{mode}' must also be present in ALLOWED_MODES"
+        );
+    }
+}
+
+#[test]
+fn async_modes_all_present_in_allowed_modes() {
+    let allowed = super::allowed_modes();
+    for mode in super::async_modes() {
+        assert!(
+            allowed.contains(mode),
+            "async mode '{mode}' must also be present in ALLOWED_MODES"
+        );
+    }
+}
+
+#[test]
+fn direct_sync_modes_contains_core_service_modes() {
+    let direct = super::direct_sync_modes();
+    for expected in &[
+        "scrape",
+        "map",
+        "query",
+        "retrieve",
+        "ask",
+        "search",
+        "research",
+        "stats",
+        "sources",
+        "domains",
+        "doctor",
+        "status",
+        "pulse_chat",
+    ] {
+        assert!(
+            direct.contains(expected),
+            "direct_sync_modes must contain '{expected}'"
+        );
+    }
+}
+
+#[test]
+fn fallback_subprocess_modes_not_in_direct_sync_or_async() {
+    // These modes are not yet wired to direct service dispatch and are expected
+    // to fall through to the subprocess path.  Verify their classification.
+    let fallback_modes = &[
+        "suggest",
+        "screenshot",
+        "evaluate",
+        "sessions",
+        "dedupe",
+        "debug",
+    ];
+    let direct = super::direct_sync_modes();
+    let async_m = super::async_modes();
+    for mode in fallback_modes {
+        assert!(
+            !direct.contains(mode),
+            "fallback mode '{mode}' must NOT be in direct_sync_modes yet"
+        );
+        assert!(
+            !async_m.contains(mode),
+            "fallback mode '{mode}' must NOT be in async_modes"
         );
     }
 }

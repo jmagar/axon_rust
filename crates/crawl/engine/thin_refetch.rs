@@ -1,6 +1,8 @@
 use super::{CrawlSummary, canonicalize_url_for_dedupe};
 use crate::crates::core::config::Config;
-use crate::crates::core::content::{build_transform_config, url_to_filename};
+use crate::crates::core::content::{
+    build_selector_config, build_transform_config, clean_markdown_whitespace, url_to_filename,
+};
 use crate::crates::core::logging::{log_info, log_warn};
 use crate::crates::crawl::manifest::ManifestEntry;
 use futures_util::stream::{self, StreamExt};
@@ -108,16 +110,17 @@ async fn fetch_url_with_chrome(cfg: &Config, url: &str, min_chars: usize) -> Opt
     }
 
     let transform_cfg = build_transform_config();
+    let sel_cfg = build_selector_config(cfg);
     let input = TransformInput {
         url: None,
         content: page.get_html_bytes_u8(),
         screenshot_bytes: None,
         encoding: None,
-        selector_config: None,
+        selector_config: sel_cfg.as_ref(),
         ignore_tags: None,
     };
     let markdown = transform_content_input(input, transform_cfg);
-    let trimmed = markdown.trim().to_string();
+    let trimmed = clean_markdown_whitespace(markdown.trim());
 
     if trimmed.len() < min_chars {
         return None;

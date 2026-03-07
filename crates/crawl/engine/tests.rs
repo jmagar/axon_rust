@@ -168,12 +168,12 @@ fn test_canonicalize_url_root_and_default_port() {
     assert_eq!(a.as_deref(), Some("https://example.com/"));
 }
 
-// Bug: when max_pages == 0 (uncapped), (0/10).max(10) = 10, so any site
-// with < 10 markdown files always triggers Chrome — even a complete 1-page crawl.
+// Coverage checks are skipped when max_pages == 0 (uncapped), so this verifies
+// the explicit single-page fallback rule rather than the coverage heuristic.
 #[test]
-fn test_no_fallback_uncapped_small_but_complete_site() {
+fn test_fallback_uncapped_small_but_complete_site() {
     // 1-page site, healthy content, no thin pages, max_pages uncapped (0)
-    assert!(!should_fallback_to_chrome(
+    assert!(should_fallback_to_chrome(
         &summary(1, 0, 1),
         0,
         &default_cfg()

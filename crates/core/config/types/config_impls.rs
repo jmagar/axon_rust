@@ -82,6 +82,8 @@ impl Default for Config {
             openai_base_url: String::new(),
             openai_api_key: String::new(),
             openai_model: String::new(),
+            acp_adapter_cmd: None,
+            acp_adapter_args: None,
             tavily_api_key: String::new(),
             ask_diagnostics: false,
             evaluate_responses_mode: EvaluateResponsesMode::Inline,
@@ -114,6 +116,8 @@ impl Default for Config {
             max_page_bytes: None,
             redirect_policy_strict: false,
             chrome_wait_for_selector: None,
+            root_selector: None,
+            exclude_selector: None,
             chrome_screenshot: false,
             research_depth: None,
             search_time_range: None,
@@ -122,7 +126,7 @@ impl Default for Config {
             screenshot_full_page: true,
             viewport_width: 1920,
             viewport_height: 1080,
-            serve_port: 3939,
+            serve_port: 49000,
             custom_headers: vec![],
         }
     }
@@ -225,6 +229,8 @@ impl fmt::Debug for Config {
             .field("openai_base_url", &self.openai_base_url)
             .field("openai_api_key", &"[REDACTED]")
             .field("openai_model", &self.openai_model)
+            .field("acp_adapter_cmd", &self.acp_adapter_cmd)
+            .field("acp_adapter_args", &self.acp_adapter_args)
             .field("tavily_api_key", &"[REDACTED]")
             .field("ask_diagnostics", &self.ask_diagnostics)
             .field("evaluate_responses_mode", &self.evaluate_responses_mode)
@@ -275,6 +281,8 @@ impl fmt::Debug for Config {
             .field("max_page_bytes", &self.max_page_bytes)
             .field("redirect_policy_strict", &self.redirect_policy_strict)
             .field("chrome_wait_for_selector", &self.chrome_wait_for_selector)
+            .field("root_selector", &self.root_selector)
+            .field("exclude_selector", &self.exclude_selector)
             .field("chrome_screenshot", &self.chrome_screenshot)
             .field("research_depth", &self.research_depth)
             .field("search_time_range", &self.search_time_range)

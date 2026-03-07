@@ -1,25 +1,15 @@
 ---
 description: Semantic search over embedded content in Qdrant
-argument-hint: <search-query> [--limit N] [--domain example.com]
-allowed-tools: mcp__axon__axon
+argument-hint: <search-query> [--limit N]
+allowed-tools: mcp__axon__axon, Bash
 ---
 
-# Semantic Search Query
+Use `mcp__axon__axon` directly:
 
-Call the Axon MCP tool (`axon`) with:
-- `action: "query"`
-- map `$ARGUMENTS` to schema fields
+```json
+{ "action": "query", "query": "<search terms from $ARGUMENTS>", "limit": 10 }
+```
 
-## Instructions
+Optional: `limit` (int, default 10), `offset` (int), `response_mode`.
 
-1. Execute using the Axon MCP tool (`axon`) with action/subaction routing and mapped arguments.
-2. Parse ranked results, scores, snippets, and URLs.
-3. Present top results with relevance ordering.
-4. Summarize dominant themes and next query refinements.
-
-## Expected Output
-
-The command returns:
-- ranked semantic matches
-- similarity scores
-- source URLs and content snippets
+Present ranked results with scores, source URLs, and content snippets. Summarize themes and suggest refinements if sparse.

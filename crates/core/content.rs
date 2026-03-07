@@ -10,9 +10,10 @@ pub use deterministic::{
 };
 pub use engine::{ExtractWebConfig, run_extract_with_engine};
 
+use super::config::Config;
 use spider::url::Url;
 use spider_transformations::transformation::content::{
-    ReturnFormat, TransformConfig, TransformInput, transform_content_input,
+    ReturnFormat, SelectorConfiguration, TransformConfig, TransformInput, transform_content_input,
 };
 use std::sync::LazyLock;
 
@@ -45,18 +46,63 @@ pub fn build_transform_config() -> &'static TransformConfig {
     &TRANSFORM_CONFIG
 }
 
-pub fn to_markdown(html: &str) -> String {
+/// Build a `SelectorConfiguration` from Config's `root_selector` / `exclude_selector`.
+/// Returns `None` when neither selector is set (the common case).
+pub fn build_selector_config(cfg: &Config) -> Option<SelectorConfiguration> {
+    if cfg.root_selector.is_none() && cfg.exclude_selector.is_none() {
+        return None;
+    }
+    Some(SelectorConfiguration {
+        root_selector: cfg.root_selector.clone(),
+        exclude_selector: cfg.exclude_selector.clone(),
+    })
+}
+
+/// Convert HTML to clean markdown with optional CSS selector scoping.
+///
+/// When `selector_config` is `Some`, spider scopes extraction to the root
+/// selector and excludes elements matching the exclude selector — matching
+/// Spider Cloud's official API behavior.
+pub fn to_markdown(html: &str, selector_config: Option<&SelectorConfiguration>) -> String {
     let input = TransformInput {
         url: None,
         content: html.as_bytes(),
         screenshot_bytes: None,
         encoding: None,
-        selector_config: None,
+        selector_config,
         ignore_tags: None,
     };
-    transform_content_input(input, &TRANSFORM_CONFIG)
-        .trim()
-        .to_string()
+    let raw = transform_content_input(input, &TRANSFORM_CONFIG);
+    clean_markdown_whitespace(raw.trim())
+}
+
+/// Collapse runs of 3+ newlines to 2 and runs of 2+ horizontal spaces to 1.
+/// Matches `spider_transformations::aho_clean_markdown` behavior.
+pub fn clean_markdown_whitespace(md: &str) -> String {
+    let mut out = String::with_capacity(md.len());
+    let mut newline_run = 0u32;
+    let mut space_run = 0u32;
+
+    for ch in md.chars() {
+        if ch == '\n' {
+            space_run = 0;
+            newline_run += 1;
+            if newline_run <= 2 {
+                out.push('\n');
+            }
+        } else if ch == ' ' || ch == '\t' {
+            newline_run = 0;
+            space_run += 1;
+            if space_run <= 1 {
+                out.push(' ');
+            }
+        } else {
+            newline_run = 0;
+            space_run = 0;
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// Redact credentials from a URL, replacing username and password with `***`.

@@ -1,6 +1,6 @@
 [package]
 name = "axon"
-version = "0.4.1"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.87"
 description = "Web crawl, scrape, embed, and query CLI backed by a self-hosted RAG stack"
@@ -16,6 +16,7 @@ path = "main.rs"
 
 [dependencies]
 anyhow = "1"
+async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 bollard = "0.18"
@@ -31,6 +32,7 @@ octocrab = "0.49"
 portable-pty = "0"
 redis = { version = "1.0", features = ["tokio-comp", "connection-manager"] }
 futures-util = "0.3"
+futures = "0.3"
 reqwest = { version = "0.13", features = ["json", "rustls", "stream", "form"] }
 rustls = { version = "0.23", features = ["aws-lc-rs"], default-features = false }
 rand = "0.10"
@@ -52,6 +54,7 @@ spider_transformations = "2"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util", "net", "process", "signal", "sync", "time"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+tokio-util = { version = "0.7", features = ["compat"] }
 tokio-executor-trait = "3"
 tokio-reactor-trait = "4"
 tracing = "0.1"
@@ -64,6 +67,7 @@ reflink-copy = "0.1"
 dotenvy = "0.15"
 rmcp = { version = "0.17.0", features = ["server", "macros", "transport-io", "transport-streamable-http-server", "schemars"] }
 html5gum = "0.5"
+agent-client-protocol = "0.10.0"
 
 [profile.release]
 opt-level = 3

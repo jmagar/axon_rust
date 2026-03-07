@@ -242,8 +242,11 @@ export function useOmniboxState() {
     // Workspace
     workspaceMode: execution.workspaceMode,
     workspaceContext: execution.workspaceContext,
+    workspaceResumeSessionId: execution.workspaceResumeSessionId,
+    pulseAgent: execution.pulseAgent,
     pulseModel: execution.pulseModel,
     pulsePermissionLevel: execution.pulsePermissionLevel,
+    acpConfigOptions: execution.acpConfigOptions,
     currentMode: execution.currentMode,
     isProcessingWithCurrentMode: execution.isProcessing && Boolean(execution.currentMode),
 
@@ -255,6 +258,7 @@ export function useOmniboxState() {
     setMentionSelectionIndex: mentions.setMentionSelectionIndex,
     setIsFocused,
     setMentionTipSeen,
+    setPulseAgent: execution.setPulseAgent,
     setPulseModel: execution.setPulseModel,
     setPulsePermissionLevel: execution.setPulsePermissionLevel,
     execute: execution.execute,

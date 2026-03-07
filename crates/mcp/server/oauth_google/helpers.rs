@@ -31,12 +31,20 @@ pub(crate) fn append_query_pairs(base: &str, params: &[(&str, String)]) -> Resul
 
 pub(crate) fn normalize_loopback_redirect_uri(uri: &str) -> Option<String> {
     let mut parsed = Url::parse(uri).ok()?;
-    let host = parsed.host_str()?.to_ascii_lowercase();
-    if host == "127.0.0.1" || host == "localhost" {
+    if is_loopback_host(parsed.host_str()?) {
         let _ = parsed.set_scheme("http");
         let _ = parsed.set_host(Some("localhost"));
     }
     Some(parsed.to_string())
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let normalized_host = host.trim_matches(['[', ']']);
+    normalized_host.eq_ignore_ascii_case("localhost")
+        || normalized_host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
 }
 
 pub(crate) fn is_allowed_redirect_uri(uri: &str, policy: RedirectPolicy) -> bool {
@@ -52,8 +60,13 @@ pub(crate) fn is_allowed_redirect_uri(uri: &str, policy: RedirectPolicy) -> bool
             scheme == "http" || scheme == "https"
         }
         RedirectPolicy::LoopbackOnly => {
-            let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
-            parsed.scheme() == "http" && (host == "localhost" || host == "127.0.0.1")
+            parsed.scheme() == "http" && parsed.host_str().map(is_loopback_host).unwrap_or(false)
+        }
+        RedirectPolicy::LoopbackOrHttps => {
+            let scheme = parsed.scheme();
+            let is_loopback_http =
+                scheme == "http" && parsed.host_str().map(is_loopback_host).unwrap_or(false);
+            is_loopback_http || scheme == "https"
         }
     }
 }

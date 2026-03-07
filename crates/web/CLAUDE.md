@@ -18,7 +18,6 @@ For branding, theme, layout, and frontend UX decisions: `apps/web`.
 - `crates/web/execute.rs`: subprocess launch + WS output pump entry point
 - `crates/web/execute/events.rs`: WS event type definitions
 - `crates/web/execute/files.rs`: output file serving for completed jobs
-- `crates/web/execute/polling.rs`: job-completion polling loop
 - `crates/web/execute/tests/`: execute integration tests
 - `crates/web/docker_stats.rs`: container stats streaming
 - `crates/web/download.rs`: HTTP endpoints for crawl artifact downloads (individual files + zip archives)

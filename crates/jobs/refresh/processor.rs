@@ -86,7 +86,7 @@ async fn fetch_and_process_url(
     }
 
     let body = response.text().await?;
-    let markdown = to_markdown(&body);
+    let markdown = to_markdown(&body, None);
     let trimmed = markdown.trim().to_string();
     let mut hasher = Sha256::new();
     hasher.update(trimmed.as_bytes());
