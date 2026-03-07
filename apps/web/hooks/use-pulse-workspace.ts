@@ -328,7 +328,6 @@ export function usePulseWorkspaceBehavior() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [
     acpConfigOptions,
-    pulseAgent,
     setPulseModel,
     setPulsePermissionLevel,
     splitPane.toggleChat,
