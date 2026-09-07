@@ -348,10 +348,14 @@ fn toml_workers_qdrant_point_buffer_wins_and_clamps() {
 #[allow(unsafe_code)]
 #[serial_test::serial]
 #[test]
-fn canonical_vector_upsert_batch_points_configures_the_runtime_point_buffer() {
+fn canonical_vector_upsert_batch_points_precedes_legacy_point_buffer() {
     let _guard = env_guard();
     let mut config = TempfileBuilder::new().suffix(".toml").tempfile().unwrap();
-    writeln!(config, "[providers.vector]\nupsert-batch-points = 8").unwrap();
+    writeln!(
+        config,
+        "[providers.vector]\nupsert-batch-points = 8\n[pipeline]\nqdrant-point-buffer = 2048"
+    )
+    .unwrap();
 
     let mut got = 0usize;
     with_env_saved(
@@ -371,6 +375,59 @@ fn canonical_vector_upsert_batch_points_configures_the_runtime_point_buffer() {
     );
 
     assert_eq!(got, 8);
+}
+
+#[allow(unsafe_code)]
+#[serial_test::serial]
+#[test]
+fn canonical_vector_upsert_env_precedes_toml_and_legacy_env() {
+    let _guard = env_guard();
+    let mut config = TempfileBuilder::new().suffix(".toml").tempfile().unwrap();
+    writeln!(config, "[providers.vector]\nupsert-batch-points = 8").unwrap();
+
+    let mut got = 0usize;
+    with_env_saved(
+        &[
+            "AXON_CONFIG_PATH",
+            "AXON_QDRANT_UPSERT_BATCH_SIZE",
+            "AXON_QDRANT_POINT_BUFFER",
+        ],
+        || unsafe {
+            env::set_var("AXON_CONFIG_PATH", config.path());
+            env::set_var("AXON_QDRANT_UPSERT_BATCH_SIZE", "16");
+            env::set_var("AXON_QDRANT_POINT_BUFFER", "4096");
+            got = into_config_via_args(&["status"])
+                .unwrap()
+                .qdrant_point_buffer;
+        },
+    );
+
+    assert_eq!(got, 16);
+}
+
+#[allow(unsafe_code)]
+#[serial_test::serial]
+#[test]
+fn vector_write_concurrency_priority_and_clamp_match_runtime_contract() {
+    let _guard = env_guard();
+    let mut config = TempfileBuilder::new().suffix(".toml").tempfile().unwrap();
+    writeln!(config, "[providers.vector]\nwrite-concurrency = 7").unwrap();
+
+    let mut toml_value = 0usize;
+    let mut env_value = 0usize;
+    with_env_saved(
+        &["AXON_CONFIG_PATH", "AXON_QDRANT_UPSERT_PARALLELISM"],
+        || unsafe {
+            env::set_var("AXON_CONFIG_PATH", config.path());
+            env::remove_var("AXON_QDRANT_UPSERT_PARALLELISM");
+            toml_value = crate::config::parse::tuning::qdrant_upsert_parallelism();
+            env::set_var("AXON_QDRANT_UPSERT_PARALLELISM", "999");
+            env_value = crate::config::parse::tuning::qdrant_upsert_parallelism();
+        },
+    );
+
+    assert_eq!(toml_value, 7);
+    assert_eq!(env_value, 16, "environment override must clamp at 16");
 }
 
 #[allow(unsafe_code)]

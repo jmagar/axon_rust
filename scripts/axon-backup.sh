@@ -184,6 +184,6 @@ for protected_file in "$QDRANT_DEST" "$MANIFEST"; do
     [[ "$protected_mode" = 600 ]] || { echo "ERROR: insecure backup mode on $protected_file" >&2; exit 1; }
 done
 if [[ -n "$SQLITE_DEST" ]]; then
-    sqlite_mode="$(stat -c '%a' "$SQLITE_DEST" 2>/dev/null || stat -f '%Lp' "$SQLITE_DEST")"
-    [[ "$sqlite_mode" = 600 ]] || { echo "ERROR: insecure backup mode on $SQLITE_DEST" >&2; exit 1; }
+    db_mode="$(stat -c '%a' "$SQLITE_DEST" 2>/dev/null || stat -f '%Lp' "$SQLITE_DEST")"
+    [[ "$db_mode" = 600 ]] || { echo "ERROR: insecure backup mode on $SQLITE_DEST" >&2; exit 1; }
 fi

@@ -26,6 +26,7 @@ use axon_core::config::Config;
 use axon_core::logging::log_warn;
 use axon_jobs::boundary::JobStore;
 use axon_jobs::config_snapshot::apply_config_snapshot;
+use axon_jobs::scheduler::SqliteWriteGate;
 use axon_jobs::unified::SqliteUnifiedJobStore;
 use axon_jobs::workers::unified::UnifiedClaimedJob;
 use axon_jobs::workers::{JobRunnerRegistry, UnifiedJobOutcome, UnifiedJobRunner};
@@ -65,6 +66,13 @@ pub const WORKER_JOB_KINDS: &[JobKind] = &[
 /// path, unwritable directory, …) — callers should treat that as fatal for
 /// the `Memory` runner rather than silently registering a broken one.
 pub fn build_registry(cfg: &Arc<Config>) -> Result<JobRunnerRegistry, ApiError> {
+    build_registry_with_write_gate(cfg, SqliteWriteGate::default())
+}
+
+pub(crate) fn build_registry_with_write_gate(
+    cfg: &Arc<Config>,
+    write_gate: SqliteWriteGate,
+) -> Result<JobRunnerRegistry, ApiError> {
     let mut registry = JobRunnerRegistry::new();
     registry.register(
         JobKind::ProviderProbe,
@@ -80,7 +88,10 @@ pub fn build_registry(cfg: &Arc<Config>) -> Result<JobRunnerRegistry, ApiError> 
     );
     registry.register(
         JobKind::Source,
-        Arc::new(SourceRunner::new(Arc::clone(cfg))),
+        Arc::new(SourceRunner::new_with_write_gate(
+            Arc::clone(cfg),
+            write_gate,
+        )),
     );
 
     // The composed migration runner owns the shared schema. Open this handle

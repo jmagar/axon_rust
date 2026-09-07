@@ -282,7 +282,8 @@ async fn source_runner_context_reuses_the_worker_pool() {
     let worker_pool = Arc::clone(backend.pool());
     let store = SqliteUnifiedJobStore::new(worker_pool.as_ref().clone());
 
-    let ctx = build_service_context(&cfg, &store)
+    let write_gate = axon_jobs::scheduler::SqliteWriteGate::default();
+    let ctx = build_service_context_with_write_gate(&cfg, &store, write_gate.clone())
         .await
         .expect("runner service context");
     let context_pool = ctx.jobs.sqlite_pool().expect("runner SQLite pool");
@@ -294,5 +295,16 @@ async fn source_runner_context_reuses_the_worker_pool() {
     assert!(
         context_pool.try_acquire().is_none(),
         "the source runner must reuse the worker's SQLx pool instead of opening a second pool"
+    );
+    drop(held);
+
+    let _held_gate = write_gate.lock().await;
+    assert!(
+        ctx.jobs
+            .sqlite_write_gate()
+            .expect("runner writer gate")
+            .try_lock()
+            .is_none(),
+        "the source runner must reuse the process writer gate"
     );
 }

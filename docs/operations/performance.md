@@ -195,11 +195,12 @@ Qdrant controls:
 
 - `search.collection` in `~/.axon/config.toml`
 - `QDRANT_URL`
-- `workers.qdrant-point-buffer=1024` batches points before each pipeline flush
-- upsert batching via `qdrant.upsert-batch-size` in `~/.axon/config.toml`
-  (env override: `AXON_QDRANT_UPSERT_BATCH_SIZE`; default `1024`)
-- upsert fanout via `qdrant.upsert-parallelism` in `~/.axon/config.toml`
-  (env override: `AXON_QDRANT_UPSERT_PARALLELISM`; default `1`). This is a
+- upsert batching via `providers.vector.upsert-batch-points` in
+  `~/.axon/config.toml` (env override: `AXON_QDRANT_UPSERT_BATCH_SIZE`; default
+  `1024`). Legacy `pipeline.qdrant-point-buffer` and
+  `AXON_QDRANT_POINT_BUFFER` are compatibility fallbacks only.
+- upsert fanout via `providers.vector.write-concurrency` in `~/.axon/config.toml`
+  (env override: `AXON_QDRANT_UPSERT_PARALLELISM`; default `2`). This is a
   process-shared point/generation-write request ceiling for stores using the
   same Qdrant endpoint/admission profile; durable vector scheduler slots govern
   logical operations separately. Payload-index creation has its own bounded

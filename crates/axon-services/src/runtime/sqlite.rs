@@ -7,6 +7,7 @@ use axon_api::source::{JobKind, LifecycleStatus};
 use axon_core::config::Config;
 use axon_jobs::SqliteJobBackend;
 use axon_jobs::boundary::JobStore;
+use axon_jobs::scheduler::SqliteWriteGate;
 use axon_jobs::status::JobStatus;
 use axon_jobs::unified::SqliteUnifiedJobStore;
 use axon_observe::sink::SqliteObservabilitySink;
@@ -21,22 +22,38 @@ mod service_job_view;
 pub struct SqliteServiceRuntime {
     pub(crate) cfg: Arc<Config>,
     pub(crate) backend: Arc<SqliteJobBackend>,
+    write_gate: SqliteWriteGate,
     worker_queue_idle_observed: AtomicBool,
 }
 
 impl SqliteServiceRuntime {
+    #[cfg(test)]
     pub(crate) fn new_for_backend(cfg: Arc<Config>, backend: SqliteJobBackend) -> Self {
+        Self::new_for_backend_with_write_gate(cfg, backend, SqliteWriteGate::default())
+    }
+
+    pub(crate) fn new_for_backend_with_write_gate(
+        cfg: Arc<Config>,
+        backend: SqliteJobBackend,
+        write_gate: SqliteWriteGate,
+    ) -> Self {
         Self {
             cfg,
             backend: Arc::new(backend),
+            write_gate,
             worker_queue_idle_observed: AtomicBool::new(false),
         }
     }
 
-    pub(crate) fn new_for_migrated_pool(cfg: Arc<Config>, pool: Arc<SqlitePool>) -> Self {
-        Self::new_for_backend(
+    pub(crate) fn new_for_migrated_pool_with_write_gate(
+        cfg: Arc<Config>,
+        pool: Arc<SqlitePool>,
+        write_gate: SqliteWriteGate,
+    ) -> Self {
+        Self::new_for_backend_with_write_gate(
             Arc::clone(&cfg),
             SqliteJobBackend::from_migrated_pool(cfg, pool),
+            write_gate,
         )
     }
 
@@ -58,6 +75,10 @@ impl ServiceJobRuntime for SqliteServiceRuntime {
 
     fn sqlite_pool(&self) -> Option<Arc<SqlitePool>> {
         Some(Arc::clone(self.backend.pool()))
+    }
+
+    fn sqlite_write_gate(&self) -> Option<SqliteWriteGate> {
+        Some(self.write_gate.clone())
     }
 
     fn unified_job_store(&self) -> Option<Arc<dyn JobStore>> {

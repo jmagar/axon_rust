@@ -34,6 +34,7 @@ use axon_api::source::{
     ApiError, AuthSnapshot, ErrorStage, LifecycleStatus, PipelinePhase, SourceRequest, SourceResult,
 };
 use axon_core::config::Config;
+use axon_jobs::scheduler::SqliteWriteGate;
 use axon_jobs::unified::SqliteUnifiedJobStore;
 use axon_jobs::workers::unified::UnifiedClaimedJob;
 use axon_jobs::workers::{UnifiedJobOutcome, UnifiedJobRunner};
@@ -50,13 +51,20 @@ const CANCEL_CLEANUP_GRACE: std::time::Duration = std::time::Duration::from_secs
 
 pub(super) struct SourceRunner {
     cfg: Arc<Config>,
+    write_gate: SqliteWriteGate,
     ctx: OnceCell<ServiceContext>,
 }
 
 impl SourceRunner {
+    #[cfg(test)]
     pub(super) fn new(cfg: Arc<Config>) -> Self {
+        Self::new_with_write_gate(cfg, SqliteWriteGate::default())
+    }
+
+    pub(super) fn new_with_write_gate(cfg: Arc<Config>, write_gate: SqliteWriteGate) -> Self {
         Self {
             cfg,
+            write_gate,
             ctx: OnceCell::new(),
         }
     }
@@ -66,7 +74,9 @@ impl SourceRunner {
         store: &SqliteUnifiedJobStore,
     ) -> Result<&ServiceContext, ApiError> {
         self.ctx
-            .get_or_try_init(|| build_service_context(&self.cfg, store))
+            .get_or_try_init(|| {
+                build_service_context_with_write_gate(&self.cfg, store, self.write_gate.clone())
+            })
             .await
     }
 }
@@ -79,23 +89,33 @@ impl SourceRunner {
 /// `qdrant_url`/`tei_url` is not an error here — `index_source_with_auth`
 /// itself degrades cleanly to a `Failed` `SourceResult` when the runtime has
 /// no target local-source runtime attached.
-async fn build_service_context(
+async fn build_service_context_with_write_gate(
     cfg: &Arc<Config>,
     store: &SqliteUnifiedJobStore,
+    write_gate: SqliteWriteGate,
 ) -> Result<ServiceContext, ApiError> {
     let pool = Arc::new(store.sqlite_pool().clone());
-    let jobs: Arc<dyn crate::runtime::ServiceJobRuntime> =
-        Arc::new(crate::runtime::SqliteServiceRuntime::new_for_migrated_pool(
+    let jobs: Arc<dyn crate::runtime::ServiceJobRuntime> = Arc::new(
+        crate::runtime::SqliteServiceRuntime::new_for_migrated_pool_with_write_gate(
             Arc::clone(cfg),
             Arc::clone(&pool),
-        ));
+            write_gate.clone(),
+        ),
+    );
     let mut ctx = ServiceContext::from_runtime(Arc::clone(cfg), Arc::clone(&jobs));
 
     if cfg.qdrant_url.trim().is_empty() || cfg.tei_url.trim().is_empty() {
         return Ok(ctx);
     }
     let job_store: Arc<dyn axon_jobs::boundary::JobStore> = Arc::new(store.clone());
-    match TargetLocalSourceRuntime::from_config(cfg, job_store, pool.as_ref().clone()).await {
+    match TargetLocalSourceRuntime::from_config_with_write_gate(
+        cfg,
+        job_store,
+        pool.as_ref().clone(),
+        write_gate,
+    )
+    .await
+    {
         Ok(runtime) => {
             crate::source::spawn_artifact_candidate_outbox_drain(&runtime);
             ctx = ctx.with_target_local_source_runtime(runtime);

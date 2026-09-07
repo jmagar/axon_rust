@@ -277,6 +277,7 @@ async fn build_target_runtime(
     cfg: Config,
     jobs: Arc<dyn JobStore>,
     pool: SqlitePool,
+    sqlite_write_gate: SqliteWriteGate,
 ) -> Result<TargetLocalSourceRuntime, Box<dyn std::error::Error + Send + Sync>> {
     // The composed migrations prepare ledger tables in this shared job-runtime pool.
     let db_stage_slots = Arc::new(Semaphore::new(source_db_stage_capacity(&pool)));
@@ -285,7 +286,6 @@ async fn build_target_runtime(
         Arc::clone(&db_stage_slots),
     ));
 
-    let sqlite_write_gate = SqliteWriteGate::default();
     let embedding_cache_store = cfg.embed_cache_enabled.then(|| {
         Arc::new(SqliteEmbeddingVectorCacheStore::new(
             pool.clone(),
@@ -449,15 +449,26 @@ impl TargetLocalSourceRuntime {
         jobs: Arc<dyn JobStore>,
         pool: SqlitePool,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        build_target_runtime(cfg.clone(), jobs, pool).await
+        Self::from_config_owned_with_write_gate(cfg.clone(), jobs, pool, SqliteWriteGate::default())
+            .await
     }
 
-    pub(crate) async fn from_config_owned(
+    pub(crate) async fn from_config_with_write_gate(
+        cfg: &Config,
+        jobs: Arc<dyn JobStore>,
+        pool: SqlitePool,
+        write_gate: SqliteWriteGate,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Self::from_config_owned_with_write_gate(cfg.clone(), jobs, pool, write_gate).await
+    }
+
+    pub(crate) async fn from_config_owned_with_write_gate(
         cfg: Config,
         jobs: Arc<dyn JobStore>,
         pool: SqlitePool,
+        write_gate: SqliteWriteGate,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        build_target_runtime(cfg, jobs, pool).await
+        build_target_runtime(cfg, jobs, pool, write_gate).await
     }
 }
 

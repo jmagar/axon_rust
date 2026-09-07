@@ -299,7 +299,8 @@
 # openai-pool-max-inputs = 1024
 
 [providers.vector]
-# Upsert request batch size and request parallelism.
+# Upsert request batch size and request parallelism. This is the canonical
+# replacement for legacy pipeline.qdrant-point-buffer / AXON_QDRANT_POINT_BUFFER.
 # Env: AXON_QDRANT_UPSERT_BATCH_SIZE
 # upsert-batch-points = 1024
 # Env: AXON_QDRANT_UPSERT_PARALLELISM

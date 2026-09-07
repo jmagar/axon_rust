@@ -1,6 +1,7 @@
 //! Process-local admission for mutations sharing the SQLite writer boundary.
 
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -19,24 +20,30 @@ use tokio::sync::Mutex;
 #[derive(Debug, Default)]
 struct SqliteWriteGateInner {
     mutex: Mutex<()>,
-    holder: StdMutex<Option<&'static std::panic::Location<'static>>>,
+    next_holder_id: AtomicU64,
+    holder: StdMutex<Option<(u64, &'static std::panic::Location<'static>)>>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct SqliteWriteGate(Arc<SqliteWriteGateInner>);
 
 pub struct SqliteWriteGuard<'a> {
-    _guard: tokio::sync::MutexGuard<'a, ()>,
+    guard: Option<tokio::sync::MutexGuard<'a, ()>>,
     inner: &'a SqliteWriteGateInner,
+    holder_id: u64,
 }
 
 impl Drop for SqliteWriteGuard<'_> {
     fn drop(&mut self) {
-        *self
+        drop(self.guard.take());
+        let mut holder = self
             .inner
             .holder
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if holder.is_some_and(|(holder_id, _)| holder_id == self.holder_id) {
+            *holder = None;
+        }
     }
 }
 
@@ -44,6 +51,16 @@ impl Drop for SqliteWriteGuard<'_> {
 pub type SchedulerWriteGate = SqliteWriteGate;
 
 impl SqliteWriteGate {
+    fn record_holder(&self, caller: &'static std::panic::Location<'static>) -> u64 {
+        let holder_id = self.0.next_holder_id.fetch_add(1, Ordering::Relaxed);
+        *self
+            .0
+            .holder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((holder_id, caller));
+        holder_id
+    }
+
     #[doc(hidden)]
     #[track_caller]
     pub fn lock(&self) -> impl Future<Output = SqliteWriteGuard<'_>> + '_ {
@@ -55,11 +72,12 @@ impl SqliteWriteGate {
             let guard = tokio::select! {
                 guard = &mut lock => guard,
                 _ = tokio::time::sleep(Duration::from_secs(1)) => {
-                    let holder = *self
+                    let holder = self
                         .0
                         .holder
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .map(|(_, location)| location);
                     tracing::warn!(
                         waited_ms = started.elapsed().as_millis() as u64,
                         caller = %caller,
@@ -69,14 +87,11 @@ impl SqliteWriteGate {
                     lock.await
                 }
             };
-            *self
-                .0
-                .holder
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(caller);
+            let holder_id = self.record_holder(caller);
             SqliteWriteGuard {
-                _guard: guard,
+                guard: Some(guard),
                 inner: &self.0,
+                holder_id,
             }
         }
     }
@@ -85,15 +100,15 @@ impl SqliteWriteGate {
     #[track_caller]
     pub fn try_lock(&self) -> Option<SqliteWriteGuard<'_>> {
         let guard = self.0.mutex.try_lock().ok()?;
-        *self
-            .0
-            .holder
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some(std::panic::Location::caller());
+        let holder_id = self.record_holder(std::panic::Location::caller());
         Some(SqliteWriteGuard {
-            _guard: guard,
+            guard: Some(guard),
             inner: &self.0,
+            holder_id,
         })
     }
 }
+
+#[cfg(test)]
+#[path = "write_gate_tests.rs"]
+mod tests;

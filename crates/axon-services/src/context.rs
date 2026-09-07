@@ -354,7 +354,16 @@ impl ServiceContext {
                 observe_sink,
             ),
         );
-        let runtime = TargetLocalSourceRuntime::from_config(cfg, store, (*pool).clone()).await?;
+        let write_gate = jobs
+            .sqlite_write_gate()
+            .ok_or("SQLite runtime is missing its shared writer gate")?;
+        let runtime = TargetLocalSourceRuntime::from_config_with_write_gate(
+            cfg,
+            store,
+            (*pool).clone(),
+            write_gate,
+        )
+        .await?;
         crate::source::spawn_artifact_candidate_outbox_drain(&runtime);
         Ok(Some(Arc::new(runtime)))
     }

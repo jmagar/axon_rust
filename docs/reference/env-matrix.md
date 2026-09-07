@@ -200,7 +200,7 @@ These env vars are being migrated to `config.toml`. Env override is retained tem
 | `AXON_EMBED_LANES` | move-toml | not-runtime | `workers.embed-lanes` | migration.rs |
 | `AXON_EMBED_DOC_TIMEOUT_SECS` | move-toml | not-runtime | `workers.embed-doc-timeout-secs` | migration.rs |
 | `AXON_QUEUE_SUMMARY_SECS` | move-toml | not-runtime | `workers.queue-summary-secs` | migration.rs |
-| `AXON_QDRANT_POINT_BUFFER` | move-toml | not-runtime | `workers.qdrant-point-buffer` | migration.rs |
+| `AXON_QDRANT_POINT_BUFFER` | move-toml | not-runtime | `pipeline.qdrant-point-buffer` | migration.rs |
 | `AXON_QDRANT_UPSERT_BATCH_SIZE` | keep-env | both |  | env-matrix.toml |
 | `AXON_QDRANT_UPSERT_PARALLELISM` | keep-env | both |  | env-matrix.toml |
 | `AXON_QDRANT_BULK_LOAD` | keep-env | both |  | env-matrix.toml |
