@@ -126,7 +126,7 @@ impl ProviderScheduler {
         }
     }
 
-    async fn grant_head_locked(
+    pub(super) async fn grant_head_locked(
         &self,
         connection: &mut PoolConnection<Sqlite>,
         domain: &str,
@@ -263,31 +263,27 @@ impl ProviderScheduler {
             ));
         }
         sqlx::query(
-            "WITH desired AS (
-               SELECT reservation_id,
-                 CASE max(0,
+            "UPDATE provider_reservations
+             SET effective_priority = CASE max(0,
                    CASE requested_priority
                      WHEN 'interactive' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2
                      WHEN 'background' THEN 3 ELSE 4 END
                    - min(4, max(0, (unixepoch('now') - unixepoch(updated_at)) / ?)))
                  WHEN 0 THEN 'interactive' WHEN 1 THEN 'high' WHEN 2 THEN 'normal'
-                 WHEN 3 THEN 'background' ELSE 'maintenance' END AS priority
-               FROM provider_reservations
-               WHERE capacity_domain = ? AND instance_id = ? AND status = 'queued'
-             )
-             UPDATE provider_reservations
-             SET effective_priority = (
-               SELECT priority FROM desired
-               WHERE desired.reservation_id = provider_reservations.reservation_id
-             )
-             WHERE reservation_id IN (
-               SELECT desired.reservation_id FROM desired
-               WHERE COALESCE(provider_reservations.effective_priority, '') <> desired.priority
-             )",
+                 WHEN 3 THEN 'background' ELSE 'maintenance' END
+             WHERE capacity_domain = ? AND instance_id = ? AND status = 'queued'
+               AND COALESCE(effective_priority, '') <> CASE max(0,
+                 CASE requested_priority
+                   WHEN 'interactive' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2
+                   WHEN 'background' THEN 3 ELSE 4 END
+                 - min(4, max(0, (unixepoch('now') - unixepoch(updated_at)) / ?)))
+               WHEN 0 THEN 'interactive' WHEN 1 THEN 'high' WHEN 2 THEN 'normal'
+               WHEN 3 THEN 'background' ELSE 'maintenance' END",
         )
         .bind(AGING_QUANTUM_SECS)
         .bind(domain)
         .bind(&self.domain.instance_id)
+        .bind(AGING_QUANTUM_SECS)
         .execute(&mut **connection)
         .await?;
         Ok(())

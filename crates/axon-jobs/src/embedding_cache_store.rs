@@ -224,7 +224,7 @@ impl EmbeddingVectorCacheStore for SqliteEmbeddingVectorCacheStore {
         self.inner
             .max_entries
             .store(max_entries.max(1), Ordering::Relaxed);
-        prune(&mut transaction, max_entries, now).await?;
+        prune_capacity(&mut transaction, max_entries).await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -269,7 +269,6 @@ async fn prune(
     max_entries: usize,
     now: i64,
 ) -> Result<(), sqlx::Error> {
-    let max_entries = i64::try_from(max_entries).unwrap_or(i64::MAX).max(1);
     let cutoff = now.saturating_sub(MAX_CACHE_AGE.as_millis() as i64);
     sqlx::query(
         "DELETE FROM embedding_vector_cache WHERE cache_key IN (\
@@ -280,6 +279,14 @@ async fn prune(
     .bind(MAINTENANCE_DELETE_BUDGET)
     .execute(&mut **transaction)
     .await?;
+    prune_capacity(transaction, max_entries).await
+}
+
+async fn prune_capacity(
+    transaction: &mut sqlx::Transaction<'_, Sqlite>,
+    max_entries: usize,
+) -> Result<(), sqlx::Error> {
+    let max_entries = i64::try_from(max_entries).unwrap_or(i64::MAX).max(1);
     let count: Option<i64> = sqlx::query_scalar(
         "SELECT entry_count FROM embedding_vector_cache_state WHERE singleton = 1",
     )
@@ -390,7 +397,7 @@ fn cache_cutoff_millis() -> i64 {
 
 async fn acquire_write_permit(
     gate: &SqliteWriteGate,
-) -> Result<tokio::sync::MutexGuard<'_, ()>, CacheStoreError> {
+) -> Result<crate::scheduler::SqliteWriteGuard<'_>, CacheStoreError> {
     tokio::time::timeout(WRITE_ADMISSION_TIMEOUT, gate.lock())
         .await
         .map_err(|_| "embedding cache SQLite writer admission timed out".into())

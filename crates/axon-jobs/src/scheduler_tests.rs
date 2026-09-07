@@ -53,10 +53,133 @@ fn shared_dispatch_signal_spans_authorities_in_one_capacity_domain() {
 }
 
 #[tokio::test]
+async fn in_process_notifications_do_not_start_recovery_dispatch() {
+    let pool = open_sqlite_pool(":memory:").await.expect("migrations");
+    seed_jobs(&pool, "notification-source", &[0xa1, 0xa2]).await;
+    let scheduler = test_scheduler(&pool, "notification-dispatch");
+    let held = scheduler
+        .reserve(request(0xa1, "notification-held", JobPriority::Normal))
+        .await
+        .expect("held reservation");
+    let queued = scheduler
+        .reserve(request(0xa2, "notification-waiting", JobPriority::Normal))
+        .await
+        .expect("queued reservation");
+    assert!(!queued.is_granted());
+    sqlx::query(
+        "UPDATE provider_reservations
+         SET updated_at = datetime('now', '-120 seconds'),
+             renewed_at = datetime('now'),
+             effective_priority = 'normal'
+         WHERE reservation_id = ?",
+    )
+    .bind(queued.reservation_id())
+    .execute(&pool)
+    .await
+    .expect("age queued reservation");
+
+    let waiting_scheduler = scheduler.clone();
+    let waiting_id = queued.reservation_id().to_string();
+    let waiter =
+        tokio::spawn(async move { waiting_scheduler.wait_for_grant(waiting_id, None).await });
+    for _ in 0..100 {
+        scheduler.dispatch_signal.changed.notify_waiters();
+        tokio::task::yield_now().await;
+    }
+
+    let priority: String = sqlx::query_scalar(
+        "SELECT effective_priority FROM provider_reservations WHERE reservation_id = ?",
+    )
+    .bind(queued.reservation_id())
+    .fetch_one(&pool)
+    .await
+    .expect("queued priority");
+    assert_eq!(
+        priority, "normal",
+        "an in-process notification must recheck the grant without running the cross-process recovery dispatcher"
+    );
+
+    waiter.abort();
+    scheduler
+        .complete(held.reservation_id(), "notification-held")
+        .await
+        .expect("release held reservation");
+}
+
+#[tokio::test]
 async fn invalid_scheduler_capacity_is_rejected() {
     let error = SchedulerConfig::new(1, 2, 10, 10)
         .expect_err("interactive reserve larger than capacity must be rejected");
     assert!(matches!(error, SchedulerError::InvalidConfig(_)));
+}
+
+#[tokio::test]
+async fn completing_a_lease_atomically_grants_the_next_waiter() {
+    let pool = open_sqlite_pool(":memory:").await.expect("migrations");
+    seed_jobs(&pool, "atomic-handoff-source", &[0x91, 0x92]).await;
+    let scheduler = test_scheduler(&pool, "atomic-handoff");
+    let held = scheduler
+        .reserve(request(0x91, "atomic-held", JobPriority::Normal))
+        .await
+        .expect("held reservation");
+    let waiting = scheduler
+        .reserve(request(0x92, "atomic-waiting", JobPriority::Normal))
+        .await
+        .expect("waiting reservation");
+    assert!(!waiting.is_granted());
+
+    scheduler
+        .complete(held.reservation_id(), "atomic-held")
+        .await
+        .expect("release held reservation");
+
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM provider_reservations WHERE reservation_id = ?")
+            .bind(waiting.reservation_id())
+            .fetch_one(&pool)
+            .await
+            .expect("waiting reservation status");
+    assert_eq!(status, "granted");
+}
+
+#[tokio::test]
+async fn failed_atomic_handoff_rolls_back_its_writer_transaction() {
+    let pool = open_sqlite_pool(":memory:").await.expect("migrations");
+    seed_jobs(&pool, "atomic-rollback-source", &[0x93, 0x94]).await;
+    let scheduler = test_scheduler(&pool, "atomic-rollback");
+    let held = scheduler
+        .reserve(request(0x93, "rollback-held", JobPriority::Normal))
+        .await
+        .expect("held reservation");
+    let waiting = scheduler
+        .reserve(request(0x94, "rollback-waiting", JobPriority::Normal))
+        .await
+        .expect("waiting reservation");
+    assert!(!waiting.is_granted());
+    sqlx::query(
+        "UPDATE provider_reservations SET updated_at = 'not-a-timestamp' \
+         WHERE reservation_id = ?",
+    )
+    .bind(waiting.reservation_id())
+    .execute(&pool)
+    .await
+    .expect("corrupt queued aging timestamp");
+
+    assert!(matches!(
+        scheduler
+            .complete(held.reservation_id(), "rollback-held")
+            .await,
+        Err(SchedulerError::DatabaseState(_))
+    ));
+
+    let tx = tokio::time::timeout(
+        Duration::from_millis(500),
+        axon_core::sqlite::ImmediateTx::begin(&pool),
+    )
+    .await
+    .expect("failed handoff must not strand the SQLite writer lock")
+    .expect("new writer transaction remains available");
+    tx.rollback().await;
 }
 
 #[test]
@@ -658,7 +781,7 @@ async fn cross_process_recovery_is_independent_for_domains_sharing_an_authority(
         )
         .await
     });
-    wait_for_reservation_status(&pool, "domain-a-waiter", "queued").await;
+    wait_for_reservation_status(&pool, "vector-waiter", "queued").await;
     sqlx::query(
         "UPDATE provider_reservations SET status = 'released', granted_units = 0
          WHERE reservation_id = ?",

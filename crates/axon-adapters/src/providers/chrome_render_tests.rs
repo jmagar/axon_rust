@@ -162,6 +162,36 @@ fn classify_render_error_recognizes_timeout() {
     );
 }
 
+#[tokio::test]
+async fn render_deadline_cancels_a_provider_future_that_never_resolves() {
+    let error = await_isolated_render_outcome(
+        std::time::Duration::from_millis(10),
+        std::future::pending::<std::result::Result<(), String>>(),
+    )
+    .await
+    .expect_err("a hung render must be bounded by the provider deadline");
+
+    assert!(error.contains("timed out after 10ms"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn render_deadline_remains_responsive_when_render_poll_blocks() {
+    let started = std::time::Instant::now();
+    let error = await_isolated_render_outcome(std::time::Duration::from_millis(10), async {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::future::pending::<std::result::Result<(), String>>().await
+    })
+    .await
+    .expect_err("a blocking render poll must not block the deadline controller");
+
+    assert!(error.contains("timed out after 10ms"));
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(100),
+        "deadline controller was blocked for {:?}",
+        started.elapsed()
+    );
+}
+
 #[test]
 fn classify_render_error_recognizes_rate_limiting() {
     assert_eq!(
@@ -354,6 +384,44 @@ async fn render_chrome_mode_against_a_live_browser() {
         .await
         .expect("render should succeed against a live Chrome instance");
     assert!(!rendered.markdown.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 18)]
+#[ignore = "requires a live Chrome/CDP endpoint, not available in CI"]
+async fn concurrent_chrome_renders_all_reach_a_terminal_outcome() {
+    let provider = ChromeRenderProvider::new(ChromeRenderConfig {
+        max_concurrent_pages: Some(8),
+        chrome_remote_url: std::env::var("AXON_CHROME_REMOTE_URL").ok(),
+        default_timeout_ms: Some(10_000),
+    });
+    let urls = [
+        "https://nextjs.org/blog/composable-caching",
+        "https://nextjs.org/blog/CVE-2025-66478",
+        "https://nextjs.org/blog/august-2026-security-release",
+        "https://nextjs.org/blog",
+        "https://nextjs.org/blog/agentic-future",
+        "https://nextjs.org/.well-known/ai-catalog.json",
+        "https://nextjs.org/blog/building-app-like-experiences-with-nextjs-16-3",
+        "https://nextjs.org/blog/building-apis-with-nextjs",
+    ];
+    let started = std::time::Instant::now();
+    let outcomes = futures_util::future::join_all((0..32).map(|index| {
+        let url = urls[index % urls.len()];
+        let provider = provider.clone();
+        async move {
+            provider
+                .render(request(url.to_string(), RenderMode::Chrome))
+                .await
+        }
+    }))
+    .await;
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "concurrent renders exceeded their provider deadlines: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(outcomes.len(), 32);
 }
 
 /// Same live-Chrome requirement as `render_chrome_mode_against_a_live_browser`,

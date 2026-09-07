@@ -229,6 +229,10 @@ fn initial_source_specific_registry_allows_only_declared_family_fields() {
     assert!(source_family_allows_field("web", "web_normalized_url"));
     assert!(source_family_allows_field("web", "web_fetch_method"));
     assert!(source_family_allows_field("web", "web_render_mode"));
+    assert!(source_family_allows_field(
+        "web",
+        "web_render_bypass_reason"
+    ));
     assert!(source_family_allows_field("web", "web_etag"));
     assert!(source_family_allows_field("web", "web_last_modified"));
     assert!(source_family_allows_field("web", "web_prior_etag"));
@@ -510,7 +514,7 @@ fn chunk_text_rejects_every_known_bare_token_family() {
         "github_pat_abcdefghijklmnopqrstuvwxyz123456789",
         "ghp_abcdefghijklmnopqrstuvwxyz123456789",
         "xoxb-abcdefghijklmnopqrstuvwxyz123456789",
-        "glpat-abcdefghijklmnopqrstuvwxyz123456789",
+        "glpat-abcdefghijklmnopqrstuvwxyz123456789", // gitleaks:allow
     ] {
         let mut metadata = fixture("web.valid.json");
         metadata.insert("chunk_text".to_string(), serde_json::json!(token));

@@ -600,6 +600,36 @@ async fn request_count_is_local_to_each_invocation() {
     endpoint.assert_calls_async(2).await;
 }
 
+#[tokio::test]
+#[ignore = "requires a live TEI_URL endpoint"]
+async fn live_embed_all_drains_more_than_two_admission_waves() {
+    let endpoint = std::env::var("TEI_URL").expect("TEI_URL must identify the live endpoint");
+    let client = TeiClient::new(TeiClientParams {
+        endpoint,
+        provider_id: "tei".to_string(),
+        max_batch_inputs: 16,
+        max_input_tokens: 8_192,
+        max_batch_tokens: 131_072,
+        max_concurrent_requests: 3,
+        max_in_flight_inputs: 48,
+        max_attempts: 1,
+        request_timeout: Duration::from_secs(30),
+        retry_backoff_base_ms: 1,
+    })
+    .expect("live TEI client");
+    let inputs = (0..96)
+        .map(|index| format!("Axon live admission regression input {index}"))
+        .collect::<Vec<_>>();
+
+    let outcome = tokio::time::timeout(Duration::from_secs(60), client.embed_all(&inputs))
+        .await
+        .expect("six TEI batches must not deadlock")
+        .expect("live TEI embedding");
+
+    assert_eq!(outcome.vectors.len(), inputs.len());
+    assert_eq!(outcome.requests, 6);
+}
+
 #[test]
 fn tei_client_new_reuses_the_shared_client_across_many_constructions() {
     let before = shared_client_build_count();

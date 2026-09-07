@@ -65,8 +65,8 @@ fn source_job_request(source_request: &SourceRequest) -> JobCreateRequest {
 /// directly against a plain enqueue-only `SqliteJobBackend::new` (no
 /// `build_registry` involved) sidesteps that unrelated construction bug and
 /// still exercises the runner's real logic end-to-end: real payload
-/// deserialization, a real lazily-built `ServiceContext` (via
-/// `crate::runtime::resolve_runtime`), and a real
+/// deserialization, a real lazily-built `ServiceContext` sharing the worker
+/// pool, and a real
 /// `crate::source::index_source_with_auth` call.
 async fn claim_source_job(
     store: &SqliteUnifiedJobStore,
@@ -271,4 +271,28 @@ async fn build_registry_registers_source() {
     let (_tmp, cfg) = test_cfg().await;
     let registry = build_registry(&cfg).expect("build registry");
     assert!(registry.contains(UnifiedJobKind::Source));
+}
+
+#[tokio::test]
+async fn source_runner_context_reuses_the_worker_pool() {
+    let (_tmp, cfg) = test_cfg().await;
+    let backend = SqliteJobBackend::new(Arc::clone(&cfg))
+        .await
+        .expect("enqueue-only backend");
+    let worker_pool = Arc::clone(backend.pool());
+    let store = SqliteUnifiedJobStore::new(worker_pool.as_ref().clone());
+
+    let ctx = build_service_context(&cfg, &store)
+        .await
+        .expect("runner service context");
+    let context_pool = ctx.jobs.sqlite_pool().expect("runner SQLite pool");
+
+    let mut held = Vec::new();
+    for _ in 0..worker_pool.options().get_max_connections() {
+        held.push(worker_pool.acquire().await.expect("worker pool connection"));
+    }
+    assert!(
+        context_pool.try_acquire().is_none(),
+        "the source runner must reuse the worker's SQLx pool instead of opening a second pool"
+    );
 }

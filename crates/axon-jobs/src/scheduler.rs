@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex as StdMutex, Weak};
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 const FOREGROUND_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -137,9 +137,11 @@ impl ReservationGrant {
 mod grant;
 mod lease;
 mod reconcile;
+mod write_gate;
 use lease::WaitingReservationGuard;
 pub use lease::{ReservationObservation, call_reserved};
 pub use reconcile::Reconciliation;
+pub use write_gate::{SchedulerWriteGate, SqliteWriteGate, SqliteWriteGuard};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SchedulerError {
@@ -247,35 +249,6 @@ fn shared_dispatch_signal(
     let signal = Arc::new(DispatchSignal::default());
     notifiers.insert(key, Arc::downgrade(&signal));
     signal
-}
-
-/// Process-local admission gate for scheduler mutations sharing one SQLite DB.
-///
-/// SQLite admits one writer at a time. Without this gate, concurrent provider
-/// calls can park every SQLx connection worker inside SQLite's busy handler,
-/// starving unrelated job heartbeats and control-plane reads of a pool slot.
-///
-/// The gate is intentionally process-local even though the DB is shared with
-/// short-lived CLI processes: cross-process writers are serialized by SQLite's
-/// own write lock, so the accepted bound is that a gate holder may stall up to
-/// the busy timeout behind an external writer while in-process writers queue
-/// behind the gate.
-#[derive(Debug, Clone, Default)]
-pub struct SqliteWriteGate(Arc<Mutex<()>>);
-
-/// Backward-compatible scheduler-facing name for the shared SQLite writer gate.
-pub type SchedulerWriteGate = SqliteWriteGate;
-
-impl SqliteWriteGate {
-    #[doc(hidden)]
-    pub async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.0.lock().await
-    }
-
-    /// Attempt admission without parking behind another SQLite writer.
-    pub fn try_lock(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
-        self.0.try_lock().ok()
-    }
 }
 
 impl ProviderScheduler {
@@ -392,12 +365,14 @@ impl ProviderScheduler {
             // timeout remains solely as cross-process/crash recovery because
             // another process cannot signal this Notify.
             if let Some(_claim) = self.dispatch_signal.try_claim_recovery() {
-                tokio::select! {
-                    _ = &mut capacity_changed => {}
-                    _ = tokio::time::sleep(RECOVERY_POLL) => {}
+                let recovery_due = tokio::select! {
+                    _ = &mut capacity_changed => false,
+                    _ = tokio::time::sleep(RECOVERY_POLL) => true,
+                };
+                if recovery_due {
+                    self.dispatch_queued().await?;
+                    self.dispatch_signal.changed.notify_waiters();
                 }
-                self.dispatch_queued().await?;
-                self.dispatch_signal.changed.notify_waiters();
             } else {
                 capacity_changed.await;
             }
@@ -428,23 +403,48 @@ impl ProviderScheduler {
     }
 
     pub async fn complete(&self, reservation_id: &str, fence: &str) -> Result<(), SchedulerError> {
+        self.terminalize_and_dispatch(reservation_id, fence, "completed")
+            .await
+    }
+
+    async fn terminalize_and_dispatch(
+        &self,
+        reservation_id: &str,
+        fence: &str,
+        reason: &str,
+    ) -> Result<(), SchedulerError> {
         let _write_permit = self.write_gate.lock().await;
-        let changed = sqlx::query(
-            "UPDATE provider_reservations SET status = 'released', granted_units = 0,
-             terminal_reason = 'completed', updated_at = datetime('now')
-             WHERE reservation_id = ? AND fence = ? AND authority_id = ? AND status IN ('granted','active')",
-        )
-        .bind(reservation_id)
-        .bind(fence)
-        .bind(&self.domain.authority_id)
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
-        if changed == 0 {
-            return Err(SchedulerError::StaleFence);
+        let mut connection = self.pool.acquire().await?;
+        begin_immediate(&mut connection).await?;
+        let result = async {
+            let changed = sqlx::query(
+                "UPDATE provider_reservations SET status = 'released', granted_units = 0,
+                 terminal_reason = ?, updated_at = datetime('now')
+                 WHERE reservation_id = ? AND fence = ? AND authority_id = ? AND status IN ('granted','active')",
+            )
+            .bind(reason)
+            .bind(reservation_id)
+            .bind(fence)
+            .bind(&self.domain.authority_id)
+            .execute(&mut *connection)
+            .await?
+            .rows_affected();
+            if changed == 0 {
+                return Err(SchedulerError::StaleFence);
+            }
+            let domain = domain_name(self.domain.kind)?;
+            while self.grant_head_locked(&mut connection, &domain).await? {}
+            Ok(())
         }
-        self.dispatch_signal.changed.notify_waiters();
-        Ok(())
+        .await;
+        match result {
+            Ok(()) => {
+                sqlx::query("COMMIT").execute(&mut *connection).await?;
+                self.dispatch_signal.changed.notify_waiters();
+                Ok(())
+            }
+            Err(error) => Err(rollback_after_error(&mut connection, error).await),
+        }
     }
 
     async fn activate(&self, reservation_id: &str, fence: &str) -> Result<(), SchedulerError> {
@@ -499,24 +499,8 @@ impl ProviderScheduler {
         fence: &str,
         reason: &str,
     ) -> Result<(), SchedulerError> {
-        let _write_permit = self.write_gate.lock().await;
-        let changed = sqlx::query(
-            "UPDATE provider_reservations SET status = 'released', granted_units = 0,
-             terminal_reason = ?, updated_at = datetime('now')
-             WHERE reservation_id = ? AND fence = ? AND authority_id = ? AND status IN ('granted','active')",
-        )
-        .bind(reason)
-        .bind(reservation_id)
-        .bind(fence)
-        .bind(&self.domain.authority_id)
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
-        if changed == 0 {
-            return Err(SchedulerError::StaleFence);
-        }
-        self.dispatch_signal.changed.notify_waiters();
-        Ok(())
+        self.terminalize_and_dispatch(reservation_id, fence, reason)
+            .await
     }
 
     #[cfg(test)]

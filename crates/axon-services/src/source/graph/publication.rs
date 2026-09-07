@@ -8,6 +8,11 @@ use sqlx::SqlitePool;
 use crate::context::TargetLocalSourceRuntime;
 use crate::reserved_call::{self, ProviderCallContext};
 
+#[cfg(not(test))]
+const GRAPH_BATCH_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+#[cfg(test)]
+const GRAPH_BATCH_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// Drain the generation lazily. A committed prefix may be visible if a later
 /// batch fails; the caller reports degradation and retries the idempotent work.
 pub(super) async fn upsert_candidate_batches<I>(
@@ -50,26 +55,41 @@ async fn upsert(
     pool: &Arc<SqlitePool>,
     candidates: Vec<GraphCandidate>,
 ) -> Result<GraphWriteResult, ApiError> {
-    match (runtime, context) {
-        (Some(runtime), Some(context)) => {
-            reserved_call::upsert_graph_candidates(
-                runtime,
-                context,
-                pool.as_ref().clone(),
-                candidates,
+    let write = async move {
+        match (runtime, context) {
+            (Some(runtime), Some(context)) => {
+                reserved_call::upsert_graph_candidates(
+                    runtime,
+                    context,
+                    pool.as_ref().clone(),
+                    candidates,
+                )
+                .await
+            }
+            #[cfg(test)]
+            (None, None) => {
+                reserved_call::upsert_graph_candidates_for_test(pool.as_ref().clone(), candidates)
+                    .await
+            }
+            _ => Err(ApiError::new(
+                "graph.runtime_missing",
+                ErrorStage::Graphing,
+                "graph write is missing scheduler runtime/context",
+            )),
+        }
+    };
+    tokio::time::timeout(GRAPH_BATCH_WRITE_TIMEOUT, write)
+        .await
+        .map_err(|_| {
+            ApiError::new(
+                "graph.write_timeout",
+                ErrorStage::Graphing,
+                format!(
+                    "graph candidate batch exceeded the {}ms write deadline",
+                    GRAPH_BATCH_WRITE_TIMEOUT.as_millis()
+                ),
             )
-            .await
-        }
-        #[cfg(test)]
-        (None, None) => {
-            reserved_call::upsert_graph_candidates_for_test(pool.as_ref().clone(), candidates).await
-        }
-        _ => Err(ApiError::new(
-            "graph.runtime_missing",
-            ErrorStage::Graphing,
-            "graph write is missing scheduler runtime/context",
-        )),
-    }
+        })?
 }
 
 fn merge(total: &mut Option<GraphWriteResult>, result: GraphWriteResult) {

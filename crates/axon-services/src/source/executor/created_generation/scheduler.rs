@@ -6,7 +6,12 @@ use crate::source::executor::generation_work::{PreparedBatchReceiver, PreparedWo
 use crate::source::executor::progress::PipelineProgress;
 use crate::source::executor::vectorize::batching::charged_chunk_count;
 
-const OUTER_POOL_CONCURRENCY: usize = 3;
+// Prepared envelopes retain permits from a semaphore sized for three pools
+// until they are flushed. Stop accumulating at two pools/envelopes so a third
+// maximum-sized envelope always has enough permit headroom to reach the
+// receiver. Matching the flush threshold to the semaphore capacity can
+// deadlock when the next envelope would cross that threshold.
+const OUTER_POOL_CONCURRENCY: usize = 2;
 
 fn should_flush(
     pending_chunks: usize,

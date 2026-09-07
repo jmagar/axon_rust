@@ -97,6 +97,20 @@ impl SqliteJobBackend {
         })
     }
 
+    /// Reuse an already migrated pool for an enqueue-only composition layer.
+    ///
+    /// Unified job runners execute inside a backend that already owns this
+    /// pool. Their domain service contexts must clone that pool handle rather
+    /// than opening a second pool against the same SQLite file, which would
+    /// create an independent writer-admission domain.
+    pub fn from_migrated_pool(cfg: Arc<Config>, pool: Arc<SqlitePool>) -> Self {
+        Self {
+            pool,
+            workers: None,
+            cfg,
+        }
+    }
+
     pub fn pool(&self) -> &Arc<SqlitePool> {
         &self.pool
     }

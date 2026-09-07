@@ -140,6 +140,11 @@ impl SqliteUnifiedJobStore {
         }
     }
 
+    /// Shared SQLx pool used by the worker that constructed this store.
+    pub fn sqlite_pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
     #[cfg(test)]
     pub(crate) fn pool_for_tests(&self) -> &SqlitePool {
         &self.pool

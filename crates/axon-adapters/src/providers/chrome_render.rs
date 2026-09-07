@@ -22,8 +22,10 @@
 //! `web_engine::scrape::scrape_to_result` — see that module's
 //! `apply_automation_scripts` for the actual Chrome-only execution gate.
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration as StdDuration;
 
 use async_trait::async_trait;
 use axon_api::source::*;
@@ -187,6 +189,105 @@ fn automation_script_path(uri: &str) -> PathBuf {
     PathBuf::from(uri.strip_prefix("file://").unwrap_or(uri))
 }
 
+async fn await_isolated_render_outcome<T, F>(
+    deadline: StdDuration,
+    future: F,
+) -> std::result::Result<T, String>
+where
+    T: Send + 'static,
+    F: Future<Output = T> + Send + 'static,
+{
+    let mut task = tokio::spawn(future);
+    match tokio::time::timeout(deadline, &mut task).await {
+        Ok(Ok(outcome)) => Ok(outcome),
+        Ok(Err(error)) => Err(format!("render task failed: {error}")),
+        Err(_) => {
+            task.abort();
+            Err(format!("render timed out after {}ms", deadline.as_millis()))
+        }
+    }
+}
+
+impl ChromeRenderProvider {
+    async fn render_inner(
+        &self,
+        request: RenderRequest,
+        mut cfg: Config,
+        timeout_policy: crate::web_engine::browser::BrowserTimeoutPolicy,
+    ) -> Result<RenderedResource> {
+        validate_url_with_dns(&request.uri).await.map_err(|err| {
+            self.error(
+                "render.invalid_uri",
+                format!("render target rejected by SSRF policy: {err}"),
+            )
+        })?;
+        let _page_permit = self.acquire_page_slot_for(cfg.render_mode).await?;
+        if crate::web_engine::chrome_bootstrap::chrome_runtime_requested(&cfg) {
+            let bootstrap =
+                crate::web_engine::chrome_bootstrap::bootstrap_chrome_runtime(&cfg).await;
+            for warning in &bootstrap.warnings {
+                log_warn(&format!("[chrome_render] {warning}"));
+            }
+            crate::web_engine::chrome_bootstrap::apply_bootstrap_outcome(&mut cfg, &bootstrap);
+        }
+        let render_mode = cfg.render_mode;
+        let outcome = crate::web_engine::scrape::scrape_to_result_with_timeout_policy(
+            &cfg,
+            &request.uri,
+            timeout_policy,
+        )
+        .await
+        .map_err(|err| err.to_string());
+
+        match outcome {
+            Ok(result) => {
+                self.health.record_success().await;
+                Ok(RenderedResource {
+                    uri: request.uri,
+                    final_uri: result.url,
+                    markdown: result.markdown,
+                    html: Some(result.output),
+                    text: None,
+                    render_mode: map_core_render_mode(render_mode),
+                    captured_at: Timestamp::from(Utc::now()),
+                    artifacts: Vec::new(),
+                    console: Vec::new(),
+                    network: Vec::new(),
+                    metadata: request.metadata,
+                })
+            }
+            Err(message) => match classify_render_error(&message) {
+                RenderFailureClass::Timeout => {
+                    self.health.record_failure("render.timeout", true).await;
+                    Err(self
+                        .error("render.timeout", message)
+                        .with_retry_policy(RetryPolicy::retryable(RetryScope::Item)))
+                }
+                RenderFailureClass::RateLimited => {
+                    for _ in 0..HEALTH_TRACKER_COOLDOWN_AFTER_FAILURES {
+                        self.health
+                            .record_failure("render.rate_limited", true)
+                            .await;
+                    }
+                    Err(self
+                        .error("render.rate_limited", message)
+                        .with_retry_policy(RetryPolicy::retryable(RetryScope::Provider)))
+                }
+                RenderFailureClass::Transient => {
+                    self.health.record_failure("render.transient", true).await;
+                    Err(self
+                        .error("render.transient", message)
+                        .with_retry_policy(RetryPolicy::retryable(RetryScope::Item)))
+                }
+                RenderFailureClass::Fatal => {
+                    self.health.record_failure("render.fatal", false).await;
+                    Err(self.error("render.fatal", message))
+                }
+            },
+        }
+    }
+}
+
 pub(crate) fn map_render_mode(mode: RenderMode) -> CoreRenderMode {
     match mode {
         RenderMode::Http => CoreRenderMode::Http,
@@ -233,23 +334,7 @@ pub(crate) fn classify_render_error(message: &str) -> RenderFailureClass {
 #[async_trait]
 impl RenderProvider for ChromeRenderProvider {
     async fn render(&self, request: RenderRequest) -> Result<RenderedResource> {
-        validate_url_with_dns(&request.uri).await.map_err(|err| {
-            self.error(
-                "render.invalid_uri",
-                format!("render target rejected by SSRF policy: {err}"),
-            )
-        })?;
-        let mut cfg = self.build_config(&request);
-        let _page_permit = self.acquire_page_slot_for(cfg.render_mode).await?;
-        if crate::web_engine::chrome_bootstrap::chrome_runtime_requested(&cfg) {
-            let bootstrap =
-                crate::web_engine::chrome_bootstrap::bootstrap_chrome_runtime(&cfg).await;
-            for warning in &bootstrap.warnings {
-                log_warn(&format!("[chrome_render] {warning}"));
-            }
-            crate::web_engine::chrome_bootstrap::apply_bootstrap_outcome(&mut cfg, &bootstrap);
-        }
-        let render_mode = cfg.render_mode;
+        let cfg = self.build_config(&request);
         let timeout_policy = if request
             .metadata
             .get("exact_browser_timeout")
@@ -261,35 +346,23 @@ impl RenderProvider for ChromeRenderProvider {
             crate::web_engine::browser::BrowserTimeoutPolicy::FloorForBrowserWork
         };
 
-        // `Box<dyn Error>` (the web-engine's error type) is not `Send`, so it
-        // must not live across an `.await` — convert to an owned `String`
-        // (`Send`) immediately, synchronously, right after the outer await
-        // resolves.
-        let outcome = crate::web_engine::scrape::scrape_to_result_with_timeout_policy(
-            &cfg,
-            &request.uri,
-            timeout_policy,
-        )
-        .await
-        .map_err(|err| err.to_string());
+        let browser_timeout_ms = (cfg.chrome_network_idle_timeout_secs + 30).saturating_mul(1_000);
+        let request_timeout_ms = match (cfg.request_timeout_ms, timeout_policy) {
+            (Some(timeout_ms), crate::web_engine::browser::BrowserTimeoutPolicy::Exact) => {
+                timeout_ms
+            }
+            (Some(timeout_ms), _) => timeout_ms.max(browser_timeout_ms),
+            (None, _) => browser_timeout_ms,
+        };
+        let render_deadline = StdDuration::from_millis(request_timeout_ms.saturating_add(5_000));
+        let provider = self.clone();
+        let outcome = await_isolated_render_outcome(render_deadline, async move {
+            provider.render_inner(request, cfg, timeout_policy).await
+        })
+        .await;
 
         match outcome {
-            Ok(result) => {
-                self.health.record_success().await;
-                Ok(RenderedResource {
-                    uri: request.uri,
-                    final_uri: result.url,
-                    markdown: result.markdown,
-                    html: Some(result.output),
-                    text: None,
-                    render_mode: map_core_render_mode(render_mode),
-                    captured_at: Timestamp::from(Utc::now()),
-                    artifacts: Vec::new(),
-                    console: Vec::new(),
-                    network: Vec::new(),
-                    metadata: request.metadata,
-                })
-            }
+            Ok(result) => result,
             Err(message) => match classify_render_error(&message) {
                 RenderFailureClass::Timeout => {
                     self.health.record_failure("render.timeout", true).await;

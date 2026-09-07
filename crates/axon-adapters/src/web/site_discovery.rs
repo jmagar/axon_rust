@@ -32,13 +32,33 @@ fn finalize_items(mut items: Vec<ManifestItem>, limit: usize) -> Vec<ManifestIte
     items
 }
 
+fn discovery_start_url(plan: &SourcePlan) -> String {
+    let canonical = &plan.route.source.canonical_uri;
+    let Ok(raw) = url::Url::parse(plan.request.source.trim()) else {
+        return canonical.clone();
+    };
+    let Ok(mut resolved) = url::Url::parse(canonical) else {
+        return canonical.clone();
+    };
+    if raw.path().ends_with('/')
+        && raw.path() != "/"
+        && !resolved.path().ends_with('/')
+        && raw.path().trim_end_matches('/') == resolved.path()
+    {
+        let directory_path = format!("{}/", resolved.path());
+        resolved.set_path(&directory_path);
+        return resolved.to_string();
+    }
+    canonical.clone()
+}
+
 pub(super) async fn manifest_items(
     plan: &SourcePlan,
     refresh_content: bool,
     fetch: Arc<dyn FetchProvider>,
     render: Arc<dyn RenderProvider>,
 ) -> Result<ManifestDiscovery> {
-    let start_url = plan.route.source.canonical_uri.clone();
+    let start_url = discovery_start_url(plan);
     let cfg = build_discovery_config(plan);
     let mut provider_metadata = MetadataMap::new();
     copy_provider_execution_metadata(&plan.request.metadata, &mut provider_metadata);

@@ -20,12 +20,12 @@
 //! composition: `crate::runtime::job_runners::build_registry` runs *before*
 //! the outer `ServiceContext` exists (it is itself an input to constructing
 //! the job runtime that becomes part of that context), so this runner cannot
-//! borrow the real one. It lazily builds its own enqueue-only job runtime
-//! (`crate::runtime::resolve_runtime`, no nested worker loop) plus a
-//! [`TargetLocalSourceRuntime`] when `qdrant_url`/`tei_url` are configured,
-//! mirroring `ServiceContext::build_target_local_source`. Built once and
-//! cached (`tokio::sync::OnceCell`) so repeated `Source` jobs do not reopen a
-//! pool/TEI probe per run.
+//! borrow the real one. It reuses the claimed worker store's migrated SQLx
+//! pool to build an enqueue-only service runtime plus a
+//! [`TargetLocalSourceRuntime`] when `qdrant_url`/`tei_url` are configured.
+//! Reopening the same SQLite file here would create a competing writer domain
+//! outside the provider scheduler's admission gate. The composed context is
+//! cached (`tokio::sync::OnceCell`) for subsequent source jobs.
 
 use std::sync::Arc;
 
@@ -61,33 +61,41 @@ impl SourceRunner {
         }
     }
 
-    async fn service_context(&self) -> Result<&ServiceContext, ApiError> {
+    async fn service_context(
+        &self,
+        store: &SqliteUnifiedJobStore,
+    ) -> Result<&ServiceContext, ApiError> {
         self.ctx
-            .get_or_try_init(|| build_service_context(&self.cfg))
+            .get_or_try_init(|| build_service_context(&self.cfg, store))
             .await
     }
 }
 
-/// Build a lightweight [`ServiceContext`] scoped to this runner: an
-/// enqueue-only job runtime (no nested unified worker loop — this runner
-/// already *is* the worker executing under one) plus the real
+/// Build a lightweight [`ServiceContext`] scoped to this runner from the
+/// worker's existing migrated pool: an enqueue-only job runtime (no nested
+/// unified worker loop — this runner already *is* the worker executing under
+/// one) plus the real
 /// [`TargetLocalSourceRuntime`] when the data plane is configured. Absence of
 /// `qdrant_url`/`tei_url` is not an error here — `index_source_with_auth`
 /// itself degrades cleanly to a `Failed` `SourceResult` when the runtime has
 /// no target local-source runtime attached.
-async fn build_service_context(cfg: &Arc<Config>) -> Result<ServiceContext, ApiError> {
-    let jobs = crate::runtime::resolve_runtime(Arc::clone(cfg))
-        .await
-        .map_err(|error| source_error(format!("failed to resolve job runtime: {error}")))?;
+async fn build_service_context(
+    cfg: &Arc<Config>,
+    store: &SqliteUnifiedJobStore,
+) -> Result<ServiceContext, ApiError> {
+    let pool = Arc::new(store.sqlite_pool().clone());
+    let jobs: Arc<dyn crate::runtime::ServiceJobRuntime> =
+        Arc::new(crate::runtime::SqliteServiceRuntime::new_for_migrated_pool(
+            Arc::clone(cfg),
+            Arc::clone(&pool),
+        ));
     let mut ctx = ServiceContext::from_runtime(Arc::clone(cfg), Arc::clone(&jobs));
 
     if cfg.qdrant_url.trim().is_empty() || cfg.tei_url.trim().is_empty() {
         return Ok(ctx);
     }
-    let (Some(pool), Some(store)) = (jobs.sqlite_pool(), jobs.unified_job_store()) else {
-        return Ok(ctx);
-    };
-    match TargetLocalSourceRuntime::from_config(cfg, store, (*pool).clone()).await {
+    let job_store: Arc<dyn axon_jobs::boundary::JobStore> = Arc::new(store.clone());
+    match TargetLocalSourceRuntime::from_config(cfg, job_store, pool.as_ref().clone()).await {
         Ok(runtime) => {
             crate::source::spawn_artifact_candidate_outbox_drain(&runtime);
             ctx = ctx.with_target_local_source_runtime(runtime);
@@ -129,7 +137,7 @@ impl UnifiedJobRunner for SourceRunner {
                     .map_err(|error| source_error(format!("malformed source_request: {error}")))
             })?;
 
-        let ctx = self.service_context().await?;
+        let ctx = self.service_context(store).await?;
         let run_fut = run_source_request_with_cancellation(
             claimed,
             source_request,

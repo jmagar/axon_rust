@@ -411,6 +411,52 @@ async fn write_baseline_graph_without_pool_is_degraded() {
 }
 
 #[tokio::test]
+async fn blocked_graph_writer_degrades_instead_of_stalling_source_completion() {
+    let uri = "https://example.com/docs";
+    let ledger = FakeLedgerStore::new();
+    let published_manifest = manifest(
+        "src_blocked",
+        "gen_blocked",
+        vec![manifest_item(
+            "src_blocked",
+            "item-1",
+            "https://example.com/docs/one",
+            ItemKind::WebPage,
+        )],
+    );
+    let pool = Arc::new(graph_pool().await);
+    let mut blocker = pool.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+
+    let summary = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        write_baseline_graph_with_db_gate(
+            None,
+            None,
+            SourceKind::Web,
+            Some(pool.clone()),
+            &ledger,
+            &counts("src_blocked", "gen_blocked"),
+            uri,
+            Some(published_manifest),
+            Vec::new(),
+            None,
+        ),
+    )
+    .await
+    .expect("blocked graph publication must honor its write deadline");
+
+    assert!(summary.degraded);
+    sqlx::query("ROLLBACK")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn write_baseline_graph_missing_manifest_is_degraded() {
     let ledger = FakeLedgerStore::new();
     let pool = Arc::new(graph_pool().await);

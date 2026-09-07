@@ -198,6 +198,9 @@ pub(crate) async fn resolve_map_seed_url_with_metadata(
 fn derive_map_scope_url(requested_url: &str, resolved_url: &str) -> Option<String> {
     let requested_canonical = canonicalize_url_for_dedupe(requested_url)?;
     let requested = Url::parse(&requested_canonical).ok()?;
+    let resolved_is_directory = Url::parse(resolved_url)
+        .ok()
+        .is_some_and(|url| url.path() != "/" && url.path().ends_with('/'));
     let resolved_canonical = canonicalize_url_for_dedupe(resolved_url)
         .or_else(|| canonicalize_url_for_dedupe(requested_url))?;
     let mut resolved = Url::parse(&resolved_canonical).ok()?;
@@ -218,8 +221,20 @@ fn derive_map_scope_url(requested_url: &str, resolved_url: &str) -> Option<Strin
     } else {
         &scope_path
     });
-    canonicalize_url_for_dedupe(resolved.as_ref())
+    let canonical = canonicalize_url_for_dedupe(resolved.as_ref())?;
+    if resolved_is_directory && !requested_path.is_empty() {
+        let mut directory = Url::parse(&canonical).ok()?;
+        let path = format!("{}/", directory.path().trim_end_matches('/'));
+        directory.set_path(&path);
+        Some(directory.to_string())
+    } else {
+        Some(canonical)
+    }
 }
+
+#[cfg(test)]
+#[path = "map_tests.rs"]
+mod tests;
 
 pub fn derive_map_scope(requested_url: &str, resolved_url: &str) -> Option<MapScope> {
     let scope_url = derive_map_scope_url(requested_url, resolved_url)?;

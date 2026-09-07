@@ -1144,6 +1144,15 @@ fn queue_summary_secs(toml: &TomlConfig) -> u64 {
 }
 
 fn qdrant_point_buffer(toml: &TomlConfig) -> usize {
+    if let Some(value) = performance::env_usize_opt("AXON_QDRANT_UPSERT_BATCH_SIZE", 1, 4096)
+        .or_else(|| {
+            toml.qdrant
+                .upsert_batch_size
+                .map(|value| value.clamp(1, 4096))
+        })
+    {
+        return value;
+    }
     resolve_clamped_usize(
         "AXON_QDRANT_POINT_BUFFER",
         toml.workers.qdrant_point_buffer,

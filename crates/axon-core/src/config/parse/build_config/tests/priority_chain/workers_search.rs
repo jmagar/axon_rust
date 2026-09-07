@@ -348,6 +348,34 @@ fn toml_workers_qdrant_point_buffer_wins_and_clamps() {
 #[allow(unsafe_code)]
 #[serial_test::serial]
 #[test]
+fn canonical_vector_upsert_batch_points_configures_the_runtime_point_buffer() {
+    let _guard = env_guard();
+    let mut config = TempfileBuilder::new().suffix(".toml").tempfile().unwrap();
+    writeln!(config, "[providers.vector]\nupsert-batch-points = 8").unwrap();
+
+    let mut got = 0usize;
+    with_env_saved(
+        &[
+            "AXON_CONFIG_PATH",
+            "AXON_QDRANT_UPSERT_BATCH_SIZE",
+            "AXON_QDRANT_POINT_BUFFER",
+        ],
+        || unsafe {
+            env::set_var("AXON_CONFIG_PATH", config.path());
+            env::remove_var("AXON_QDRANT_UPSERT_BATCH_SIZE");
+            env::remove_var("AXON_QDRANT_POINT_BUFFER");
+            got = into_config_via_args(&["status"])
+                .unwrap()
+                .qdrant_point_buffer;
+        },
+    );
+
+    assert_eq!(got, 8);
+}
+
+#[allow(unsafe_code)]
+#[serial_test::serial]
+#[test]
 fn toml_workers_embed_doc_timeout_secs_wins_over_default() {
     let _guard = env_guard();
     let mut f = TempfileBuilder::new().suffix(".toml").tempfile().unwrap();

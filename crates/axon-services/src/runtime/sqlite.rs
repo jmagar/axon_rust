@@ -33,6 +33,13 @@ impl SqliteServiceRuntime {
         }
     }
 
+    pub(crate) fn new_for_migrated_pool(cfg: Arc<Config>, pool: Arc<SqlitePool>) -> Self {
+        Self::new_for_backend(
+            Arc::clone(&cfg),
+            SqliteJobBackend::from_migrated_pool(cfg, pool),
+        )
+    }
+
     fn unified_store(&self) -> Arc<dyn JobStore> {
         Arc::new(SqliteUnifiedJobStore::with_observe_sink(
             self.backend.pool().as_ref().clone(),
