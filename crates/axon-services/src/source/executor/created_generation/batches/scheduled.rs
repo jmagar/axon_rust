@@ -1,4 +1,5 @@
 use super::*;
+use axon_adapters::AcquisitionProgressSink;
 use std::future::Future;
 use tokio_util::sync::CancellationToken;
 
@@ -264,6 +265,7 @@ async fn stream_prepare_batch(
     };
     let consume = async {
         let mut first_error = None;
+        let mut batch_items_done = 0_u64;
         let mut batch_documents = 0_u64;
         while let Some(streamed) = rx.recv().await {
             // Retain cleanup ownership even when an earlier streamed item failed.
@@ -279,11 +281,14 @@ async fn stream_prepare_batch(
                 continue;
             }
             let documents = streamed.acquisition.fetched_items.len() as u64;
+            batch_items_done = batch_items_done.saturating_add(streamed.items_attempted);
             batch_documents = batch_documents.saturating_add(documents);
             stage.acquired_items = stage
                 .acquired_items
                 .saturating_add(streamed.items_attempted);
             stage.acquired_documents = stage.acquired_documents.saturating_add(documents);
+            report_acquisition_progress(&reporter, item_count, batch_items_done, batch_documents)
+                .await;
             let item_key = streamed
                 .acquisition
                 .manifest
@@ -344,6 +349,21 @@ async fn stream_prepare_batch(
         (Ok(_), Err(error)) => Err(error.into()),
         (Ok(_), Ok(())) => Ok(()),
     }
+}
+
+async fn report_acquisition_progress(
+    reporter: &crate::source::executor::progress::AcquisitionBatchProgress<'_>,
+    items_total: u64,
+    items_done: u64,
+    documents_done: u64,
+) {
+    reporter
+        .report(axon_adapters::AcquisitionProgress {
+            items_total,
+            items_done,
+            documents_done,
+        })
+        .await;
 }
 
 #[cfg(test)]

@@ -271,11 +271,10 @@ where
 
 impl ChromeRenderProvider {
     async fn render_inner(
-        &self,
         request: RenderRequest,
         mut cfg: Config,
         timeout_policy: crate::web_engine::browser::BrowserTimeoutPolicy,
-    ) -> Result<RenderedResource> {
+    ) -> std::result::Result<RenderedResource, String> {
         if crate::web_engine::chrome_bootstrap::chrome_runtime_requested(&cfg) {
             let bootstrap =
                 crate::web_engine::chrome_bootstrap::bootstrap_chrome_runtime(&cfg).await;
@@ -285,60 +284,26 @@ impl ChromeRenderProvider {
             crate::web_engine::chrome_bootstrap::apply_bootstrap_outcome(&mut cfg, &bootstrap);
         }
         let render_mode = cfg.render_mode;
-        let outcome = crate::web_engine::scrape::scrape_to_result_with_timeout_policy(
+        crate::web_engine::scrape::scrape_to_result_with_timeout_policy(
             &cfg,
             &request.uri,
             timeout_policy,
         )
         .await
-        .map_err(|err| err.to_string());
-
-        match outcome {
-            Ok(result) => {
-                self.health.record_success().await;
-                Ok(RenderedResource {
-                    uri: request.uri,
-                    final_uri: result.url,
-                    markdown: result.markdown,
-                    html: Some(result.output),
-                    text: None,
-                    render_mode: map_core_render_mode(render_mode),
-                    captured_at: Timestamp::from(Utc::now()),
-                    artifacts: Vec::new(),
-                    console: Vec::new(),
-                    network: Vec::new(),
-                    metadata: request.metadata,
-                })
-            }
-            Err(message) => match classify_render_error(&message) {
-                RenderFailureClass::Timeout => {
-                    self.health.record_failure("render.timeout", true).await;
-                    Err(self
-                        .error("render.timeout", message)
-                        .with_retry_policy(RetryPolicy::retryable(RetryScope::Item)))
-                }
-                RenderFailureClass::RateLimited => {
-                    for _ in 0..HEALTH_TRACKER_COOLDOWN_AFTER_FAILURES {
-                        self.health
-                            .record_failure("render.rate_limited", true)
-                            .await;
-                    }
-                    Err(self
-                        .error("render.rate_limited", message)
-                        .with_retry_policy(RetryPolicy::retryable(RetryScope::Provider)))
-                }
-                RenderFailureClass::Transient => {
-                    self.health.record_failure("render.transient", true).await;
-                    Err(self
-                        .error("render.transient", message)
-                        .with_retry_policy(RetryPolicy::retryable(RetryScope::Item)))
-                }
-                RenderFailureClass::Fatal => {
-                    self.health.record_failure("render.fatal", false).await;
-                    Err(self.error("render.fatal", message))
-                }
-            },
-        }
+        .map_err(|err| err.to_string())
+        .map(|result| RenderedResource {
+            uri: request.uri,
+            final_uri: result.url,
+            markdown: result.markdown,
+            html: Some(result.output),
+            text: None,
+            render_mode: map_core_render_mode(render_mode),
+            captured_at: Timestamp::from(Utc::now()),
+            artifacts: Vec::new(),
+            console: Vec::new(),
+            network: Vec::new(),
+            metadata: request.metadata,
+        })
     }
 }
 
@@ -435,15 +400,18 @@ impl RenderProvider for ChromeRenderProvider {
             .acquire_page_slot_for(cfg.render_mode, absolute_deadline)
             .await?;
         let remaining = absolute_deadline.saturating_duration_since(tokio::time::Instant::now());
-        let provider = self.clone();
         let outcome = await_isolated_render_outcome(remaining, async move {
             let _page_permit = page_permit;
-            provider.render_inner(request, cfg, timeout_policy).await
+            ChromeRenderProvider::render_inner(request, cfg, timeout_policy).await
         })
-        .await;
+        .await
+        .and_then(|outcome| outcome);
 
         match outcome {
-            Ok(result) => result,
+            Ok(result) => {
+                self.health.record_success().await;
+                Ok(result)
+            }
             Err(message) => match classify_render_error(&message) {
                 RenderFailureClass::Timeout => {
                     self.health.record_failure("render.timeout", true).await;

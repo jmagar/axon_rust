@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.3.1] - 2026-09-07
+
+### Changed
+
+- Bound and tune Qdrant publication work independently from embedding so crawl
+  pipelines keep provider work flowing without overwhelming SQLite writers.
+- Apply the configured embedding-scheduler flush delay to partially filled
+  pools, reducing acquisition-to-embedding stalls for small crawl waves.
+
+### Fixed
+
+- Serialize SQLite writes through one shared runtime gate while retaining
+  operation-specific diagnostics and durable source progress checkpoints.
+- Bound Chrome rendering, capacity admission, and cleanup by one deadline, and
+  prevent late render completion from overwriting timeout health state.
+- Keep vector payload, configuration migration, backup, and generated contract
+  documentation aligned with the unified crawl pipeline.
+
 ## [7.3.0] - 2026-08-28
 
 ### Added

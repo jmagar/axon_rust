@@ -13,6 +13,30 @@ use crate::source::executor::vectorize::batching::charged_chunk_count;
 // deadlock when the next envelope would cross that threshold.
 const OUTER_POOL_CONCURRENCY: usize = 2;
 
+enum SchedulerWake {
+    Envelope(Box<Option<PreparedWorkEnvelope>>),
+    Flush,
+}
+
+async fn next_scheduler_wake(
+    receiver: &mut PreparedBatchReceiver,
+    cancel: &CancellationToken,
+    flush_deadline: Option<tokio::time::Instant>,
+) -> anyhow::Result<SchedulerWake> {
+    if let Some(deadline) = flush_deadline {
+        tokio::select! {
+            _ = cancel.cancelled() => anyhow::bail!("generation scheduler canceled"),
+            _ = tokio::time::sleep_until(deadline) => Ok(SchedulerWake::Flush),
+            envelope = receiver.recv() => Ok(SchedulerWake::Envelope(Box::new(envelope))),
+        }
+    } else {
+        tokio::select! {
+            _ = cancel.cancelled() => anyhow::bail!("generation scheduler canceled"),
+            envelope = receiver.recv() => Ok(SchedulerWake::Envelope(Box::new(envelope))),
+        }
+    }
+}
+
 fn should_flush(
     pending_chunks: usize,
     pending_envelopes: usize,
@@ -49,6 +73,7 @@ pub(super) async fn run_generation_scheduler(
     let mut pending_bytes = 0_usize;
     let mut vectorizer = vectorize::PreparedPoolVectorizer::default();
     let mut next_sequence = 0_u64;
+    let mut flush_deadline = None;
 
     loop {
         if should_flush(pending_chunks, pending.len(), pool_size, false, false) {
@@ -67,63 +92,53 @@ pub(super) async fn run_generation_scheduler(
             .await?;
             pending_chunks = 0;
             pending_bytes = 0;
+            flush_deadline = None;
             continue;
         }
 
-        let received = tokio::select! {
-            _ = cancel.cancelled() => anyhow::bail!("generation scheduler canceled"),
-            envelope = receiver.recv() => envelope,
+        let received = match next_scheduler_wake(&mut receiver, cancel, flush_deadline).await? {
+            SchedulerWake::Envelope(envelope) => *envelope,
+            SchedulerWake::Flush => {
+                flush_pending(
+                    runtime,
+                    input,
+                    emitter,
+                    coordinator,
+                    collection.clone(),
+                    &mut pending,
+                    accumulator,
+                    &mut vectorizer,
+                    progress,
+                    cancel,
+                )
+                .await?;
+                pending_chunks = 0;
+                pending_bytes = 0;
+                flush_deadline = None;
+                continue;
+            }
         };
 
         match received {
-            Some(mut envelope) => {
-                anyhow::ensure!(
-                    envelope.sequence == next_sequence,
-                    "prepared work arrived out of FIFO order"
-                );
-                next_sequence = next_sequence.saturating_add(1);
-                let chunks = envelope
-                    .prepared
-                    .iter()
-                    .map(|document| document.chunks.len())
-                    .sum::<usize>();
-                progress.add_documents(envelope.prepared.len() as u64);
-                let _ = progress.prepared(
-                    envelope.prepared.len() as u64,
-                    chunks as u64,
-                    envelope.is_final,
-                );
-                accumulator.absorb_pretracked_side_effects(std::mem::replace(
-                    &mut envelope.side_effects,
-                    crate::source::executor::generation_work::PreparedBatchSideEffects::empty(),
-                ))?;
-                pending_chunks =
-                    pending_chunks.saturating_add(charged_chunk_count(&envelope.prepared));
-                pending_bytes = pending_bytes.saturating_add(envelope.estimated_bytes);
-                pending.push(envelope);
-                if should_flush(
-                    pending_chunks,
-                    pending.len(),
-                    pool_size,
-                    pending.last().is_some_and(|envelope| envelope.is_final),
-                    false,
-                ) {
-                    flush_pending(
-                        runtime,
-                        input,
-                        emitter,
-                        coordinator,
-                        collection.clone(),
-                        &mut pending,
-                        accumulator,
-                        &mut vectorizer,
-                        progress,
-                        cancel,
-                    )
-                    .await?;
-                    pending_chunks = 0;
-                    pending_bytes = 0;
-                }
+            Some(envelope) => {
+                accept_envelope(
+                    runtime,
+                    input,
+                    emitter,
+                    coordinator,
+                    collection.clone(),
+                    &mut pending,
+                    accumulator,
+                    &mut vectorizer,
+                    progress,
+                    cancel,
+                    envelope,
+                    &mut next_sequence,
+                    &mut pending_chunks,
+                    &mut pending_bytes,
+                    &mut flush_deadline,
+                )
+                .await?;
             }
             None if pending.is_empty() => break,
             None => {
@@ -142,6 +157,7 @@ pub(super) async fn run_generation_scheduler(
                 .await?;
                 pending_chunks = 0;
                 pending_bytes = 0;
+                flush_deadline = None;
                 if receiver.is_channel_closed() {
                     break;
                 }
@@ -155,6 +171,76 @@ pub(super) async fn run_generation_scheduler(
         accumulator.absorb_vectorized(result);
     }
     tracing::debug!(pending_bytes, "generation scheduler drained prepared work");
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn accept_envelope(
+    runtime: &TargetLocalSourceRuntime,
+    input: &SourcePipelineInput<'_>,
+    emitter: &SourceEventEmitter,
+    coordinator: &ProgressCoordinator,
+    collection: CollectionSpec,
+    pending: &mut Vec<PreparedWorkEnvelope>,
+    accumulator: &mut GenerationAccumulator,
+    vectorizer: &mut vectorize::PreparedPoolVectorizer,
+    progress: &mut PipelineProgress,
+    cancel: &CancellationToken,
+    mut envelope: PreparedWorkEnvelope,
+    next_sequence: &mut u64,
+    pending_chunks: &mut usize,
+    pending_bytes: &mut usize,
+    flush_deadline: &mut Option<tokio::time::Instant>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        envelope.sequence == *next_sequence,
+        "prepared work arrived out of FIFO order"
+    );
+    *next_sequence = next_sequence.saturating_add(1);
+    let chunks = envelope
+        .prepared
+        .iter()
+        .map(|document| document.chunks.len())
+        .sum::<usize>();
+    progress.add_documents(envelope.prepared.len() as u64);
+    let _ = progress.prepared(
+        envelope.prepared.len() as u64,
+        chunks as u64,
+        envelope.is_final,
+    );
+    accumulator.absorb_pretracked_side_effects(std::mem::replace(
+        &mut envelope.side_effects,
+        crate::source::executor::generation_work::PreparedBatchSideEffects::empty(),
+    ))?;
+    *pending_chunks = pending_chunks.saturating_add(charged_chunk_count(&envelope.prepared));
+    *pending_bytes = pending_bytes.saturating_add(envelope.estimated_bytes);
+    pending.push(envelope);
+    flush_deadline
+        .get_or_insert_with(|| tokio::time::Instant::now() + runtime.embed_scheduler_flush_delay);
+    if should_flush(
+        *pending_chunks,
+        pending.len(),
+        runtime.embed_pool_max_inputs.max(1),
+        pending.last().is_some_and(|envelope| envelope.is_final),
+        false,
+    ) {
+        flush_pending(
+            runtime,
+            input,
+            emitter,
+            coordinator,
+            collection,
+            pending,
+            accumulator,
+            vectorizer,
+            progress,
+            cancel,
+        )
+        .await?;
+        *pending_chunks = 0;
+        *pending_bytes = 0;
+        *flush_deadline = None;
+    }
     Ok(())
 }
 
