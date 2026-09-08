@@ -64,3 +64,10 @@ fn job_command_mode_ignores_non_job_commands() {
         None
     );
 }
+
+#[test]
+fn long_lived_servers_own_their_single_service_context() {
+    assert!(command_owns_service_context(CommandKind::Serve));
+    assert!(command_owns_service_context(CommandKind::Mcp));
+    assert!(!command_owns_service_context(CommandKind::Query));
+}

@@ -17,7 +17,9 @@ impl SqliteUnifiedJobStore {
         job_id: JobId,
         request: JobCancelRequest,
     ) -> Result<JobCancelResult> {
-        let mut tx = ImmediateTx::begin(&self.pool).await.map_err(sql_error)?;
+        let mut tx = ImmediateTx::begin_with_gate(&self.pool, &self.write_gate)
+            .await
+            .map_err(sql_error)?;
         let row = sqlx::query("SELECT status, phase FROM jobs WHERE job_id = ?")
             .bind(job_id.0.to_string())
             .fetch_optional(&mut *tx)
@@ -189,7 +191,9 @@ impl SqliteUnifiedJobStore {
             stage_plan = stage_plan.split_off(index);
         }
         let attempt = original.attempt + 1;
-        let mut tx = ImmediateTx::begin(&self.pool).await.map_err(sql_error)?;
+        let mut tx = ImmediateTx::begin_with_gate(&self.pool, &self.write_gate)
+            .await
+            .map_err(sql_error)?;
         reset_job_for_retry(
             &mut tx,
             job_id,
@@ -335,7 +339,9 @@ impl SqliteUnifiedJobStore {
             .collect::<Vec<_>>();
         let quoted = quoted_job_ids(&ids);
 
-        let mut tx = ImmediateTx::begin(&self.pool).await.map_err(sql_error)?;
+        let mut tx = ImmediateTx::begin_with_gate(&self.pool, &self.write_gate)
+            .await
+            .map_err(sql_error)?;
         let rows = sqlx::query(&format!(
             "SELECT job_id, status FROM jobs WHERE job_id IN ({quoted})"
         ))

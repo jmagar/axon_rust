@@ -498,6 +498,14 @@ async fn expired_reset_plan_rejects_first_start_but_allows_started_resume() {
     let mut cfg = cfg_with(vec!["jobs"], false, false);
     cfg.sqlite_path = dir.path().join("jobs.db");
     let mut saved = reset(&cfg).await.expect("reviewed plan");
+    let persisted = plan_store::load_plan(&cfg, &saved.plan_id)
+        .await
+        .expect("saved plan");
+    assert_eq!(
+        serde_json::to_value(&saved.plan).unwrap(),
+        serde_json::to_value(&persisted.plan).unwrap(),
+        "persisted inventory must equal reviewed inventory"
+    );
     saved.plan_expires_at_utc = (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
     saved.reset_plan.expires_at_utc = saved.plan_expires_at_utc.clone();
     plan_store::save_plan(&cfg, &saved)
@@ -523,6 +531,21 @@ async fn expired_reset_plan_rejects_first_start_but_allows_started_resume() {
     plan_store::save_receipt(&cfg, &started)
         .await
         .expect("persist started checkpoint");
+
+    let fresh = prepare_reset(
+        &cfg,
+        saved.stores.clone(),
+        saved.reset_id.clone(),
+        saved.plan_id.clone(),
+        false,
+    )
+    .await
+    .expect("fresh inventory");
+    assert_eq!(
+        planning::physical_chunk_checksum(&saved.plan, "sqlite").unwrap(),
+        planning::physical_chunk_checksum(&fresh.plan, "sqlite").unwrap(),
+        "unchanged inventory must survive location redaction"
+    );
 
     let resumed = reset_with_authz(&cfg, &ResetAuthz::admin())
         .await

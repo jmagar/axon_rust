@@ -397,7 +397,7 @@ fn cache_cutoff_millis() -> i64 {
 
 async fn acquire_write_permit(
     gate: &SqliteWriteGate,
-) -> Result<crate::scheduler::SqliteWriteGuard<'_>, CacheStoreError> {
+) -> Result<crate::scheduler::SqliteWriteGuard, CacheStoreError> {
     tokio::time::timeout(WRITE_ADMISSION_TIMEOUT, gate.lock())
         .await
         .map_err(|_| "embedding cache SQLite writer admission timed out".into())

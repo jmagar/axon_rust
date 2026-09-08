@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use super::SqliteUnifiedJobStore;
 use super::ops_helpers::{append_job_filters, bind_job_filters};
-use super::terminal_warnings::collect_terminal_warnings;
+use super::terminal_warnings::prepare_status_write;
 use crate::boundary::Result;
 use crate::limits::clamp_page_limit;
 use crate::state_machine::{validate_stage_plan, validate_transition};
@@ -57,7 +57,9 @@ impl SqliteUnifiedJobStore {
         let root_job_id = request.root_job_id.unwrap_or(job_id);
         let now = now_timestamp();
         let request_json = request.request.clone();
-        let mut tx = ImmediateTx::begin(&self.pool).await.map_err(sql_error)?;
+        let mut tx = ImmediateTx::begin_with_gate(&self.pool, &self.write_gate)
+            .await
+            .map_err(sql_error)?;
         insert_config_snapshot(&mut tx, &request, config_json, now.0.as_str()).await?;
         sqlx::query(
             "INSERT INTO jobs (
@@ -132,7 +134,9 @@ impl SqliteUnifiedJobStore {
         job_id: JobId,
         status: LifecycleStatus,
     ) -> Result<()> {
-        let mut tx = ImmediateTx::begin(&self.pool).await.map_err(sql_error)?;
+        let mut tx = ImmediateTx::begin_with_gate(&self.pool, &self.write_gate)
+            .await
+            .map_err(sql_error)?;
         let now = crate::store::now_ms();
         sqlx::query(
             "INSERT INTO axon_source_watch_runs (watch_id, job_id, created_at) \
@@ -189,15 +193,8 @@ impl SqliteUnifiedJobStore {
     }
 
     pub(crate) async fn update_job_status(&self, status: JobStatusUpdate) -> Result<()> {
-        let mut tx = ImmediateTx::begin(&self.pool).await.map_err(sql_error)?;
-        let row = sqlx::query(
-            "SELECT status, started_at, warnings_json, attempt FROM jobs WHERE job_id = ?",
-        )
-        .bind(status.job_id.0.to_string())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(sql_error)?
-        .ok_or_else(|| missing_job(status.job_id))?;
+        let (mut tx, row, terminal_warnings) =
+            prepare_status_write(self, status.job_id, is_terminal(status.status)).await?;
         let current = parse_enum::<LifecycleStatus>(row.get::<String, _>("status"))?;
         let current_attempt = row.get::<i64, _>("attempt") as u32;
         #[cfg(test)]
@@ -209,18 +206,6 @@ impl SqliteUnifiedJobStore {
             .then(|| now.0.clone());
         let stage_started_at = (status.status == LifecycleStatus::Running).then(|| now.0.clone());
         let finished_at = is_terminal(status.status).then(|| now.0.clone());
-        let terminal_warnings = if is_terminal(status.status) {
-            Some(
-                collect_terminal_warnings(
-                    &mut tx,
-                    status.job_id,
-                    row.get::<String, _>("warnings_json"),
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
 
         // cooldown_until: cleared on every transition to a non-Waiting status
         // (a job that cooled once and later runs/completes/fails must not

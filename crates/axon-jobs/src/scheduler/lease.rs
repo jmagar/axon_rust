@@ -359,39 +359,42 @@ where
         lease.reservation_id.clone(),
         lease.fence.clone(),
     );
-    let operation = operation(ReservationObservation {
-        reservation_id: lease.reservation_id.clone(),
-        provider_kind: lease.scheduler.domain.kind,
-        provider_id: lease.scheduler.domain.instance_id.clone(),
-        _kind: std::marker::PhantomData,
-    });
-    tokio::pin!(operation);
-    let mut renewal = tokio::time::interval(RENEW_INTERVAL);
-    renewal.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    renewal.tick().await;
-    let value = loop {
-        tokio::select! {
-            result = &mut operation => {
-                break match result {
-                    Ok(value) => value,
-                    Err(error) => {
-                        // Release capacity, but never let a failing release
-                        // mask the provider root cause; the drop guard retries
-                        // a release the fence still owns.
-                        release_failed_call(&lease, &mut release_guard, "provider_error").await;
-                        return Err(ReservedCallError::Provider(error));
-                    }
-                };
-            }
-            _ = renewal.tick() => {
-                if let Err(renew_error) = lease.renew().await {
-                    // The pinned operation is dropped when we return, so a
-                    // transient renew failure must not leave the row active
-                    // and holding units until reconcile notices.
-                    release_failed_call(&lease, &mut release_guard, "renew_error").await;
-                    return Err(renew_error.into());
+    let outcome = {
+        let operation = operation(ReservationObservation {
+            reservation_id: lease.reservation_id.clone(),
+            provider_kind: lease.scheduler.domain.kind,
+            provider_id: lease.scheduler.domain.instance_id.clone(),
+            _kind: std::marker::PhantomData,
+        });
+        tokio::pin!(operation);
+        let mut renewal = tokio::time::interval(RENEW_INTERVAL);
+        renewal.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        renewal.tick().await;
+        let renewals = async {
+            loop {
+                renewal.tick().await;
+                if let Err(error) = lease.renew().await {
+                    break error;
                 }
             }
+        };
+        tokio::pin!(renewals);
+        tokio::select! {
+            result = &mut operation => Ok(result),
+            error = &mut renewals => Err(error),
+        }
+    };
+    // Drop both futures before release: either could own the writer needed by
+    // cleanup. A renewal waiting for that writer must never pause the operation.
+    let value = match outcome {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            release_failed_call(&lease, &mut release_guard, "provider_error").await;
+            return Err(ReservedCallError::Provider(error));
+        }
+        Err(error) => {
+            release_failed_call(&lease, &mut release_guard, "renew_error").await;
+            return Err(error.into());
         }
     };
     match lease.clone().complete().await {

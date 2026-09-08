@@ -60,7 +60,12 @@ pub async fn resolve_runtime_with_workers(
                     error.message
                 )
             })?);
-        SqliteJobBackend::new_with_workers_and_registry(Arc::clone(&cfg), Some(registry)).await
+        SqliteJobBackend::new_with_workers_registry_and_write_gate(
+            Arc::clone(&cfg),
+            Some(registry),
+            write_gate.clone(),
+        )
+        .await
     } else {
         SqliteJobBackend::new(Arc::clone(&cfg)).await
     }

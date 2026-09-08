@@ -35,11 +35,19 @@ use rows::{
 #[derive(Debug, Clone)]
 pub struct SqliteWatchStore {
     pool: SqlitePool,
+    write_gate: crate::scheduler::SqliteWriteGate,
 }
 
 impl SqliteWatchStore {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self::new_with_write_gate(pool, crate::scheduler::SqliteWriteGate::default())
+    }
+
+    pub fn new_with_write_gate(
+        pool: SqlitePool,
+        write_gate: crate::scheduler::SqliteWriteGate,
+    ) -> Self {
+        Self { pool, write_gate }
     }
 
     /// Reconstruct the original request fields stored for a watch.

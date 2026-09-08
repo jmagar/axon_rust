@@ -282,7 +282,10 @@ async fn build_target_runtime(
     // The composed migrations prepare ledger tables in this shared job-runtime pool.
     let db_stage_slots = Arc::new(Semaphore::new(source_db_stage_capacity(&pool)));
     let ledger: Arc<dyn axon_ledger::store::LedgerStore> = Arc::new(DbLimitedLedgerStore::new(
-        Arc::new(SqliteLedgerStore::from_pool(pool.clone())),
+        Arc::new(SqliteLedgerStore::from_pool_with_write_gate(
+            pool.clone(),
+            sqlite_write_gate.clone(),
+        )),
         Arc::clone(&db_stage_slots),
     ));
 
@@ -352,7 +355,6 @@ async fn build_target_runtime(
         parse_scheduler: Some(Arc::new(parse_scheduler)),
         graph_scheduler: Some(Arc::new(graph_scheduler)),
         artifact_scheduler: Some(Arc::new(artifact_scheduler)),
-        #[cfg(test)]
         sqlite_write_gate,
         #[cfg(test)]
         embedding_cache_store,

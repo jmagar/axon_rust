@@ -116,9 +116,7 @@ fn chat_model_uses_chat_override_for_openai_compat_backend() {
 }
 
 #[test]
-fn openai_compat_lifts_default_completion_concurrency() {
-    // Operator left AXON_LLM_COMPLETION_CONCURRENCY at the Gemini default (4);
-    // the openai-compat backend should lift it to the HTTP-tuned default.
+fn openai_compat_honours_explicit_four_completion_concurrency() {
     let cfg = Config {
         llm_backend: LlmBackendKind::OpenAiCompat,
         llm_completion_concurrency: GEMINI_DEFAULT_COMPLETION_CONCURRENCY,
@@ -127,7 +125,7 @@ fn openai_compat_lifts_default_completion_concurrency() {
     let backend = LlmBackendConfig::from_config(&cfg);
     assert_eq!(
         backend.completion_concurrency,
-        OPENAI_DEFAULT_COMPLETION_CONCURRENCY
+        GEMINI_DEFAULT_COMPLETION_CONCURRENCY
     );
 }
 

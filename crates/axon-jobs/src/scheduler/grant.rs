@@ -94,13 +94,33 @@ impl ProviderScheduler {
         &self,
         reservation_id: &str,
     ) -> Result<ReservationGrant, SchedulerError> {
-        let _write_permit = self.write_gate.lock().await;
-        let mut connection = self.pool.acquire().await?;
-        sqlx::query("UPDATE provider_reservations SET renewed_at = datetime('now') WHERE reservation_id = ? AND authority_id = ? AND status = 'queued'")
+        // Notifications are grant observations, not heartbeats. Inspect durable
+        // liveness before entering the global writer queue; the 5-second recovery
+        // wake ensures live waiters renew well inside the 90-second expiry.
+        let renewal_due: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM provider_reservations
+             WHERE reservation_id = ? AND authority_id = ? AND status = 'queued'
+               AND unixepoch(COALESCE(renewed_at, updated_at)) <= unixepoch('now') - 30)",
+        )
+        .bind(reservation_id)
+        .bind(&self.domain.authority_id)
+        .fetch_one(&self.pool)
+        .await?;
+        if renewal_due {
+            let _write_permit = self.write_gate.lock().await;
+            // Recheck under admission: concurrent observers may already have
+            // renewed or granted this row. Never refresh terminal reservations.
+            sqlx::query(
+                "UPDATE provider_reservations SET renewed_at = datetime('now')
+                 WHERE reservation_id = ? AND authority_id = ? AND status = 'queued'
+                   AND unixepoch(COALESCE(renewed_at, updated_at)) <= unixepoch('now') - 30",
+            )
             .bind(reservation_id)
             .bind(&self.domain.authority_id)
-            .execute(&mut *connection)
+            .execute(&self.pool)
             .await?;
+        }
+        let mut connection = self.pool.acquire().await?;
         self.reservation_grant_locked(&mut connection, reservation_id)
             .await
     }
@@ -338,7 +358,7 @@ impl ProviderScheduler {
     ) -> Result<u64, SchedulerError> {
         // Abandonment means "no grant poll recently" (see
         // `QUEUED_LIVENESS_TIMEOUT_SECS`), never "queued for a while": a live
-        // waiter refreshes `renewed_at` on every poll while `updated_at`
+        // waiter periodically refreshes `renewed_at` while `updated_at`
         // stays at insert time so priority aging keeps progressing.
         Ok(sqlx::query(
             "UPDATE provider_reservations SET status = 'expired', granted_units = 0,

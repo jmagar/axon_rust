@@ -12,6 +12,76 @@ async fn store() -> SqliteGraphStore {
 }
 
 #[tokio::test]
+async fn evidence_heavy_graph_reads_are_bounded_and_explicit() {
+    for large_body in [false, true] {
+        let store = store().await;
+        store
+            .upsert_candidates(vec![repo_docs_candidate(
+                "bounded",
+                "src",
+                vec![ev("seed", "sitemap", 0.8)],
+            )])
+            .await
+            .unwrap();
+        if large_body {
+            sqlx::query("UPDATE graph_evidence SET quote = ?")
+                .bind("x".repeat(2 * 1024 * 1024))
+                .execute(store.pool())
+                .await
+                .unwrap();
+        } else {
+            sqlx::query("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1100)
+                INSERT INTO graph_evidence (evidence_id, edge_id, evidence_kind, source_id, source_item_key, quote, confidence, metadata_json)
+                SELECT printf('extra-%04d', n.i), e.edge_id, e.evidence_kind, e.source_id, e.source_item_key, e.quote, e.confidence, e.metadata_json
+                FROM n CROSS JOIN graph_evidence e WHERE e.evidence_id = 'seed'")
+                .execute(store.pool()).await.unwrap();
+        }
+        let edge: String = sqlx::query_scalar("SELECT edge_id FROM graph_edges LIMIT 1")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        let result = store
+            .query(GraphQueryRequest {
+                start: GraphIdentifier {
+                    kind: "node".into(),
+                    node_id: Some(node_id_for("repo", "https://github.com/x/y")),
+                    canonical_uri: None,
+                    value: None,
+                    source_id: None,
+                    source_item_key: None,
+                    metadata: MetadataMap::new(),
+                },
+                depth: 1,
+                direction: GraphDirection::Out,
+                edges: Vec::new(),
+                limit: 1,
+                cursor: None,
+                filters: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.edges.len(), 1);
+        assert!(
+            result.evidence.is_empty(),
+            "oversized evidence must use explicit summary mode"
+        );
+        assert!(result.edges[0].evidence.is_empty());
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "graph.evidence_limit_exceeded")
+        );
+        assert!(serde_json::to_vec(&result).unwrap().len() < 16 * 1024);
+        let error = store
+            .get_edge(GraphEdgeId::new(edge))
+            .await
+            .expect_err("detail API must not silently truncate evidence");
+        assert_eq!(error.code.to_string(), "graph.evidence_limit_exceeded");
+    }
+}
+
+#[tokio::test]
 async fn standalone_schema_includes_publication_state() {
     let store = store().await;
     let table: Option<String> = sqlx::query_scalar(

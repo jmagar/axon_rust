@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn extracted_fetch_provider_redirects_do_not_exempt_other_helpers() {
+    let root = tempfile::tempdir().unwrap();
+    let helpers = root
+        .path()
+        .join("crates/axon-adapters/src/providers/http_fetch");
+    std::fs::create_dir_all(&helpers).unwrap();
+    std::fs::write(
+        helpers.join("redirects.rs"),
+        "let client = self.build_client()?;\n",
+    )
+    .unwrap();
+    check(root.path()).expect("the existing provider's extracted redirect boundary is permitted");
+    std::fs::write(
+        helpers.join("other.rs"),
+        "let client = self.build_client()?;\n",
+    )
+    .unwrap();
+    let error = check(root.path()).unwrap_err().to_string();
+    assert!(error.contains("http_fetch/other.rs:1"), "{error}");
+}
+
+#[test]
 fn test_files_are_ignored() {
     assert!(is_ignored(
         "crates/axon-adapters/src/web_engine/scrape_tests.rs"

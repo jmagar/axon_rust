@@ -343,7 +343,7 @@
     },
     {
       "default": 4,
-      "description": "Global LLM completions.",
+      "description": "Per-backend LLM completion limit. When unset: Gemini 4, OpenAI-compatible 16. Explicit values, including 4, are honored.",
       "env_key": "AXON_LLM_COMPLETION_CONCURRENCY",
       "key": "providers.llm.completion_concurrency",
       "owner_crate": "axon-llm",
@@ -830,7 +830,7 @@
         "path": "docs/pipeline-unification/schemas/config-schema.md"
       },
       {
-        "checksum": "sha256:ad08d7ab1adfbbc6439fa3fe20c3a33b9e69143b9eb44c316bffd203210020d1",
+        "checksum": "sha256:bd09add629af1905fcade322e08bcc1daeda703f6a7551cad9e64861efdbb5f5",
         "kind": "rust_module",
         "path": "xtask/src/schemas/config_schema_registry.rs"
       }

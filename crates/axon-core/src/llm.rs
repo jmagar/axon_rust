@@ -60,9 +60,8 @@ pub const GEMINI_DEFAULT_COMPLETION_CONCURRENCY: usize = 4;
 ///
 /// The OpenAI-compatible backend issues plain HTTP requests (no subprocess
 /// fork), so a higher fan-out is both cheap and beneficial for throughput
-/// against a remote endpoint. Applied only when the operator has NOT raised
-/// `AXON_LLM_COMPLETION_CONCURRENCY` above the Gemini default — an explicit
-/// value always wins (see [`LlmBackendConfig::from_config`]).
+/// against a remote endpoint. Applied by config parsing only when neither env
+/// nor TOML supplies a value. Every explicit positive value wins, including 4.
 pub const OPENAI_DEFAULT_COMPLETION_CONCURRENCY: usize = 16;
 
 impl Default for LlmBackendConfig {
@@ -102,16 +101,15 @@ impl LlmBackendConfig {
             codex_model: non_empty(cfg.codex_model.clone()),
             codex_home: cfg.codex_home.clone(),
             codex_load_user_config: cfg.codex_load_user_config,
-            // Codex uses its own dedicated concurrency knob; Gemini/OpenAI-compat
-            // go through the backend-aware resolver (Gemini 4 / OpenAI-compat 16
-            // defaults, explicit values honored) — PERF-L3.
+            // Parsing resolves backend defaults before explicit overrides. Never
+            // infer whether a value was explicit from the number itself.
             completion_concurrency: match cfg.llm_backend {
                 LlmBackendKind::CodexAppServer => cfg
                     .codex_completion_concurrency
                     .clamp(1, tokio::sync::Semaphore::MAX_PERMITS),
-                _ => {
-                    resolve_completion_concurrency(cfg.llm_backend, cfg.llm_completion_concurrency)
-                }
+                _ => cfg
+                    .llm_completion_concurrency
+                    .clamp(1, tokio::sync::Semaphore::MAX_PERMITS),
             },
             completion_timeout_secs: cfg.llm_completion_timeout_secs.max(1),
             configured: true,
@@ -384,26 +382,6 @@ pub trait TextCompleter: Send + Sync {
 pub fn normalize_stream_flag(mut req: CompletionRequest, stream: bool) -> CompletionRequest {
     req.stream = stream;
     req
-}
-
-/// Resolve the effective completion-concurrency permit count for a backend.
-///
-/// The config-layer default for `AXON_LLM_COMPLETION_CONCURRENCY` is tuned for
-/// the Gemini headless backend (subprocess fork per completion → small fan-out).
-/// For the HTTP `openai-compat` backend that default is needlessly conservative.
-/// When the operator left the value at the Gemini default, this lifts the
-/// `openai-compat` default to [`OPENAI_DEFAULT_COMPLETION_CONCURRENCY`]. Any
-/// explicitly raised (or otherwise non-default) value is honoured verbatim, so
-/// this never overrides an operator's deliberate choice. The result is always
-/// clamped to the Tokio semaphore permit range.
-fn resolve_completion_concurrency(backend: LlmBackendKind, configured: usize) -> usize {
-    let resolved = match backend {
-        LlmBackendKind::OpenAiCompat if configured == GEMINI_DEFAULT_COMPLETION_CONCURRENCY => {
-            OPENAI_DEFAULT_COMPLETION_CONCURRENCY
-        }
-        _ => configured,
-    };
-    resolved.clamp(1, tokio::sync::Semaphore::MAX_PERMITS)
 }
 
 fn non_empty(value: String) -> Option<String> {

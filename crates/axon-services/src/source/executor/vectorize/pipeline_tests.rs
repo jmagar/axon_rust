@@ -1061,3 +1061,35 @@ async fn successful_overlap_checkpoints_current_upsert_before_next_embedding() {
         vec![PipelinePhase::Upserting, PipelinePhase::Embedding]
     );
 }
+#[tokio::test]
+async fn buffered_embedding_releases_writer_while_publication_is_waiting() {
+    use futures_util::{StreamExt, stream};
+    let gate = axon_core::sqlite::SqliteWriteGate::default();
+    let held = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let pending = stream::iter(0..2)
+        .map(|index| {
+            let gate = gate.clone();
+            let held = held.clone();
+            let release = release.clone();
+            run_embedding_independently(async move {
+                if index == 0 {
+                    held.notified().await;
+                } else {
+                    let _writer = gate.lock().await;
+                    held.notify_one();
+                    release.notified().await;
+                }
+                Ok(index)
+            })
+        })
+        .buffered(2);
+    tokio::pin!(pending);
+    assert_eq!(pending.next().await.unwrap().unwrap(), 0);
+    release.notify_one();
+    let writer = tokio::time::timeout(std::time::Duration::from_secs(1), gate.lock())
+        .await
+        .expect("publication must not wait for polling a buffered embedding");
+    drop(writer);
+    assert_eq!(pending.next().await.unwrap().unwrap(), 1);
+}

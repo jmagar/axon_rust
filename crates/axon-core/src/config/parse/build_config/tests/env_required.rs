@@ -7,6 +7,55 @@ use super::*;
 
 #[allow(unsafe_code)]
 #[test]
+fn completion_concurrency_defaults_and_explicit_values_resolve_before_dispatch() {
+    let _guard = env_guard();
+    with_env_saved(
+        &[
+            "AXON_LLM_BACKEND",
+            "AXON_LLM_COMPLETION_CONCURRENCY",
+            "AXON_CONFIG_PATH",
+        ],
+        || unsafe {
+            for (backend, configured, expected) in [
+                ("openai-compat", None, 16),
+                ("openai-compat", Some("4"), 4),
+                ("openai-compat", Some("2"), 2),
+                ("gemini-headless", None, 4),
+            ] {
+                env::set_var("AXON_LLM_BACKEND", backend);
+                match configured {
+                    Some(value) => env::set_var("AXON_LLM_COMPLETION_CONCURRENCY", value),
+                    None => env::remove_var("AXON_LLM_COMPLETION_CONCURRENCY"),
+                }
+                let cfg = into_config_via_args(&["status"]).unwrap();
+                assert_eq!(cfg.llm_completion_concurrency, expected);
+                assert_eq!(
+                    crate::llm::LlmBackendConfig::from_config(&cfg).completion_concurrency,
+                    expected
+                );
+            }
+            let mut config = TempfileBuilder::new().suffix(".toml").tempfile().unwrap();
+            writeln!(config, "[providers.llm]\ncompletion-concurrency = 4").unwrap();
+            env::set_var("AXON_CONFIG_PATH", config.path());
+            env::set_var("AXON_LLM_BACKEND", "openai-compat");
+            env::remove_var("AXON_LLM_COMPLETION_CONCURRENCY");
+            let cfg = into_config_via_args(&["status"]).unwrap();
+            assert_eq!(
+                crate::llm::LlmBackendConfig::from_config(&cfg).completion_concurrency,
+                4
+            );
+            env::set_var("AXON_LLM_COMPLETION_CONCURRENCY", "2");
+            let cfg = into_config_via_args(&["status"]).unwrap();
+            assert_eq!(
+                crate::llm::LlmBackendConfig::from_config(&cfg).completion_concurrency,
+                2
+            );
+        },
+    );
+}
+
+#[allow(unsafe_code)]
+#[test]
 fn into_config_parses_mcp_origin_allowlist_from_env() {
     let _guard = env_guard();
     const MCP: &str = "AXON_ALLOWED_ORIGINS";

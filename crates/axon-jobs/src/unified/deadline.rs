@@ -12,7 +12,9 @@ impl SqliteUnifiedJobStore {
     /// all owned child rows, before canceling the matching local runner.
     pub(crate) async fn expire_past_deadline_jobs(&self) -> Result<u64> {
         let now = now_timestamp();
-        let mut tx = ImmediateTx::begin(&self.pool).await.map_err(sql_error)?;
+        let mut tx = ImmediateTx::begin_with_gate(&self.pool, &self.write_gate)
+            .await
+            .map_err(sql_error)?;
         let expired = sqlx::query(
             "SELECT job_id, attempt FROM jobs
              WHERE status IN ('running', 'waiting', 'canceling')

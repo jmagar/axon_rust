@@ -95,6 +95,11 @@ IGNORED_TOKENS = {
     "GITHUB_RUN_ID",
     "AXON_RUST",  # issue id prefix in docs/tests
     "AXON_DEV_BIN",  # local shell variable in scripts/axon
+    "AXON_NO_BUILD",  # wrapper-only build control, not binary runtime config
+    "AXON_INSTALL_REPO",  # installer test fixture; not consumed by Axon runtime
+    "AXON_TIMEOUT_FORCE_FALLBACK",  # timeout-wrapper regression test control
+    "QDRANT_HEADERS",  # local shell array in scripts/axon-backup.sh
+    "QDRANT_TMP",  # local shell variable in scripts/axon-backup.sh
     "AXON_DEV_BIN_DIR",  # local shell variable in scripts/axon
     "AXON_HOME_DIR",  # local shell variable in scripts/axon
     "AXON_BACKUP_DIR",  # operational var in scripts/axon-backup.sh, not axon runtime config
@@ -285,6 +290,8 @@ VALID_TOML_DESTINATIONS = {
     "workers.unified-worker-concurrency",
     "workers.queue-summary-secs",
     "workers.qdrant-point-buffer",
+    "providers.vector.upsert-batch-points",
+    "providers.vector.write-concurrency",
     "workers.max-pending-crawl-jobs",
     "workers.max-pending-embed-jobs",
     "workers.max-pending-extract-jobs",

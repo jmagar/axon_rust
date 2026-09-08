@@ -15,7 +15,7 @@ pub(super) async fn acquire_lease(
 ) -> Result<Option<LeaseGuard>> {
     let now = timestamp();
     let requested_expires_at = add_seconds(&now, request.ttl_seconds)?;
-    let mut tx = ImmediateTx::begin(&store.pool)
+    let mut tx = ImmediateTx::begin_with_gate(&store.pool, &store.write_gate)
         .await
         .map_err(sqlite_error)?;
     let existing = sqlx::query(

@@ -96,6 +96,7 @@ mod terminal_warnings;
 #[derive(Clone)]
 pub struct SqliteUnifiedJobStore {
     pool: SqlitePool,
+    write_gate: axon_core::sqlite::SqliteWriteGate,
     /// Optional durable observability sink (`axon_observe_events`/heartbeats).
     ///
     /// When present, every status transition and heartbeat routed through this
@@ -120,8 +121,16 @@ pub const MAX_PROVIDER_COOLDOWN_WINDOW: std::time::Duration = std::time::Duratio
 
 impl SqliteUnifiedJobStore {
     pub fn new(pool: SqlitePool) -> Self {
+        Self::new_with_write_gate(pool, axon_core::sqlite::SqliteWriteGate::default())
+    }
+
+    pub fn new_with_write_gate(
+        pool: SqlitePool,
+        write_gate: axon_core::sqlite::SqliteWriteGate,
+    ) -> Self {
         Self {
             pool,
+            write_gate,
             observe: None,
         }
     }
@@ -134,8 +143,21 @@ impl SqliteUnifiedJobStore {
     /// Build a store that also routes status/heartbeat transitions into the
     /// durable observability sink on the same pool.
     pub fn with_observe_sink(pool: SqlitePool, observe: Arc<SqliteObservabilitySink>) -> Self {
+        Self::with_observe_sink_and_write_gate(
+            pool,
+            observe,
+            axon_core::sqlite::SqliteWriteGate::default(),
+        )
+    }
+
+    pub fn with_observe_sink_and_write_gate(
+        pool: SqlitePool,
+        observe: Arc<SqliteObservabilitySink>,
+        write_gate: axon_core::sqlite::SqliteWriteGate,
+    ) -> Self {
         Self {
             pool,
+            write_gate,
             observe: Some(observe),
         }
     }

@@ -6,11 +6,14 @@ use std::time::{Duration, Instant};
 
 use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
 
+use super::{SqliteWriteGate, SqliteWriteGuard};
+
 const ACQUIRE_WARN_THRESHOLD: Duration = Duration::from_secs(1);
 
 #[must_use = "settle ImmediateTx with commit, rollback, or finish"]
 pub struct ImmediateTx {
     tx: Transaction<'static, Sqlite>,
+    _write_guard: Option<SqliteWriteGuard>,
 }
 
 impl ImmediateTx {
@@ -25,7 +28,20 @@ impl ImmediateTx {
             );
         }
         let tx = Transaction::begin(conn, Some(Cow::Borrowed("BEGIN IMMEDIATE"))).await?;
-        Ok(Self { tx })
+        Ok(Self {
+            tx,
+            _write_guard: None,
+        })
+    }
+
+    pub async fn begin_with_gate(
+        pool: &SqlitePool,
+        gate: &SqliteWriteGate,
+    ) -> Result<Self, sqlx::Error> {
+        let write_guard = gate.lock().await;
+        let mut tx = Self::begin(pool).await?;
+        tx._write_guard = Some(write_guard);
+        Ok(tx)
     }
 
     pub async fn commit(self) -> Result<(), sqlx::Error> {

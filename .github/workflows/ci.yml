@@ -579,6 +579,8 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - name: enforce pre-commit stays fast
         run: python3 scripts/check_lefthook_pre_commit_speed.py
+      - name: enforce structural hook failures propagate
+        run: python3 scripts/test_lefthook_fail_fast.py
 
   palette-tauri:
     name: palette-tauri

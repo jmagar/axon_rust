@@ -1,6 +1,173 @@
 use super::*;
+use chrono::Utc;
 use httpmock::MockServer;
 use std::time::{Duration, Instant};
+
+#[tokio::test]
+async fn long_retry_after_defers_without_holding_the_embedding_call() {
+    for attempts in [1, 3] {
+        let server = MockServer::start_async().await;
+        let busy = server
+            .mock_async(|when, then| {
+                when.method("POST").path("/embed");
+                then.status(429).header("retry-after", "86400");
+            })
+            .await;
+        let client = TeiClient::new(TeiClientParams {
+            endpoint: server.base_url(),
+            provider_id: "retry-after".into(),
+            max_batch_inputs: 1,
+            max_input_tokens: 8192,
+            max_batch_tokens: 8192,
+            max_concurrent_requests: 1,
+            max_in_flight_inputs: 1,
+            max_attempts: attempts,
+            request_timeout: Duration::from_millis(100),
+            retry_backoff_base_ms: 1,
+        })
+        .unwrap();
+        let before = Utc::now();
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.embed_all(&["document".into()]),
+        )
+        .await
+        .expect("long server cooldown must not park a running call")
+        .expect_err("provider is cooling");
+        let cooling = error.provider_cooling().expect("durable cooling metadata");
+        assert!(
+            cooling.cooldown_until >= before + chrono::Duration::seconds(86400),
+            "retry exhaustion must not shorten the server cooling window"
+        );
+        assert_eq!(client.request_slots.available_permits(), 1);
+        assert_eq!(client.input_slots.available_permits(), 1);
+        busy.assert_calls_async(1).await;
+    }
+}
+
+#[tokio::test]
+async fn unrepresentable_retry_after_is_rejected_without_sleep_or_overflow() {
+    let server = MockServer::start_async().await;
+    server
+        .mock_async(|when, then| {
+            when.method("POST").path("/embed");
+            then.status(429).header("retry-after", u64::MAX.to_string());
+        })
+        .await;
+    let client = TeiClient::new(TeiClientParams {
+        endpoint: server.base_url(),
+        provider_id: "invalid-retry-after".into(),
+        max_batch_inputs: 1,
+        max_input_tokens: 8192,
+        max_batch_tokens: 8192,
+        max_concurrent_requests: 1,
+        max_in_flight_inputs: 1,
+        max_attempts: 2,
+        request_timeout: Duration::from_millis(100),
+        retry_backoff_base_ms: 1,
+    })
+    .unwrap();
+    let error = tokio::time::timeout(
+        Duration::from_secs(1),
+        client.embed_all(&["document".into()]),
+    )
+    .await
+    .expect("invalid Retry-After must not park the worker")
+    .expect_err("unrepresentable cooldown must fail explicitly");
+    assert_eq!(error.code, "embedding.tei.retry_after_invalid".into());
+    assert!(!error.retryable);
+}
+
+#[tokio::test]
+async fn malformed_success_body_is_not_retried_as_a_network_failure() {
+    let server = MockServer::start_async().await;
+    let invalid = server
+        .mock_async(|when, then| {
+            when.method("POST").path("/embed");
+            then.status(200).body("not embedding JSON");
+        })
+        .await;
+    let client = TeiClient::new(TeiClientParams {
+        endpoint: server.base_url(),
+        provider_id: "invalid-body".into(),
+        max_batch_inputs: 1,
+        max_input_tokens: 8192,
+        max_batch_tokens: 8192,
+        max_concurrent_requests: 1,
+        max_in_flight_inputs: 1,
+        max_attempts: 3,
+        request_timeout: Duration::from_secs(2),
+        retry_backoff_base_ms: 1,
+    })
+    .unwrap();
+    let error = client
+        .embed_all(&["document".into()])
+        .await
+        .expect_err("invalid schema");
+    assert!(error.provider_cooling().is_none());
+    invalid.assert_calls_async(1).await;
+}
+
+#[tokio::test]
+async fn embed_retries_timeout_reading_success_response_body() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let mut held = Vec::new();
+        for attempt in 0..2 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(socket.read_u8().await.unwrap());
+                assert!(request.len() < 8192);
+            }
+            let headers = String::from_utf8(request).unwrap();
+            let length: usize = headers
+                .lines()
+                .find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse().unwrap())
+                })
+                .unwrap();
+            let mut body = vec![0; length];
+            socket.read_exact(&mut body).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                serde_json::json!({"inputs":["document"],"truncate":false})
+            );
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 7\r\nConnection: close\r\n\r\n").await.unwrap();
+            if attempt == 0 {
+                socket.write_all(b"[").await.unwrap();
+                held.push(socket); // Headers succeeded, but the body never completes.
+            } else {
+                socket.write_all(b"[[0.5]]").await.unwrap();
+            }
+        }
+    });
+    let client = TeiClient::new(TeiClientParams {
+        endpoint,
+        provider_id: "body-timeout".into(),
+        max_batch_inputs: 1,
+        max_input_tokens: 8192,
+        max_batch_tokens: 8192,
+        max_concurrent_requests: 1,
+        max_in_flight_inputs: 1,
+        max_attempts: 2,
+        request_timeout: Duration::from_millis(150),
+        retry_backoff_base_ms: 1,
+    })
+    .unwrap();
+    let result = client.embed_all(&["document".into()]).await;
+    server.abort();
+    assert_eq!(
+        result
+            .expect("body timeout must use the remaining retry budget")
+            .vectors,
+        vec![vec![0.5]]
+    );
+}
 
 #[test]
 fn batch_plan_contains_only_indices_into_caller_owned_inputs() {

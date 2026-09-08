@@ -13,14 +13,15 @@ use std::time::{Duration, Instant};
 
 use axon_api::source::ApiError;
 use axon_error::ErrorStage;
-use axon_error::cooling::ProviderCooling;
-use chrono::Utc;
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use reqwest::header::RETRY_AFTER;
 use reqwest::{Client, StatusCode};
 use tokio::sync::Semaphore;
 
+mod admission;
+mod errors;
 mod policy;
+mod response;
 mod types;
 #[cfg(test)]
 use policy::estimated_tokens;
@@ -125,6 +126,7 @@ pub struct TeiClient {
     max_concurrent_requests: usize,
     request_slots: Arc<Semaphore>,
     input_slots: Arc<Semaphore>,
+    profile_input_slots: Arc<Semaphore>,
     max_attempts: usize,
     request_timeout: Duration,
     retry_backoff_base_ms: u64,
@@ -185,6 +187,7 @@ impl TeiClient {
         let max_batch_inputs =
             resolve_batch_size(params.max_batch_inputs).min(max_in_flight_inputs);
         Ok(Self {
+            profile_input_slots: Arc::new(Semaphore::new(max_in_flight_inputs)),
             client: SHARED_CLIENT.clone(),
             embed_url,
             info_url,
@@ -329,7 +332,7 @@ impl TeiClient {
     ///
     /// When every attempt is exhausted on a retryable condition (transport
     /// error or 429/5xx status), the returned [`ApiError`] carries
-    /// [`ProviderCooling`] metadata (`with_provider_cooling`) so the scheduler
+    /// [`axon_error::cooling::ProviderCooling`] metadata so the scheduler
     /// backs off this provider instead of hammering it again immediately —
     /// see "Cooling" in `docs/pipeline-unification/runtime/provider-contract.md`.
     async fn send_chunk_with_retries(
@@ -350,30 +353,8 @@ impl TeiClient {
         let mut last_retryable = true;
 
         for attempt in 1..=self.max_attempts {
-            let request_permit = Arc::clone(&self.request_slots)
-                .acquire_owned()
-                .await
-                .map_err(|_| {
-                    self.error(
-                        "embedding.tei.admission_closed",
-                        "TEI request admission gate is closed",
-                    )
-                })?;
-            let input_count = u32::try_from(chunk.len()).map_err(|_| {
-                self.error(
-                    "embedding.tei.input_budget_invalid",
-                    "TEI client batch exceeds the weighted admission range",
-                )
-            })?;
-            let input_permit = Arc::clone(&self.input_slots)
-                .acquire_many_owned(input_count)
-                .await
-                .map_err(|_| {
-                    self.error(
-                        "embedding.tei.admission_closed",
-                        "TEI input admission gate is closed",
-                    )
-                })?;
+            let (profile_input_permit, request_permit, input_permit) =
+                self.acquire_admission(chunk.len()).await?;
 
             invocation_requests.fetch_add(1, Ordering::Relaxed);
             self.cumulative_requests.fetch_add(1, Ordering::Relaxed);
@@ -381,15 +362,19 @@ impl TeiClient {
             if let Some(token) = &self.bearer_token {
                 request = request.bearer_auth(token);
             }
-            let send = request
-                .timeout(self.request_timeout)
-                .json(&body)
-                .send()
-                .await;
+            let send =
+                response::send_with_body(request.timeout(self.request_timeout).json(&body)).await;
 
             let resp = match send {
-                Ok(resp) => resp,
+                Ok(response::EmbedResponse::Vectors(vectors)) => {
+                    return Ok(ChunkOutcome::Vectors(vectors));
+                }
+                Ok(response::EmbedResponse::Status(resp)) => resp,
+                Err(err) if err.is_decode() && !err.is_timeout() && !err.is_body() => {
+                    return Err(self.transport(error_category(&err)));
+                }
                 Err(err) => {
+                    drop(profile_input_permit);
                     drop(input_permit);
                     drop(request_permit);
                     last = Some(self.transport(error_category(&err)));
@@ -407,12 +392,6 @@ impl TeiClient {
             };
 
             let status = resp.status();
-            if status.is_success() {
-                return match resp.json::<Vec<Vec<f32>>>().await {
-                    Ok(vectors) => Ok(ChunkOutcome::Vectors(vectors)),
-                    Err(err) => Err(self.transport(error_category(&err))),
-                };
-            }
 
             // 413 = payload too large; split multi-input chunks and retry halves.
             if is_batch_too_large(status) && chunk.len() > 1 {
@@ -421,9 +400,20 @@ impl TeiClient {
 
             let retryable = is_retryable_status(status);
             let retry_after = resp.headers().get(RETRY_AFTER).and_then(parse_retry_after);
+            if retryable
+                && let Some(delay) = retry_after
+                && (delay
+                    > self
+                        .request_timeout
+                        .min(Duration::from_millis(MAX_BACKOFF_MS))
+                    || attempt == self.max_attempts)
+            {
+                return Err(self.deferred_retry_after(status, delay));
+            }
             last = Some(self.status_error(status));
             last_retryable = retryable;
             if retryable && attempt < self.max_attempts {
+                drop(profile_input_permit);
                 drop(input_permit);
                 drop(request_permit);
                 tokio::time::sleep(
@@ -453,46 +443,6 @@ impl TeiClient {
         } else {
             err
         })
-    }
-
-    /// Attach a bounded [`ProviderCooling`] window to a retry-exhausted error
-    /// so callers holding a scheduler reservation back off before their next
-    /// attempt. The window is fixed (not exponential) — it only needs to
-    /// outlast one scheduling tick, not model the retry backoff itself.
-    fn with_exhausted_cooling(&self, err: ApiError) -> ApiError {
-        err.with_provider_cooling(
-            ProviderCooling::new(Utc::now() + chrono::Duration::seconds(TEI_COOLDOWN_SECS))
-                .with_provider(self.provider_id.as_str())
-                .with_reason("tei_retry_exhausted"),
-        )
-    }
-
-    fn error(&self, code: &str, message: &str) -> ApiError {
-        ApiError::new(code, ErrorStage::Embedding, message.to_string())
-            .with_context("endpoint", ENDPOINT_MARKER)
-            .with_provider_id(&self.provider_id)
-    }
-
-    fn transport(&self, category: &str) -> ApiError {
-        // reqwest's Display can carry the request URL, so it is never embedded.
-        ApiError::new(
-            "embedding.tei.transport",
-            ErrorStage::Embedding,
-            format!("TEI transport error ({category})"),
-        )
-        .with_context("endpoint", ENDPOINT_MARKER)
-        .with_provider_id(&self.provider_id)
-    }
-
-    fn status_error(&self, status: StatusCode) -> ApiError {
-        ApiError::new(
-            "embedding.tei.status",
-            ErrorStage::Embedding,
-            format!("TEI returned status {}", status.as_u16()),
-        )
-        .with_context("endpoint", ENDPOINT_MARKER)
-        .with_context("status", status.as_u16().to_string())
-        .with_provider_id(&self.provider_id)
     }
 }
 

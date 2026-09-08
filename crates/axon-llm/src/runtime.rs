@@ -34,6 +34,14 @@ pub async fn complete_text(
     req: CompletionRequest,
 ) -> Result<CompletionResponse, Box<dyn StdError + Send + Sync>> {
     ensure_configured(&req)?;
+    tokio::time::timeout(req.backend.completion_timeout(), complete_text_inner(req))
+        .await
+        .map_err(|_| completion_deadline_error())?
+}
+
+async fn complete_text_inner(
+    req: CompletionRequest,
+) -> Result<CompletionResponse, Box<dyn StdError + Send + Sync>> {
     let _reservation = reservation::reserve().await?;
     let limiter_key = completion_limiter_key(&req);
     let _permit = concurrency::acquire_completion_permit_for_key(
@@ -68,6 +76,29 @@ where
     F: FnMut(&str) -> Result<(), Box<dyn StdError + Send + Sync>> + Send,
 {
     ensure_configured(&req)?;
+    tokio::time::timeout(
+        req.backend.completion_timeout(),
+        complete_streaming_inner(req, on_delta),
+    )
+    .await
+    .map_err(|_| completion_deadline_error())?
+}
+
+fn completion_deadline_error() -> Box<dyn StdError + Send + Sync> {
+    Box::new(axon_api::source::ApiError::new(
+        "llm.completion.deadline",
+        axon_api::source::ErrorStage::Synthesizing,
+        "LLM completion deadline exceeded during admission or execution",
+    ))
+}
+
+async fn complete_streaming_inner<F>(
+    req: CompletionRequest,
+    on_delta: F,
+) -> Result<CompletionResponse, Box<dyn StdError + Send + Sync>>
+where
+    F: FnMut(&str) -> Result<(), Box<dyn StdError + Send + Sync>> + Send,
+{
     let _reservation = reservation::reserve().await?;
     let limiter_key = completion_limiter_key(&req);
     let _permit = concurrency::acquire_completion_permit_for_key(

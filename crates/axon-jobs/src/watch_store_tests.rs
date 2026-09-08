@@ -1,10 +1,30 @@
 use super::*;
-use tempfile::NamedTempFile;
+
+#[tokio::test]
+async fn watch_run_write_waits_at_shared_admission_before_pool_checkout() {
+    let (_store, pool, _temp) = store().await;
+    let gate = crate::scheduler::SqliteWriteGate::default();
+    let store = SqliteWatchStore::new_with_write_gate(pool.clone(), gate.clone());
+    let held = gate.lock().await;
+    let write = tokio::spawn(async move {
+        store
+            .record_run(WatchId::new("missing"), JobId::from(Uuid::new_v4()))
+            .await
+    });
+    tokio::task::yield_now().await;
+    assert!(
+        pool.try_acquire().is_some(),
+        "waiting watch write must not consume a pool slot"
+    );
+    drop(held);
+    let _ = write.await;
+}
+use tempfile::TempDir;
 use uuid::Uuid;
 
-async fn store() -> (SqliteWatchStore, SqlitePool, NamedTempFile) {
-    let temp = NamedTempFile::new().expect("tempfile");
-    let pool = crate::store::open_sqlite_pool(&temp.path().to_string_lossy())
+async fn store() -> (SqliteWatchStore, SqlitePool, TempDir) {
+    let temp = tempfile::tempdir().expect("private database directory");
+    let pool = crate::store::open_sqlite_pool(&temp.path().join("jobs.db").to_string_lossy())
         .await
         .expect("open pool");
     (SqliteWatchStore::new(pool.clone()), pool, temp)

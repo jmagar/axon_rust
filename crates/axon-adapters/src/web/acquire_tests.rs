@@ -244,7 +244,7 @@ fn require_item(outcome: AcquiredItem, message: &str) -> AcquiredSourceItem {
 
 #[tokio::test]
 async fn concurrent_acquisition_reports_each_completed_page() {
-    let providers = FakeAdapterProviders::new();
+    let providers = std::sync::Arc::new(FakeAdapterProviders::new());
     let progress = RecordingProgress::default();
     let manifest_items = vec![
         item("https://example.com/docs/one"),
@@ -253,8 +253,8 @@ async fn concurrent_acquisition_reports_each_completed_page() {
     ];
 
     let (items, warnings) = acquire_concurrent(
-        &providers,
-        &providers,
+        providers.clone(),
+        providers,
         &manifest_items,
         &opts(RenderMode::Http, 200),
         Some(&progress),
@@ -312,7 +312,9 @@ async fn sequential_acquisition_reports_each_completed_page() {
 
 #[tokio::test]
 async fn failed_pages_advance_attempts_without_inflating_documents() {
-    let providers = FakeAdapterProviders::new().with_mode(crate::boundary::FakeAdapterMode::Fatal);
+    let providers = std::sync::Arc::new(
+        FakeAdapterProviders::new().with_mode(crate::boundary::FakeAdapterMode::Fatal),
+    );
     let progress = RecordingProgress::default();
     let manifest_items = vec![
         item("https://example.com/docs/one"),
@@ -320,8 +322,8 @@ async fn failed_pages_advance_attempts_without_inflating_documents() {
     ];
 
     let (items, warnings) = acquire_concurrent(
-        &providers,
-        &providers,
+        providers.clone(),
+        providers,
         &manifest_items,
         &opts(RenderMode::Http, 200),
         Some(&progress),
@@ -723,8 +725,8 @@ async fn conditional_304_advances_progress_with_a_reusable_document() {
     options.cache_policy = CachePolicy::Revalidate;
 
     let (items, warnings) = acquire_concurrent(
-        &provider,
-        &render,
+        std::sync::Arc::new(provider),
+        std::sync::Arc::new(render),
         &manifest_items,
         &options,
         Some(&progress),

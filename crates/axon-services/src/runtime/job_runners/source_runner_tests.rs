@@ -8,6 +8,73 @@ use axon_api::source::{
 use axon_jobs::SqliteJobBackend;
 use axon_jobs::boundary::JobStore;
 
+#[tokio::test(start_paused = true)]
+async fn heartbeat_waiting_for_writer_must_keep_polling_source() {
+    let gate = SqliteWriteGate::default();
+    let shutdown = CancellationToken::new();
+    let source = async {
+        let _writer = gate.lock().await;
+        tokio::time::sleep(std::time::Duration::from_secs(31)).await;
+        42
+    };
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(35),
+        drive_source_with_heartbeat(source, &shutdown, || async {
+            let _writer = gate.lock().await;
+        }),
+    )
+    .await
+    .expect("heartbeat must not suspend the source holding its writer gate")
+    .expect("source completes");
+    assert_eq!(result, 42);
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancellation_bounds_cleanup_while_heartbeat_is_blocked() {
+    let shutdown = CancellationToken::new();
+    let cancel = async {
+        tokio::time::sleep(std::time::Duration::from_secs(31)).await;
+        shutdown.cancel();
+    };
+    let running = drive_source_with_heartbeat(std::future::pending::<()>(), &shutdown, || {
+        std::future::pending::<()>()
+    });
+    let (_, result) = tokio::time::timeout(std::time::Duration::from_secs(42), async {
+        tokio::join!(cancel, running)
+    })
+    .await
+    .expect("a blocked heartbeat must not hide cancellation or its cleanup deadline");
+    assert!(result.is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancellation_releases_heartbeat_writer_before_source_cleanup() {
+    let gate = SqliteWriteGate::default();
+    let shutdown = CancellationToken::new();
+    let cancel = async {
+        tokio::time::sleep(std::time::Duration::from_secs(31)).await;
+        shutdown.cancel();
+    };
+    let source = async {
+        shutdown.cancelled().await;
+        let _writer = gate.lock().await;
+        42
+    };
+    let running = drive_source_with_heartbeat(source, &shutdown, || async {
+        let _writer = gate.lock().await;
+        std::future::pending::<()>().await;
+    });
+    let (_, result) = tokio::join!(cancel, running);
+    assert_eq!(
+        result.expect("cleanup must acquire the abandoned heartbeat writer"),
+        42
+    );
+    assert!(
+        gate.try_lock().is_some(),
+        "all writer guards must be released"
+    );
+}
+
 async fn test_cfg() -> (tempfile::TempDir, Arc<Config>) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut cfg = Config::test_default();

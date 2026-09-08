@@ -4,11 +4,11 @@ use axon_api::source::{
     AdapterOptions, AdapterRef, AuthSnapshot, SourceId, SourceScope, WatchRequest, WatchSchedule,
 };
 use sqlx::Row;
-use tempfile::NamedTempFile;
+use tempfile::TempDir;
 
-async fn scheduler_pool() -> (SqlitePool, NamedTempFile) {
-    let temp = NamedTempFile::new().expect("tempfile");
-    let pool = crate::store::open_sqlite_pool(&temp.path().to_string_lossy())
+async fn scheduler_pool() -> (SqlitePool, TempDir) {
+    let temp = tempfile::tempdir().expect("private database directory");
+    let pool = crate::store::open_sqlite_pool(&temp.path().join("jobs.db").to_string_lossy())
         .await
         .expect("open pool");
     (pool, temp)

@@ -370,7 +370,7 @@ fn enforce_read_size_from_file(
     .with_context("max_file_bytes", max_file_bytes.to_string()))
 }
 
-fn validate_item_key(item_key: &str) -> Result<()> {
+pub(super) fn validate_item_key(item_key: &str) -> Result<()> {
     let key = Path::new(item_key);
     if !key.is_absolute()
         && !key

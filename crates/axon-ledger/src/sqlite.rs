@@ -72,11 +72,12 @@ use crate::store::{LedgerStore, Result};
 #[derive(Debug, Clone)]
 pub struct SqliteLedgerStore {
     pub(crate) pool: SqlitePool,
+    pub(crate) write_gate: axon_core::sqlite::SqliteWriteGate,
 }
 
 impl SqliteLedgerStore {
     pub(crate) fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self::from_pool_with_write_gate(pool, axon_core::sqlite::SqliteWriteGate::default())
     }
 
     /// Bind the ledger to an already-open, already-migrated SQLite pool — the
@@ -90,6 +91,13 @@ impl SqliteLedgerStore {
     /// ledger-only database (tests, tooling).
     pub fn from_pool(pool: SqlitePool) -> Self {
         Self::new(pool)
+    }
+
+    pub fn from_pool_with_write_gate(
+        pool: SqlitePool,
+        write_gate: axon_core::sqlite::SqliteWriteGate,
+    ) -> Self {
+        Self { pool, write_gate }
     }
 
     pub async fn connect(path: &str) -> Result<Self> {

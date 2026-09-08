@@ -14,8 +14,8 @@
 //! 3. After a successful turn the slot is returned to the idle queue.
 //! 4. After a timeout, a protocol error, or an unhealthy child, the slot is
 //!    discarded and a fresh child is spawned to replace it.
-//! 5. Idle children whose last use was more than `idle_ttl` ago are replaced on
-//!    the next checkout.
+//! 5. An idle reaper discards expired children without requiring another call;
+//!    checkout also rejects stale slots before handing them to a caller.
 //!
 //! ## Pool keying
 //!
@@ -24,7 +24,6 @@
 //! a fresh pool.
 
 use std::error::Error as StdError;
-use std::io;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -36,7 +35,6 @@ use tempfile::TempDir;
 use tokio::io::BufReader;
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
-use tokio::task::JoinHandle;
 
 use crate::runtime::CompletionResponse;
 use crate::runtime::LlmBackendConfig;
@@ -49,12 +47,24 @@ use axon_core::logging::{log_info, log_warn};
 use super::home;
 use super::protocol::run_init_handshake;
 
+mod lifecycle;
+use lifecycle::LifecycleGuard;
+
 type BoxError = Box<dyn StdError + Send + Sync>;
+
+/// Account for pending work even when its future is dropped at an await point.
+struct PendingCount<'a>(&'a AtomicUsize);
+
+impl Drop for PendingCount<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 /// Default idle TTL for a pooled child.
 ///
-/// A child that has been idle for this long is discarded and replaced on next
-/// checkout rather than being handed to a caller. This bounds memory (kept
+/// A child that has been idle for this long is discarded by the periodic reaper
+/// or the next checkout, whichever happens first. This bounds memory (kept
 /// `CODEX_HOME` temp dirs) and avoids handing out a process that the OS may
 /// have reaped after a long pause.
 const DEFAULT_IDLE_TTL: Duration = Duration::from_secs(300);
@@ -79,6 +89,8 @@ fn idle_ttl_from_env() -> Duration {
 
 /// An initialised child ready for `turn/start` cycles.
 pub(super) struct PoolSlot {
+    // Declared before child so group cleanup runs before direct-child drop.
+    lifecycle: LifecycleGuard,
     /// Thread-id returned by `thread/start`.
     pub(super) thread_id: String,
     /// Write half of the child's stdin.
@@ -87,8 +99,6 @@ pub(super) struct PoolSlot {
     pub(super) stdout: BufReader<ChildStdout>,
     /// The child process itself (owns the wait handle).
     child: Child,
-    /// Background stderr drain task.
-    stderr_task: JoinHandle<Result<Vec<u8>, io::Error>>,
     /// Owns the isolated CODEX_HOME (dropped with the slot when unhealthy).
     _home_guard: Option<TempDir>,
     /// When this slot last finished a turn.
@@ -135,7 +145,7 @@ pub struct PoolMetrics {
 
 impl CodexPool {
     fn new(size: usize, idle_ttl: Duration, backend: LlmBackendConfig) -> Arc<Self> {
-        Arc::new(Self {
+        let pool = Arc::new(Self {
             idle: Mutex::new(Vec::with_capacity(size)),
             size,
             idle_ttl,
@@ -144,7 +154,9 @@ impl CodexPool {
             waiting: AtomicUsize::new(0),
             rejected: AtomicUsize::new(0),
             spawning: AtomicUsize::new(0),
-        })
+        });
+        lifecycle::spawn_idle_reaper(&pool);
+        pool
     }
 
     /// Acquire one ready-to-use slot. Blocks until a slot is available (up to
@@ -154,13 +166,13 @@ impl CodexPool {
         let deadline = Instant::now() + timeout;
         let max_waiters = self.size.saturating_mul(8).max(8);
         let previous = self.waiting.fetch_add(1, Ordering::AcqRel);
+        let waiting = PendingCount(&self.waiting);
         if previous >= max_waiters {
-            self.waiting.fetch_sub(1, Ordering::AcqRel);
             self.rejected.fetch_add(1, Ordering::Relaxed);
             return Err("codex pool: checkout queue is full".into());
         }
         let permit = tokio::time::timeout(timeout, self.permits.clone().acquire_owned()).await;
-        self.waiting.fetch_sub(1, Ordering::AcqRel);
+        drop(waiting);
         let permit = match permit {
             Ok(Ok(permit)) => permit,
             Ok(Err(_)) => return Err("codex pool: capacity semaphore closed".into()),
@@ -224,9 +236,8 @@ impl CodexPool {
     /// Spawn and initialise a fresh child slot.
     async fn spawn_slot(&self, permit: OwnedSemaphorePermit) -> Result<PoolSlot, BoxError> {
         self.spawning.fetch_add(1, Ordering::AcqRel);
-        let result = self.spawn_slot_inner(permit).await;
-        self.spawning.fetch_sub(1, Ordering::AcqRel);
-        result
+        let _spawning = PendingCount(&self.spawning);
+        self.spawn_slot_inner(permit).await
     }
 
     async fn spawn_slot_inner(&self, permit: OwnedSemaphorePermit) -> Result<PoolSlot, BoxError> {
@@ -244,6 +255,7 @@ impl CodexPool {
             (Some(home), child)
         };
 
+        let mut lifecycle = LifecycleGuard::new(child.id());
         let mut stdin = child
             .stdin
             .take()
@@ -256,7 +268,7 @@ impl CodexPool {
             .stderr
             .take()
             .ok_or("codex pool: failed to open child stderr")?;
-        let stderr_task = read_bounded_stderr_spawn(stderr);
+        lifecycle.stderr = Some(read_bounded_stderr_spawn(stderr));
         let mut stdout_reader = BufReader::new(stdout);
 
         // Run the one-time initialisation handshake.
@@ -275,11 +287,11 @@ impl CodexPool {
         log_info(&format!("codex pool: spawned child, thread_id={thread_id}"));
 
         Ok(PoolSlot {
+            lifecycle,
             thread_id,
             stdin,
             stdout: stdout_reader,
             child,
-            stderr_task,
             _home_guard: home_guard,
             last_used: Instant::now(),
             turns_served: 0,
@@ -301,8 +313,16 @@ impl CodexPool {
 /// Kill and wait for a pool slot's child. Errors from cleanup are logged but do
 /// not propagate — the slot is already being discarded.
 pub(super) async fn discard_slot(mut slot: PoolSlot, reason: &str) {
-    let stderr_task = slot.stderr_task;
     let cleanup = cleanup_codex_child(&mut slot.child).await;
+    // Retain group ownership if reaping failed, so Drop still retries cleanup.
+    if slot.child.id().is_none() {
+        slot.lifecycle.disarm_group();
+    }
+    let stderr_task = slot
+        .lifecycle
+        .stderr
+        .take()
+        .expect("pooled child stderr task");
     let stderr_tail = collect_stderr(stderr_task).await;
     log_warn(&format!(
         "codex pool: discarding slot (reason={reason}, {} turns served, cleanup={:?}){}",

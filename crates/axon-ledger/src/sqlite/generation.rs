@@ -26,7 +26,7 @@ pub(super) async fn create_generation(
     store: &SqliteLedgerStore,
     source_id: SourceId,
 ) -> Result<SourceGeneration> {
-    let mut tx = ImmediateTx::begin(&store.pool)
+    let mut tx = ImmediateTx::begin_with_gate(&store.pool, &store.write_gate)
         .await
         .map_err(sqlite_error)?;
     ensure_source_exists_in_tx(&mut tx, &source_id).await?;
@@ -93,7 +93,7 @@ pub(super) async fn complete_generation(
     generation: SourceGeneration,
 ) -> Result<SourceGeneration> {
     ensure_generation_publishable(&generation)?;
-    let mut tx = ImmediateTx::begin(&store.pool)
+    let mut tx = ImmediateTx::begin_with_gate(&store.pool, &store.write_gate)
         .await
         .map_err(sqlite_error)?;
     let stored = generation_in_tx(&mut tx, &generation.source_id, &generation.generation).await?;
@@ -139,7 +139,7 @@ pub(super) async fn fail_generation(
     store: &SqliteLedgerStore,
     generation: SourceGeneration,
 ) -> Result<SourceGeneration> {
-    let mut tx = ImmediateTx::begin(&store.pool)
+    let mut tx = ImmediateTx::begin_with_gate(&store.pool, &store.write_gate)
         .await
         .map_err(sqlite_error)?;
     let stored = generation_in_tx(&mut tx, &generation.source_id, &generation.generation).await?;
@@ -161,7 +161,7 @@ pub(super) async fn publish_generation(
     store: &SqliteLedgerStore,
     request: PublishGenerationRequest,
 ) -> Result<SourceGeneration> {
-    let mut tx = ImmediateTx::begin(&store.pool)
+    let mut tx = ImmediateTx::begin_with_gate(&store.pool, &store.write_gate)
         .await
         .map_err(sqlite_error)?;
     let generation = generation_in_tx(&mut tx, &request.source_id, &request.generation).await?;

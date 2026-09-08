@@ -72,7 +72,9 @@ impl SqliteUnifiedJobStore {
         let mut requeued = 0_u64;
         let mut failed = 0_u64;
         if !request.dry_run && scanned > 0 {
-            let mut tx = ImmediateTx::begin(&self.pool).await.map_err(sql_error)?;
+            let mut tx = ImmediateTx::begin_with_gate(&self.pool, &self.write_gate)
+                .await
+                .map_err(sql_error)?;
             for row in rows {
                 let job_id = JobId::new(parse_uuid(row.get::<String, _>("job_id"))?);
                 let attempt = (row.get::<i64, _>("attempt") as u32).max(1);
@@ -85,6 +87,7 @@ impl SqliteUnifiedJobStore {
                     )
                     .await?
                     {
+                        crate::workers::cancel_attempt(job_id, attempt);
                         failed += 1;
                     }
                     continue;
@@ -104,6 +107,11 @@ impl SqliteUnifiedJobStore {
                 )
                 .await?
                 {
+                    // The queued successor remains invisible until this
+                    // transaction commits, so cancel the old in-process owner
+                    // after the compare-and-swap succeeds but before attempt
+                    // N+1 can be claimed.
+                    crate::workers::cancel_attempt(job_id, attempt);
                     requeued += 1;
                 }
             }

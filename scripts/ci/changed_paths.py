@@ -101,6 +101,7 @@ CI_CONTRACT_PATHS = {
 
 HOOK_PATHS = {
     "lefthook.yml",
+    "scripts/test_lefthook_fail_fast.py",
     "scripts/check_lefthook_pre_commit_speed.py",
     "scripts/clear-git-local-env.sh",
     "xtask/src/pre_push.rs",

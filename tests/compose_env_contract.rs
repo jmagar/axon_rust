@@ -379,14 +379,17 @@ fn production_startup_ensures_the_external_compose_network() {
 }
 
 #[test]
-fn mcporter_prefers_canonical_env_with_repo_fallback() {
+fn mcporter_uses_installed_cli_and_wrapper_retains_canonical_env_fallback() {
     let config = fs::read_to_string("config/mcporter.json")
         .expect("config/mcporter.json should be readable");
 
-    assert!(
-        config.contains("scripts/mcporter-axon"),
-        "mcporter config should delegate shell setup to a wrapper script"
-    );
+    let config_json: serde_json::Value = serde_json::from_str(&config).unwrap();
+    let server = &config_json["mcpServers"]["axon"];
+    // The shared config is checkout-independent. Repository-specific callers
+    // can still opt into scripts/mcporter-axon for a local debug binary.
+    assert_eq!(server["command"], "axon");
+    assert_eq!(server["args"], serde_json::json!(["mcp"]));
+    assert_eq!(server["env"]["AXON_MCP_TRANSPORT"], "stdio");
     assert!(
         !config.contains("\"AXON_HOME\": \"${HOME}/.axon\""),
         "mcporter static env must not preserve a literal ${{HOME}} value"
@@ -567,6 +570,10 @@ fn env_example_only_contains_production_runtime_keys() {
         "AXON_PUBLIC_URL",
         "AXON_GOOGLE_CLIENT_ID",
         "AXON_GOOGLE_CLIENT_SECRET",
+        "AXON_GOOGLE_AUTHORIZE_ENDPOINT",
+        "AXON_GOOGLE_TOKEN_ENDPOINT",
+        "AXON_GOOGLE_JWKS_ENDPOINT",
+        "AXON_GOOGLE_ISSUER",
         "AXON_AUTH_ADMIN_EMAIL",
         "AXON_ALLOWED_REDIRECT_URIS",
         "AXON_ALLOWED_ORIGINS",

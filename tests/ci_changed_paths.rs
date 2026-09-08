@@ -552,6 +552,7 @@ fn changed_path_router_edits_use_the_narrowest_safe_contract_lane() {
 
     for file in [
         "lefthook.yml",
+        "scripts/test_lefthook_fail_fast.py",
         "scripts/clear-git-local-env.sh",
         "xtask/src/pre_push.rs",
     ] {

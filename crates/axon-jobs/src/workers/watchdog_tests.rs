@@ -8,7 +8,6 @@ use axon_api::source::{
     AuthSnapshot, JobCreateRequest, JobIntent, JobKind as UnifiedJobKind, JobPriority,
     JobStagePlan, LifecycleStatus, MetadataMap, PipelinePhase, Timestamp,
 };
-use tempfile::NamedTempFile;
 use tokio::sync::Notify;
 
 #[test]
@@ -72,8 +71,8 @@ fn test_notifies() -> WatchdogNotifies {
 /// on-demand `crawl recover`/`embed recover`/etc. CLI/MCP paths.
 #[tokio::test]
 async fn watchdog_sweep_reclaims_stale_unified_job() {
-    let temp = NamedTempFile::new().unwrap();
-    let pool = open_sqlite_pool(&temp.path().to_string_lossy())
+    let temp = tempfile::tempdir().unwrap();
+    let pool = open_sqlite_pool(&temp.path().join("jobs.db").to_string_lossy())
         .await
         .unwrap();
     let pool = Arc::new(pool);

@@ -686,3 +686,35 @@ fn first_fence_language_ignores_fence_lines_inside_other_marker_fence() {
         Some("python".to_string())
     );
 }
+#[test]
+fn markdown_source_positions_do_not_rescan_every_section_prefix() {
+    let source = (0..500)
+        .map(|index| format!("# Heading {index}\nélève body\n"))
+        .collect::<String>();
+    let (chunks, work) = crate::performance_measurement::measure(|| markdown_sections(&source));
+    assert!(chunks.len() >= 500);
+    assert!(
+        work.range_scan_bytes <= source.len() * 4,
+        "source position scans grew with section count: {} bytes for {} source bytes",
+        work.range_scan_bytes,
+        source.len()
+    );
+    for chunk in chunks {
+        let start = chunk.range.byte_start.unwrap() as usize;
+        let end = chunk.range.byte_end.unwrap() as usize;
+        assert_eq!(chunk.range, source_range(&source, start, end));
+    }
+}
+
+#[test]
+fn html_source_positions_are_computed_once_for_all_chunks() {
+    let source = format!("<article>{}</article>", "élève body ".repeat(10_000));
+    let (chunks, work) = crate::performance_measurement::measure(|| html_article(&source));
+    assert!(chunks.len() > 10);
+    assert!(
+        work.range_scan_bytes <= source.len() * 4,
+        "HTML recomputed its full source range for every chunk"
+    );
+    let range = source_range(&source, 0, source.len());
+    assert!(chunks.iter().all(|chunk| chunk.range == range));
+}

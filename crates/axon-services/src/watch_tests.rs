@@ -1,11 +1,11 @@
 use super::*;
 use axon_core::config::Config;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
+use tempfile::TempDir;
 
-async fn open_pool() -> (SqlitePool, NamedTempFile) {
-    let temp = NamedTempFile::new().expect("tempfile");
-    let pool = axon_jobs::store::open_sqlite_pool(&temp.path().to_string_lossy())
+async fn open_pool() -> (SqlitePool, TempDir) {
+    let temp = tempfile::tempdir().expect("private database directory");
+    let pool = axon_jobs::store::open_sqlite_pool(&temp.path().join("jobs.db").to_string_lossy())
         .await
         .expect("open pool");
     (pool, temp)
@@ -34,7 +34,7 @@ fn watch_request(source: &str, every_seconds: u64) -> WatchRequest {
 async fn create_source_watch_writes_only_canonical_row() {
     let (pool, temp) = open_pool().await;
     let mut cfg = Config::test_default();
-    cfg.sqlite_path = temp.path().to_path_buf();
+    cfg.sqlite_path = temp.path().join("jobs.db");
 
     let created = create_source_watch(
         &cfg,
@@ -123,7 +123,7 @@ async fn create_source_watch_ensures_existing_canonical_source() {
 async fn overlapping_watch_exec_enqueues_and_links_one_source_job() {
     let (pool, temp) = open_pool().await;
     let mut cfg = Config::test_default();
-    cfg.sqlite_path = temp.path().to_path_buf();
+    cfg.sqlite_path = temp.path().join("jobs.db");
     let created = create_source_watch(
         &cfg,
         Some(&pool),
@@ -213,7 +213,7 @@ async fn overlapping_watch_exec_enqueues_and_links_one_source_job() {
 async fn source_watch_denies_local_session_scope_without_local_auth() {
     let (pool, temp) = open_pool().await;
     let mut cfg = Config::test_default();
-    cfg.sqlite_path = temp.path().to_path_buf();
+    cfg.sqlite_path = temp.path().join("jobs.db");
     let auth_without_local = AuthSnapshot::default();
     let session_source = "session:claude:/tmp/axon-session-watch-local";
 

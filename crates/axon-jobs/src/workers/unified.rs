@@ -4,6 +4,7 @@ use std::sync::Arc;
 use axon_api::source::{
     ApiError, AuthSnapshot, ErrorStage, JobId, JobKind as UnifiedJobKind, PipelinePhase,
 };
+use axon_core::sqlite::SqliteWriteGate;
 use futures::FutureExt;
 use sqlx::SqlitePool;
 use tokio::sync::Notify;
@@ -19,7 +20,7 @@ mod helpers;
 mod claim;
 #[allow(unused_imports)] // only used by #[cfg(test)] call sites in sibling test files
 pub(crate) use claim::claim_next_unified_job;
-use claim::claim_next_unified_job_with_source_policy;
+use claim::claim_next_unified_job_with_source_policy_and_write_gate;
 
 mod runner_registry;
 pub use runner_registry::{JobRunnerRegistry, UnifiedJobOutcome, UnifiedJobRunner};
@@ -147,6 +148,29 @@ pub(crate) async fn unified_worker_loop_with_concurrency_limits_and_activity(
     concurrency: usize,
     source_concurrency: usize,
 ) {
+    unified_worker_loop_with_concurrency_limits_activity_and_write_gate(
+        pool,
+        notify,
+        activity,
+        shutdown,
+        registry,
+        concurrency,
+        source_concurrency,
+        SqliteWriteGate::default(),
+    )
+    .await;
+}
+
+pub(crate) async fn unified_worker_loop_with_concurrency_limits_activity_and_write_gate(
+    pool: Arc<SqlitePool>,
+    notify: Arc<Notify>,
+    activity: Arc<WorkerActivity>,
+    shutdown: CancellationToken,
+    registry: Option<Arc<JobRunnerRegistry>>,
+    concurrency: usize,
+    source_concurrency: usize,
+    write_gate: SqliteWriteGate,
+) {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
     let source_semaphore = Arc::new(tokio::sync::Semaphore::new(source_concurrency.max(1)));
     let mut in_flight = tokio::task::JoinSet::new();
@@ -160,7 +184,8 @@ pub(crate) async fn unified_worker_loop_with_concurrency_limits_and_activity(
         }
         wake_count = wake_count.wrapping_add(1);
         while let Some(result) = in_flight.try_join_next_with_id() {
-            observe_worker_join(&pool, &mut claimed_by_task, result).await;
+            observe_worker_join_with_write_gate(&pool, &write_gate, &mut claimed_by_task, result)
+                .await;
         }
 
         let mut claimed_this_wake = 0usize;
@@ -201,7 +226,13 @@ pub(crate) async fn unified_worker_loop_with_concurrency_limits_and_activity(
                     },
                 };
 
-                match claim_next_unified_job_with_source_policy(&pool, allow_source).await {
+                match claim_next_unified_job_with_source_policy_and_write_gate(
+                    &pool,
+                    allow_source,
+                    &write_gate,
+                )
+                .await
+                {
                     Ok(Some(claimed)) => {
                         // We may be holding a speculative source permit for
                         // a job that, in the end, wasn't the one claimed
@@ -221,6 +252,7 @@ pub(crate) async fn unified_worker_loop_with_concurrency_limits_and_activity(
                         let pool = Arc::clone(&pool);
                         let shutdown = shutdown.clone();
                         let registry = registry.clone();
+                        let write_gate = write_gate.clone();
                         // Increment before spawning so a task can never begin
                         // executing without being visible to the process-level
                         // idle monitor. The durable running row covers the
@@ -231,8 +263,14 @@ pub(crate) async fn unified_worker_loop_with_concurrency_limits_and_activity(
                         let handle = in_flight.spawn(async move {
                             let _activity_guard = activity_guard;
                             let _source_permit = source_permit;
-                            run_unified_claimed(&pool, &claimed, &shutdown, registry.as_deref())
-                                .await;
+                            run_unified_claimed_with_write_gate(
+                                &pool,
+                                &write_gate,
+                                &claimed,
+                                &shutdown,
+                                registry.as_deref(),
+                            )
+                            .await;
                             drop(permit);
                         });
                         claimed_by_task.insert(handle.id(), tracked_claim);
@@ -268,12 +306,23 @@ pub(crate) async fn unified_worker_loop_with_concurrency_limits_and_activity(
     // terminal state (mark_canceled/mark_terminal) rather than abandoning
     // them mid-write.
     while let Some(result) = in_flight.join_next_with_id().await {
-        observe_worker_join(&pool, &mut claimed_by_task, result).await;
+        observe_worker_join_with_write_gate(&pool, &write_gate, &mut claimed_by_task, result).await;
     }
 }
 
+#[cfg(test)]
 async fn observe_worker_join(
     pool: &SqlitePool,
+    claimed_by_task: &mut HashMap<tokio::task::Id, UnifiedClaimedJob>,
+    result: Result<(tokio::task::Id, ()), tokio::task::JoinError>,
+) {
+    observe_worker_join_with_write_gate(pool, &SqliteWriteGate::default(), claimed_by_task, result)
+        .await;
+}
+
+async fn observe_worker_join_with_write_gate(
+    pool: &SqlitePool,
+    write_gate: &SqliteWriteGate,
     claimed_by_task: &mut HashMap<tokio::task::Id, UnifiedClaimedJob>,
     result: Result<(tokio::task::Id, ()), tokio::task::JoinError>,
 ) {
@@ -295,7 +344,8 @@ async fn observe_worker_join(
                     ErrorStage::Planning,
                     format!("job worker task terminated unexpectedly: {join_error}"),
                 );
-                terminal::fail_unified_claimed(pool, &claimed, error).await;
+                terminal::fail_unified_claimed_with_write_gate(pool, write_gate, &claimed, error)
+                    .await;
             }
         }
     }
@@ -335,8 +385,26 @@ pub(crate) async fn mark_job_failed_for_tests(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) async fn run_unified_claimed(
     pool: &SqlitePool,
+    claimed: &UnifiedClaimedJob,
+    shutdown: &CancellationToken,
+    registry: Option<&JobRunnerRegistry>,
+) {
+    run_unified_claimed_with_write_gate(
+        pool,
+        &SqliteWriteGate::default(),
+        claimed,
+        shutdown,
+        registry,
+    )
+    .await;
+}
+
+pub(crate) async fn run_unified_claimed_with_write_gate(
+    pool: &SqlitePool,
+    write_gate: &SqliteWriteGate,
     claimed: &UnifiedClaimedJob,
     shutdown: &CancellationToken,
     registry: Option<&JobRunnerRegistry>,
@@ -344,12 +412,18 @@ pub(crate) async fn run_unified_claimed(
     // Worker-owned terminal transitions must flow through the same durable
     // observability sink as service-owned progress updates. A plain store here
     // left successful jobs without a terminal `complete` observe event.
-    let store = SqliteUnifiedJobStore::with_observe_sink(
+    let store = SqliteUnifiedJobStore::with_observe_sink_and_write_gate(
         pool.clone(),
-        Arc::new(axon_observe::sink::SqliteObservabilitySink::from_migrated_pool(pool.clone())),
+        Arc::new(
+            axon_observe::sink::SqliteObservabilitySink::from_migrated_pool_with_write_gate(
+                pool.clone(),
+                write_gate.clone(),
+            ),
+        ),
+        write_gate.clone(),
     );
     if shutdown.is_cancelled() {
-        terminal::mark_canceled(pool, &store, claimed).await;
+        terminal::mark_canceled_with_write_gate(pool, write_gate, &store, claimed).await;
         return;
     }
     let job_cancel = super::cancel_registry::register(claimed.job_id, claimed.attempt, shutdown);
@@ -358,7 +432,7 @@ pub(crate) async fn run_unified_claimed(
         if cancellation_requested(pool, claimed).await {
             job_cancel.cancel();
             super::cancel_registry::unregister(claimed.job_id, claimed.attempt);
-            terminal::mark_canceled(pool, &store, claimed).await;
+            terminal::mark_canceled_with_write_gate(pool, write_gate, &store, claimed).await;
             return;
         }
     }
@@ -367,7 +441,7 @@ pub(crate) async fn run_unified_claimed(
         && let Err(error) = require_job_scope(&claimed.auth_snapshot, required)
     {
         super::cancel_registry::unregister(claimed.job_id, claimed.attempt);
-        terminal::fail_unified_claimed(pool, claimed, error).await;
+        terminal::fail_unified_claimed_with_write_gate(pool, write_gate, claimed, error).await;
         return;
     }
 
@@ -386,7 +460,7 @@ pub(crate) async fn run_unified_claimed(
             ),
         );
         super::cancel_registry::unregister(claimed.job_id, claimed.attempt);
-        terminal::fail_unified_claimed(pool, claimed, error).await;
+        terminal::fail_unified_claimed_with_write_gate(pool, write_gate, claimed, error).await;
         return;
     };
 
@@ -407,14 +481,15 @@ pub(crate) async fn run_unified_claimed(
 
     super::cancel_registry::unregister(claimed.job_id, claimed.attempt);
     if job_cancel.is_cancelled() {
-        terminal::mark_canceled(pool, &store, claimed).await;
+        terminal::mark_canceled_with_write_gate(pool, write_gate, &store, claimed).await;
         return;
     }
 
     match run_result {
         Ok(Ok(outcome)) => {
-            if let Err(mark_error) = terminal::mark_terminal(
+            if let Err(mark_error) = terminal::mark_terminal_with_write_gate(
                 pool,
+                write_gate,
                 claimed,
                 outcome.status,
                 PipelinePhase::Complete,
@@ -432,7 +507,7 @@ pub(crate) async fn run_unified_claimed(
             }
         }
         Ok(Err(error)) => {
-            terminal::fail_unified_claimed(pool, claimed, error).await;
+            terminal::fail_unified_claimed_with_write_gate(pool, write_gate, claimed, error).await;
         }
         Err(panic_payload) => {
             let message = panic_message(&panic_payload);
@@ -447,7 +522,7 @@ pub(crate) async fn run_unified_claimed(
                 ErrorStage::Planning,
                 format!("job runner panicked: {message}"),
             );
-            terminal::fail_unified_claimed(pool, claimed, error).await;
+            terminal::fail_unified_claimed_with_write_gate(pool, write_gate, claimed, error).await;
         }
     }
 }

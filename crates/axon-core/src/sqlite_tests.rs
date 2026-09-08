@@ -13,6 +13,42 @@ async fn default_pool_matches_unified_worker_fanout() {
 }
 
 #[tokio::test]
+async fn gate_aware_immediate_writers_wait_before_consuming_pool_connections() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("mixed-writers.db");
+    let pool = open_pool_unlocked(db.to_str().expect("utf8 path"))
+        .await
+        .expect("open pool");
+    sqlx::query("CREATE TABLE proof (value INTEGER NOT NULL)")
+        .execute(&pool)
+        .await
+        .expect("create table");
+    let gate = SqliteWriteGate::default();
+    let held = ImmediateTx::begin_with_gate(&pool, &gate)
+        .await
+        .expect("hold SQLite writer");
+    let mut waiters = Vec::new();
+    for _ in 0..DEFAULT_SQLITE_POOL_CONNECTIONS - 1 {
+        let pool = pool.clone();
+        let gate = gate.clone();
+        waiters.push(tokio::spawn(async move {
+            ImmediateTx::begin_with_gate(&pool, &gate).await
+        }));
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let control_connection =
+        tokio::time::timeout(std::time::Duration::from_millis(100), pool.acquire()).await;
+    for waiter in waiters {
+        waiter.abort();
+    }
+    held.rollback().await;
+    assert!(
+        control_connection.is_ok(),
+        "gated writers must wait before pool checkout"
+    );
+}
+
+#[tokio::test]
 async fn wal_sidecars_survive_the_last_pool_close() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db = dir.path().join("jobs.db");

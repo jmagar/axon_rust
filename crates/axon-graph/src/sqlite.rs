@@ -32,6 +32,7 @@ use crate::store::{GraphStore, Result};
 #[derive(Debug, Clone)]
 pub struct SqliteGraphStore {
     pool: SqlitePool,
+    write_gate: axon_core::sqlite::SqliteWriteGate,
 }
 
 impl SqliteGraphStore {
@@ -39,7 +40,14 @@ impl SqliteGraphStore {
     /// [`ensure_schema`]; prefer [`SqliteGraphStore::connect`] for a
     /// self-contained store.
     pub fn from_pool(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self::from_pool_with_write_gate(pool, axon_core::sqlite::SqliteWriteGate::default())
+    }
+
+    pub fn from_pool_with_write_gate(
+        pool: SqlitePool,
+        write_gate: axon_core::sqlite::SqliteWriteGate,
+    ) -> Self {
+        Self { pool, write_gate }
     }
 
     /// Open a pool at `path` (`":memory:"` for tests), create the schema, and
@@ -49,7 +57,7 @@ impl SqliteGraphStore {
             .await
             .map_err(|e| graph_storage_error(format!("failed to open graph sqlite pool: {e}")))?;
         ensure_schema(&pool).await?;
-        Ok(Self { pool })
+        Ok(Self::from_pool(pool))
     }
 
     /// Access the underlying pool (for tests / introspection).
@@ -64,7 +72,7 @@ impl SqliteGraphStore {
     where
         I: IntoIterator<Item = GraphCandidate>,
     {
-        upsert::upsert_candidate_iter(&self.pool, candidates).await
+        upsert::upsert_candidate_iter(&self.pool, &self.write_gate, candidates).await
     }
 
     /// Count conflict rows recorded for an edge (introspection/tests).
@@ -85,7 +93,7 @@ fn sqlite_url(path: &str) -> String {
 #[async_trait]
 impl GraphStore for SqliteGraphStore {
     async fn upsert_candidates(&self, candidates: Vec<GraphCandidate>) -> Result<GraphWriteResult> {
-        upsert::upsert_candidates(&self.pool, candidates).await
+        upsert::upsert_candidates(&self.pool, &self.write_gate, candidates).await
     }
 
     async fn get_node(&self, node_id: GraphNodeId) -> Result<Option<GraphNode>> {

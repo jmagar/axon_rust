@@ -60,13 +60,14 @@ pub(crate) fn markdown_sections_with_limits(
     text: &str,
     limits: MarkdownChunkLimits,
 ) -> Vec<DocumentChunk> {
+    let positions = windowing::SourcePositions::new(text);
     let (frontmatter, body_start) = extract_frontmatter(text);
     let mut chunks = Vec::new();
     if frontmatter.is_some() {
         chunks.push(
             DocumentChunk::new(
                 text[..body_start].trim().to_string(),
-                source_range(text, 0, body_start),
+                positions.range(0, body_start),
             )
             .with_metadata("markdown_block_kind", "frontmatter".into()),
         );
@@ -104,7 +105,7 @@ pub(crate) fn markdown_sections_with_limits(
         }
 
         let breadcrumb: Vec<String> = stack.iter().map(|(_, title)| title.clone()).collect();
-        let mut chunk = DocumentChunk::new(content.to_string(), source_range(text, start, end))
+        let mut chunk = DocumentChunk::new(content.to_string(), positions.range(start, end))
             .with_metadata("markdown_block_kind", "section".into());
         if let Some((level, title)) = stack.last() {
             chunk = chunk
@@ -118,7 +119,7 @@ pub(crate) fn markdown_sections_with_limits(
         chunks.push(chunk);
     }
 
-    let chunks = split_oversized_sections(text, chunks, limits);
+    let chunks = split_oversized_sections(text, &positions, chunks, limits);
     pack_small_sections(chunks, limits)
 }
 
@@ -174,6 +175,7 @@ pub(crate) fn html_article(text: &str) -> Vec<DocumentChunk> {
         plain.push_str(&text[cursor..]);
     }
     let visible = plain.split_whitespace().collect::<Vec<_>>().join(" ");
+    let range = source_range(text, 0, text.len());
     plain_text_windows(&visible)
         .into_iter()
         .map(|mut chunk| {
@@ -181,7 +183,7 @@ pub(crate) fn html_article(text: &str) -> Vec<DocumentChunk> {
             // offsets do not map back to raw HTML. Anchor each derived chunk
             // to the full source document instead of publishing false or
             // out-of-bounds offsets from the transformed buffer.
-            chunk.range = source_range(text, 0, text.len());
+            chunk.range = range.clone();
             chunk
         })
         .collect()

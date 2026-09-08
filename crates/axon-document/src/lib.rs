@@ -42,3 +42,6 @@ mod preparer_tests;
 mod local_source_tests;
 
 pub const CRATE_NAME: &str = "axon-document";
+
+#[cfg(test)]
+mod performance_measurement;

@@ -19,9 +19,7 @@ use axon_embedding::provider::EmbeddingProvider;
 use axon_jobs::boundary::JobStore;
 #[cfg(test)]
 use axon_jobs::embedding_cache_store::SqliteEmbeddingVectorCacheStore;
-use axon_jobs::scheduler::ProviderScheduler;
-#[cfg(test)]
-use axon_jobs::scheduler::SqliteWriteGate;
+use axon_jobs::scheduler::{ProviderScheduler, SqliteWriteGate};
 use axon_ledger::store::LedgerStore;
 use axon_vectors::store::VectorStore;
 use tokio::sync::{OnceCell, Semaphore};
@@ -123,7 +121,6 @@ pub struct TargetLocalSourceRuntime {
     pub parse_scheduler: Option<Arc<ProviderScheduler>>,
     pub graph_scheduler: Option<Arc<ProviderScheduler>>,
     pub artifact_scheduler: Option<Arc<ProviderScheduler>>,
-    #[cfg(test)]
     pub(crate) sqlite_write_gate: SqliteWriteGate,
     #[cfg(test)]
     pub(crate) embedding_cache_store: Option<Arc<SqliteEmbeddingVectorCacheStore>>,

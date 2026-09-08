@@ -270,7 +270,9 @@ impl QdrantHttp {
                         .get(RETRY_AFTER)
                         .and_then(parse_retry_after);
                     if attempt == MAX_ATTEMPTS
-                        || !(status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error())
+                        || !(status == StatusCode::REQUEST_TIMEOUT
+                            || status == StatusCode::TOO_MANY_REQUESTS
+                            || status.is_server_error())
                     {
                         return Ok(status);
                     }

@@ -1,11 +1,11 @@
 use httpmock::Method::{GET, POST};
 use httpmock::MockServer;
 use std::process::Command;
-use tempfile::NamedTempFile;
 
 #[test]
 fn query_with_diagnostics_emits_structured_diagnostics_on_error() {
-    let sqlite = NamedTempFile::new().expect("temp sqlite path");
+    let state = tempfile::tempdir().expect("private test state");
+    let sqlite = state.path().join("jobs.db");
     // Isolate from the developer's real ~/.axon/config.toml, which may still use
     // pre-contract-rewrite section names and would hard-fail config parse before
     // the query path runs. An empty temp config parses as defaults. (An explicit
@@ -41,10 +41,11 @@ fn query_with_diagnostics_emits_structured_diagnostics_on_error() {
     // Point AXON_ENV_FILE at a nonexistent path so the binary does not load
     // ~/.axon/.env or a repo-root .env, which would inject live QDRANT_URL /
     // TEI_URL and cause the binary to route to a real service.
-    let no_env_file = sqlite.path().with_extension("nonexistent.env");
+    let no_env_file = state.path().join("nonexistent.env");
 
     let output = Command::new(env!("CARGO_BIN_EXE_axon"))
-        .env("AXON_SQLITE_PATH", sqlite.path())
+        .env("AXON_SQLITE_PATH", &sqlite)
+        .env("AXON_DATA_DIR", state.path())
         .env("AXON_ENV_FILE", &no_env_file)
         .env("AXON_CONFIG_PATH", config.path())
         // Clear any inherited service-URL env vars so CLI flags are authoritative.

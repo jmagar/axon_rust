@@ -164,43 +164,67 @@ impl UnifiedJobRunner for SourceRunner {
             ctx,
             Some(shutdown.clone()),
         );
-        tokio::pin!(run_fut);
-        let mut heartbeat = tokio::time::interval_at(
-            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
-            std::time::Duration::from_secs(30),
-        );
-        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let result = loop {
-            tokio::select! {
-                _ = shutdown.cancelled() => {
-                    // Cooperative cancel: the pipeline observes `shutdown` and
-                    // resolves promptly with an error, letting the executor
-                    // clean the uncommitted generation's vectors and mark the
-                    // generation row failed before this runner returns
-                    // (finding M3). Bound the wait so a stage that has not
-                    // reached the cancellation checkpoint yet cannot stall
-                    // worker shutdown indefinitely.
-                    break match tokio::time::timeout(CANCEL_CLEANUP_GRACE, &mut run_fut).await {
-                        Ok(result) => result,
-                        Err(_) => return Err(source_error("source canceled")),
-                    };
-                }
-                result = &mut run_fut => break result,
-                _ = heartbeat.tick() => {
-                    heartbeat_running_preserving_progress(store, claimed).await;
-                }
-            }
-        };
+        let result = drive_source_with_heartbeat(run_fut, shutdown, || {
+            heartbeat_running_preserving_progress(store, claimed)
+        })
+        .await?;
 
         match result {
             Ok(source_result) => {
                 store
-                    .record_job_artifacts(claimed.job_id, &source_result.artifacts)
+                    .record_job_artifacts_for_attempt(
+                        claimed.job_id,
+                        claimed.attempt,
+                        &source_result.artifacts,
+                    )
                     .await?;
                 outcome_from_result(source_result)
             }
             Err(error) => Err(source_error(error.to_string())),
         }
+    }
+}
+
+async fn drive_source_with_heartbeat<F, H, HF>(
+    run_fut: F,
+    shutdown: &CancellationToken,
+    mut send_heartbeat: H,
+) -> Result<F::Output, ApiError>
+where
+    F: std::future::Future,
+    H: FnMut() -> HF,
+    HF: std::future::Future<Output = ()>,
+{
+    tokio::pin!(run_fut);
+    let mut heartbeat = tokio::time::interval_at(
+        tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+        std::time::Duration::from_secs(30),
+    );
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // A heartbeat can wait for a writer held (or already queued) by the
+    // source future. Keep polling both futures until the source settles;
+    // awaiting the heartbeat inside a select branch deadlocks that writer.
+    let result = {
+        let heartbeat_loop = async {
+            loop {
+                heartbeat.tick().await;
+                send_heartbeat().await;
+            }
+        };
+        tokio::pin!(heartbeat_loop);
+        tokio::select! {
+            _ = shutdown.cancelled() => None,
+            result = &mut run_fut => Some(result),
+            _ = &mut heartbeat_loop => unreachable!("heartbeat loop never finishes"),
+        }
+    };
+    // Drop the heartbeat future before cleanup: it may itself hold a writer
+    // that the source needs to settle its unpublished generation.
+    match result {
+        Some(result) => Ok(result),
+        None => tokio::time::timeout(CANCEL_CLEANUP_GRACE, &mut run_fut)
+            .await
+            .map_err(|_| source_error("source canceled")),
     }
 }
 

@@ -16,9 +16,7 @@ async fn stale_guard_cleanup_cannot_erase_a_new_holder() {
         .holder
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((newer_id, newer_location));
-
     drop(guard);
-
     assert_eq!(
         *gate
             .0
@@ -27,5 +25,5 @@ async fn stale_guard_cleanup_cannot_erase_a_new_holder() {
             .unwrap_or_else(std::sync::PoisonError::into_inner),
         Some((newer_id, newer_location))
     );
-    assert!(gate.try_lock().is_some(), "dropping the guard must unlock");
+    assert!(gate.try_lock().is_some());
 }

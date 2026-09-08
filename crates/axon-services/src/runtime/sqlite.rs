@@ -58,11 +58,14 @@ impl SqliteServiceRuntime {
     }
 
     fn unified_store(&self) -> Arc<dyn JobStore> {
-        Arc::new(SqliteUnifiedJobStore::with_observe_sink(
+        let observe = Arc::new(SqliteObservabilitySink::from_migrated_pool_with_write_gate(
             self.backend.pool().as_ref().clone(),
-            Arc::new(SqliteObservabilitySink::from_migrated_pool(
-                self.backend.pool().as_ref().clone(),
-            )),
+            self.write_gate.clone(),
+        ));
+        Arc::new(SqliteUnifiedJobStore::with_observe_sink_and_write_gate(
+            self.backend.pool().as_ref().clone(),
+            observe,
+            self.write_gate.clone(),
         ))
     }
 }

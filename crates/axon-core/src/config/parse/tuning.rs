@@ -62,7 +62,12 @@ pub(super) fn apply_env_toml_tuning(cfg: &mut Config, toml: &TomlConfig) {
     cfg.llm_completion_concurrency = resolve_clamped_usize(
         "AXON_LLM_COMPLETION_CONCURRENCY",
         toml.llm.completion_concurrency,
-        4,
+        match cfg.llm_backend {
+            crate::llm::LlmBackendKind::OpenAiCompat => {
+                crate::llm::OPENAI_DEFAULT_COMPLETION_CONCURRENCY
+            }
+            _ => crate::llm::GEMINI_DEFAULT_COMPLETION_CONCURRENCY,
+        },
         1,
         64,
     );

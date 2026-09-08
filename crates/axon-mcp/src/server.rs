@@ -76,7 +76,7 @@ use rmcp::{
 use serde_json::Value;
 pub use server_authz::{mutates_if_upgrade, required_scope_for, required_scope_with_mutates_if};
 use std::{collections::HashMap, sync::Arc};
-pub use stdio_runner::run_stdio_server;
+pub use stdio_runner::{run_stdio_server, run_stdio_server_with_context};
 use tokio::{
     sync::{Mutex, OnceCell},
     task::JoinHandle,

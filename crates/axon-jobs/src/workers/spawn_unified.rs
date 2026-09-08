@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use axon_core::sqlite::SqliteWriteGate;
 use sqlx::SqlitePool;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -14,6 +15,7 @@ use super::unified::{self, JobRunnerRegistry};
 /// one is supplied (built by axon-services at composition time). Kinds with
 /// no registered runner keep failing with `job_runner.unsupported_stage` —
 /// spawning unconditionally is safe.
+#[allow(dead_code)]
 pub(super) fn spawn_unified_worker(
     pool: Arc<SqlitePool>,
     unified_notify: Arc<Notify>,
@@ -22,6 +24,28 @@ pub(super) fn spawn_unified_worker(
     job_runner_registry: Option<Arc<JobRunnerRegistry>>,
     concurrency: usize,
     source_concurrency: usize,
+) -> tokio::task::JoinHandle<()> {
+    spawn_unified_worker_with_write_gate(
+        pool,
+        unified_notify,
+        activity,
+        shutdown,
+        job_runner_registry,
+        concurrency,
+        source_concurrency,
+        SqliteWriteGate::default(),
+    )
+}
+
+pub(super) fn spawn_unified_worker_with_write_gate(
+    pool: Arc<SqlitePool>,
+    unified_notify: Arc<Notify>,
+    activity: Arc<WorkerActivity>,
+    shutdown: CancellationToken,
+    job_runner_registry: Option<Arc<JobRunnerRegistry>>,
+    concurrency: usize,
+    source_concurrency: usize,
+    write_gate: SqliteWriteGate,
 ) -> tokio::task::JoinHandle<()> {
     let registered_kinds = job_runner_registry
         .as_deref()
@@ -45,7 +69,7 @@ pub(super) fn spawn_unified_worker(
         "jobs: spawning unified worker"
     );
     tokio::spawn(
-        unified::unified_worker_loop_with_concurrency_limits_and_activity(
+        unified::unified_worker_loop_with_concurrency_limits_activity_and_write_gate(
             pool,
             unified_notify,
             activity,
@@ -53,6 +77,7 @@ pub(super) fn spawn_unified_worker(
             job_runner_registry,
             concurrency,
             source_concurrency,
+            write_gate,
         ),
     )
 }

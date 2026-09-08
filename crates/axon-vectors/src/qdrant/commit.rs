@@ -251,10 +251,7 @@ async fn upsert_carried_points(
         return Ok(0);
     }
 
-    let bodies = carried_upsert_chunks(carried, store.point_buffer())
-        .map(|points| serde_json::json!({ "points": points }))
-        .collect::<Vec<_>>();
-    let requests = bodies.len() as u64;
+    let bodies = carried_upsert_chunks(carried, store.point_buffer(), stage);
     let write_slots = store.write_slots();
     let provider_id = store.provider_id().0.clone();
     stream::iter(bodies)
@@ -262,6 +259,7 @@ async fn upsert_carried_points(
             let write_slots = Arc::clone(&write_slots);
             let provider_id = provider_id.clone();
             async move {
+                let body = body?;
                 let _permit = write_slots.acquire_owned().await.map_err(|_| {
                     ApiError::new(
                         "vector.qdrant.write_admission_closed",
@@ -270,19 +268,18 @@ async fn upsert_carried_points(
                     )
                     .with_provider_id(provider_id)
                 })?;
-                http.put_json(
+                http.put_json_bytes(
                     stage,
                     upsert_url,
-                    &body,
+                    body,
                     "qdrant_mark_unchanged_items_committed",
                 )
                 .await
             }
         })
         .buffer_unordered(store.write_parallelism())
-        .try_collect::<Vec<_>>()
-        .await?;
-    Ok(requests)
+        .try_fold(0_u64, |requests, ()| async move { Ok(requests + 1) })
+        .await
 }
 
 fn empty_commit(collection: String) -> VectorStoreWriteResult {
@@ -358,11 +355,57 @@ fn point_id_string(id: &serde_json::Value) -> String {
 fn carried_upsert_chunks(
     points: Vec<serde_json::Value>,
     point_buffer: usize,
-) -> impl Iterator<Item = Vec<serde_json::Value>> {
+    stage: ErrorStage,
+) -> impl Iterator<Item = Result<Vec<u8>>> {
+    use super::upsert::{MAX_UPSERT_REQUEST_BYTES, encode_upsert_body};
+    const PREFIX: &[u8] = b"{\"points\":[";
     let mut points = points.into_iter();
     let chunk_size = point_buffer.max(1);
+    let mut pending = None;
+    let mut failed = false;
     std::iter::from_fn(move || {
-        let chunk = points.by_ref().take(chunk_size).collect::<Vec<_>>();
-        (!chunk.is_empty()).then_some(chunk)
+        if failed {
+            return None;
+        }
+        let mut body = PREFIX.to_vec();
+        let mut count = 0;
+        while count < chunk_size {
+            let encoded = match pending.take() {
+                Some(encoded) => encoded,
+                None => {
+                    let Some(point) = points.next() else {
+                        break;
+                    };
+                    match encode_upsert_body(
+                        &point,
+                        MAX_UPSERT_REQUEST_BYTES - PREFIX.len() - 2,
+                        stage,
+                    ) {
+                        Ok(Some(encoded)) => encoded,
+                        outcome => {
+                            failed = true;
+                            return Some(Err(outcome.err().unwrap_or_else(|| ApiError::new(
+                                "vector.qdrant.upsert_point_oversized", stage,
+                                "a single carried vector point exceeds the encoded qdrant request limit",
+                            ))));
+                        }
+                    }
+                }
+            };
+            if count > 0 && body.len() + 1 + encoded.len() + 2 > MAX_UPSERT_REQUEST_BYTES {
+                pending = Some(encoded);
+                break;
+            }
+            if count > 0 {
+                body.push(b',');
+            }
+            body.extend_from_slice(&encoded);
+            count += 1;
+        }
+        if count == 0 {
+            return None;
+        }
+        body.extend_from_slice(b"]}");
+        Some(Ok(body))
     })
 }

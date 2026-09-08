@@ -43,7 +43,7 @@ impl PreparedBatchSideEffects {
         }
     }
 
-    fn estimated_resident_bytes(&self) -> usize {
+    pub(super) fn estimated_resident_bytes(&self) -> usize {
         std::mem::size_of_val(self)
             .saturating_add(vector_resident_bytes(&self.acquisition_artifacts))
             .saturating_add(vector_resident_bytes(&self.enrichment_artifacts))
@@ -61,7 +61,7 @@ impl PreparedBatchSideEffects {
             )
     }
 
-    fn estimated_bytes(&self) -> anyhow::Result<usize> {
+    pub(super) fn estimated_bytes(&self) -> anyhow::Result<usize> {
         let serializable = (
             &self.acquisition_artifacts,
             &self.enrichment_artifacts,

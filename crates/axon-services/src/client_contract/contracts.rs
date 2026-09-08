@@ -147,6 +147,7 @@ const REST_ROUTE_CONTRACTS: &[RestRouteContract] = &[
         path: "/v1/ask",
         schema_name: "RestAskRequest",
         fields: &[
+            "agent",
             "ask_authoritative_boost",
             "ask_authoritative_domains",
             "ask_backfill_chunks",
@@ -164,6 +165,7 @@ const REST_ROUTE_CONTRACTS: &[RestRouteContract] = &[
             "diagnostics",
             "explain",
             "hybrid_search",
+            "loadout",
             "query",
             "since",
         ],
@@ -173,6 +175,7 @@ const REST_ROUTE_CONTRACTS: &[RestRouteContract] = &[
         path: "/v1/ask/stream",
         schema_name: "RestAskRequest",
         fields: &[
+            "agent",
             "ask_authoritative_boost",
             "ask_authoritative_domains",
             "ask_backfill_chunks",
@@ -190,6 +193,7 @@ const REST_ROUTE_CONTRACTS: &[RestRouteContract] = &[
             "diagnostics",
             "explain",
             "hybrid_search",
+            "loadout",
             "query",
             "since",
         ],
@@ -198,12 +202,12 @@ const REST_ROUTE_CONTRACTS: &[RestRouteContract] = &[
         method: "POST",
         path: "/v1/chat",
         schema_name: "RestChatRequest",
-        fields: &["message"],
+        fields: &["agent", "loadout", "message", "session_id"],
     },
     RestRouteContract {
         method: "POST",
         path: "/v1/chat/stream",
         schema_name: "RestChatRequest",
-        fields: &["message"],
+        fields: &["agent", "loadout", "message", "session_id"],
     },
 ];

@@ -23,6 +23,8 @@ pub(super) struct GenerationSpool {
     file: File,
     keys: HashSet<String>,
     _directory: Option<tempfile::TempDir>,
+    #[cfg(test)]
+    fail_after_flush: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -45,6 +47,8 @@ impl GenerationSpool {
             file,
             keys: HashSet::new(),
             _directory: None,
+            #[cfg(test)]
+            fail_after_flush: false,
         })
     }
 
@@ -76,8 +80,17 @@ impl GenerationSpool {
         writer.write_all(&encoded)?;
         writer.write_all(b"\n")?;
         writer.flush()?;
+        #[cfg(test)]
+        if self.fail_after_flush {
+            anyhow::bail!("injected ambiguous append failure after flush");
+        }
         self.keys.insert(key.to_string());
         Ok(true)
+    }
+
+    #[cfg(test)]
+    pub(super) fn inject_failure_after_flush(&mut self) {
+        self.fail_after_flush = true;
     }
 
     pub(super) fn replay_each<T: DeserializeOwned>(

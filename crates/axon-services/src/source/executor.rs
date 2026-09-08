@@ -7,6 +7,8 @@ mod generation_state;
 mod generation_work;
 mod helpers;
 mod index;
+mod lease_heartbeat;
+use lease_heartbeat::run_with_lease;
 mod metadata;
 mod preparation;
 mod progress;
@@ -63,75 +65,6 @@ pub(super) struct SourcePipelineInput<'a> {
     pub(super) owner_id: &'a str,
     pub(super) auth_snapshot: Option<&'a AuthSnapshot>,
     pub(super) execution: &'a SourceExecutionContext,
-}
-
-async fn run_with_lease<'a, F, Fut>(
-    runtime: &'a TargetLocalSourceRuntime,
-    input: &mut SourcePipelineInput<'a>,
-    emitter: &'a SourceEventEmitter,
-    materialize: F,
-) -> anyhow::Result<IndexCounts>
-where
-    F: FnOnce(SourcePlan) -> Fut + Send + 'a,
-    Fut: Future<Output = anyhow::Result<MaterializedSource>> + Send + 'a,
-{
-    let source_id = input.plan.route.source.source_id.clone();
-    let previous = runtime.ledger.get_source(source_id.clone()).await?;
-    // Upsert the source row BEFORE the first job-status update. `jobs.source_id`
-    // has a foreign key to `sources(source_id)`, and `record_running_phase`
-    // stamps `jobs.source_id`; if the source row does not exist yet the update
-    // fails with a FOREIGN KEY constraint, the job stays Queued, and the
-    // terminal handler's Queued -> Failed then masks the real cause with a
-    // spurious `job.invalid_transition`. Seen live on every canonical source
-    // family (git/feed/youtube/reddit/session/registry); the web/local paths
-    // already upsert the source first.
-    let running_counts = previous
-        .as_ref()
-        .map(preserved_source_counts)
-        .unwrap_or_else(empty_source_counts);
-    runtime
-        .ledger
-        .upsert_source(metadata::source_summary(
-            input,
-            LifecycleStatus::Running,
-            running_counts,
-            previous.as_ref(),
-        ))
-        .await?;
-    record_running_phase(
-        runtime,
-        input,
-        emitter,
-        PipelinePhase::Leasing,
-        "acquiring source lease",
-    )
-    .await?;
-    let lease = runtime
-        .ledger
-        .acquire_lease(LeaseRequest {
-            lease_key: format!("source:{}", source_id.0),
-            owner_id: input.owner_id.to_string(),
-            ttl_seconds: SOURCE_LEASE_TTL_SECONDS,
-            job_id: Some(input.plan.job_id),
-            metadata: MetadataMap::new(),
-        })
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("source refresh already running for {}", source_id.0))?;
-    let result = match materialize(input.plan.clone()).await {
-        Ok(materialized) => {
-            input.plan = materialized.plan.clone();
-            let result = run_generation(runtime, input, emitter, &lease, previous.clone()).await;
-            drop(materialized);
-            result
-        }
-        Err(error) => Err(error),
-    };
-    record_source_failure(runtime, input, emitter, previous.as_ref(), &result).await?;
-    let release = runtime
-        .ledger
-        .release_lease(lease.lease_id, input.owner_id.to_string())
-        .await;
-    merge_source_and_release(runtime, result, release).await
 }
 
 async fn record_source_failure(
@@ -245,7 +178,11 @@ async fn run_generation(
     previous: Option<SourceSummary>,
 ) -> anyhow::Result<IndexCounts> {
     let coordinator = progress::ProgressCoordinator::new(runtime, input);
-    let (mut manifest, mut diff) = discover_and_diff(runtime, input, emitter, &coordinator).await?;
+    let (mut manifest, mut diff) = lease_heartbeat::until_cancelled(
+        input.execution,
+        discover_and_diff(runtime, input, emitter, &coordinator),
+    )
+    .await?;
     let publication_config_unchanged = match diff.previous_generation.as_ref() {
         Some(generation) => runtime
             .ledger
@@ -269,10 +206,14 @@ async fn run_generation(
     if !publication_config_unchanged {
         force_publication_refresh(&mut diff);
     }
-    diff = reuse::overlay_trusted_validators(runtime, input, diff).await?;
+    diff = lease_heartbeat::until_cancelled(
+        input.execution,
+        reuse::overlay_trusted_validators(runtime, input, diff),
+    )
+    .await?;
 
     if input.plan.request.embed {
-        ensure_providers_ready(runtime).await?;
+        lease_heartbeat::until_cancelled(input.execution, ensure_providers_ready(runtime)).await?;
     }
     let generation = runtime
         .ledger

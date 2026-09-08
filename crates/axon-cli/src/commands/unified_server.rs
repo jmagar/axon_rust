@@ -18,6 +18,7 @@ pub async fn run_unified_server(
     cfg: Config,
     host: &str,
     port: u16,
+    eager_context: Arc<ServiceContext>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Install the Prometheus recorder before any router is built so the
     // `/metrics` route and the ask-path metric macros have a live recorder.
@@ -28,12 +29,6 @@ pub async fn run_unified_server(
     let setup_required = panel.setup_required();
     let cfg_arc = Arc::new(cfg.clone());
     let service_context = Arc::new(OnceCell::<Arc<ServiceContext>>::new());
-    let eager_context = Arc::new(
-        ServiceContext::new_with_workers_and_schedulers(Arc::clone(&cfg_arc))
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error> { e })?,
-    );
-    let shutdown_context = Arc::clone(&eager_context);
     let result: Result<(), Box<dyn std::error::Error>> = async {
         service_context
             .set(eager_context)
@@ -64,7 +59,6 @@ pub async fn run_unified_server(
         axum::serve(listener, app).await.map_err(Into::into)
     }
     .await;
-    shutdown_context.shutdown_background_tasks().await;
     result?;
     tracing::info!("serve: unified server shut down cleanly");
     Ok(())

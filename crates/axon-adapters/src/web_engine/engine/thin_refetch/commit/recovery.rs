@@ -22,9 +22,14 @@ pub(super) async fn rollback_manifest(
     }
     let owned_len = journal.manifest_line_len.unwrap_or(0);
     let expected_end = journal.manifest_start.saturating_add(owned_len);
-    if current_len < expected_end {
+    if current_len != expected_end {
         return Err(std::io::Error::other(
-            "manifest ends inside the recorded transaction",
+            "manifest length no longer matches this transaction; preserving unrelated writes",
+        ));
+    }
+    if owned_len > 0 && journal.manifest_line_hash.is_none() {
+        return Err(std::io::Error::other(
+            "manifest transaction has no ownership hash",
         ));
     }
     if let Some(expected_hash) = journal.manifest_line_hash.as_deref() {

@@ -3,6 +3,103 @@ use crate::store::open_sqlite_pool;
 use std::future::{Future, poll_fn};
 use std::task::Poll;
 
+#[tokio::test]
+async fn fresh_queue_observation_does_not_need_the_sqlite_writer() {
+    let pool = open_sqlite_pool(":memory:").await.unwrap();
+    seed_jobs(&pool, "read-only-poll", &[0xc01, 0xc02]).await;
+    let scheduler = test_scheduler(&pool, "read-only-poll");
+    scheduler
+        .reserve(request(0xc01, "held", JobPriority::Normal))
+        .await
+        .unwrap();
+    let queued = scheduler
+        .reserve(request(0xc02, "queued", JobPriority::Normal))
+        .await
+        .unwrap();
+    let _writer = scheduler.write_gate.lock().await;
+    tokio::time::timeout(
+        Duration::from_millis(200),
+        scheduler.reservation_grant(queued.reservation_id()),
+    )
+    .await
+    .expect("fresh observations must not compete for the shared writer")
+    .unwrap();
+}
+
+#[tokio::test]
+async fn queue_liveness_renewal_is_rate_limited_across_observers() {
+    let pool = open_sqlite_pool(":memory:").await.unwrap();
+    seed_jobs(&pool, "bounded-renewal", &[0xc03, 0xc04]).await;
+    let scheduler = test_scheduler(&pool, "bounded-renewal");
+    scheduler
+        .reserve(request(0xc03, "held", JobPriority::Normal))
+        .await
+        .unwrap();
+    let queued = scheduler
+        .reserve(request(0xc04, "queued", JobPriority::Normal))
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE renewal_count (n INTEGER NOT NULL)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO renewal_count VALUES (0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER count_renewals AFTER UPDATE OF renewed_at ON provider_reservations BEGIN UPDATE renewal_count SET n = n + 1; END")
+        .execute(&pool).await.unwrap();
+    for _ in 0..32 {
+        scheduler
+            .clone()
+            .reservation_grant(queued.reservation_id())
+            .await
+            .unwrap();
+    }
+    let count: i64 = sqlx::query_scalar("SELECT n FROM renewal_count")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "notifications must not amplify liveness writes");
+    sqlx::query("UPDATE provider_reservations SET renewed_at = datetime('now', '-40 seconds') WHERE reservation_id = ?")
+        .bind(queued.reservation_id()).execute(&pool).await.unwrap();
+    for _ in 0..32 {
+        scheduler
+            .clone()
+            .reservation_grant(queued.reservation_id())
+            .await
+            .unwrap();
+    }
+    let count: i64 = sqlx::query_scalar("SELECT n FROM renewal_count")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 2, "one fixture aging write plus one overdue renewal");
+}
+
+#[tokio::test]
+async fn renewal_waiting_for_writer_keeps_provider_operation_polled() {
+    let pool = open_sqlite_pool(":memory:").await.unwrap();
+    seed_jobs(&pool, "renewal-polling", &[0xfab]).await;
+    let scheduler = test_scheduler(&pool, "renewal-polling");
+    let gate = scheduler.write_gate.clone();
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        call_reserved(
+            &scheduler,
+            request(0xfab, "renewal-polling", JobPriority::Normal),
+            move |_: ReservationObservation<()>| async move {
+                let _writer = gate.lock().await;
+                tokio::time::sleep(RENEW_INTERVAL * 3).await;
+                Ok::<_, std::io::Error>(42)
+            },
+        ),
+    )
+    .await
+    .expect("lease renewal must keep polling the provider that owns its writer");
+    assert_eq!(result.unwrap(), 42);
+}
+
 async fn wait_for_reservation_status(pool: &SqlitePool, fence: &str, status: &str) {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {

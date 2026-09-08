@@ -7,7 +7,7 @@ use axon_api::source::{
     ApiError, ErrorStage, JobHeartbeat, LifecycleStatus, PipelinePhase, Severity,
     SourceProgressEvent, StageCounts, Timestamp, Visibility,
 };
-use axon_core::sqlite::ImmediateTx;
+use axon_core::sqlite::{ImmediateTx, SqliteWriteGate};
 use axon_observe::collector::ObservabilitySink;
 use axon_observe::sink::SqliteObservabilitySink;
 use sqlx::SqlitePool;
@@ -22,8 +22,18 @@ use super::helpers::{empty_counts, enum_name, json_error, source_error_from_api,
 /// `error`. Shared by every rejection path (auth denial, unsupported stage,
 /// registered-runner failure) so each one only needs to construct its own
 /// `ApiError`.
+#[allow(dead_code)]
 pub(super) async fn fail_unified_claimed(
     pool: &SqlitePool,
+    claimed: &UnifiedClaimedJob,
+    error: ApiError,
+) {
+    fail_unified_claimed_with_write_gate(pool, &SqliteWriteGate::default(), claimed, error).await;
+}
+
+pub(super) async fn fail_unified_claimed_with_write_gate(
+    pool: &SqlitePool,
+    write_gate: &SqliteWriteGate,
     claimed: &UnifiedClaimedJob,
     error: ApiError,
 ) {
@@ -59,6 +69,7 @@ pub(super) async fn fail_unified_claimed(
 
     if let Err(mark_error) = mark_terminal_with_event(
         pool,
+        write_gate,
         claimed,
         LifecycleStatus::Failed,
         PipelinePhase::Complete,
@@ -79,6 +90,7 @@ pub(super) async fn fail_unified_claimed(
 
 async fn mark_terminal_with_event(
     pool: &SqlitePool,
+    write_gate: &SqliteWriteGate,
     claimed: &UnifiedClaimedJob,
     status: LifecycleStatus,
     phase: PipelinePhase,
@@ -90,6 +102,7 @@ async fn mark_terminal_with_event(
     retry_job_write("unified worker terminal transition with event", || {
         mark_terminal_once(
             pool,
+            write_gate,
             claimed,
             status,
             phase,
@@ -100,7 +113,7 @@ async fn mark_terminal_with_event(
         )
     })
     .await?;
-    SqliteObservabilitySink::from_migrated_pool(pool.clone())
+    SqliteObservabilitySink::from_migrated_pool_with_write_gate(pool.clone(), write_gate.clone())
         .emit(event)
         .await
 }
@@ -128,8 +141,18 @@ pub(super) async fn heartbeat(
         .await
 }
 
+#[allow(dead_code)]
 pub(super) async fn mark_canceled(
     pool: &SqlitePool,
+    store: &SqliteUnifiedJobStore,
+    claimed: &UnifiedClaimedJob,
+) {
+    mark_canceled_with_write_gate(pool, &SqliteWriteGate::default(), store, claimed).await;
+}
+
+pub(super) async fn mark_canceled_with_write_gate(
+    pool: &SqlitePool,
+    write_gate: &SqliteWriteGate,
     store: &SqliteUnifiedJobStore,
     claimed: &UnifiedClaimedJob,
 ) {
@@ -167,8 +190,9 @@ pub(super) async fn mark_canceled(
     {
         tracing::warn!(job_id = %claimed.job_id.0, error = %error.message, "unified worker cancel event failed");
     }
-    if let Err(error) = mark_terminal(
+    if let Err(error) = mark_terminal_with_write_gate(
         pool,
+        write_gate,
         claimed,
         LifecycleStatus::Canceled,
         PipelinePhase::Canceled,
@@ -182,8 +206,32 @@ pub(super) async fn mark_canceled(
     }
 }
 
+#[allow(dead_code)]
 pub(super) async fn mark_terminal(
     pool: &SqlitePool,
+    claimed: &UnifiedClaimedJob,
+    status: LifecycleStatus,
+    phase: PipelinePhase,
+    counts: Option<StageCounts>,
+    result_json: Option<String>,
+    error: Option<ApiError>,
+) -> Result<(), ApiError> {
+    mark_terminal_with_write_gate(
+        pool,
+        &SqliteWriteGate::default(),
+        claimed,
+        status,
+        phase,
+        counts,
+        result_json,
+        error,
+    )
+    .await
+}
+
+pub(super) async fn mark_terminal_with_write_gate(
+    pool: &SqlitePool,
+    write_gate: &SqliteWriteGate,
     claimed: &UnifiedClaimedJob,
     status: LifecycleStatus,
     phase: PipelinePhase,
@@ -227,6 +275,7 @@ pub(super) async fn mark_terminal(
     };
     mark_terminal_with_event(
         pool,
+        write_gate,
         claimed,
         status,
         phase,
@@ -240,6 +289,7 @@ pub(super) async fn mark_terminal(
 
 async fn mark_terminal_once(
     pool: &SqlitePool,
+    write_gate: &SqliteWriteGate,
     claimed: &UnifiedClaimedJob,
     status: LifecycleStatus,
     phase: PipelinePhase,
@@ -273,7 +323,9 @@ async fn mark_terminal_once(
         .map(serde_json::to_string)
         .transpose()
         .map_err(json_error)?;
-    let mut tx = ImmediateTx::begin(pool).await.map_err(sql_error)?;
+    let mut tx = ImmediateTx::begin_with_gate(pool, write_gate)
+        .await
+        .map_err(sql_error)?;
     // mark_terminal is only ever called with a terminal LifecycleStatus
     // (Completed/CompletedDegraded/Failed/Canceled — see call sites in
     // run_unified_claimed/fail_unified_claimed/mark_canceled), never Waiting,

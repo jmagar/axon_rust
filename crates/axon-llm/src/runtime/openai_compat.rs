@@ -9,6 +9,8 @@ use std::fmt::{Display, Formatter};
 use std::sync::LazyLock;
 use std::time::Duration;
 
+mod output_limits;
+
 #[cfg(test)]
 #[path = "openai_compat_tests.rs"]
 mod tests;
@@ -342,7 +344,8 @@ struct OpenAiUsage {
 async fn parse_chat_completion(
     response: reqwest::Response,
 ) -> Result<CompletionResponse, Box<dyn StdError + Send + Sync>> {
-    let parsed: ChatCompletionResponse = response.json().await.map_err(|error| {
+    let body = output_limits::read_body(response).await?;
+    let parsed: ChatCompletionResponse = serde_json::from_slice(&body).map_err(|error| {
         Box::new(OpenAiProviderError {
             code: "provider.malformed_response",
             message: format!("OpenAI-compatible completion JSON was malformed: {error}"),
@@ -408,12 +411,24 @@ where
     // multibyte sequence — once we have a complete line, decoding is safe.
     let mut pending_bytes: Vec<u8> = Vec::new();
     let mut terminal = false;
+    let mut budget = output_limits::StreamBudget::default();
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        pending_bytes.extend_from_slice(&chunk?);
+    'body: while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        budget.accept(&chunk)?;
+        pending_bytes.extend_from_slice(&chunk);
         while let Some(pos) = pending_bytes.iter().position(|&b| b == b'\n') {
             let line = String::from_utf8_lossy(&pending_bytes[..pos]);
             terminal |= handle_sse_line(line.trim_end_matches('\r'), &mut text, on_delta)?;
+            // A choice's finish_reason may precede usage trailers. Only the
+            // definitive stream marker ends body consumption before HTTP EOF.
+            if line
+                .strip_prefix("data:")
+                .is_some_and(|data| data.trim() == "[DONE]")
+            {
+                pending_bytes.clear();
+                break 'body;
+            }
             pending_bytes.drain(..=pos);
         }
     }

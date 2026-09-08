@@ -9,8 +9,10 @@
 
 mod busy_retry;
 mod immediate_tx;
+mod write_gate;
 pub use busy_retry::{is_retryable_busy, message_is_retryable_busy, retry_on, with_busy_retry};
 pub use immediate_tx::ImmediateTx;
+pub use write_gate::{SqliteWriteGate, SqliteWriteGuard};
 
 use sqlx::sqlite::SqliteConnection;
 use sqlx::{

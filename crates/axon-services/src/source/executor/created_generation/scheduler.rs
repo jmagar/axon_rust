@@ -7,7 +7,7 @@ use crate::source::executor::progress::PipelineProgress;
 use crate::source::executor::vectorize::batching::charged_chunk_count;
 
 // Prepared envelopes retain permits from a semaphore sized for three pools
-// until they are flushed. Stop accumulating at two pools/envelopes so a third
+// until they are flushed. Stop accumulating at two pools so a third
 // maximum-sized envelope always has enough permit headroom to reach the
 // receiver. Matching the flush threshold to the semaphore capacity can
 // deadlock when the next envelope would cross that threshold.
@@ -47,7 +47,12 @@ fn should_flush(
     is_final
         || closed
         || pending_chunks >= pool_size.max(1).saturating_mul(OUTER_POOL_CONCURRENCY)
-        || pending_envelopes >= OUTER_POOL_CONCURRENCY
+        // Envelopes are individual streamed documents, not necessarily full
+        // pools. Counting every envelope as a pool flushes tiny documents in
+        // pairs and defeats coalescing. Keep an equivalent count bound only
+        // for envelopes with no charged chunks; byte admission and the oldest-
+        // item deadline still bound memory and release byte-blocked producers.
+        || pending_envelopes >= pool_size.max(1).saturating_mul(OUTER_POOL_CONCURRENCY)
 }
 
 // The producer's web acquisition waves are intentionally small and commonly
@@ -208,10 +213,12 @@ async fn accept_envelope(
         chunks as u64,
         envelope.is_final,
     );
-    accumulator.absorb_pretracked_side_effects(std::mem::replace(
-        &mut envelope.side_effects,
-        crate::source::executor::generation_work::PreparedBatchSideEffects::empty(),
-    ))?;
+    accumulator
+        .absorb_pretracked_side_effects(std::mem::replace(
+            &mut envelope.side_effects,
+            crate::source::executor::generation_work::PreparedBatchSideEffects::empty(),
+        ))
+        .await?;
     *pending_chunks = pending_chunks.saturating_add(charged_chunk_count(&envelope.prepared));
     *pending_bytes = pending_bytes.saturating_add(envelope.estimated_bytes);
     pending.push(envelope);

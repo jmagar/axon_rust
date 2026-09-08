@@ -51,7 +51,7 @@ pub(super) async fn put_manifest(
     manifest: &SourceManifest,
 ) -> Result<()> {
     validate_manifest(manifest)?;
-    let mut tx = ImmediateTx::begin(&store.pool)
+    let mut tx = ImmediateTx::begin_with_gate(&store.pool, &store.write_gate)
         .await
         .map_err(sqlite_error)?;
     ensure_generation_for_manifest_in_tx(&mut tx, manifest).await?;

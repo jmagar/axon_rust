@@ -81,6 +81,13 @@ const APPROVED_EXCEPTIONS: &[(&str, &str)] = &[
          expose. TRACKED for migration under axon_rust-w612x.",
     ),
     (
+        "crates/axon-adapters/src/providers/http_fetch/redirects.rs",
+        "Private FetchProvider redirect loop, using its parent's shared SSRF-guarded \
+         client while preserving request-local methods, bodies, headers and credential \
+         origin checks. Same provider boundary tracked under axon_rust-w612x; not a \
+         separate page acquisition path or a directory-wide exemption.",
+    ),
+    (
         "crates/axon-adapters/src/providers/searxng_search.rs",
         "Search-backend API client (SearXNG JSON), not page acquisition.",
     ),

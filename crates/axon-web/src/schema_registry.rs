@@ -1,6 +1,7 @@
 //! REST route registry used by schema-contract generation.
 
 mod admin_watch_routes;
+mod agent_routes;
 mod codex_routes;
 mod extract_routes;
 mod graph_routes;
@@ -32,6 +33,7 @@ pub fn rest_route_registry() -> &'static [RestRouteSpec] {
                 + POST_MEMORY_ROUTES.len()
                 + extract_routes::EXTRACT_ROUTES.len()
                 + admin_watch_routes::ADMIN_WATCH_ROUTES.len()
+                + agent_routes::AGENT_ROUTES.len()
                 + codex_routes::CODEX_ROUTES.len()
                 + graph_routes::GRAPH_ROUTES.len(),
         );
@@ -40,6 +42,7 @@ pub fn rest_route_registry() -> &'static [RestRouteSpec] {
         routes.extend_from_slice(POST_MEMORY_ROUTES);
         routes.extend_from_slice(extract_routes::EXTRACT_ROUTES);
         routes.extend_from_slice(admin_watch_routes::ADMIN_WATCH_ROUTES);
+        routes.extend_from_slice(agent_routes::AGENT_ROUTES);
         routes.extend_from_slice(codex_routes::CODEX_ROUTES);
         routes.extend_from_slice(graph_routes::GRAPH_ROUTES);
         routes

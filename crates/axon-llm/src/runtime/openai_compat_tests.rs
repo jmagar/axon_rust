@@ -2,6 +2,81 @@ use super::*;
 use crate::runtime::{CompletionRequest, LlmBackendConfig, LlmBackendKind};
 use httpmock::prelude::*;
 
+#[tokio::test]
+async fn oversized_success_body_is_rejected_before_json_deserialization() {
+    let server = MockServer::start();
+    let body =
+        serde_json::json!({"choices":[{"message":{"content":"x".repeat(16 * 1024 * 1024 + 1)}}]})
+            .to_string();
+    server.mock(|when, then| {
+        when.method(POST).path("/v1/chat/completions");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(body);
+    });
+    let mut request = CompletionRequest::new("bounded response");
+    request.backend = backend(&server, None);
+    let result = complete_text(request).await;
+    assert!(
+        result.is_err(),
+        "provider output must have an application byte limit"
+    );
+    assert!(result.unwrap_err().to_string().contains("byte limit"));
+}
+
+#[tokio::test]
+async fn oversized_unterminated_sse_frame_is_rejected_by_byte_limit() {
+    let server = MockServer::start();
+    let body = format!("data: {}", "x".repeat(1024 * 1024 + 1));
+    server.mock(|when, then| {
+        when.method(POST).path("/v1/chat/completions");
+        then.status(200)
+            .header("content-type", "text/event-stream")
+            .body(body);
+    });
+    let mut request = CompletionRequest::new("bounded frame");
+    request.backend = backend(&server, None);
+    let error = complete_streaming(request, |_| Ok(())).await.unwrap_err();
+    assert!(error.to_string().contains("byte limit"), "{error}");
+}
+
+#[tokio::test]
+async fn definitive_done_returns_without_waiting_for_http_eof() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 4096];
+        assert!(socket.read(&mut request).await.unwrap() > 0);
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 100000\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"finished\"}}]}\n\ndata: [DONE]\n\n").await.unwrap();
+        let mut remaining = [0_u8; 1];
+        let _ = socket.read(&mut remaining).await;
+    });
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(format!("http://{address}"))
+        .send()
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        parse_sse_completion(response, &mut |_| Ok(())),
+    )
+    .await;
+    server.abort();
+    let _ = server.await;
+    assert_eq!(
+        result
+            .expect("DONE must finish before HTTP EOF")
+            .unwrap()
+            .text,
+        "finished"
+    );
+}
+
 fn backend(server: &MockServer, api_key: Option<&str>) -> LlmBackendConfig {
     LlmBackendConfig {
         kind: LlmBackendKind::OpenAiCompat,

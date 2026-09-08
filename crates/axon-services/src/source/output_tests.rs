@@ -286,6 +286,7 @@ async fn stored_artifact(core: &FakeCoreBoundaries, suffix: &str) -> ArtifactRef
 
 #[tokio::test]
 async fn cleanup_guard_removes_artifacts_from_an_uncommitted_generation() {
+    let _serial = crate::reserved_call::CLEANUP_GLOBAL_TEST_LOCK.lock().await;
     let core = Arc::new(FakeCoreBoundaries::new());
     let ledger: Arc<dyn LedgerStore> = cleanup_ledger().await;
     let artifact = stored_artifact(core.as_ref(), "uncommitted").await;
@@ -311,6 +312,7 @@ async fn cleanup_guard_removes_artifacts_from_an_uncommitted_generation() {
 
 #[tokio::test]
 async fn track_surfaces_journal_failure_before_guard_takes_drop_ownership() {
+    let _serial = crate::reserved_call::CLEANUP_GLOBAL_TEST_LOCK.lock().await;
     let core = Arc::new(FakeCoreBoundaries::new());
     let ledger: Arc<dyn LedgerStore> = cleanup_ledger().await;
     let artifact = stored_artifact(core.as_ref(), "track-persist-failure").await;
@@ -345,6 +347,7 @@ async fn track_surfaces_journal_failure_before_guard_takes_drop_ownership() {
 
 #[tokio::test]
 async fn cancellation_after_disarm_remove_never_deletes_published_artifact() {
+    let _serial = crate::reserved_call::CLEANUP_GLOBAL_TEST_LOCK.lock().await;
     let core = Arc::new(FakeCoreBoundaries::new());
     let ledger: Arc<dyn LedgerStore> = cleanup_ledger().await;
     let artifact = stored_artifact(core.as_ref(), "disarm-cancel").await;
@@ -373,6 +376,7 @@ async fn cancellation_after_disarm_remove_never_deletes_published_artifact() {
 
 #[test]
 fn cleanup_guard_drop_without_a_tokio_runtime_uses_drained_fallback() {
+    let _serial = crate::reserved_call::CLEANUP_GLOBAL_TEST_LOCK.blocking_lock();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -411,6 +415,7 @@ fn cleanup_guard_drop_without_a_tokio_runtime_uses_drained_fallback() {
 
 #[tokio::test]
 async fn disarmed_cleanup_guard_preserves_published_artifacts() {
+    let _serial = crate::reserved_call::CLEANUP_GLOBAL_TEST_LOCK.lock().await;
     let core = Arc::new(FakeCoreBoundaries::new());
     let ledger: Arc<dyn LedgerStore> = cleanup_ledger().await;
     let artifact = stored_artifact(core.as_ref(), "published").await;
@@ -435,6 +440,7 @@ async fn disarmed_cleanup_guard_preserves_published_artifacts() {
 
 #[tokio::test]
 async fn cleanup_guard_keeps_durable_debt_when_artifact_delete_fails() {
+    let _serial = crate::reserved_call::CLEANUP_GLOBAL_TEST_LOCK.lock().await;
     let core = Arc::new(FakeCoreBoundaries::new());
     let ledger = cleanup_ledger().await;
     let artifact = stored_artifact(core.as_ref(), "delete-failure").await;
@@ -473,6 +479,7 @@ async fn cleanup_guard_keeps_durable_debt_when_artifact_delete_fails() {
 
 #[tokio::test]
 async fn cleanup_guard_surfaces_confirmation_failure_and_retains_retry_ownership() {
+    let _serial = crate::reserved_call::CLEANUP_GLOBAL_TEST_LOCK.lock().await;
     let core = Arc::new(FakeCoreBoundaries::new());
     let ledger =
         cleanup_ledger_from(FakeLedgerStore::new().with_committed_generation_failure()).await;
@@ -506,6 +513,7 @@ async fn cleanup_guard_surfaces_confirmation_failure_and_retains_retry_ownership
 
 #[tokio::test]
 async fn cleanup_guard_surfaces_debt_write_failure_and_retains_retry_ownership() {
+    let _serial = crate::reserved_call::CLEANUP_GLOBAL_TEST_LOCK.lock().await;
     let core = Arc::new(FakeCoreBoundaries::new());
     let ledger =
         cleanup_ledger_from(FakeLedgerStore::new().with_cleanup_debt_write_failure()).await;
@@ -539,6 +547,7 @@ async fn cleanup_guard_surfaces_debt_write_failure_and_retains_retry_ownership()
 
 #[tokio::test]
 async fn failed_finish_transfers_once_and_shutdown_reports_then_recovers_unresolved_work() {
+    let _serial = crate::reserved_call::CLEANUP_GLOBAL_TEST_LOCK.lock().await;
     let core = Arc::new(FakeCoreBoundaries::new());
     let ledger =
         cleanup_ledger_from(FakeLedgerStore::new().with_cleanup_debt_write_failure()).await;
@@ -571,6 +580,7 @@ async fn failed_finish_transfers_once_and_shutdown_reports_then_recovers_unresol
 
 #[tokio::test]
 async fn partial_cleanup_retries_only_the_unresolved_suffix() {
+    let _serial = crate::reserved_call::CLEANUP_GLOBAL_TEST_LOCK.lock().await;
     let core = Arc::new(FakeCoreBoundaries::new());
     let deletes = Arc::new(AtomicUsize::new(0));
     let store: Arc<dyn ArtifactStore> = Arc::new(CountingDeleteStore {
@@ -603,6 +613,7 @@ async fn partial_cleanup_retries_only_the_unresolved_suffix() {
 
 #[tokio::test]
 async fn artifact_delete_debt_is_recovered_by_the_autonomous_drain_path() {
+    let _serial = crate::reserved_call::CLEANUP_GLOBAL_TEST_LOCK.lock().await;
     let core = Arc::new(FakeCoreBoundaries::new());
     let ledger = cleanup_ledger().await;
     let artifact = stored_artifact(core.as_ref(), "restart-drain").await;
@@ -652,13 +663,15 @@ async fn artifact_delete_debt_is_recovered_by_the_autonomous_drain_path() {
 
 #[tokio::test]
 async fn cleanup_guard_artifact_delete_participates_in_scheduler() {
+    let _serial = crate::reserved_call::CLEANUP_GLOBAL_TEST_LOCK.lock().await;
     let core = Arc::new(FakeCoreBoundaries::new());
     let ledger = cleanup_ledger().await;
     let artifact = stored_artifact(core.as_ref(), "scheduled").await;
-    let database = tempfile::NamedTempFile::new().unwrap();
-    let pool = axon_jobs::store::open_sqlite_pool(&database.path().to_string_lossy())
-        .await
-        .expect("migrated scheduler database");
+    let database = tempfile::tempdir().unwrap();
+    let pool =
+        axon_jobs::store::open_sqlite_pool(&database.path().join("jobs.db").to_string_lossy())
+            .await
+            .expect("migrated scheduler database");
     sqlx::query(
         "INSERT INTO jobs (job_id, kind, status, phase, priority, created_at, updated_at) \
          VALUES (?, 'source', 'running', 'cleaning', 'background', datetime('now'), datetime('now'))",

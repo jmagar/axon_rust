@@ -47,7 +47,7 @@ pre-commit:
       run: >
         scripts/with_timeout.sh 60 --
         scripts/clear-git-local-env.sh
-        bash -c '
+        bash -e -c '
           if [ -x "./target/debug/xtask" ]; then
             ./target/debug/xtask check-no-mod-rs;
             ./target/debug/xtask check-layering;

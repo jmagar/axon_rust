@@ -82,6 +82,7 @@ struct ControlledBatchAdapter {
     normalize_started: mpsc::UnboundedSender<usize>,
     first_normalize_release: Mutex<Option<oneshot::Receiver<()>>>,
     second_acquire_release: Mutex<Option<oneshot::Receiver<()>>>,
+    first_acquire_release: Mutex<Option<oneshot::Receiver<()>>>,
     failures: AdapterFailures,
     prefetched_artifact: Option<ArtifactRef>,
 }
@@ -131,6 +132,7 @@ impl ControlledBatchAdapter {
             normalize_started,
             first_normalize_release: Mutex::new(first_normalize_release),
             second_acquire_release: Mutex::new(None),
+            first_acquire_release: Mutex::new(None),
             failures,
             prefetched_artifact: None,
         }
@@ -176,6 +178,11 @@ impl SourceAdapter for ControlledBatchAdapter {
     ) -> axon_adapters::adapter::Result<SourceAcquisition> {
         let call = self.acquire_calls.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = self.acquire_started.send(call);
+        if call == 1
+            && let Some(release) = self.first_acquire_release.lock().await.take()
+        {
+            let _ = release.await;
+        }
         if call == 2
             && let Some(release) = self.second_acquire_release.lock().await.take()
         {
@@ -469,6 +476,36 @@ async fn scheduled_generation_drops_its_sender_after_production_finishes() {
         completed.3.calls().await,
         vec!["begin_bulk_load", "finish_bulk_load"]
     );
+}
+
+#[tokio::test]
+async fn scheduled_generation_admits_next_wave_before_first_wave_settles() {
+    let (acquire_tx, mut acquired) = mpsc::unbounded_channel();
+    let (normalize_tx, _normalized) = mpsc::unbounded_channel();
+    let (release, wait) = oneshot::channel();
+    let mut adapter = ControlledBatchAdapter::new(
+        ACQUIRE_BATCH_SIZE + 1,
+        acquire_tx,
+        normalize_tx,
+        None,
+        AdapterFailures::default(),
+    );
+    adapter.first_acquire_release = Mutex::new(Some(wait));
+    let run = tokio::spawn(run_actual_scheduled_generation_batches(
+        Arc::new(adapter),
+        None,
+        false,
+    ));
+    assert_eq!(acquired.recv().await, Some(1));
+    let second = tokio::time::timeout(std::time::Duration::from_millis(200), acquired.recv()).await;
+    release.send(()).unwrap();
+    let (result, stage, _, _) = run.await.unwrap();
+    result.unwrap();
+    assert_eq!(
+        second.expect("one bounded next wave must use available capacity"),
+        Some(2)
+    );
+    assert_eq!(stage.acquired_items, (ACQUIRE_BATCH_SIZE + 1) as u64);
 }
 
 #[tokio::test]

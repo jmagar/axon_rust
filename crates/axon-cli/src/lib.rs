@@ -143,6 +143,12 @@ fn jobs_worker_invocation(cfg: &Config) -> bool {
     cfg.command == CommandKind::Jobs && cfg.positional.first().map(String::as_str) == Some("worker")
 }
 
+/// Long-lived servers construct and own their worker-bearing runtime so the
+/// CLI dispatcher must not open an additional enqueue-only SQLite pool first.
+fn command_owns_service_context(command: CommandKind) -> bool {
+    matches!(command, CommandKind::Serve | CommandKind::Mcp)
+}
+
 /// Returns true if the process argv is the `setup plugin-hook` (or `setup hook`)
 /// invocation. Inspected from raw argv before the Config is built so the plugin
 /// env-var mapping can run before `parse_args()` reads the AXON_* env vars.
@@ -205,6 +211,25 @@ fn exit_if_removed_command() {
     }
 }
 
+fn log_startup(cfg: &Config) {
+    if let Some(warning) = axon_core::binary_status::stale_binary_warning() {
+        eprintln!("warning: {warning}");
+    }
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        pid = std::process::id(),
+        "startup"
+    );
+    tracing::info!(
+        command = cfg.command.as_str(),
+        collection = %cfg.collection,
+        sqlite_path = %cfg.sqlite_path.display(),
+        data_dir = %axon_core::paths::axon_data_base_dir().display(),
+        output_dir = %cfg.output_dir.display(),
+        "runtime paths resolved"
+    );
+}
+
 pub async fn run() -> Result<(), Box<dyn Error>> {
     // CRITICAL ORDERING: the `setup plugin-hook` invocation must apply the
     // Claude Code plugin-option → AXON_* env-var mapping BEFORE parse_args()
@@ -232,22 +257,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
     // Declared after the tracing guard so reverse drop order drains cleanup
     // threads while tracing is still available for restoration failures.
     let _bulk_load_cleanup_drain = axon_services::BulkLoadCleanupDrain;
-    if let Some(warning) = axon_core::binary_status::stale_binary_warning() {
-        eprintln!("warning: {warning}");
-    }
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        pid = std::process::id(),
-        "startup"
-    );
-    tracing::info!(
-        command = cfg.command.as_str(),
-        collection = %cfg.collection,
-        sqlite_path = %cfg.sqlite_path.display(),
-        data_dir = %axon_core::paths::axon_data_base_dir().display(),
-        output_dir = %cfg.output_dir.display(),
-        "runtime paths resolved"
-    );
+    log_startup(&cfg);
 
     let start_url = start_url_from_cfg(&cfg);
 
@@ -288,6 +298,20 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         let result = commands::run_worker_process(Arc::clone(&cfg_arc)).await;
         if result.is_ok() {
             log_done("command=jobs worker complete");
+        }
+        return result;
+    }
+
+    // Like `jobs worker`, server commands own their runtime construction. This
+    // keeps one SQLite pool and one writer-admission domain per process.
+    if command_owns_service_context(cfg_arc.command) {
+        let result = match cfg_arc.command {
+            CommandKind::Serve => run_serve(&cfg_arc).await,
+            CommandKind::Mcp => run_mcp(&cfg_arc).await,
+            _ => unreachable!("guarded by command_owns_service_context"),
+        };
+        if result.is_ok() {
+            log_done(&format!("command={} complete", cfg_arc.command.as_str()));
         }
         return result;
     }

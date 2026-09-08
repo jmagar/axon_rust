@@ -1,6 +1,67 @@
 use super::*;
 use httpmock::{Method::PUT, MockServer};
 
+#[tokio::test]
+async fn repeated_request_timeouts_stop_at_the_existing_attempt_limit() {
+    let server = MockServer::start_async().await;
+    let unavailable = server
+        .mock_async(|when, then| {
+            when.method(PUT).path("/points");
+            then.status(408).header("Retry-After", "0");
+        })
+        .await;
+    let http = QdrantHttp::new(&server.base_url(), "bounded-retry").unwrap();
+    let error = http
+        .put_json_bytes(
+            axon_error::ErrorStage::Upserting,
+            &format!("{}/points", server.base_url()),
+            b"{}".to_vec(),
+            "qdrant_upsert",
+        )
+        .await
+        .expect_err("a permanent timeout must not loop forever");
+    assert_eq!(error.code.0, "vector.qdrant.status");
+    unavailable.assert_calls_async(4).await;
+}
+
+#[tokio::test]
+async fn data_put_retries_request_timeout_before_success() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for status in ["408 Request Timeout", "200 OK"] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(socket.read_u8().await.unwrap());
+                assert!(request.len() < 8192);
+            }
+            let mut body = [0; 13];
+            socket.read_exact(&mut body).await.unwrap();
+            assert_eq!(&body, b"{\"points\":[]}");
+            socket
+                .write_all(
+                    format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                        .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+    });
+    let http = QdrantHttp::new(&endpoint, "test").unwrap();
+    let result = http
+        .put_json_bytes(
+            axon_error::ErrorStage::Upserting,
+            &format!("{endpoint}/points"),
+            b"{\"points\":[]}".to_vec(),
+            "qdrant_upsert",
+        )
+        .await;
+    server.abort();
+    result.expect("a retryable request timeout must not terminate an idempotent upsert");
+}
+
 #[test]
 fn endpoint_strips_userinfo_and_query_into_base_and_key() {
     let endpoint = QdrantEndpoint::parse("http://token:secret@qdrant.internal:6333/x?api_key=k1");

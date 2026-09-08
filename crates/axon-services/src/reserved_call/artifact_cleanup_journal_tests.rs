@@ -1,4 +1,5 @@
 use super::*;
+use crate::reserved_call::CLEANUP_GLOBAL_TEST_LOCK;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -8,9 +9,6 @@ use axon_embedding::fake::FakeEmbeddingProvider;
 use axon_jobs::boundary::FakeJobWatchStore;
 use axon_ledger::store::{FakeLedgerStore, LedgerStore};
 use axon_vectors::store::FakeVectorStore;
-
-static CLEANUP_GLOBAL_TEST_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
-    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 struct CountingStore {
     inner: Arc<FakeCoreBoundaries>,
@@ -776,7 +774,11 @@ fn drain_worker_real_panic_after_take_retains_the_handoff() {
 async fn retry_panic_after_first_durable_progress_owns_only_the_suffix() {
     let _serial = CLEANUP_GLOBAL_TEST_LOCK.lock().await;
     let deletes = Arc::new(AtomicUsize::new(0));
-    let pending = seeded_counting_work("retry_progress", 2, deletes.clone()).await;
+    let mut pending = seeded_counting_work("retry_progress", 2, deletes.clone()).await;
+    // The deliberately retained journal must not be discovered by unrelated
+    // runtime-recovery tests using the process-wide default journal root.
+    let journal_root = tempfile::tempdir().unwrap();
+    pending.journal = Some(persist(journal_root.path(), &pending).await.unwrap());
     super::super::spawn_artifact_cleanup_retry_inner(
         pending,
         Some(super::super::CleanupWorkerFault::PanicAfterFirstProgress),
