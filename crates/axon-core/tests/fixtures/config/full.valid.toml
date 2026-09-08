@@ -6,10 +6,9 @@
 # (crates/axon-core/src/config/parse/toml_config/raw.rs::RawTomlConfig and
 # its per-section Raw*Section structs), verified to parse via the real
 # loader (wired in
-# crates/axon-core/src/config/parse/toml_config_tests.rs). `memory`,
-# `graph`, `artifacts`, `prune`, `observability`, and `security` parse
-# (and reject unknown keys) but are not yet wired to a runtime knob — see
-# raw.rs's doc comment.
+# crates/axon-core/src/config/parse/toml_config_tests.rs). The reserved memory
+# and graph sections remain empty: current runtime validation rejects their
+# unsupported settings rather than silently accepting them.
 #
 # NOTE (2026-07-12 alignment audit, bead axon_rust-ldozg): two keys named in
 # the contract's "Required Config Keys" table do not exist on the real
@@ -68,11 +67,8 @@ max-pages = 2000
 respect-robots = false
 
 [memory]
-decay-enabled = true
-review-interval-days = 30
 
 [graph]
-enabled = true
 
 [artifacts]
 retention-days = 14

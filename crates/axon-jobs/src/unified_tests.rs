@@ -61,13 +61,15 @@ async fn recovery_rejects_a_malformed_persisted_job_id_even_in_dry_run() {
     assert_eq!(error.code.to_string(), "job.uuid_invalid");
 }
 
-fn snapshot_test_db_path() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("axon-jobs-snapshot-{}.db", uuid::Uuid::new_v4()))
+fn snapshot_test_db_path() -> (tempfile::TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().expect("private snapshot test directory");
+    let path = directory.path().join("jobs.db");
+    (directory, path)
 }
 
 #[tokio::test]
 async fn public_status_update_reserves_writer_before_reading_snapshot() {
-    let path = snapshot_test_db_path();
+    let (_directory, path) = snapshot_test_db_path();
     let path_string = path.to_string_lossy().to_string();
     let pool = open_sqlite_pool(&path_string).await.expect("open job pool");
     seed_source(&pool).await;
@@ -128,7 +130,8 @@ async fn public_status_update_reserves_writer_before_reading_snapshot() {
     competing_write
         .await
         .expect("competing writer commits after status transaction");
-    std::fs::remove_file(path).expect("remove snapshot test database");
+    writer.close().await;
+    store.pool_for_tests().close().await;
 }
 
 #[tokio::test]
@@ -156,7 +159,7 @@ async fn job_store_write_boundary_restarts_busy_snapshot_operation() {
 
 #[tokio::test]
 async fn concurrent_status_updates_serialize_without_busy_errors() {
-    let path = snapshot_test_db_path();
+    let (_directory, path) = snapshot_test_db_path();
     let path_string = path.to_string_lossy().to_string();
     let pool = open_sqlite_pool(&path_string).await.expect("open job pool");
     seed_source(&pool).await;
@@ -195,7 +198,6 @@ async fn concurrent_status_updates_serialize_without_busy_errors() {
     }
 
     store.pool_for_tests().close().await;
-    std::fs::remove_file(path).expect("remove concurrent test database");
 }
 
 async fn store() -> SqliteUnifiedJobStore {

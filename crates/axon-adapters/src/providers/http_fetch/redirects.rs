@@ -43,9 +43,14 @@ impl HttpFetchProvider {
             let mut outgoing = client.request(method.clone(), url.clone());
             for header in &request.headers.headers {
                 if drop_entity_headers
-                    && ["content-length", "content-type", "transfer-encoding"]
-                        .iter()
-                        .any(|name| header.name.eq_ignore_ascii_case(name))
+                    && [
+                        "content-length",
+                        "content-type",
+                        "content-encoding",
+                        "transfer-encoding",
+                    ]
+                    .iter()
+                    .any(|name| header.name.eq_ignore_ascii_case(name))
                 {
                     continue;
                 }
@@ -85,11 +90,12 @@ impl HttpFetchProvider {
                     "refusing to follow a credentialed redirect across an origin boundary",
                 ));
             }
-            if matches!(response.status().as_u16(), 301..=303)
-                && method != Method::GET
-                && method != Method::HEAD
-            {
-                method = Method::GET;
+            let discard_body = response.status().as_u16() == 303
+                || (matches!(response.status().as_u16(), 301 | 302) && method == Method::POST);
+            if discard_body {
+                if method != Method::HEAD {
+                    method = Method::GET;
+                }
                 body = None;
                 drop_entity_headers = true;
             }

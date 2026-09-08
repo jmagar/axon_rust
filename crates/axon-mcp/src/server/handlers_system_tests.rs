@@ -77,7 +77,9 @@ async fn removed_prune_subactions_fail_before_service_initialization() {
         })
         .await
         .expect_err("removed scoped dedupe must fail closed");
-    assert!(error.message.contains("expected plan|exec"));
+    assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    assert!(error.message.contains("unknown prune subaction 'dedupe'"));
+    assert!(server.service_context.get().is_none());
 }
 
 #[tokio::test]

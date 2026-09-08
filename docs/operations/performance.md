@@ -1,7 +1,7 @@
 ---
 title: "Performance"
 created: 2026-02-25
-updated: 2026-08-18
+updated: 2026-09-08
 ---
 
 # Performance
@@ -85,14 +85,14 @@ Guidance:
 - Start with `http` when sites are static; use `auto-switch` for mixed sites.
 - Use `delay-ms` to reduce target pressure and avoid defensive throttling.
 - Keep `drop-thin-markdown=true` for higher-quality embedding corpus.
-- Sitemap backfill cap defaults to `512` and is configurable via `scrape.max-sitemaps` in `~/.axon/config.toml` (no CLI flag). Restrict backfill by recency with `--sitemap-since-days <n>`.
+- Sitemap backfill cap defaults to `512` and is configurable via `crawl.max-sitemaps` in `~/.axon/config.toml` (no CLI flag). Restrict backfill by recency with `--sitemap-since-days <n>`.
 
 ### Adaptive Crawl Concurrency
 
 Adaptive crawl concurrency is opt-in via TOML:
 
 ```toml
-[workers.adaptive-concurrency]
+[crawl.adaptive-concurrency]
 enabled = true
 min = 1
 # max = 64
@@ -137,7 +137,8 @@ kept independently.
 
 Worker controls:
 
-- `workers.ingest-lanes` in `~/.axon/config.toml`
+- `pipeline.unified-worker-concurrency` bounds all concurrently running jobs.
+- `pipeline.max-active-source-jobs` separately bounds source-job concurrency.
 
 Watchdog controls:
 
@@ -189,11 +190,11 @@ Measured RTX 4070 + `Qwen/Qwen3-Embedding-0.6B` docs-chunk profile:
 
 Embed pipeline controls:
 
-- `workers.embed-doc-timeout-secs` in `~/.axon/config.toml`
+- `pipeline.embed-doc-timeout-secs` in `~/.axon/config.toml`
 
 Qdrant controls:
 
-- `search.collection` in `~/.axon/config.toml`
+- `server.default-collection` in `~/.axon/config.toml`
 - `QDRANT_URL`
 - upsert batching via `providers.vector.upsert-batch-points` in
   `~/.axon/config.toml` (env override: `AXON_QDRANT_UPSERT_BATCH_SIZE`; default
@@ -204,21 +205,21 @@ Qdrant controls:
   process-shared point/generation-write request ceiling for stores using the
   same Qdrant endpoint/admission profile; durable vector scheduler slots govern
   logical operations separately. Payload-index creation has its own bounded
-  `qdrant.payload-index-parallelism` gate.
+  `providers.vector.payload-index-parallelism` gate.
   Qdrant's generic bulk-upload guidance suggests `64-256` point batches with
   `2-4` parallel streams; on the local `code.claude.com` docs corpus,
   `1024/1` measured faster, so treat `256/2-4` as a large-import tuning profile
   to validate with `bench-embed`
-- payload-index creation fanout via `qdrant.payload-index-parallelism`; requests
+- payload-index creation fanout via `providers.vector.payload-index-parallelism`; requests
   are bounded client-side even though Qdrant may serialize index work internally
-- fresh-collection bulk indexing profile via `qdrant.bulk-load=true`
+- fresh-collection bulk indexing profile via `providers.vector.bulk-load=true`
   (env override: `AXON_QDRANT_BULK_LOAD=true`): Axon creates the collection
-  with `qdrant.bulk-indexing-threshold-kb` and restores
-  `qdrant.indexing-threshold-kb` after the embed pipeline finishes
-- HNSW build cost for new collections via `qdrant.hnsw-m` and
-  `qdrant.hnsw-ef-construct`; lower values can speed indexing but must be
+  with `providers.vector.bulk-indexing-threshold-kb` and restores
+  `providers.vector.indexing-threshold-kb` after the embed pipeline finishes
+- HNSW build cost for new collections via `providers.vector.hnsw-m` and
+  `providers.vector.hnsw-ef-construct`; lower values can speed indexing but must be
   validated with exact-vs-approx recall before becoming a quality default
-- fresh payload-index cost via `qdrant.payload-index-profile=core`, which
+- fresh payload-index cost via `providers.vector.payload-index-profile=core`, which
   creates only URL/domain/source/schema/time indexes for docs-style collections;
   keep `full` for mixed code/package/social collections unless evaluated
 

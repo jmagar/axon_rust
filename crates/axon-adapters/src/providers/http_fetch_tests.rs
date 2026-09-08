@@ -144,6 +144,59 @@ fn request(uri: String) -> FetchRequest {
     }
 }
 
+#[tokio::test]
+async fn redirect_preserves_or_rewrites_method_and_body_like_reqwest() {
+    let _loopback = axon_core::http::LoopbackGuard::allow();
+    for status in [301, 302, 303, 307, 308] {
+        for method in ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] {
+            let server = MockServer::start_async().await;
+            let rewrites = status == 303 || (matches!(status, 301 | 302) && method == "POST");
+            let expected_method = if rewrites && method != "HEAD" {
+                "GET"
+            } else {
+                method
+            };
+            let source = server
+                .mock_async(|when, then| {
+                    when.method(method)
+                        .path("/redirect")
+                        .is_true(|request| request.body_ref() == b"payload");
+                    then.status(status).header("location", "/destination");
+                })
+                .await;
+            let destination = server
+                .mock_async(|when, then| {
+                    let when = when.method(expected_method).path("/destination");
+                    if rewrites {
+                        when.is_true(|request| request.body_ref().is_empty())
+                            .header_missing("content-type");
+                    } else {
+                        when.is_true(|request| request.body_ref() == b"payload")
+                            .header("content-type", "text/plain");
+                    }
+                    then.status(200).body("ok");
+                })
+                .await;
+            let mut requested = request(server.url("/redirect"));
+            requested.method = method.into();
+            requested.body = Some(ContentRef::InlineText {
+                text: "payload".into(),
+            });
+            requested.headers.headers.push(RedactedHeader {
+                name: "content-type".into(),
+                value: "text/plain".into(),
+                redacted: false,
+            });
+            provider(Duration::from_secs(2))
+                .fetch(requested)
+                .await
+                .unwrap();
+            source.assert_calls_async(1).await;
+            destination.assert_calls_async(1).await;
+        }
+    }
+}
+
 fn provider(timeout: Duration) -> HttpFetchProvider {
     HttpFetchProvider::new(HttpFetchConfig {
         timeout,

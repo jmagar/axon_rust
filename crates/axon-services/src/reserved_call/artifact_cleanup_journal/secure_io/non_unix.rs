@@ -1,38 +1,42 @@
 use super::*;
 
+#[cfg(all(test, windows))]
+#[path = "non_unix_tests.rs"]
+mod tests;
+
 #[derive(Debug)]
 pub(in crate::reserved_call::artifact_cleanup_journal) struct SecureJournalDir {
     root: PathBuf,
     canonical_root: PathBuf,
     created_at: std::time::SystemTime,
     #[cfg(windows)]
-    identity: (Option<u32>, Option<u64>),
+    identity: same_file::Handle,
 }
 
 impl SecureJournalDir {
     pub(in crate::reserved_call::artifact_cleanup_journal) fn open(
         root: &Path,
     ) -> anyhow::Result<Self> {
-        #[cfg(windows)]
-        use std::os::windows::fs::MetadataExt as _;
         std::fs::create_dir_all(root)?;
         let metadata = std::fs::symlink_metadata(root)?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             anyhow::bail!("artifact cleanup journal root is not a real directory");
         }
-        Ok(Self {
+        let opened = Self {
             root: root.into(),
             canonical_root: std::fs::canonicalize(root)?,
             created_at: metadata.created()?,
+            // Keep the original directory handle alive: Windows file indexes
+            // may be reused once the original object is no longer held open.
             #[cfg(windows)]
-            identity: (metadata.volume_serial_number(), metadata.file_index()),
-        })
+            identity: same_file::Handle::from_path(root)?,
+        };
+        opened.verify_path()?;
+        Ok(opened)
     }
     pub(in crate::reserved_call::artifact_cleanup_journal) fn verify_path(
         &self,
     ) -> anyhow::Result<()> {
-        #[cfg(windows)]
-        use std::os::windows::fs::MetadataExt as _;
         let metadata = std::fs::symlink_metadata(&self.root)?;
         if metadata.file_type().is_symlink()
             || !metadata.is_dir()
@@ -41,7 +45,7 @@ impl SecureJournalDir {
             || cfg!(windows) && {
                 #[cfg(windows)]
                 {
-                    (metadata.volume_serial_number(), metadata.file_index()) != self.identity
+                    same_file::Handle::from_path(&self.root)? != self.identity
                 }
                 #[cfg(not(windows))]
                 {

@@ -211,6 +211,101 @@ async fn invalid_scheduler_capacity_is_rejected() {
 }
 
 #[tokio::test]
+async fn dropped_grant_dispatches_successor_before_recovery() {
+    let pool = open_sqlite_pool(":memory:").await.expect("migrations");
+    seed_jobs(&pool, "dropped-handoff", &[0xda1, 0xda2, 0xda3]).await;
+    let scheduler = test_scheduler(&pool, "dropped-handoff");
+    let held = scheduler
+        .reserve(request(0xda1, "held", JobPriority::Normal))
+        .await
+        .unwrap();
+    let mut waiting =
+        Box::pin(scheduler.reserve_wait(request(0xda2, "dropped", JobPriority::Normal)));
+    tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::select! {
+            result = &mut waiting => panic!("waiter must queue behind held capacity: {result:?}"),
+            () = async {
+                // A visible queued row alone does not prove reserve_wait has
+                // resumed after COMMIT and installed its cancellation guard.
+                // Its recovery claim proves it reached the guarded wait loop.
+                while !scheduler.dispatch_signal.recovery_claimed.load(Ordering::Acquire) {
+                    tokio::task::yield_now().await;
+                }
+            } => {}
+        }
+    })
+    .await
+    .expect("waiter must enter its guarded queue wait");
+    let successor = scheduler
+        .reserve(request(0xda3, "successor", JobPriority::Normal))
+        .await
+        .unwrap();
+    scheduler
+        .complete(held.reservation_id(), "held")
+        .await
+        .unwrap();
+    wait_for_reservation_status(&pool, "dropped", "granted").await;
+    // The real reserve_wait future owns its drop guard, but has not observed
+    // the grant yet. Dropping it must hand capacity to the next queued caller.
+    drop(waiting);
+    wait_for_reservation_status(&pool, "dropped", "canceled").await;
+    assert!(
+        scheduler
+            .reservation_grant(successor.reservation_id())
+            .await
+            .unwrap()
+            .is_granted(),
+        "cancel cleanup must grant the successor without a recovery dispatch"
+    );
+}
+
+#[tokio::test]
+async fn timed_out_head_dispatches_successor_before_recovery() {
+    let pool = open_sqlite_pool(":memory:").await.expect("migrations");
+    seed_jobs(&pool, "timeout-handoff", &[0xdb1, 0xdb2, 0xdb3, 0xdb4]).await;
+    let mut scheduler = test_scheduler(&pool, "timeout-handoff");
+    scheduler.config.capacity = 2;
+    scheduler
+        .reserve(request(0xdb1, "held", JobPriority::Normal))
+        .await
+        .unwrap();
+    let mut head_request = request(0xdb2, "head", JobPriority::Normal);
+    head_request.units = 2;
+    let head = scheduler.reserve(head_request).await.unwrap();
+    let bypass = scheduler
+        .reserve(request(0xdb3, "bypass", JobPriority::Normal))
+        .await
+        .unwrap();
+    assert!(bypass.is_granted());
+    scheduler
+        .complete(bypass.reservation_id(), "bypass")
+        .await
+        .unwrap();
+    let successor = scheduler
+        .reserve(request(0xdb4, "successor", JobPriority::Normal))
+        .await
+        .unwrap();
+    assert!(
+        !successor.is_granted(),
+        "the head has already allowed one bypass"
+    );
+    assert!(matches!(
+        scheduler
+            .wait_for_grant(head.reservation_id().to_string(), Some(Duration::ZERO))
+            .await,
+        Err(SchedulerError::WaitTimeout)
+    ));
+    assert!(
+        scheduler
+            .reservation_grant(successor.reservation_id())
+            .await
+            .unwrap()
+            .is_granted(),
+        "timing out the blocking head must grant the fitting successor immediately"
+    );
+}
+
+#[tokio::test]
 async fn completing_a_lease_atomically_grants_the_next_waiter() {
     let pool = open_sqlite_pool(":memory:").await.expect("migrations");
     seed_jobs(&pool, "atomic-handoff-source", &[0x91, 0x92]).await;
@@ -1132,6 +1227,24 @@ async fn dropping_a_waiter_cancels_its_durable_queue_row() {
             .await
     });
     wait_for_reservation_status(&pool, "dropped-waiter-fence", "queued").await;
+    // The committed row can be observed before reserve() returns and installs
+    // WaitingReservationGuard. Recovery ownership proves this lone waiter has
+    // entered wait_for_grant with its cancellation guard already armed.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !scheduler
+            .dispatch_signal
+            .recovery_claimed
+            .load(Ordering::Acquire)
+        {
+            assert!(
+                !waiter.is_finished(),
+                "waiter exited before entering its wait loop"
+            );
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("waiter cancellation guard installed");
     waiter.abort();
     let _ = waiter.await;
 
@@ -1332,18 +1445,27 @@ async fn dropping_active_reserved_call_releases_capacity() {
     seed_jobs(&pool, "drop-active-source", &[41, 42]).await;
     let scheduler = test_scheduler(&pool, "tei-drop-active");
     let task_scheduler = scheduler.clone();
+    let (operation_started, operation_ready) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
         call_reserved::<(), _, &'static str, _, _>(
             &task_scheduler,
             request(41, "dropped-active-fence", JobPriority::Normal),
             |_lease| async move {
+                operation_started
+                    .send(())
+                    .expect("signal guarded operation");
                 std::future::pending::<()>().await;
                 Ok("never")
             },
         )
         .await
     });
-    wait_for_reservation_status(&pool, "dropped-active-fence", "active").await;
+    // Activation can commit before ActiveReservationGuard is installed.
+    // Entering the provider callback proves cancellation owns that guard.
+    tokio::time::timeout(Duration::from_secs(3), operation_ready)
+        .await
+        .expect("provider operation entered")
+        .expect("provider readiness signal");
     task.abort();
     let _ = task.await;
     wait_for_reservation_status(&pool, "dropped-active-fence", "released").await;

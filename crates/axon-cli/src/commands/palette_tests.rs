@@ -235,12 +235,18 @@ fn palette_launch_rejects_an_immediate_child_failure() {
 
 #[test]
 fn palette_launch_accepts_a_running_child() {
-    let mut child = std::process::Command::new("sh")
-        .args(["-c", "sleep 5"])
+    // Own the sleeper directly: killing a shell can leave its child holding
+    // nextest's output pipes open on platforms without shell exec optimization.
+    let mut child = std::process::Command::new("sleep")
+        .arg("5")
         .spawn()
         .unwrap();
 
-    confirm_palette_started(&mut child, Path::new("test-palette")).unwrap();
-    child.kill().unwrap();
-    child.wait().unwrap();
+    let started = confirm_palette_started(&mut child, Path::new("test-palette"));
+    let killed = child.kill();
+    let reaped = child.wait();
+    // Reap even when startup confirmation or termination fails, then assert.
+    killed.unwrap();
+    reaped.unwrap();
+    started.unwrap();
 }

@@ -4,6 +4,21 @@ use chrono::Utc;
 use std::time::Duration;
 
 impl TeiClient {
+    pub(super) fn response_error(&self, error: super::response::ResponseError) -> ApiError {
+        match error {
+            super::response::ResponseError::Transport(error) => {
+                self.transport(super::policy::error_category(&error))
+            }
+            super::response::ResponseError::Decode => self.transport("decode"),
+            super::response::ResponseError::TooLarge => self
+                .error(
+                    "embedding.tei.response_too_large",
+                    "TEI success response exceeded its byte limit",
+                )
+                .with_retry_policy(axon_error::retry::RetryPolicy::fail_fast()),
+        }
+    }
+
     pub(super) fn deferred_retry_after(&self, status: StatusCode, delay: Duration) -> ApiError {
         let until = i64::try_from(delay.as_secs())
             .ok()

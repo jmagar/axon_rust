@@ -9,15 +9,43 @@ fn config_defaults_to_stdio_transport() {
     assert_eq!(cfg.mcp_http_port, 8001);
 }
 
-#[test]
-fn every_mcp_transport_uses_one_worker_context() {
-    for transport in [McpTransport::Stdio, McpTransport::Http, McpTransport::Both] {
-        let plan = runtime_plan(transport);
-        assert_eq!(plan.context_count, 1, "transport={transport}");
+#[tokio::test]
+async fn transports_receive_the_same_prebuilt_service_context() {
+    let temp = tempfile::tempdir().unwrap();
+    let cfg = Config {
+        sqlite_path: temp.path().join("jobs.db"),
+        qdrant_url: String::new(),
+        tei_url: String::new(),
+        ..Config::default()
+    };
+    let context = Arc::new(ServiceContext::new(Arc::new(cfg.clone())).await.unwrap());
+    for (transport, expected) in [
+        (McpTransport::Stdio, vec!["stdio"]),
+        (McpTransport::Http, vec!["http"]),
+        (McpTransport::Both, vec!["stdio", "http"]),
+    ] {
+        let cfg = Config {
+            mcp_transport: transport,
+            ..cfg.clone()
+        };
+        let seen = std::sync::Mutex::new(Vec::new());
+        run_transports(
+            &cfg,
+            Arc::clone(&context),
+            |_, received| {
+                assert!(Arc::ptr_eq(&received, &context));
+                seen.lock().unwrap().push("stdio");
+                std::future::ready(Ok(()))
+            },
+            |_, received| {
+                assert!(Arc::ptr_eq(&received, &context));
+                seen.lock().unwrap().push("http");
+                std::future::ready(Ok(()))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(*seen.lock().unwrap(), expected);
     }
-}
-
-#[test]
-fn both_transports_share_the_prebuilt_context() {
-    assert!(runtime_plan(McpTransport::Both).share_between_transports);
+    context.shutdown_background_tasks().await;
 }

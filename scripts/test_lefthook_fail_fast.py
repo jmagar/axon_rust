@@ -12,10 +12,15 @@ from check_lefthook_pre_commit_speed import parse_pre_commit_runs
 
 class StructuralHookFailureTests(unittest.TestCase):
     def test_each_checker_failure_stops_both_dispatch_paths(self):
+        self.assert_stage_failures_propagate("pre-commit", "xtask-check")
+
+    def test_pre_push_checker_failures_stop_both_dispatch_paths(self):
+        self.assert_stage_failures_propagate("pre-push", "structural-checks")
+
+    def assert_stage_failures_propagate(self, stage, command):
         repo = Path(__file__).resolve().parents[1]
-        run = dict(parse_pre_commit_runs((repo / "lefthook.yml").read_text()))[
-            "xtask-check"
-        ]
+        stage_text = (repo / "lefthook.yml").read_text().split(f"\n{stage}:", 1)[1]
+        run = dict(parse_pre_commit_runs("pre-commit:" + stage_text))[command]
         # The parser retains folded line breaks; shlex preserves the quoted
         # Bash program while reconstructing the wrapper's argument vector.
         argv = shlex.split(run)

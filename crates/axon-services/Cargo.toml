@@ -80,6 +80,9 @@ dotenvy = "0.15"
 url = "2"
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies]
+same-file = "1.0.6"
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]

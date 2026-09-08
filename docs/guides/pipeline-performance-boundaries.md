@@ -1,3 +1,9 @@
+---
+title: "Pipeline performance and resource boundaries"
+created: 2026-09-08
+updated: 2026-09-08
+---
+
 # Pipeline performance and resource boundaries
 
 This guide describes the backend safeguards introduced by the September 2026
@@ -37,6 +43,12 @@ cooling rather than keeping request permits occupied during a long sleep.
 Representable retry dates are preserved for scheduling. Invalid, overflowing
 retry dates fail explicitly. Short retries release admission before backoff.
 
+Successful TEI `/embed` bodies are capped at **16 MiB** while streaming, even
+without a Content-Length header. Oversized multi-input responses trigger smaller
+batches; a single oversized vector fails with `embedding.tei.response_too_large`
+rather than retrying indefinitely. `/info` success bodies are capped at **1 MiB**.
+These byte limits do not impose a new configured batch-size or dimension limit.
+
 Qdrant carry-forward publication uses both point-count and encoded-request-byte
 limits, including the 16 MiB request cap. An individual point that cannot fit
 is rejected explicitly before that oversized request is sent. Requests are
@@ -66,6 +78,9 @@ Observing a fresh queued reservation does not acquire the SQLite writer.
 Liveness renewal is conditional and coalesced to a 30-second interval; the
 elected recovery path continues to protect long-lived queued work. Domain
 notifications still cause reads, but not a write transaction per fresh waiter.
+Cancellation and queue timeout remove the reservation and grant eligible
+successors in the same writer transaction, then notify waiters. Freed capacity
+does not wait for the five-second recovery poll.
 
 Terminal-warning projection reads events in 128-row keyset pages outside the
 writer transaction and deduplicates with a hash set. The write is fenced by
@@ -123,7 +138,8 @@ stack setting for deeply nested async tests. Protocol-success subprocess tests
 use generous startup budgets; separate deadline tests enforce timeout behavior.
 
 Unit and mock-provider evidence is not proof that a running daemon contains the
-new implementation. Confirm the deployed binary before a live benchmark. CLI
-server mode can execute a different, already-running binary; use `--local`
-when deliberately testing a locally built binary in-process. Do not compare a
+new implementation. Confirm the deployed binary before a live benchmark. A CLI
+enqueue may be consumed by an already-running worker sharing its database. Use
+an explicit binary and an isolated data directory, as the benchmark harness
+does, when testing a local build. There is no generic CLI forwarding mode. Do not compare a
 frozen-corpus TEI replay directly with a live acquisition-to-publication crawl.

@@ -33,7 +33,11 @@ fn parse_watch_runtime_args_rejects_removed_artifacts_subcommand() {
 
 #[tokio::test]
 async fn handle_watch_create_requires_every_seconds() {
-    let cfg = Config::test_default();
+    let directory = tempfile::tempdir().expect("private watch test directory");
+    let cfg = Config {
+        sqlite_path: directory.path().join("jobs.db"),
+        ..Config::test_default()
+    };
     let context = test_service_context(&cfg).await;
     let service = WatchServiceImpl::new(Arc::new(context));
     let err = handle_watch_create(

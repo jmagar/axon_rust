@@ -227,9 +227,9 @@ impl TeiClient {
         if !status.is_success() {
             return Err(self.status_error(status));
         }
-        resp.json::<TeiInfo>()
+        response::read_json::<TeiInfo>(resp, response::INFO_BODY_LIMIT)
             .await
-            .map_err(|err| self.transport(error_category(&err)))
+            .map_err(|err| self.response_error(err))
     }
 
     /// Embed a single probe input and return its vector length. Used to derive
@@ -370,10 +370,15 @@ impl TeiClient {
                     return Ok(ChunkOutcome::Vectors(vectors));
                 }
                 Ok(response::EmbedResponse::Status(resp)) => resp,
-                Err(err) if err.is_decode() && !err.is_timeout() && !err.is_body() => {
-                    return Err(self.transport(error_category(&err)));
+                Err(response::ResponseError::TooLarge) if chunk.len() > 1 => {
+                    return Ok(ChunkOutcome::Split);
                 }
-                Err(err) => {
+                Err(
+                    err @ (response::ResponseError::TooLarge | response::ResponseError::Decode),
+                ) => {
+                    return Err(self.response_error(err));
+                }
+                Err(response::ResponseError::Transport(err)) => {
                     drop(profile_input_permit);
                     drop(input_permit);
                     drop(request_permit);

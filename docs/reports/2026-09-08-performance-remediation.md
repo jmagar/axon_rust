@@ -1,3 +1,9 @@
+---
+title: "Backend performance review remediation"
+created: 2026-09-08
+updated: 2026-09-08
+---
+
 # Backend performance review remediation
 
 ## Scope and outcome
@@ -166,6 +172,59 @@ for exact limits and behavior changes. In particular:
 - Larger supported workloads may now fail explicitly at resource limits rather
   than consuming unbounded memory. This is intentional and documented.
 
-Changes remain local and uncommitted. No daemon restart, production deployment,
-ingestion-queue mutation, PR creation, push, or live crawl benchmark was performed
-as part of this remediation. Existing unrelated dirty work was preserved.
+The initial remediation was committed and pushed as `07d1761b1` on PR #607.
+No daemon restart, production deployment, ingestion-queue mutation, or live crawl
+benchmark was performed. The follow-up review status below is separate from the
+original 22-finding remediation and its test counts.
+
+## PR #607 follow-up review
+
+Lavra reviewed the 235-file diff from `9152ebe94` to `07d1761b1` across seven
+perspectives: architecture, performance, security, simplicity, data migration,
+deployment verification, and migration drift. This is a scoped review, not a
+claim of line-by-line semantic coverage of every changed file.
+
+| Tracking | Finding | Remediation evidence |
+| --- | --- | --- |
+| `axon_rust-axvtw.3` (P2) | Canceled grants and expired queue heads delayed eligible successors until recovery. | Mutation-side transactional settlement/dispatch; two real SQLite tests failed before the fix, then passed. All 55 scheduler tests passed. |
+| `axon_rust-s4y64` (P2, pre-existing) | Successful TEI bodies were unbounded before JSON decoding. | Streaming byte caps, bounded batch splitting, explicit singleton failure; four response regressions and the 88-test embedding suite passed, with one existing ignored test. |
+| `axon_rust-axvtw.4` (P3) | MCP runtime-plan assertions did not exercise actual context wiring. | Removed disconnected plan; actual transport/context identity tests pass and detect a deliberate duplicate-context mutation. |
+| `axon_rust-axvtw.5` (P3) | Early writer unlock required unnecessary holder-generation bookkeeping. | Clear diagnostics before unlocking; removed IDs and optional guard. Real drop/reacquire regressions pass. |
+| `axon_rust-n1k01` (P1, pre-existing) | Pre-push shell wrapper could mask an earlier failed check. | Fail-fast shell execution; 16 controlled failure cases cover both pre-commit and pre-push branches. |
+| `axon_rust-axvtw.6` (P1) | Required repository gate targeted an unavailable runner label. | Same immutable fleet validator and Rust profile on hosted runners; all 75 workflow tests passed. Missing guide frontmatter corrected; unchanged validator passes. |
+| `axon_rust-axvtw.7` (P2) | Operational guidance used removed tuning keys and a nonexistent `--local` flag. | Current configuration ownership and isolated-process instructions documented; workflow documentation regression passed. |
+| `axon_rust-axvtw.8` (P2) | Manual 301/302 redirects rewrote methods other than POST. | Status-specific method/body handling; real-wire 30-case matrix, all 17 fetch tests, and independent affected-code re-review passed. |
+
+Performance, data-migration, deployment, and drift passes found no additional
+confirmed code defects. All 152 frozen provenance records and six JSON fixture
+families matched. The outer target-runtime gate-topology concern was inspected
+and discarded as unconfirmed: it predated this diff, and no bounded failure was
+established. Deployment remains unqualified until exact-artifact CI, a recovery
+baseline, and a deployed source/retrieval canary are verified.
+
+An initial embedding-suite run observed an existing request-count test retry
+(two requests instead of one); its isolated run and full-suite rerun passed.
+This is recorded rather than presenting the first run as green. Another 105
+targeted/repeated checks passed without recurrence; the original retry trigger
+remains uncertain. No speculative production or test-policy change was made.
+
+Fresh CI also exposed fixture/build issues tracked under `axon_rust-axvtw.2`.
+The hermetic security bind probe reused a live worker's database; isolating its
+owned database restored the full composed CLI/HTTP/MCP replay with zero residual
+resources, without weakening the authentication assertion. Windows directory
+identity now uses a retained stable handle: Windows-target test compilation
+passes, and the platform workflow now executes its native regression tests.
+Schema fixture closure, isolated database fixtures, scheduler readiness, worker
+lock ownership, and stale assertions were corrected. All 84 schema tests, two
+generated-contract tests, and the targeted fixture regressions passed locally.
+The palette test now kills and reaps its direct child rather than a shell;
+its exact nextest selector passes without a leak. Native Windows execution and
+fresh Linux workspace qualification still require final-head CI.
+
+The separate PR Review Toolkit completed all seven aspects: code, types, tests,
+silent failures, simplification, comments, and documentation/configuration. Its
+two confirmed findings are `.7` and `.8` above; both are implemented and tested.
+No additional actionable finding remained in the affected-code re-review.
+The final quick-push patch version is 7.3.3. Local Cargo checking and generated
+contract refresh/check passed at that version. These focused follow-up results
+do not relabel the earlier broad-suite counts as a fresh full-workspace run.
