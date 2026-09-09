@@ -93,3 +93,19 @@ def child_failure(root: Path, domain: str, child: subprocess.CompletedProcess[st
     if safe is None:
         raise ValueError("invalid failure diagnostic metadata")
     return safe
+
+
+def exception_failure(root: Path, domain: str, error: BaseException) -> dict:
+    """Read traceback identity only; never format the exception or frame locals."""
+    name = type(error).__name__
+    value = {"domain": domain, "error_type": name if name in ERROR_TYPES else "unknown"}
+    frame = error.__traceback__
+    while frame is not None:
+        location = _location(root, frame.tb_frame.f_code.co_filename, frame.tb_lineno)
+        if location is not None:
+            value.update(traceback_file=location, traceback_line=frame.tb_lineno)
+        frame = frame.tb_next
+    safe = validate(root, value)
+    if safe is None:
+        raise ValueError("invalid failure diagnostic metadata")
+    return safe

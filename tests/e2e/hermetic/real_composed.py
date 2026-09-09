@@ -182,9 +182,6 @@ def main():
    if descriptor["fixture_source_id"] not in json.dumps(graph_source):raise RuntimeError("stateful source fixture was not persisted")
    def sqlite_footprint():
     database=Path(env["AXON_SQLITE_PATH"]);return sum(path.stat().st_size for path in (database,Path(str(database)+"-wal"),Path(str(database)+"-shm")) if path.exists())
-   sqlite_before=sqlite_footprint()
-   phase="observability";observability=verify_observability(binary,mcporter,descriptor,env,run_id)
-   sqlite_growth=max(0,sqlite_footprint()-sqlite_before)
    representative_count=0;representative_ms=None
    phase="retrieval";item={"prompt":"What signal does the Atlas beacon emit?","max_results":1};provider=descriptor["environment"]["AXON_SEARXNG_URL"]
    before=execute.provider_stats(provider)
@@ -196,6 +193,11 @@ def main():
    for surface,value in (("cli",cli),("http",http),("mcp",mcp)):
     if "amber" not in json.dumps(value,ensure_ascii=False).casefold():raise RuntimeError(f"real {surface} retrieval omitted evidence")
    if delta["calls"]<3:raise RuntimeError(f"provider observation missed surface calls: {delta}")
+   # Prove retrieval against the seeded corpus before observability publishes
+   # its unrelated canary document. The contract double does not rank relevance.
+   sqlite_before=sqlite_footprint()
+   phase="observability";observability=verify_observability(binary,mcporter,descriptor,env,run_id)
+   sqlite_growth=max(0,sqlite_footprint()-sqlite_before)
    if os.environ.get("AXON_E2E_PERFORMANCE_ONLY") == "1":
     corpus_manifest=json.loads((ROOT/"tests/e2e/corpus/manifest.json").read_text());representative=Path(env["AXON_DATA_DIR"])/"representative-corpus";representative.mkdir()
     for document in corpus_manifest["documents"]:
@@ -232,7 +234,8 @@ def main():
   except BaseException as error:
    primary_error=error
    diagnostic_phase=getattr(error,"axon_e2e_phase",phase)
-   print(json.dumps({"axon_e2e_diagnostic":{"domain":diagnostic_phase,"error_type":type(error).__name__}},sort_keys=True),flush=True)
+   diagnostic=diagnostics.exception_failure(ROOT,diagnostic_phase,error)
+   print(json.dumps({"axon_e2e_diagnostic":diagnostic},sort_keys=True),flush=True)
    raise
   finally:
    resource_stop.set();resource_thread.join(timeout=1)

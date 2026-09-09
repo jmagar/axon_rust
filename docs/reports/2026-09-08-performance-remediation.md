@@ -256,3 +256,32 @@ adversarial cases reject unapproved fields, private paths and wrong field types.
 Independent safety review found no remaining actionable issue in the diagnostic
 change. This instrumentation does not claim to repair the underlying security
 failure.
+
+### Retrieval fixture isolation follow-up
+
+At `9c36858ed`, Rust contracts and the main CI gate passed; hermetic execution
+failed earlier in the top-level retrieval phase, before the security domain.
+Top-level exceptions now use the same safe traceback-location extraction as
+child failures. Its real-exception canary regressions and exact report-verifier
+checks pass with the 23-test workflow suite.
+
+Investigation confirmed a separate fixture interference defect
+(`axon_rust-axvtw.2.5`). The Qdrant contract double serializes point IDs in sorted
+order and returns the first eligible points at a constant score; it is not a
+relevance-ranking implementation. Observability published an unrelated document
+before the one-result Atlas queries. Real HTTP tests prove a low-UUID unrelated
+document replaces Atlas in the result, while a high UUID does not. The earlier
+full-composed failure was not independently reproduced in five local runs; the
+deterministic HTTP experiment proves the interference mechanism, not a recovered
+traceback from that CI attempt.
+
+The harness now completes all three real retrieval calls, amber-evidence checks,
+and provider-call assertions before the observability source is published.
+Source observability, SQLite growth measurement, downstream domain checks, and
+ownership-checked cleanup are retained. The execution-based ordering regression
+failed before this change and passed afterward; both focused tests passed with
+`AXON_E2E_REAL_ORDER_REGRESSION=1`. The built-binary integration test is opt-in;
+default discovery does not claim to run it. Full composed replay then passed all
+three transports and seven observability oracles with no cleanup residue.
+Independent affected-code review found no actionable issue. The earlier Linux
+security-domain failure still needs qualification on the next CI head.
