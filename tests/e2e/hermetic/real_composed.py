@@ -11,6 +11,7 @@ execute=load("axon_e2e_real_composed_execute",ROOT/"tests/e2e/scenarios/retrieva
 source=load("axon_e2e_real_composed_source",ROOT/"tests/e2e/scenarios/source/orchestrator.py")
 observe=load("axon_e2e_real_composed_observe",ROOT/"scripts/e2e/lib/observability-assertions.py")
 reporting=load("axon_e2e_real_composed_reporting",ROOT/"scripts/e2e/lib/reporting.py")
+diagnostics=load("axon_e2e_failure_diagnostics",ROOT/"scripts/e2e/lib/failure_diagnostics.py")
 def retained_descriptor(descriptor):
  value=json.loads(json.dumps(descriptor));value["environment"]["AXON_HTTP_TOKEN"]="[REDACTED]"
  value["bindings"]["AXON_HTTP_TOKEN"]="[REDACTED]"
@@ -212,12 +213,9 @@ def main():
      completed=subprocess.run([sys.executable,str(entry),"--launcher-descriptor",str(descriptor_path)],cwd=ROOT,env=env,
                               capture_output=True,text=True,timeout=180,check=False)
      if completed.returncode:
-      error_type="unknown"
-      for line in reversed(completed.stderr.splitlines()):
-       candidate=line.split(":",1)[0]
-       if candidate.endswith(("Error","Exception")) and candidate.replace("_","").isalnum():error_type=candidate;break
-      print(json.dumps({"axon_e2e_diagnostic":{"domain":entry.parent.name,"error_type":error_type}},sort_keys=True),flush=True)
-      raise RuntimeError(f"domain hermetic entry failed: {entry.parent.name}: {completed.stderr[-2000:]}")
+      diagnostic=diagnostics.child_failure(ROOT,entry.parent.name,completed)
+      print(json.dumps({"axon_e2e_diagnostic":diagnostic},sort_keys=True),flush=True)
+      raise RuntimeError(f"domain hermetic entry failed: {entry.parent.name}")
    result={"result":"pass","surfaces":["cli","http","mcp"],"provider_observation":delta,"observability":observability,
            "performance":{"cold_start_ms":cold_ms,
                           "warm_start_ms":warm_ms,"source_to_terminal_ms":representative_ms or observability["source_to_terminal_ms"],

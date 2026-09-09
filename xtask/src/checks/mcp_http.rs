@@ -13,7 +13,9 @@ const FILE_SPECS: &[FileSpec] = &[
                 "ERROR: MCP CLI must support unified HTTP transport in crates/axon-cli/src/commands/mcp.rs",
             ),
             (
-                "run_stdio_server(",
+                // Passed as a callback to run_transports so both endpoints share
+                // the prebuilt service context, rather than called directly here.
+                "axon_mcp::run_stdio_server_with_context",
                 "ERROR: MCP CLI must support stdio transport in crates/axon-cli/src/commands/mcp.rs",
             ),
             // Match the actual McpTransport::Both match arm shape, not a bare "Both"

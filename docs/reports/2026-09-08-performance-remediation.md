@@ -228,3 +228,31 @@ No additional actionable finding remained in the affected-code re-review.
 The final quick-push patch version is 7.3.3. Local Cargo checking and generated
 contract refresh/check passed at that version. These focused follow-up results
 do not relabel the earlier broad-suite counts as a fresh full-workspace run.
+
+### CI qualification of `5b88f9291`
+
+Linux nextest passed all 6,081 tests (eight skipped) with no leak reports.
+Repository Contract, Compose, Clippy, and all three platform smoke jobs passed.
+The Windows native identity tests also passed (run `34292353463`, completed
+2026-09-09 at 00:11 UTC), qualifying the stable-handle fix on Windows itself.
+
+Two failures prevented merge. The MCP structural checker still required the
+old direct stdio call spelling after the shared-context callback refactor;
+`axon_rust-axvtw.2.3` fixes that matcher while retaining all transport checks.
+Its actual-source regression failed before the change, then all six checker
+tests and an independent affected review passed.
+
+The hermetic security domain failed with an `unknown` diagnostic. The parser
+discarded qualified exception names; only hashes of the underlying output
+were retained, so this evidence does not establish the security failure's
+cause. The direct composed replay passed locally. A native macOS run also
+encountered sandbox-related failures and is not a substitute for Linux CI
+qualification. Safe exception/return-code/source-location instrumentation
+(`axon_rust-axvtw.2.4`) now makes the next CI failure actionable without retaining
+messages, arguments, local variables, credentials, or private absolute paths.
+Its real subprocess-to-report regression failed before the fix and passed
+afterward, including the exact CI report verifier. All 21 workflow tests passed;
+adversarial cases reject unapproved fields, private paths and wrong field types.
+Independent safety review found no remaining actionable issue in the diagnostic
+change. This instrumentation does not claim to repair the underlying security
+failure.
