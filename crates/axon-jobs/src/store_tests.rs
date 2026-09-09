@@ -1,6 +1,35 @@
 use super::*;
 
 #[tokio::test]
+async fn pending_job_counter_waits_for_existing_writer_before_migration_reads() {
+    let directory = tempfile::tempdir().expect("private database directory");
+    let path = directory.path().join("jobs.db");
+    let pool = open_sqlite_pool(path.to_str().expect("database path"))
+        .await
+        .expect("initialized database");
+    let mut writer = axon_core::sqlite::ImmediateTx::begin(&pool)
+        .await
+        .expect("independent writer");
+    sqlx::query("UPDATE axon_applied_migrations SET applied_at = applied_at")
+        .execute(&mut *writer)
+        .await
+        .expect("hold a write transaction");
+
+    let mut count = Box::pin(count_pending_jobs(&path));
+    let early = tokio::time::timeout(std::time::Duration::from_millis(200), count.as_mut()).await;
+    writer.commit().await.expect("release independent writer");
+    let result = match early {
+        Ok(result) => result,
+        Err(_) => count.await,
+    };
+    pool.close().await;
+    assert_eq!(
+        result.expect("counter survives concurrent migration writer"),
+        0
+    );
+}
+
+#[tokio::test]
 async fn pending_job_counter_reads_the_canonical_job_table() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("jobs.db");

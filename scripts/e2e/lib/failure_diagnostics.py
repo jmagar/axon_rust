@@ -1,6 +1,7 @@
 """Allowlisted failure metadata; never retain exception messages or source text."""
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -11,14 +12,15 @@ ERROR_TYPES = frozenset({
     "ProcessLookupError", "TimeoutError", "TimeoutExpired", "CalledProcessError",
     "HTTPError", "URLError", "RemoteDisconnected", "IncompleteRead",
     "BrokenPipeError", "ConnectionResetError", "ConnectionRefusedError",
-    "JSONDecodeError", "UnicodeDecodeError", "AcceptanceError", "SecurityError",
+    "JSONDecodeError", "UnicodeDecodeError", "AcceptanceError", "SecurityError", "WireError",
 })
 PHASES = frozenset({
     "launcher", "doctor", "observability", "retrieval", "domains",
     "observe-cli", "observe-http-job", "observe-http-events", "observe-mcp",
     "observe-http-stats", "observe-oracles", "observe-report",
 })
-FIELDS = frozenset({"domain", "error_type", "child_returncode", "traceback_file", "traceback_line"})
+WIRE_FIELDS = frozenset({"wire_context", "rpc_code", "internal_context"})
+FIELDS = frozenset({"domain", "error_type", "child_returncode", "traceback_file", "traceback_line"}) | WIRE_FIELDS
 EXCEPTION_LINE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.]*):(?: |$)")
 FRAME_LINE = re.compile(r'^  File "([^"\r\n]+)", line ([0-9]+), in ')
 
@@ -57,6 +59,15 @@ def validate(root: Path, value: object) -> dict | None:
         return None
     if not isinstance(value["error_type"], str) or value["error_type"] not in ERROR_TYPES:
         return None
+    if WIRE_FIELDS & value.keys():
+        if value["error_type"] != "WireError":
+            return None
+        if "wire_context" in value and value["wire_context"] not in ("initialize", "stdio_capabilities"):
+            return None
+        if "internal_context" in value and value["internal_context"] not in ("capabilities.context", "capabilities.doctor"):
+            return None
+        if "rpc_code" in value and (type(value["rpc_code"]) is not int or not -(2**31) <= value["rpc_code"] < 2**31):
+            return None
     if "child_returncode" in value and (
         type(value["child_returncode"]) is not int or not -(2**31) <= value["child_returncode"] < 2**31
     ):
@@ -79,6 +90,15 @@ def child_failure(root: Path, domain: str, child: subprocess.CompletedProcess[st
             name = match[1].rsplit(".", 1)[-1]
             if name in ERROR_TYPES:
                 value["error_type"] = name
+            if name == "WireError":
+                try:
+                    metadata = json.loads(line[match.end():])
+                except (ValueError, RecursionError):
+                    metadata = None
+                if isinstance(metadata, dict) and metadata.keys() <= WIRE_FIELDS:
+                    candidate = {**value, **metadata}
+                    if validate(root, candidate) is not None:
+                        value = candidate
             # Do not mistake an earlier chained exception for the final error.
             break
     for line in reversed(child.stderr.splitlines()):

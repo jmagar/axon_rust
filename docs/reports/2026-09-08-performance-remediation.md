@@ -285,3 +285,50 @@ default discovery does not claim to run it. Full composed replay then passed all
 three transports and seven observability oracles with no cleanup residue.
 Independent affected-code review found no actionable issue. The earlier Linux
 security-domain failure still needs qualification on the next CI head.
+
+### SQLite migration writer-admission follow-up
+
+At `b1533e9da`, the main CI workflow, native platform checks, and CodeQL passed.
+Hermetic run `34295675951` reached the security domain and failed on a JSON-RPC
+error in the raw stdio client. Its retained traceback locates `result()` but
+does not establish the server error code or its underlying cause.
+
+Investigation reproduced a pre-existing database contention defect
+(`axon_rust-e9q54`): `count_pending_jobs` reopens the database and runs composed
+migration validation. The deferred transaction reads schema identity before
+writing the schema epoch, even when all migrations already exist. With an
+independent writer active, the real counter failed with SQLite code 5 instead
+of waiting. The regression failed before the fix and passed afterward.
+
+The migration runner now uses the existing `ImmediateTx` writer admission
+before its validation reads. Schema identity, migration receipts, checksum and
+foreign-key validation, rollback, and atomic commit remain unchanged. The
+wrapper does not recursively acquire the application writer gate. All 16
+migration tests and 67 store-related tests passed, as did jobs Clippy and an
+independent architecture/security review. The parent independently reran the
+exact counter regression and generated-contract checks successfully.
+
+The direct macOS composed replay and six fresh stdio probes passed before
+this fix. Ten isolated fresh-stdio probes with the exact Linux CI binary also
+passed. These results do not establish that the reproduced migration race was
+the trigger for the security-domain CI failure; final-head hermetic evidence
+is still required. No production runtime or ingestion state was changed.
+
+Wire failures now retain only allowlisted request/internal contexts and an
+integer JSON-RPC error code. The producer no longer includes arbitrary error
+messages or data in its exception, and the report boundary independently
+validates every retained field. The real subprocess-to-report regression
+failed before implementation and passed afterward, including the exact CI
+report verifier; the workflow suite passed 25 tests. Fresh agent attempts for
+this diagnostic delta were blocked by the Codex usage limit, so the parent
+completed the affected correctness, tests, error handling, type validation,
+security, simplification, and documentation review locally. No further
+actionable finding remained. The migration fix's independent review had
+already completed before the limit.
+
+The rebuilt binary then passed the full composed local suite: CLI, HTTP, and
+MCP retrieval, all downstream domains including security, three observed
+provider calls without retries, and all seven observability oracles. The
+parent's migration-suite rerun passed 16 tests and the task-wire suite passed
+six tests. The macOS debug link emitted a large `__eh_frame` compact-unwind
+warning but completed successfully; this is not a warning-free build claim.

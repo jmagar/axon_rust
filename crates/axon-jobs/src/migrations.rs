@@ -119,7 +119,10 @@ pub async fn apply_all_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> 
     let sets = composed_sets();
     validate_sets(&sets)?;
 
-    let mut tx = pool.begin().await?;
+    // Validation establishes a read snapshot, and epoch stamping writes even
+    // when every migration receipt already exists. Reserve the writer first
+    // so a concurrent runtime writer cannot invalidate that snapshot.
+    let mut tx = axon_core::sqlite::ImmediateTx::begin(pool).await?;
     let fresh = identity::validate_before_mutation(&mut tx, &sets).await?;
     if fresh {
         ensure_applied_table(&mut tx).await?;
