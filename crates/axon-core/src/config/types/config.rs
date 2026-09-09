@@ -1008,8 +1008,12 @@ pub struct Config {
     /// Env: `AXON_QUEUE_SUMMARY_SECS`. TOML: `workers.queue-summary-secs`. 0 disables logging. Clamped 0–3600. Default: 30.
     pub queue_summary_secs: u64,
 
-    /// Buffered Qdrant points before flush.
-    /// Env: `AXON_QDRANT_POINT_BUFFER`. TOML: `workers.qdrant-point-buffer`. Clamped 128–16384. Default: 1024.
+    /// Points sent in each Qdrant upsert request.
+    /// Canonical env: `AXON_QDRANT_UPSERT_BATCH_SIZE`. Canonical TOML:
+    /// `providers.vector.upsert-batch-points`. Clamped 1–4096. The older
+    /// `AXON_QDRANT_POINT_BUFFER` / `pipeline.qdrant-point-buffer` controls are
+    /// compatibility fallbacks only and retain their historical 128–16384 clamp.
+    /// Default: 1024.
     pub qdrant_point_buffer: usize,
 
     /// HNSW `ef` for named-mode (dense+sparse) collection searches.

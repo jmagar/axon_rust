@@ -1,5 +1,6 @@
 pub const REQUIRED_WORKSPACE_MEMBERS: &[&str] = &[
     "xtask",
+    "xtask-release",
     // axon-error graduated from the PR0 skeleton in Phase 1 (issue #298): it now
     // carries real dependencies and sidecar tests, so it is a required member
     // rather than a `TARGET_CRATES` skeleton entry.

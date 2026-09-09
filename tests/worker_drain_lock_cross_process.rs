@@ -13,7 +13,18 @@
 //! worker and asserts it refuses.
 
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use axon_services::runtime::{WorkerDrainLock, drain_lock_path};
+
+struct ManagedWorker(std::process::Child);
+
+impl Drop for ManagedWorker {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 
 fn axon_bin() -> &'static str {
     env!("CARGO_BIN_EXE_axon")
@@ -23,68 +34,95 @@ fn axon_bin() -> &'static str {
 fn second_worker_refuses_while_first_holds_the_lock() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let data_dir = tmp.path();
+    std::fs::write(data_dir.join("config.toml"), "").expect("isolated config");
 
-    // Holder: runs forever (idle-exit 0). The drain lock is acquired as the
-    // very first thing in `run_worker_process`, before any runtime is built, so
-    // a short fixed head-start guarantees it is held. (Its stdout is
-    // block-buffered to a pipe when not a tty, so we can't read the banner
-    // live — the second worker's refusal is the actual assertion.)
-    let mut holder = worker_command()
-        .args(["jobs", "worker", "--idle-exit-secs", "0"])
-        .env("AXON_DATA_DIR", data_dir)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn holder worker");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("probe runtime");
+    let lock_path = drain_lock_path(&data_dir.join("jobs.db"));
+    let holder_log = data_dir.join("holder.stderr");
+    // Own cleanup even if a readiness or refusal assertion fails.
+    let mut holder = ManagedWorker(
+        worker_command(data_dir)
+            .args(["jobs", "worker", "--idle-exit-secs", "0"])
+            .env("AXON_DATA_DIR", data_dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::fs::File::create(&holder_log).expect("holder log"))
+            .spawn()
+            .expect("spawn holder worker"),
+    );
 
-    // The lock is acquired first thing in `run_worker_process`, before any
-    // runtime is built, so a short fixed head-start guarantees it is held.
-    std::thread::sleep(Duration::from_secs(3));
-    if let Ok(Some(status)) = holder.try_wait() {
-        panic!("holder worker exited early before it could hold the lock: {status:?}");
+    // Probe real cross-process ownership instead of guessing startup duration.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let exited = holder.0.try_wait().expect("holder status");
+        assert!(
+            exited.is_none(),
+            "holder exited: {exited:?}; stderr: {}",
+            std::fs::read_to_string(&holder_log).unwrap_or_default()
+        );
+        if lock_path.exists()
+            && runtime
+                .block_on(WorkerDrainLock::is_held(&lock_path))
+                .expect("probe lock")
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "holder never acquired queue lock; stderr: {}",
+            std::fs::read_to_string(&holder_log).unwrap_or_default()
+        );
+        std::thread::sleep(Duration::from_millis(10));
     }
 
     // Second worker: must detect the held lock and exit immediately. It refuses
     // at `try_hold`, before building any runtime, so `.output()` returns fast.
-    let second = worker_command()
+    let second = worker_command(data_dir)
         .args(["jobs", "worker", "--idle-exit-secs", "1", "--json"])
         .env("AXON_DATA_DIR", data_dir)
         .output()
         .expect("run second worker");
 
     let stdout = String::from_utf8_lossy(&second.stdout);
-    let _ = holder.kill();
-    let _ = holder.wait();
+    let stderr = String::from_utf8_lossy(&second.stderr);
 
     assert!(
-        stdout.contains("\"acquired_lock\": false") || stdout.contains("\"acquired_lock\":false"),
-        "second worker should refuse while the first holds the lock; stdout: {stdout}"
+        stderr.contains("jobs.worker_already_active"),
+        "second worker must report queue ownership refusal; stdout: {stdout}; stderr: {stderr}"
     );
     assert!(
         !second.status.success(),
         "a worker that did not acquire the queue must not report success: {:?}",
         second.status
     );
-    // Lock release on holder death is a kernel guarantee for the fcntl lock and
-    // is covered in-process by `drain_lock_tests::probe_does_not_evict_a_live_holder`
-    // / `holder_excludes_second_holder_until_dropped`; not re-tested here because
-    // a reacquiring worker would not cleanly idle-exit against dummy endpoints.
+    assert!(holder.0.try_wait().expect("holder status").is_none());
+    assert!(
+        runtime
+            .block_on(WorkerDrainLock::is_held(&lock_path))
+            .expect("holder retains lock")
+    );
+    drop(holder);
+    let _reacquired = runtime
+        .block_on(WorkerDrainLock::try_hold(&lock_path))
+        .expect("reacquire released lock")
+        .expect("holder death releases queue ownership");
 }
 
-/// A `Command` for the axon binary with dummy (present-but-unreachable) service
-/// endpoints. The worker requires `QDRANT_URL`/`TEI_URL` to be *present* at
-/// config-parse time; they are never contacted on the lock/refusal paths under
-/// test. `AXON_ALLOW_INCOMPATIBLE_STORE_STARTUP` bypasses the reachability gate
-/// so the holder can start and hold the lock.
-fn worker_command() -> Command {
+/// Keep startup on temporary state and dummy service endpoints. The empty
+/// queue needs no provider work, and the losing worker fails before runtime
+/// construction.
+fn worker_command(data_dir: &std::path::Path) -> Command {
     let mut cmd = Command::new(axon_bin());
     cmd.env("QDRANT_URL", "http://127.0.0.1:1")
         .env("TEI_URL", "http://127.0.0.1:1")
         .env("AXON_ALLOW_INCOMPATIBLE_STORE_STARTUP", "1")
-        // An inherited explicit config path is a hard startup error when the
-        // file is missing; this test owns its whole environment.
-        .env_remove("AXON_CONFIG_PATH")
-        .env_remove("AXON_ENV_FILE");
+        // Explicit paths keep both workers on this test's queue and prevent
+        // repo/user dotenv files from supplying live configuration.
+        .env("AXON_SQLITE_PATH", data_dir.join("jobs.db"))
+        .env("AXON_CONFIG_PATH", data_dir.join("config.toml"))
+        .env("AXON_ENV_FILE", data_dir.join("absent.env"));
     cmd
 }

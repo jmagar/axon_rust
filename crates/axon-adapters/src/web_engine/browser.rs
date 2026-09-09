@@ -51,7 +51,10 @@ pub(crate) fn apply_spider_browser_defaults_with_timeout(
     website.with_wait_for_idle_network0(Some(spider::configuration::WaitForIdleNetwork::new(
         Some(Duration::from_secs(cfg.chrome_network_idle_timeout_secs)),
     )));
-    let default_timeout_ms = (cfg.chrome_network_idle_timeout_secs + 30) * 1_000;
+    let default_timeout_ms = cfg
+        .chrome_network_idle_timeout_secs
+        .saturating_add(30)
+        .saturating_mul(1_000);
     let timeout_ms = match (cfg.request_timeout_ms, timeout_policy) {
         (Some(timeout_ms), BrowserTimeoutPolicy::Exact) => timeout_ms,
         (Some(timeout_ms), BrowserTimeoutPolicy::FloorForBrowserWork) => {

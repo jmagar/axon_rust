@@ -16,7 +16,20 @@ def rpc(identifier, method, params=None):
     return value
 
 def result(message, context):
-    if "error" in message: raise WireError(f"{context}: {message['error']}")
+    if "error" in message:
+        # Failure evidence must never contain an arbitrary RPC message or data.
+        safe = {}
+        contexts = {"initialize": "initialize", "stdio capabilities": "stdio_capabilities"}
+        if context in contexts: safe["wire_context"] = contexts[context]
+        error = message["error"]
+        if isinstance(error, dict):
+            code = error.get("code")
+            if type(code) is int and -(2**31) <= code < 2**31: safe["rpc_code"] = code
+            detail = error.get("message")
+            if isinstance(detail, str):
+                for name in ("capabilities.context", "capabilities.doctor"):
+                    if detail.startswith(name + " failed:"): safe["internal_context"] = name
+        raise WireError(json.dumps(safe, sort_keys=True))
     value = message.get("result")
     if not isinstance(value, dict): raise WireError(f"{context}: result object missing")
     return value

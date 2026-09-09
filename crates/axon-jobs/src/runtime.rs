@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axon_core::config::Config;
+use axon_core::sqlite::SqliteWriteGate;
 use sqlx::SqlitePool;
 
 use crate::store::{checkpoint_and_close, open_sqlite_pool, open_sqlite_pool_or_recover};
@@ -65,6 +66,19 @@ impl SqliteJobBackend {
         cfg: Arc<Config>,
         job_runner_registry: Option<Arc<workers::JobRunnerRegistry>>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Self::new_with_workers_registry_and_write_gate(
+            cfg,
+            job_runner_registry,
+            SqliteWriteGate::default(),
+        )
+        .await
+    }
+
+    pub async fn new_with_workers_registry_and_write_gate(
+        cfg: Arc<Config>,
+        job_runner_registry: Option<Arc<workers::JobRunnerRegistry>>,
+        write_gate: SqliteWriteGate,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let path = cfg.sqlite_path.to_string_lossy().to_string();
         tracing::info!(
             sqlite_path = %cfg.sqlite_path.display(),
@@ -74,8 +88,12 @@ impl SqliteJobBackend {
         let pool = Arc::new(open_sqlite_pool_or_recover(&path).await?);
         Self::init(Arc::clone(&pool)).await?;
 
-        let worker_handles =
-            workers::spawn_workers(Arc::clone(&pool), Arc::clone(&cfg), job_runner_registry);
+        let worker_handles = workers::spawn_workers_with_write_gate(
+            Arc::clone(&pool),
+            Arc::clone(&cfg),
+            job_runner_registry,
+            write_gate,
+        );
 
         Ok(Self {
             pool,
@@ -95,6 +113,20 @@ impl SqliteJobBackend {
             workers: None,
             cfg: Arc::new(Config::default_minimal()),
         })
+    }
+
+    /// Reuse an already migrated pool for an enqueue-only composition layer.
+    ///
+    /// Unified job runners execute inside a backend that already owns this
+    /// pool. Their domain service contexts must clone that pool handle rather
+    /// than opening a second pool against the same SQLite file, which would
+    /// create an independent writer-admission domain.
+    pub fn from_migrated_pool(cfg: Arc<Config>, pool: Arc<SqlitePool>) -> Self {
+        Self {
+            pool,
+            workers: None,
+            cfg,
+        }
     }
 
     pub fn pool(&self) -> &Arc<SqlitePool> {

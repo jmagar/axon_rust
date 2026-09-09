@@ -105,7 +105,7 @@ async fn run_created_generation_inner(
     let collection = collection_spec(input.collection, verified_embedding.identity.dimensions);
     output::initialize_durable_export(&input.plan).await?;
     let archive_requested = input.adapter.wants_archive(&input.plan);
-    let mut accumulated = GenerationAccumulator::new(&generation.generation);
+    let mut accumulated = GenerationAccumulator::new(&generation.generation).await?;
     let changed_total = diff.added.len().saturating_add(diff.modified.len()) as u64;
     let mut stage = GenerationStageProgress::default();
 
@@ -271,9 +271,15 @@ async fn publish_created_generation(
         })
         .await?
         .ok_or_else(|| anyhow::anyhow!("source publication finalizer is already leased"))?;
-    let result = publish_created_generation_under_finalizer(
-        runtime, input, emitter, lease, manifest, diff, generation, previous, collection,
-        vectorized, artifacts, inline,
+    let result = super::lease_heartbeat::maintain(
+        runtime.ledger.clone(),
+        &finalizer,
+        SOURCE_LEASE_TTL_SECONDS,
+        input.execution.cancellation.clone(),
+        publish_created_generation_under_finalizer(
+            runtime, input, emitter, lease, manifest, diff, generation, previous, collection,
+            vectorized, artifacts, inline,
+        ),
     )
     .await;
     let release = runtime

@@ -2,13 +2,37 @@ import importlib.util
 import json
 import tempfile
 import unittest
+import sys
 from pathlib import Path
 
 SPEC=importlib.util.spec_from_file_location("security",Path(__file__).with_name("security_pack.py"))
 security=importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(security)
+ENTRY_SPEC=importlib.util.spec_from_file_location("security_entry_test",Path(__file__).with_name("hermetic_entry.py"))
+entry=importlib.util.module_from_spec(ENTRY_SPEC);sys.modules[ENTRY_SPEC.name]=entry;ENTRY_SPEC.loader.exec_module(entry)
 
 
 class SecurityPackTests(unittest.TestCase):
+    def test_nonloopback_probe_owns_a_separate_database_and_no_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            original={"AXON_DATA_DIR":str(root/"active"),"AXON_SQLITE_PATH":str(root/"active/jobs.db"),
+                      "AXON_HTTP_TOKEN":"fixture-token","AXON_AUTH_MODE":"oauth",
+                      "AXON_GOOGLE_CLIENT_ID":"fixture-id","AXON_GOOGLE_CLIENT_SECRET":"fixture-secret",
+                      "TEI_URL":"http://127.0.0.1:12345"}
+            registered=[]
+            class Manifest:
+                def register(self,kind,path):registered.append((kind,path))
+            isolated=entry.nonloopback_probe_environment(original,root,Manifest())
+            self.assertNotEqual(original["AXON_SQLITE_PATH"],isolated["AXON_SQLITE_PATH"])
+            self.assertEqual(str(Path(isolated["AXON_DATA_DIR"])/"jobs.db"),isolated["AXON_SQLITE_PATH"])
+            self.assertTrue(Path(isolated["AXON_DATA_DIR"]).is_dir())
+            self.assertIn(("temp_path",isolated["AXON_DATA_DIR"]),registered)
+            self.assertEqual("0.0.0.0",isolated["AXON_HTTP_HOST"])
+            for key in ("AXON_HTTP_TOKEN","AXON_AUTH_MODE","AXON_GOOGLE_CLIENT_ID","AXON_GOOGLE_CLIENT_SECRET"):
+                self.assertNotIn(key,isolated)
+                self.assertIn(key,original)
+            self.assertEqual(original["TEI_URL"],isolated["TEI_URL"])
+
     def test_exhaustive_ssrf_alternate_forms_are_rejected_without_connections(self):
         dns={"rebind.axon-e2e.invalid":["198.51.100.2","127.0.0.1"],
              "redirect.axon-e2e.invalid":["127.0.0.1"]}

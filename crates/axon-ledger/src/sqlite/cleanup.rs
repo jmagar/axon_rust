@@ -14,7 +14,7 @@ pub(super) async fn record_cleanup_debt(
     debt: CleanupDebt,
 ) -> Result<()> {
     validate_cleanup_debt(&debt)?;
-    let mut tx = ImmediateTx::begin(&store.pool)
+    let mut tx = ImmediateTx::begin_with_gate(&store.pool, &store.write_gate)
         .await
         .map_err(sqlite_error)?;
     ensure_source_exists_in_tx(&mut tx, &debt.source_id).await?;
@@ -126,7 +126,7 @@ pub(super) async fn resolve_cleanup_debt(
     store: &SqliteLedgerStore,
     debt_id: &CleanupDebtId,
 ) -> Result<()> {
-    let mut tx = ImmediateTx::begin(&store.pool)
+    let mut tx = ImmediateTx::begin_with_gate(&store.pool, &store.write_gate)
         .await
         .map_err(sqlite_error)?;
     let existing: Option<String> = sqlx::query_scalar(
@@ -177,7 +177,7 @@ pub(super) async fn delete_generation(
     source_id: &SourceId,
     generation: &SourceGenerationId,
 ) -> Result<u64> {
-    let mut tx = ImmediateTx::begin(&store.pool)
+    let mut tx = ImmediateTx::begin_with_gate(&store.pool, &store.write_gate)
         .await
         .map_err(sqlite_error)?;
     let documents =

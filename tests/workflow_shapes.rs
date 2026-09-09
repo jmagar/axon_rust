@@ -1522,6 +1522,67 @@ fn ci_has_changed_path_classifier_and_stable_gate() {
 }
 
 #[test]
+fn windows_platform_smoke_executes_secure_directory_identity_tests() {
+    let workflow = include_str!("../.github/workflows/e2e-platform-smoke.yml");
+    let remaining = workflow
+        .split_once("- name: Test Windows secure directory identity")
+        .expect("native Windows identity tests must run, not only compile")
+        .1;
+    let step = remaining
+        .split_once("- name:")
+        .map_or(remaining, |(step, _)| step);
+    assert!(step.contains("runner.os == 'Windows'"));
+    assert!(step.contains("RUST_MIN_STACK: 8388608"));
+    assert!(step.contains("cargo test -p axon-services --lib --locked non_unix::tests"));
+}
+
+#[test]
+fn performance_guides_use_current_configuration_and_execution_contracts() {
+    let guide = include_str!("../docs/operations/performance.md");
+    for stale in [
+        "`workers.",
+        "[workers.",
+        "`scrape.max-sitemaps`",
+        "`search.collection`",
+        "`qdrant.",
+    ] {
+        assert!(!guide.contains(stale), "obsolete performance knob {stale}");
+    }
+    for canonical in [
+        "pipeline.unified-worker-concurrency",
+        "pipeline.max-active-source-jobs",
+        "pipeline.embed-doc-timeout-secs",
+        "server.default-collection",
+        "providers.vector.payload-index-parallelism",
+        "[crawl.adaptive-concurrency]",
+    ] {
+        assert!(
+            guide.contains(canonical),
+            "missing canonical knob {canonical}"
+        );
+    }
+    let boundaries = include_str!("../docs/guides/pipeline-performance-boundaries.md");
+    assert!(!boundaries.contains("`--local`"));
+    assert!(boundaries.contains("isolated data directory"));
+}
+
+#[test]
+fn repository_contract_keeps_pinned_validation_on_available_hosted_runners() {
+    let workflow = include_str!("../.github/workflows/repository-contract.yml");
+    assert_eq!(workflow.matches("runs-on: ubuntu-latest").count(), 2);
+    assert!(!workflow.contains("runs-on: ci-pool-ops"));
+    assert!(workflow.contains("repository: dinglebear-ai/workflows"));
+    assert!(workflow.contains("ref: d1a41a7af9c41189e0f1062234364f5814bda99d"));
+    assert!(workflow.contains("python3 workflow-library/scripts/fleet_contract.py check"));
+    assert!(workflow.contains("--repo target"));
+    assert!(workflow.contains("--profile rust"));
+    assert_eq!(workflow.matches("persist-credentials: false").count(), 2);
+    assert!(!workflow.contains("secrets: inherit"));
+    assert!(workflow.contains("RESULT: ${{ needs.contract.result }}"));
+    assert!(workflow.contains("if [[ \"$RESULT\" != \"success\" ]]"));
+}
+
+#[test]
 fn non_required_automation_does_not_repeat_on_unrelated_events() {
     let sessions = include_str!("../.github/workflows/session-log-automerge.yml");
     assert!(sessions.contains("paths:\n      - docs/sessions/**"));

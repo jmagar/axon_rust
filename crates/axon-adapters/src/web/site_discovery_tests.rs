@@ -14,6 +14,20 @@ fn discovery_config_has_no_disk_output_contract() {
 }
 
 #[test]
+fn site_discovery_preserves_a_directory_seed_trailing_slash() {
+    let mut plan = crate::web_tests::web_plan(
+        "https://cargo-generate.github.io/cargo-generate/",
+        SourceScope::Site,
+    );
+    plan.route.source.canonical_uri = "https://cargo-generate.github.io/cargo-generate".to_string();
+
+    assert_eq!(
+        discovery_start_url(&plan),
+        "https://cargo-generate.github.io/cargo-generate/"
+    );
+}
+
+#[test]
 fn map_strategy_has_no_crawl_or_disk_handoff() {
     let strategy = include_str!("../web_engine/engine/map/strategy.rs");
 

@@ -13,6 +13,11 @@ use crate::context::TargetLocalSourceRuntime;
 use crate::reserved_call::ArtifactCleanupGuard;
 use crate::source::output::{self, SourceOutput};
 
+// Archive construction and candidate delivery currently require a complete
+// generation. This lifetime charge is separate from the rolling prepared-work
+// admission budget, and applies equally to disk spill and memory fallback.
+const MAX_GENERATION_SIDE_EFFECT_BYTES: usize = 256 * 1024 * 1024;
+
 #[derive(Default)]
 pub(super) struct GenerationStageProgress {
     pub(super) pipeline: PipelineProgress,
@@ -35,6 +40,11 @@ pub(super) struct GenerationAccumulator {
     refreshed_manifest_items: Vec<ManifestItem>,
     spool: Option<GenerationSpool>,
     spool_sequence: u64,
+    side_effect_bytes: usize,
+    #[cfg(test)]
+    side_effect_limit: Option<usize>,
+    #[cfg(test)]
+    append_hook: Option<Box<dyn FnOnce() + Send>>,
 }
 
 pub(super) struct FinalizedGeneration {
@@ -46,8 +56,10 @@ pub(super) struct FinalizedGeneration {
 }
 
 impl GenerationAccumulator {
-    pub(super) fn new(generation: &SourceGenerationId) -> Self {
-        let spool = match GenerationSpool::temporary(&generation.0) {
+    pub(super) async fn new(generation: &SourceGenerationId) -> anyhow::Result<Self> {
+        let generation = generation.0.clone();
+        tokio::task::spawn_blocking(move || {
+        let spool = match GenerationSpool::temporary(&generation) {
             Ok(spool) => Some(spool),
             Err(error) => {
                 tracing::warn!(error = %error, "generation spool unavailable; retaining side effects in memory");
@@ -58,12 +70,55 @@ impl GenerationAccumulator {
             spool,
             ..Self::default()
         }
+        }).await.context("generation spool initialization worker failed")
     }
 
-    pub(super) fn absorb_pretracked_side_effects(
+    pub(super) async fn absorb_pretracked_side_effects(
         &mut self,
         batch: PreparedBatchSideEffects,
     ) -> anyhow::Result<()> {
+        self.blocking_step(move |state| state.append_side_effects(batch))
+            .await
+    }
+
+    /// Borrowing `self` admits only one outstanding append/replay per generation.
+    /// A canceled caller leaves the blocking operation owning its private spool;
+    /// it finishes and drops the spool, never publishing partially replayed state.
+    async fn blocking_step(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> anyhow::Result<()> + Send + 'static,
+    ) -> anyhow::Result<()> {
+        let mut state = std::mem::take(self);
+        let (state, result) = tokio::task::spawn_blocking(move || {
+            let result = operation(&mut state);
+            (state, result)
+        })
+        .await
+        .context("generation side-effect worker failed")?;
+        *self = state;
+        result
+    }
+
+    fn append_side_effects(&mut self, batch: PreparedBatchSideEffects) -> anyhow::Result<()> {
+        #[cfg(test)]
+        if let Some(hook) = self.append_hook.take() {
+            hook();
+        }
+        let limit = MAX_GENERATION_SIDE_EFFECT_BYTES;
+        #[cfg(test)]
+        let limit = self.side_effect_limit.unwrap_or(limit);
+        let charged = batch
+            .estimated_resident_bytes()
+            .max(batch.estimated_bytes()?);
+        let next_bytes = self
+            .side_effect_bytes
+            .checked_add(charged)
+            .context("generation side-effect byte accounting overflow")?;
+        anyhow::ensure!(
+            next_bytes <= limit,
+            "generation side effects exceed the {limit}-byte total finalization budget (separate from prepared-work admission)"
+        );
+        self.side_effect_bytes = next_bytes;
         self.artifacts.extend(batch.acquisition_artifacts);
         self.artifacts.extend(batch.enrichment_artifacts);
         self.output.merge(batch.clean_output);
@@ -111,6 +166,16 @@ impl GenerationAccumulator {
             .extend(record.refreshed_manifest_items);
     }
 
+    fn replay_spool(&mut self) -> anyhow::Result<()> {
+        if let Some(spool) = self.spool.take() {
+            spool.replay_each::<SideEffectsSpoolRecord>(|_, record| {
+                self.absorb_side_effect_record(record);
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
     pub(super) fn absorb_vectorized(&mut self, vectorized: vectorize::VectorizeResult) {
         // Per-pool statuses have already been durably written. Retain only
         // document identities for generation-wide deduplication.
@@ -142,12 +207,7 @@ impl GenerationAccumulator {
         manifest: &mut SourceManifest,
         diff: SourceManifestDiff,
     ) -> anyhow::Result<FinalizedGeneration> {
-        if let Some(spool) = self.spool.take() {
-            spool.replay_each::<SideEffectsSpoolRecord>(|_, record| {
-                self.absorb_side_effect_record(record);
-                Ok(())
-            })?;
-        }
+        self.blocking_step(Self::replay_spool).await?;
         self.vectorized.warnings.splice(0..0, self.warnings);
         let archive =
             output::store_adapter_archive(runtime, input.adapter, &input.plan, &self.archive_items)
@@ -156,14 +216,14 @@ impl GenerationAccumulator {
         self.output.merge(archive);
         self.artifacts.append(&mut self.output.artifacts);
         let diff = reuse::apply_reused_items(diff, &self.reused_item_keys);
-        let refreshed = self
+        let mut refreshed = self
             .refreshed_manifest_items
             .into_iter()
             .map(|item| (item.source_item_key.clone(), item))
             .collect::<std::collections::BTreeMap<_, _>>();
         for item in &mut manifest.items {
-            if let Some(replacement) = refreshed.get(&item.source_item_key) {
-                *item = replacement.clone();
+            if let Some(replacement) = refreshed.remove(&item.source_item_key) {
+                *item = replacement;
             }
         }
         output::record_artifacts_on_manifest(
@@ -182,3 +242,7 @@ impl GenerationAccumulator {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "generation_state_tests.rs"]
+mod tests;

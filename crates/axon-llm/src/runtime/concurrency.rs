@@ -2,7 +2,11 @@ use std::error::Error as StdError;
 use std::sync::{Arc, LazyLock};
 
 use dashmap::DashMap;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Semaphore;
+
+mod admission;
+use admission::Admission;
+pub use admission::CompletionPermit;
 
 /// Typed key for the per-backend LLM completion semaphore map (B-M3).
 ///
@@ -20,7 +24,7 @@ pub(crate) enum CompletionKey {
 #[cfg(test)]
 const DEFAULT_LLM_COMPLETION_CONCURRENCY: usize = 4;
 
-static COMPLETION_SEMAPHORES: LazyLock<DashMap<CompletionKey, Arc<Semaphore>>> =
+static COMPLETION_SEMAPHORES: LazyLock<DashMap<CompletionKey, Arc<Admission>>> =
     LazyLock::new(DashMap::new);
 
 #[cfg(test)]
@@ -33,31 +37,25 @@ fn parse_completion_concurrency_limit(raw: Option<&str>) -> usize {
 
 pub async fn acquire_completion_permit(
     limit: usize,
-) -> Result<OwnedSemaphorePermit, Box<dyn StdError + Send + Sync>> {
+) -> Result<CompletionPermit, Box<dyn StdError + Send + Sync>> {
     acquire_completion_permit_for_key(CompletionKey::Default, limit).await
 }
 
 pub(crate) async fn acquire_completion_permit_for_key(
     key: CompletionKey,
     limit: usize,
-) -> Result<OwnedSemaphorePermit, Box<dyn StdError + Send + Sync>> {
+) -> Result<CompletionPermit, Box<dyn StdError + Send + Sync>> {
     completion_semaphore_for_key(key, limit)
-        .acquire_owned()
+        .acquire(crate::reservation::current_priority())
         .await
-        .map_err(|err| format!("LLM completion semaphore closed: {err}").into())
 }
 
-fn completion_semaphore_for_key(key: CompletionKey, limit: usize) -> Arc<Semaphore> {
+fn completion_semaphore_for_key(key: CompletionKey, limit: usize) -> Arc<Admission> {
     let normalized_limit = limit.clamp(1, Semaphore::MAX_PERMITS);
     COMPLETION_SEMAPHORES
         .entry(key)
-        .or_insert_with(|| Arc::new(Semaphore::new(normalized_limit)))
+        .or_insert_with(|| Arc::new(Admission::new(normalized_limit)))
         .clone()
-}
-
-#[cfg(test)]
-fn reset_completion_limiters_for_tests() {
-    COMPLETION_SEMAPHORES.clear();
 }
 
 #[cfg(test)]
@@ -68,7 +66,7 @@ fn available_permits_for_key(key: &CompletionKey) -> Option<usize> {
 }
 
 #[cfg(test)]
-fn completion_semaphore_for_key_for_tests(key: CompletionKey, limit: usize) -> Arc<Semaphore> {
+fn completion_semaphore_for_key_for_tests(key: CompletionKey, limit: usize) -> Arc<Admission> {
     completion_semaphore_for_key(key, limit)
 }
 

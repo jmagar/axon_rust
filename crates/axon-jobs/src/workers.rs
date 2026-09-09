@@ -6,10 +6,11 @@ pub mod unified;
 mod watch_scheduler;
 mod watchdog;
 
-use spawn_unified::spawn_unified_worker;
+use axon_core::sqlite::SqliteWriteGate;
+use spawn_unified::spawn_unified_worker_with_write_gate;
 pub use unified::{JobRunnerRegistry, UnifiedJobOutcome, UnifiedJobRunner};
 
-pub(crate) use cancel_registry::cancel_job;
+pub(crate) use cancel_registry::{cancel_attempt, cancel_job};
 
 use axon_core::config::Config;
 use sqlx::SqlitePool;
@@ -106,6 +107,15 @@ pub fn spawn_workers(
     cfg: Arc<Config>,
     job_runner_registry: Option<Arc<JobRunnerRegistry>>,
 ) -> WorkerHandles {
+    spawn_workers_with_write_gate(pool, cfg, job_runner_registry, SqliteWriteGate::default())
+}
+
+pub fn spawn_workers_with_write_gate(
+    pool: Arc<SqlitePool>,
+    cfg: Arc<Config>,
+    job_runner_registry: Option<Arc<JobRunnerRegistry>>,
+    write_gate: SqliteWriteGate,
+) -> WorkerHandles {
     let unified_notify = Arc::new(Notify::new());
     let activity = Arc::new(WorkerActivity::default());
     let shutdown = CancellationToken::new();
@@ -116,7 +126,7 @@ pub fn spawn_workers(
     );
 
     let worker_handles = vec![
-        spawn_unified_worker(
+        spawn_unified_worker_with_write_gate(
             Arc::clone(&pool),
             Arc::clone(&unified_notify),
             Arc::clone(&activity),
@@ -124,6 +134,7 @@ pub fn spawn_workers(
             job_runner_registry,
             cfg.unified_worker_concurrency,
             cfg.source_job_concurrency_limit,
+            write_gate.clone(),
         ),
         tokio::spawn(watchdog::watchdog_loop(
             Arc::clone(&pool),

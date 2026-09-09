@@ -12,19 +12,36 @@ permissions: {}
 
 jobs:
   contract:
+    # The pinned reusable workflow hardcodes an unavailable ci-pool-ops runner.
+    # Keep its exact validator and inputs while using an ephemeral hosted runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
-    uses: dinglebear-ai/workflows/.github/workflows/fleet-contract.yml@d1a41a7af9c41189e0f1062234364f5814bda99d # fleet-2026-07-31
-    with:
-      profile: rust
-      implementation-ref: d1a41a7af9c41189e0f1062234364f5814bda99d
-    secrets: inherit
+    steps:
+      - name: Check out caller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          path: target
+          persist-credentials: false
+      - name: Check out immutable contract implementation
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: dinglebear-ai/workflows
+          ref: d1a41a7af9c41189e0f1062234364f5814bda99d # fleet-2026-07-31
+          path: workflow-library
+          persist-credentials: false
+      - name: Validate repository contract
+        run: >-
+          python3 workflow-library/scripts/fleet_contract.py check
+          --repo target
+          --profile rust
 
   repository-contract:
     name: Repository Contract
     if: always()
     needs: [contract]
-    runs-on: ci-pool-ops
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
     steps:

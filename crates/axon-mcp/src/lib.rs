@@ -13,4 +13,4 @@ pub mod schema_registry;
 pub mod server;
 
 pub use auth::AuthPolicy;
-pub use server::{AxonMcpServer, run_stdio_server};
+pub use server::{AxonMcpServer, run_stdio_server, run_stdio_server_with_context};

@@ -8,6 +8,73 @@ use axon_api::source::{
 use axon_jobs::SqliteJobBackend;
 use axon_jobs::boundary::JobStore;
 
+#[tokio::test(start_paused = true)]
+async fn heartbeat_waiting_for_writer_must_keep_polling_source() {
+    let gate = SqliteWriteGate::default();
+    let shutdown = CancellationToken::new();
+    let source = async {
+        let _writer = gate.lock().await;
+        tokio::time::sleep(std::time::Duration::from_secs(31)).await;
+        42
+    };
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(35),
+        drive_source_with_heartbeat(source, &shutdown, || async {
+            let _writer = gate.lock().await;
+        }),
+    )
+    .await
+    .expect("heartbeat must not suspend the source holding its writer gate")
+    .expect("source completes");
+    assert_eq!(result, 42);
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancellation_bounds_cleanup_while_heartbeat_is_blocked() {
+    let shutdown = CancellationToken::new();
+    let cancel = async {
+        tokio::time::sleep(std::time::Duration::from_secs(31)).await;
+        shutdown.cancel();
+    };
+    let running = drive_source_with_heartbeat(std::future::pending::<()>(), &shutdown, || {
+        std::future::pending::<()>()
+    });
+    let (_, result) = tokio::time::timeout(std::time::Duration::from_secs(42), async {
+        tokio::join!(cancel, running)
+    })
+    .await
+    .expect("a blocked heartbeat must not hide cancellation or its cleanup deadline");
+    assert!(result.is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancellation_releases_heartbeat_writer_before_source_cleanup() {
+    let gate = SqliteWriteGate::default();
+    let shutdown = CancellationToken::new();
+    let cancel = async {
+        tokio::time::sleep(std::time::Duration::from_secs(31)).await;
+        shutdown.cancel();
+    };
+    let source = async {
+        shutdown.cancelled().await;
+        let _writer = gate.lock().await;
+        42
+    };
+    let running = drive_source_with_heartbeat(source, &shutdown, || async {
+        let _writer = gate.lock().await;
+        std::future::pending::<()>().await;
+    });
+    let (_, result) = tokio::join!(cancel, running);
+    assert_eq!(
+        result.expect("cleanup must acquire the abandoned heartbeat writer"),
+        42
+    );
+    assert!(
+        gate.try_lock().is_some(),
+        "all writer guards must be released"
+    );
+}
+
 async fn test_cfg() -> (tempfile::TempDir, Arc<Config>) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut cfg = Config::test_default();
@@ -65,8 +132,8 @@ fn source_job_request(source_request: &SourceRequest) -> JobCreateRequest {
 /// directly against a plain enqueue-only `SqliteJobBackend::new` (no
 /// `build_registry` involved) sidesteps that unrelated construction bug and
 /// still exercises the runner's real logic end-to-end: real payload
-/// deserialization, a real lazily-built `ServiceContext` (via
-/// `crate::runtime::resolve_runtime`), and a real
+/// deserialization, a real lazily-built `ServiceContext` sharing the worker
+/// pool, and a real
 /// `crate::source::index_source_with_auth` call.
 async fn claim_source_job(
     store: &SqliteUnifiedJobStore,
@@ -271,4 +338,40 @@ async fn build_registry_registers_source() {
     let (_tmp, cfg) = test_cfg().await;
     let registry = build_registry(&cfg).expect("build registry");
     assert!(registry.contains(UnifiedJobKind::Source));
+}
+
+#[tokio::test]
+async fn source_runner_context_reuses_the_worker_pool() {
+    let (_tmp, cfg) = test_cfg().await;
+    let backend = SqliteJobBackend::new(Arc::clone(&cfg))
+        .await
+        .expect("enqueue-only backend");
+    let worker_pool = Arc::clone(backend.pool());
+    let store = SqliteUnifiedJobStore::new(worker_pool.as_ref().clone());
+
+    let write_gate = axon_jobs::scheduler::SqliteWriteGate::default();
+    let ctx = build_service_context_with_write_gate(&cfg, &store, write_gate.clone())
+        .await
+        .expect("runner service context");
+    let context_pool = ctx.jobs.sqlite_pool().expect("runner SQLite pool");
+
+    let mut held = Vec::new();
+    for _ in 0..worker_pool.options().get_max_connections() {
+        held.push(worker_pool.acquire().await.expect("worker pool connection"));
+    }
+    assert!(
+        context_pool.try_acquire().is_none(),
+        "the source runner must reuse the worker's SQLx pool instead of opening a second pool"
+    );
+    drop(held);
+
+    let _held_gate = write_gate.lock().await;
+    assert!(
+        ctx.jobs
+            .sqlite_write_gate()
+            .expect("runner writer gate")
+            .try_lock()
+            .is_none(),
+        "the source runner must reuse the process writer gate"
+    );
 }

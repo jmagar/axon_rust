@@ -4,7 +4,9 @@ use super::*;
 fn directory_exchange_implementation_has_one_maintenance_point() {
     let source = include_str!("dir_ops.rs");
     assert_eq!(source.matches("RenameFlags::EXCHANGE").count(), 1);
-    assert_eq!(source.matches("exchange_directories(").count(), 4);
+    // There are cfg-specific Unix/fallback declarations. Call-site counts
+    // grow when rollback paths improve and do not measure implementation reuse.
+    assert_eq!(source.matches("async fn exchange_directories(").count(), 2);
 }
 
 #[tokio::test]

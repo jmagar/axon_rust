@@ -1086,9 +1086,9 @@ surfaces = ["src", "docs"]
 secret = false
 url_or_path = false
 container_allowed = false
-toml_destination = "workers.qdrant-point-buffer"
+toml_destination = "providers.vector.upsert-batch-points"
 compatibility = "warn-env-override"
-reason = "Qdrant batch flush tuning."
+reason = "Legacy compatibility fallback for providers.vector.upsert-batch-points."
 
 [[env]]
 key = "AXON_MAX_PENDING_CRAWL_JOBS"
@@ -1148,7 +1148,7 @@ url_or_path = false
 container_allowed = true
 toml_destination = ""
 compatibility = "canonical"
-reason = "Non-secret tuning knob; migrate to config.toml. Kept in env until a typed config.toml field is wired."
+reason = "Authoritative-domain retrieval boost override; also supported by ask.authoritative-boost in typed config."
 
 [[env]]
 key = "AXON_ASK_AUTHORITATIVE_DOMAINS"
@@ -2304,15 +2304,15 @@ reason = "Typed Qdrant transport selection belongs in config.toml; the environme
 
 [[env]]
 key = "AXON_QDRANT_UPSERT_PARALLELISM"
-classification = "keep-env"
-runtime_placement = "both"
+classification = "move-toml"
+runtime_placement = "not-runtime"
 surfaces = ["src", "docs", "config-example"]
 secret = false
 url_or_path = false
-container_allowed = true
-toml_destination = ""
-compatibility = "canonical"
-reason = "Non-secret Qdrant write-path tuning knob. Kept in env until a typed config.toml field is wired."
+container_allowed = false
+toml_destination = "providers.vector.write-concurrency"
+compatibility = "warn-env-override"
+reason = "Typed Qdrant write concurrency belongs in config.toml; the environment remains a compatibility override."
 
 [[env]]
 key = "AXON_QDRANT_BULK_LOAD"

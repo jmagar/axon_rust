@@ -1509,6 +1509,44 @@
       "streaming": false
     },
     {
+      "method": "GET",
+      "mutates": false,
+      "operation_id": "prune_get_plan",
+      "path": "/v1/prune/plans/{plan_id}",
+      "request_dto": null,
+      "requires_auth_scope": "admin",
+      "responses": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500",
+        "502"
+      ],
+      "result_dto": "StoredPrunePlan",
+      "streaming": false
+    },
+    {
+      "method": "GET",
+      "mutates": false,
+      "operation_id": "reset_get_plan",
+      "path": "/v1/reset/plans/{plan_id}",
+      "request_dto": null,
+      "requires_auth_scope": "admin",
+      "responses": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500",
+        "502"
+      ],
+      "result_dto": "ResetResult",
+      "streaming": false
+    },
+    {
       "method": "POST",
       "mutates": true,
       "operation_id": "prune_plan",
@@ -1782,6 +1820,84 @@
         "502"
       ],
       "result_dto": "WatchResult",
+      "streaming": false
+    },
+    {
+      "method": "GET",
+      "mutates": false,
+      "operation_id": "v1_agent_status",
+      "path": "/v1/agent/turns/{id}",
+      "request_dto": null,
+      "requires_auth_scope": "read",
+      "responses": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500",
+        "502"
+      ],
+      "result_dto": "AgentTurnResult",
+      "streaming": false
+    },
+    {
+      "method": "GET",
+      "mutates": false,
+      "operation_id": "v1_agent_events",
+      "path": "/v1/agent/turns/{id}/events",
+      "request_dto": null,
+      "requires_auth_scope": "read",
+      "responses": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "500",
+        "502"
+      ],
+      "result_dto": "serde_json::Value",
+      "streaming": false
+    },
+    {
+      "method": "POST",
+      "mutates": true,
+      "operation_id": "v1_agent_cancel",
+      "path": "/v1/agent/turns/{id}/cancel",
+      "request_dto": null,
+      "requires_auth_scope": "write",
+      "responses": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "422",
+        "500",
+        "502"
+      ],
+      "result_dto": "AgentTurnResult",
+      "streaming": false
+    },
+    {
+      "method": "POST",
+      "mutates": true,
+      "operation_id": "v1_agent_resume",
+      "path": "/v1/agent/turns/{id}/resume",
+      "request_dto": "AgentResumeRequest",
+      "requires_auth_scope": "write",
+      "responses": [
+        "200",
+        "400",
+        "401",
+        "403",
+        "404",
+        "422",
+        "500",
+        "502"
+      ],
+      "result_dto": "AgentTurnResult",
       "streaming": false
     },
     {
@@ -2147,14 +2263,19 @@
     "removed": [],
     "source_inputs": [
       {
-        "checksum": "sha256:7deafb1c3ef2e0c489d160b3187850a93d4efe4ff756cf5c1a0a6f19fad6ea33",
+        "checksum": "sha256:7b3c49f7035155cedbff3fc52f748671252746b9af5ebfc4ffc8e7b9b1f54695",
         "kind": "rust_module",
         "path": "crates/axon-web/src/schema_registry.rs"
       },
       {
-        "checksum": "sha256:e76c07f91410786b0e79ad2c32aaa2ac9486d21a6baea3739f2c7d1ca8d68059",
+        "checksum": "sha256:61efed61fa1bed07586644d080a1a8cc68d52641c4fb4db2e0500b6fb58d1852",
         "kind": "rust_module",
         "path": "crates/axon-web/src/schema_registry/admin_watch_routes.rs"
+      },
+      {
+        "checksum": "sha256:c381c1a1cba5ad003b90848f87fbbe784c11e37e9dcf320603eaa1c06d0b72d5",
+        "kind": "rust_module",
+        "path": "crates/axon-web/src/schema_registry/agent_routes.rs"
       },
       {
         "checksum": "sha256:ebcfe554161e465811c11a3afa630f3fc651df0f1c3eeed04adbd486d53de26b",

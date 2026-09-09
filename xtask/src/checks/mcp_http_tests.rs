@@ -2,12 +2,14 @@ use super::*;
 use std::fs;
 use tempfile::TempDir;
 
+const MCP_SOURCE: &str = include_str!("../../../crates/axon-cli/src/commands/mcp.rs");
+
 fn write_all_required(root: &Path) {
     let mcp_rs = root.join("crates/axon-cli/src/commands/mcp.rs");
     fs::create_dir_all(mcp_rs.parent().unwrap()).unwrap();
     fs::write(
         &mcp_rs,
-        "fn run_unified_server() {}\nfn run_stdio_server() {}\n\
+        "run_unified_server();\nlet stdio = axon_mcp::run_stdio_server_with_context;\n\
          match t { McpTransport::Both => {} }\n",
     )
     .unwrap();
@@ -41,6 +43,33 @@ fn passes_with_all_patterns_present() {
 }
 
 #[test]
+fn accepts_current_shared_context_transport_wiring() {
+    let tmp = TempDir::new().unwrap();
+    write_all_required(tmp.path());
+    fs::write(tmp.path().join(FILE_SPECS[0].0), MCP_SOURCE).unwrap();
+    check(tmp.path()).expect("current shared-context transport wiring must pass");
+}
+
+#[test]
+fn rejects_missing_transport_wiring() {
+    for pattern in [
+        "axon_mcp::run_stdio_server_with_context",
+        "run_unified_server(",
+        "McpTransport::Both =>",
+    ] {
+        let tmp = TempDir::new().unwrap();
+        write_all_required(tmp.path());
+        assert!(MCP_SOURCE.contains(pattern));
+        fs::write(
+            tmp.path().join(FILE_SPECS[0].0),
+            MCP_SOURCE.replace(pattern, "removed_transport_wiring"),
+        )
+        .unwrap();
+        check(tmp.path()).expect_err("missing transport wiring must fail");
+    }
+}
+
+#[test]
 fn fails_when_file_missing() {
     let tmp = TempDir::new().unwrap();
     write_all_required(tmp.path());
@@ -60,7 +89,7 @@ fn fails_when_pattern_missing() {
     // token (e.g., in a comment) must NOT satisfy the matcher.
     fs::write(
         tmp.path().join("crates/axon-cli/src/commands/mcp.rs"),
-        "fn run_unified_server() {}\nfn run_stdio_server() {}\n// keyword: Both\n",
+        "run_unified_server();\nlet stdio = axon_mcp::run_stdio_server_with_context;\n// keyword: Both\n",
     )
     .unwrap();
     let err = check(tmp.path()).expect_err("expected pattern error");
@@ -89,7 +118,7 @@ fn pattern_table_is_canonical() {
         mcp_patterns,
         vec![
             "run_unified_server(",
-            "run_stdio_server(",
+            "axon_mcp::run_stdio_server_with_context",
             "McpTransport::Both =>"
         ]
     );

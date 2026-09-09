@@ -62,7 +62,12 @@ pub(super) fn apply_env_toml_tuning(cfg: &mut Config, toml: &TomlConfig) {
     cfg.llm_completion_concurrency = resolve_clamped_usize(
         "AXON_LLM_COMPLETION_CONCURRENCY",
         toml.llm.completion_concurrency,
-        4,
+        match cfg.llm_backend {
+            crate::llm::LlmBackendKind::OpenAiCompat => {
+                crate::llm::OPENAI_DEFAULT_COMPLETION_CONCURRENCY
+            }
+            _ => crate::llm::GEMINI_DEFAULT_COMPLETION_CONCURRENCY,
+        },
         1,
         64,
     );
@@ -1144,6 +1149,15 @@ fn queue_summary_secs(toml: &TomlConfig) -> u64 {
 }
 
 fn qdrant_point_buffer(toml: &TomlConfig) -> usize {
+    if let Some(value) = performance::env_usize_opt("AXON_QDRANT_UPSERT_BATCH_SIZE", 1, 4096)
+        .or_else(|| {
+            toml.qdrant
+                .upsert_batch_size
+                .map(|value| value.clamp(1, 4096))
+        })
+    {
+        return value;
+    }
     resolve_clamped_usize(
         "AXON_QDRANT_POINT_BUFFER",
         toml.workers.qdrant_point_buffer,

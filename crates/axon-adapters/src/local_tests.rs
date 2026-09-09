@@ -305,7 +305,7 @@ async fn local_discovery_rejects_a_symlinked_source_root() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn local_acquire_rejects_directory_symlink_swap_after_discovery() {
+async fn local_acquire_preserves_discovery_snapshot_after_directory_symlink_swap() {
     let adapter = LocalSourceAdapter::new();
     let parent = temp_source_dir();
     let root = parent.join("current");
@@ -320,14 +320,19 @@ async fn local_acquire_rejects_directory_symlink_swap_after_discovery() {
     fs::remove_dir_all(&root).unwrap();
     std::os::unix::fs::symlink(&outside, &root).unwrap();
 
-    let err = adapter
+    let acquisition = adapter
         .acquire(&plan, &diff)
         .await
-        .expect_err("a swapped source-root symlink must not be traversed");
-
-    assert_eq!(err.code.0, "adapter.local.item_key.escape");
-    assert_eq!(err.message, "local source containment denied");
-    assert!(!err.message.contains(&outside.display().to_string()));
+        .expect("acquisition reads its private immutable discovery snapshot");
+    assert_eq!(acquisition.fetched_items.len(), 1);
+    assert!(matches!(&acquisition.fetched_items[0].content_ref,
+        ContentRef::InlineText { text } if text == "# safe"));
+    let serialized = serde_json::to_string(&acquisition).unwrap();
+    assert!(
+        !serialized.contains("# secret"),
+        "never follow the replacement root"
+    );
+    assert!(!serialized.contains(&outside.display().to_string()));
 }
 
 #[cfg(target_os = "linux")]

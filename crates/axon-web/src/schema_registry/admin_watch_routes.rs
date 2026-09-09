@@ -4,11 +4,29 @@
 //! repo's monolith line cap. Spliced back into `rest_route_registry()`'s
 //! output in original position by the parent module.
 //!
-//! Cleanup is plan-first: only `/v1/prune/plan` and `/v1/prune/exec` are public.
+//! Cleanup is plan-first; saved plans are also available through read-only GET routes.
 
 use super::{RestRouteSpec, job_admin, read, write};
 
 pub(super) static ADMIN_WATCH_ROUTES: &[RestRouteSpec] = &[
+    RestRouteSpec {
+        required_scope: "admin",
+        ..read(
+            "GET",
+            "/v1/prune/plans/{plan_id}",
+            "prune_get_plan",
+            "StoredPrunePlan",
+        )
+    },
+    RestRouteSpec {
+        required_scope: "admin",
+        ..read(
+            "GET",
+            "/v1/reset/plans/{plan_id}",
+            "reset_get_plan",
+            "ResetResult",
+        )
+    },
     job_admin(
         "POST",
         "/v1/prune/plan",

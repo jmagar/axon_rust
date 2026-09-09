@@ -82,6 +82,14 @@ pub(crate) fn atomic_text(text: &str) -> Vec<DocumentChunk> {
 }
 
 pub(crate) fn source_range(text: &str, start: usize, end: usize) -> SourceRange {
+    #[cfg(test)]
+    crate::performance_measurement::range_scan(
+        start
+            .min(text.len())
+            .saturating_mul(2)
+            .saturating_add(end.min(text.len()))
+            .saturating_add(end.saturating_sub(1).min(text.len())),
+    );
     let line_start = line_number_at(text, start);
     let line_end = line_number_at(text, end.saturating_sub(1).min(text.len()));
     SourceRange {

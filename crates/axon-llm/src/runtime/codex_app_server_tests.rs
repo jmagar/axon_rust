@@ -188,7 +188,9 @@ while True:
         kind: LlmBackendKind::CodexAppServer,
         codex_cmd: script.display().to_string(),
         codex_model: Some("gpt-5.5".to_string()),
-        completion_timeout_secs: 3,
+        // This tests protocol success, not deadlines; subprocess startup can be
+        // delayed when the composed suite saturates the host.
+        completion_timeout_secs: 30,
         configured: true,
         ..LlmBackendConfig::default()
     };
@@ -259,7 +261,7 @@ sys.exit(0)
     req.backend = LlmBackendConfig {
         kind: LlmBackendKind::CodexAppServer,
         codex_cmd: script.display().to_string(),
-        completion_timeout_secs: 5,
+        completion_timeout_secs: 30,
         configured: true,
         ..LlmBackendConfig::default()
     };
@@ -320,7 +322,7 @@ sys.exit(0)
         codex_cmd: script.display().to_string(),
         codex_load_user_config: true,
         codex_home: Some(override_home.path().to_path_buf()),
-        completion_timeout_secs: 5,
+        completion_timeout_secs: 30,
         configured: true,
         ..LlmBackendConfig::default()
     };
@@ -446,11 +448,9 @@ async fn codex_completion_timeout_kills_grandchild_process_group() {
     let script = dir.path().join("grandchild-codex");
     let parent_pid_file = dir.path().join("parent.pid");
     let grandchild_pid_file = dir.path().join("grandchild.pid");
-    // Use /bin/sh, not python: a shell cold-starts in microseconds so both
-    // pidfiles are written well before the 1s completion timeout fires the
-    // group kill. A python interpreter's cold start can exceed 1s under heavy
-    // parallel test load, killing the child mid-startup before it writes the
-    // pidfiles — a real source of flakiness this test previously hit.
+    // Initialize before starting the one-second turn deadline. Process startup
+    // is independently covered by the slow-initialization timeout test; under
+    // parallel load even a shell may not start before a short wall deadline.
     std::fs::write(
         &script,
         format!(
@@ -477,6 +477,15 @@ async fn codex_completion_timeout_kills_grandchild_process_group() {
         configured: true,
         ..LlmBackendConfig::default()
     };
+
+    let process_pool = pool::pool_for(&req.backend);
+    let slot = process_pool
+        .checkout(Duration::from_secs(10))
+        .await
+        .unwrap();
+    assert!(parent_pid_file.exists());
+    assert!(grandchild_pid_file.exists());
+    process_pool.checkin(slot).await;
 
     let err = complete_text(req).await.unwrap_err();
     let text = err.to_string();
@@ -511,14 +520,98 @@ fn assert_process_exits(pid: i32) {
 
 #[cfg(unix)]
 fn process_is_running(pid: i32) -> bool {
-    let proc_dir = Path::new("/proc").join(pid.to_string());
-    if !proc_dir.exists() {
-        return false;
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "stat="])
+            .output()
+            .is_ok_and(|output| {
+                let status = String::from_utf8_lossy(&output.stdout);
+                output.status.success()
+                    && !status.trim().is_empty()
+                    && !status.trim().starts_with('Z')
+            })
     }
-    let Ok(stat) = std::fs::read_to_string(proc_dir.join("stat")) else {
-        return true;
+    #[cfg(target_os = "linux")]
+    {
+        let proc_dir = Path::new("/proc").join(pid.to_string());
+        if !proc_dir.exists() {
+            return false;
+        }
+        let Ok(stat) = std::fs::read_to_string(proc_dir.join("stat")) else {
+            return true;
+        };
+        stat.split_whitespace()
+            .nth(2)
+            .is_none_or(|state| state != "Z")
+    }
+}
+
+#[cfg(unix)]
+async fn cancellation_reaps_group(initializing: bool) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("cancel-codex");
+    let pid_file = dir.path().join("grandchild.pid");
+    let handshake = if initializing {
+        ""
+    } else {
+        "echo '{\"id\":0,\"result\":{\"userAgent\":\"fake\"}}'\necho '{\"id\":1,\"result\":{\"thread\":{\"id\":\"cancel\"},\"model\":\"fake\"}}'\n"
     };
-    stat.split_whitespace()
-        .nth(2)
-        .is_none_or(|state| state != "Z")
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nsleep 30 &\necho $! > '{}'\n{handshake}wait\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut request = CompletionRequest::new("cancel");
+    request.backend = LlmBackendConfig {
+        kind: LlmBackendKind::CodexAppServer,
+        codex_cmd: script.display().to_string(),
+        completion_timeout_secs: 30,
+        configured: true,
+        ..LlmBackendConfig::default()
+    };
+    let task = tokio::spawn(complete_text(request));
+    let pid = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if let Ok(text) = std::fs::read_to_string(&pid_file)
+                && let Ok(pid) = text.trim().parse::<i32>()
+            {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    task.abort();
+    let _ = task.await;
+    let pid = pid.expect("fake child should start");
+    for _ in 0..40 {
+        if !process_is_running(pid) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    // Never leak the deliberately spawned fixture on a regression failure.
+    let _ = std::process::Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .status();
+    panic!("canceled completion left grandchild {pid} running");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn canceled_codex_turn_reaps_descendants() {
+    cancellation_reaps_group(false).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn canceled_codex_initialization_reaps_descendants() {
+    cancellation_reaps_group(true).await;
 }

@@ -11,6 +11,7 @@ execute=load("axon_e2e_real_composed_execute",ROOT/"tests/e2e/scenarios/retrieva
 source=load("axon_e2e_real_composed_source",ROOT/"tests/e2e/scenarios/source/orchestrator.py")
 observe=load("axon_e2e_real_composed_observe",ROOT/"scripts/e2e/lib/observability-assertions.py")
 reporting=load("axon_e2e_real_composed_reporting",ROOT/"scripts/e2e/lib/reporting.py")
+diagnostics=load("axon_e2e_failure_diagnostics",ROOT/"scripts/e2e/lib/failure_diagnostics.py")
 def retained_descriptor(descriptor):
  value=json.loads(json.dumps(descriptor));value["environment"]["AXON_HTTP_TOKEN"]="[REDACTED]"
  value["bindings"]["AXON_HTTP_TOKEN"]="[REDACTED]"
@@ -181,9 +182,6 @@ def main():
    if descriptor["fixture_source_id"] not in json.dumps(graph_source):raise RuntimeError("stateful source fixture was not persisted")
    def sqlite_footprint():
     database=Path(env["AXON_SQLITE_PATH"]);return sum(path.stat().st_size for path in (database,Path(str(database)+"-wal"),Path(str(database)+"-shm")) if path.exists())
-   sqlite_before=sqlite_footprint()
-   phase="observability";observability=verify_observability(binary,mcporter,descriptor,env,run_id)
-   sqlite_growth=max(0,sqlite_footprint()-sqlite_before)
    representative_count=0;representative_ms=None
    phase="retrieval";item={"prompt":"What signal does the Atlas beacon emit?","max_results":1};provider=descriptor["environment"]["AXON_SEARXNG_URL"]
    before=execute.provider_stats(provider)
@@ -195,6 +193,11 @@ def main():
    for surface,value in (("cli",cli),("http",http),("mcp",mcp)):
     if "amber" not in json.dumps(value,ensure_ascii=False).casefold():raise RuntimeError(f"real {surface} retrieval omitted evidence")
    if delta["calls"]<3:raise RuntimeError(f"provider observation missed surface calls: {delta}")
+   # Prove retrieval against the seeded corpus before observability publishes
+   # its unrelated canary document. The contract double does not rank relevance.
+   sqlite_before=sqlite_footprint()
+   phase="observability";observability=verify_observability(binary,mcporter,descriptor,env,run_id)
+   sqlite_growth=max(0,sqlite_footprint()-sqlite_before)
    if os.environ.get("AXON_E2E_PERFORMANCE_ONLY") == "1":
     corpus_manifest=json.loads((ROOT/"tests/e2e/corpus/manifest.json").read_text());representative=Path(env["AXON_DATA_DIR"])/"representative-corpus";representative.mkdir()
     for document in corpus_manifest["documents"]:
@@ -212,12 +215,9 @@ def main():
      completed=subprocess.run([sys.executable,str(entry),"--launcher-descriptor",str(descriptor_path)],cwd=ROOT,env=env,
                               capture_output=True,text=True,timeout=180,check=False)
      if completed.returncode:
-      error_type="unknown"
-      for line in reversed(completed.stderr.splitlines()):
-       candidate=line.split(":",1)[0]
-       if candidate.endswith(("Error","Exception")) and candidate.replace("_","").isalnum():error_type=candidate;break
-      print(json.dumps({"axon_e2e_diagnostic":{"domain":entry.parent.name,"error_type":error_type}},sort_keys=True),flush=True)
-      raise RuntimeError(f"domain hermetic entry failed: {entry.parent.name}: {completed.stderr[-2000:]}")
+      diagnostic=diagnostics.child_failure(ROOT,entry.parent.name,completed)
+      print(json.dumps({"axon_e2e_diagnostic":diagnostic},sort_keys=True),flush=True)
+      raise RuntimeError(f"domain hermetic entry failed: {entry.parent.name}")
    result={"result":"pass","surfaces":["cli","http","mcp"],"provider_observation":delta,"observability":observability,
            "performance":{"cold_start_ms":cold_ms,
                           "warm_start_ms":warm_ms,"source_to_terminal_ms":representative_ms or observability["source_to_terminal_ms"],
@@ -234,7 +234,8 @@ def main():
   except BaseException as error:
    primary_error=error
    diagnostic_phase=getattr(error,"axon_e2e_phase",phase)
-   print(json.dumps({"axon_e2e_diagnostic":{"domain":diagnostic_phase,"error_type":type(error).__name__}},sort_keys=True),flush=True)
+   diagnostic=diagnostics.exception_failure(ROOT,diagnostic_phase,error)
+   print(json.dumps({"axon_e2e_diagnostic":diagnostic},sort_keys=True),flush=True)
    raise
   finally:
    resource_stop.set();resource_thread.join(timeout=1)

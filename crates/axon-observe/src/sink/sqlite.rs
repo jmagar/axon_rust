@@ -35,6 +35,7 @@ use crate::sequence::SequenceRegistry;
 #[derive(Clone)]
 pub struct SqliteObservabilitySink {
     pool: SqlitePool,
+    write_gate: axon_core::sqlite::SqliteWriteGate,
     sequences: Arc<SequenceRegistry>,
 }
 
@@ -77,8 +78,19 @@ impl SqliteObservabilitySink {
     /// migrator here would collide with the composed runner's migration
     /// bookkeeping, so callers on the shared pool use this constructor.
     pub fn from_migrated_pool(pool: SqlitePool) -> Self {
+        Self::from_migrated_pool_with_write_gate(
+            pool,
+            axon_core::sqlite::SqliteWriteGate::default(),
+        )
+    }
+
+    pub fn from_migrated_pool_with_write_gate(
+        pool: SqlitePool,
+        write_gate: axon_core::sqlite::SqliteWriteGate,
+    ) -> Self {
         Self {
             pool,
+            write_gate,
             sequences: Arc::new(SequenceRegistry::new()),
         }
     }
@@ -98,7 +110,9 @@ impl SqliteObservabilitySink {
         let write = redact_event(event).map_err(|error| *error)?;
         event = write.payload;
         let job_id = event.job_id;
-        let mut tx = ImmediateTx::begin(&self.pool).await.map_err(map_sqlx)?;
+        let mut tx = ImmediateTx::begin_with_gate(&self.pool, &self.write_gate)
+            .await
+            .map_err(map_sqlx)?;
         let durable_last: i64 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(sequence), 0) FROM axon_observe_events WHERE job_id = ?",
         )

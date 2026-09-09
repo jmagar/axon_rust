@@ -25,7 +25,9 @@ impl SqliteUnifiedJobStore {
                 "projection admission requires at least one item",
             ));
         }
-        let mut tx = ImmediateTx::begin(&self.pool).await.map_err(sql_error)?;
+        let mut tx = ImmediateTx::begin_with_gate(&self.pool, &self.write_gate)
+            .await
+            .map_err(sql_error)?;
         let mut results = Vec::with_capacity(admission.items.len());
         for (index, item) in admission.items.into_iter().enumerate() {
             validate_stage_plan(&item.request.stage_plan)?;

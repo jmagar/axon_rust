@@ -57,7 +57,7 @@ mod publication;
 /// text mentions, so they carry high confidence.
 const BASELINE_CONFIDENCE: f32 = 0.95;
 const BASELINE_GRAPH_BATCH_SIZE: usize = 512;
-const GRAPH_WRITE_CANDIDATE_BATCH_SIZE: usize = 1;
+const GRAPH_WRITE_CANDIDATE_BATCH_SIZE: usize = 64;
 
 /// Producer version reported on every baseline candidate.
 const PRODUCER_VERSION: &str = env!("CARGO_PKG_VERSION");

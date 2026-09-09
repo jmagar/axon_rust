@@ -100,6 +100,7 @@ pub const VECTOR_SOURCE_FAMILY_FIELDS: &[(&str, &[&str])] = &[
             "web_normalized_url",
             "web_fetch_method",
             "web_render_mode",
+            "web_render_bypass_reason",
             "web_etag",
             "web_last_modified",
             "web_prior_etag",

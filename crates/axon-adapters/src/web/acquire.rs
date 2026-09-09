@@ -30,13 +30,8 @@
 //!
 //! ## Concurrency and per-item error isolation (PR #418 review)
 //!
-//! Items acquire with bounded concurrency (up to [`ACQUIRE_CONCURRENCY`] in
-//! flight, see [`acquire_concurrent`]) rather than one at a time — each item
-//! is an independent fetch/render round-trip (2 round-trips on `AutoSwitch`),
-//! so serializing them wasted latency for no correctness benefit. A single
-//! item's fetch/render failure is logged and turned into a [`SourceWarning`]
-//! (see [`resolve_item_outcome`]) rather than propagated with `?` — one bad
-//! item must not discard every already-succeeded sibling in the batch.
+//! Acquisition bounds concurrent items at [`ACQUIRE_CONCURRENCY`]. Individual
+//! failures become [`SourceWarning`]s without discarding successful siblings.
 //!
 //! When `warc_path` is configured, acquisition preserves input order so the
 //! services layer can build a deterministic WARC archive from the returned
@@ -93,6 +88,7 @@ fn acquire_concurrency() -> usize {
 /// Options resolved once per [`acquire_changed_items`] call from
 /// `plan.route.validated_options`, then threaded through every item so
 /// per-item helpers stay free of `MetadataMap` lookups.
+#[derive(Clone)]
 struct AcquireOptions {
     job_id: JobId,
     mode: RenderMode,
@@ -111,16 +107,10 @@ pub(super) struct AcquireOutcome {
     pub(super) warnings: Vec<SourceWarning>,
 }
 
-pub(super) struct StreamedItemOutcome {
-    pub(super) ordinal: usize,
-    pub(super) item: Option<AcquiredSourceItem>,
-    pub(super) warnings: Vec<SourceWarning>,
-}
-
-#[async_trait::async_trait]
-pub(super) trait StreamingItemSink: Send + Sync {
-    async fn send(&self, outcome: StreamedItemOutcome) -> Result<()>;
-}
+mod streaming;
+pub(super) use streaming::{
+    StreamedItemOutcome, StreamingItemSink, acquire_changed_items_streaming,
+};
 
 /// One item's acquisition outcome. `item` is `None` for a conditional-fetch
 /// 304 skip. `warning` carries a non-fatal degradation alongside a
@@ -221,35 +211,12 @@ fn log_acquisition_timings(
 pub(super) async fn acquire_changed_items(
     plan: &SourcePlan,
     manifest_items: &[ManifestItem],
-    fetch: &dyn FetchProvider,
-    render: &dyn RenderProvider,
+    fetch: std::sync::Arc<dyn FetchProvider>,
+    render: std::sync::Arc<dyn RenderProvider>,
     progress: Option<&dyn AcquisitionProgressSink>,
 ) -> Result<AcquireOutcome> {
     let values = &plan.route.validated_options.values;
-    let opts = AcquireOptions {
-        job_id: plan.job_id,
-        mode: effective_render_mode(values),
-        min_markdown_chars: min_markdown_chars(values),
-        automation_script: automation_script_ref(values),
-        headers: headers(values),
-        cache_policy: cache_policy(values),
-        render_metadata: render_metadata(values),
-        vertical: VerticalOptions {
-            enabled: verticals_enabled(values),
-            auto_dispatch_skip: auto_dispatch_skip(values),
-            user_agent: user_agent(values),
-            cache_ttl_secs: values
-                .get("vertical_cache_ttl_secs")
-                .and_then(Value::as_object)
-                .map(|entries| {
-                    entries
-                        .iter()
-                        .filter_map(|(name, value)| value.as_u64().map(|ttl| (name.clone(), ttl)))
-                        .collect()
-                })
-                .unwrap_or_default(),
-        },
-    };
+    let opts = streaming::acquire_options(plan);
     if opts.cache_policy == CachePolicy::Offline && !manifest_items.is_empty() {
         return Err(ApiError::new(
             "web.cache.offline_miss",
@@ -261,101 +228,20 @@ pub(super) async fn acquire_changed_items(
     let warc_path = warc_path(values);
 
     let (items, warnings) = match warc_path.as_deref() {
-        Some(_) => acquire_sequential(fetch, render, manifest_items, &opts, progress).await,
+        Some(_) => {
+            acquire_sequential(
+                fetch.as_ref(),
+                render.as_ref(),
+                manifest_items,
+                &opts,
+                progress,
+            )
+            .await
+        }
         None => acquire_concurrent(fetch, render, manifest_items, &opts, progress).await,
     };
 
     Ok(AcquireOutcome { items, warnings })
-}
-
-pub(super) async fn acquire_changed_items_streaming(
-    plan: &SourcePlan,
-    manifest_items: &[ManifestItem],
-    fetch: &dyn FetchProvider,
-    render: &dyn RenderProvider,
-    progress: Option<&dyn AcquisitionProgressSink>,
-    sink: &dyn StreamingItemSink,
-) -> Result<()> {
-    let opts = acquire_options(plan)?;
-    let opts = &opts;
-    let batch_started = Instant::now();
-    let concurrency = acquire_concurrency().min(manifest_items.len().max(1));
-    let mut pending = stream::iter(manifest_items.iter().cloned().enumerate())
-        .map(|(ordinal, item)| async move {
-            let started = Instant::now();
-            let outcome = acquire_item(fetch, render, &item, opts).await;
-            (ordinal, item, outcome, started.elapsed())
-        })
-        // `buffered` provides the bounded reorder window: work runs concurrently,
-        // while observations remain in stable manifest order.
-        .buffered(concurrency);
-    let mut timings = Vec::with_capacity(manifest_items.len());
-    let mut documents = 0usize;
-    while let Some((ordinal, manifest_item, outcome, elapsed)) = pending.next().await {
-        timings.push(ItemTiming {
-            elapsed,
-            completed_at: batch_started.elapsed(),
-        });
-        let mut warnings = Vec::new();
-        let item = resolve_item_outcome(
-            outcome,
-            manifest_item.source_item_key,
-            &manifest_item.canonical_uri,
-            &mut warnings,
-        );
-        documents += usize::from(item.is_some());
-        report_progress(progress, manifest_items.len(), ordinal + 1, documents).await;
-        sink.send(StreamedItemOutcome {
-            ordinal,
-            item,
-            warnings,
-        })
-        .await?;
-    }
-    log_acquisition_timings(
-        "streaming",
-        manifest_items.len(),
-        concurrency,
-        batch_started.elapsed(),
-        &timings,
-    );
-    Ok(())
-}
-
-fn acquire_options(plan: &SourcePlan) -> Result<AcquireOptions> {
-    let values = &plan.route.validated_options.values;
-    let opts = AcquireOptions {
-        job_id: plan.job_id,
-        mode: effective_render_mode(values),
-        min_markdown_chars: min_markdown_chars(values),
-        automation_script: automation_script_ref(values),
-        headers: headers(values),
-        cache_policy: cache_policy(values),
-        render_metadata: render_metadata(values),
-        vertical: VerticalOptions {
-            enabled: verticals_enabled(values),
-            auto_dispatch_skip: auto_dispatch_skip(values),
-            user_agent: user_agent(values),
-            cache_ttl_secs: values
-                .get("vertical_cache_ttl_secs")
-                .and_then(Value::as_object)
-                .map(|entries| {
-                    entries
-                        .iter()
-                        .filter_map(|(name, value)| value.as_u64().map(|ttl| (name.clone(), ttl)))
-                        .collect()
-                })
-                .unwrap_or_default(),
-        },
-    };
-    if opts.cache_policy == CachePolicy::Offline {
-        return Err(ApiError::new(
-            "web.cache.offline_miss",
-            ErrorStage::Fetching,
-            "offline cache policy cannot acquire changed web items",
-        ));
-    }
-    Ok(opts)
 }
 
 /// One-at-a-time acquisition, used only when a WARC sink is configured (WARC
@@ -409,8 +295,8 @@ async fn acquire_sequential(
 /// [`SourceWarning`] rather than aborting the batch or discarding
 /// already-succeeded siblings.
 async fn acquire_concurrent(
-    fetch: &dyn FetchProvider,
-    render: &dyn RenderProvider,
+    fetch: std::sync::Arc<dyn FetchProvider>,
+    render: std::sync::Arc<dyn RenderProvider>,
     manifest_items: &[ManifestItem],
     opts: &AcquireOptions,
     progress: Option<&dyn AcquisitionProgressSink>,
@@ -419,11 +305,23 @@ async fn acquire_concurrent(
     let concurrency = acquire_concurrency().min(manifest_items.len().max(1));
     let mut pending = stream::iter(manifest_items.iter().cloned())
         .map(|item| {
+            let fetch = fetch.clone();
+            let render = render.clone();
+            let opts = opts.clone();
             let source_item_key = item.source_item_key.clone();
             let canonical_uri = item.canonical_uri.clone();
+            let item_started = Instant::now();
+            let task = streaming::independent_acquisition(async move {
+                acquire_item(fetch.as_ref(), render.as_ref(), &item, &opts).await
+            });
             async move {
-                let item_started = Instant::now();
-                let outcome = acquire_item(fetch, render, &item, opts).await;
+                let outcome = task.await.unwrap_or_else(|_| {
+                    Err(ApiError::new(
+                        "web.acquire.task_failed",
+                        ErrorStage::Fetching,
+                        "acquisition task failed",
+                    ))
+                });
                 let timing = ItemTiming {
                     elapsed: item_started.elapsed(),
                     completed_at: batch_started.elapsed(),

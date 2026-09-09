@@ -125,13 +125,15 @@ async fn local_source_exposes_durable_progress_across_multiple_acquisition_and_c
         Some(130)
     );
     assert_eq!(fetching.first().map(|counts| counts.items_done), Some(0));
-    assert!(fetching.iter().any(|counts| counts.items_done == 64));
-    assert!(fetching.iter().any(|counts| counts.items_done == 128));
-    assert_eq!(fetching.last().map(|counts| counts.items_done), Some(130));
-    assert_eq!(
-        fetching.last().map(|counts| counts.documents_done),
-        Some(130)
+    assert!(
+        fetching
+            .iter()
+            .any(|counts| { counts.items_done > 0 && counts.items_done < FIXTURE_FILES as u64 }),
+        "expected a durable intermediate acquisition checkpoint: {fetching:?}"
     );
+    // Once preparation starts, speculative acquisition continues in the
+    // background without replacing the live downstream phase's counts.
+    assert!(fetching.last().unwrap().items_done < FIXTURE_FILES as u64);
     assert_monotonic(&fetching, PipelinePhase::Fetching);
 
     for phase in [

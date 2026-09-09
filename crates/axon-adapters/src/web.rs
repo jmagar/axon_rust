@@ -158,8 +158,8 @@ impl WebSourceAdapter {
         let outcome = acquire::acquire_changed_items(
             plan,
             &manifest_items,
-            self.fetch.as_ref(),
-            self.render.as_ref(),
+            self.fetch.clone(),
+            self.render.clone(),
             progress,
         )
         .await?;
@@ -314,7 +314,7 @@ impl SourceAdapter for WebSourceAdapter {
                 self.sink
                     .send(StreamedAcquisition {
                         ordinal: outcome.ordinal,
-                        is_final: outcome.ordinal + 1 == self.manifest_items.len(),
+                        is_final: outcome.is_final,
                         items_attempted: 1,
                         acquisition: SourceAcquisition {
                             header,
@@ -333,8 +333,8 @@ impl SourceAdapter for WebSourceAdapter {
         acquire::acquire_changed_items_streaming(
             plan,
             &manifest_items,
-            self.fetch.as_ref(),
-            self.render.as_ref(),
+            self.fetch.clone(),
+            self.render.clone(),
             progress,
             &Sink {
                 plan,

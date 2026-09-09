@@ -9,6 +9,7 @@ use walkdir::{DirEntry, WalkDir};
 const SKIP_DIRS: &[&str] = &[
     ".git",
     ".full-review",
+    ".full-review-archive",
     "node_modules",
     "target",
     ".cache",
@@ -27,7 +28,7 @@ fn is_excluded_dir(entry: &DirEntry) -> bool {
     entry
         .file_name()
         .to_str()
-        .map(|name| SKIP_DIRS.contains(&name))
+        .map(|name| SKIP_DIRS.contains(&name) || name.starts_with(".full-review-archive-"))
         .unwrap_or(false)
 }
 

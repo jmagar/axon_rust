@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::types::ServiceJob;
 use axon_api::source::JobKind;
 use axon_jobs::boundary::JobStore;
+use axon_jobs::scheduler::SqliteWriteGate;
 use axon_jobs::status::JobStatus;
 
 pub type RuntimeResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -53,6 +54,10 @@ pub trait ServiceJobRuntime: Send + Sync {
     fn mode_name(&self) -> &'static str;
 
     fn sqlite_pool(&self) -> Option<Arc<SqlitePool>> {
+        None
+    }
+
+    fn sqlite_write_gate(&self) -> Option<SqliteWriteGate> {
         None
     }
 

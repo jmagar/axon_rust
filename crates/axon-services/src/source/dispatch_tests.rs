@@ -1003,10 +1003,28 @@ impl SourceAdapter for BlockingNormalizeAdapter {
 
 #[tokio::test]
 async fn cancellation_mid_generation_cleans_vectors_and_fails_generation() {
+    canceled_generation_cleans_up(false).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn lost_source_lease_cleans_generation_without_canceling_parent_job() {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1200),
+        canceled_generation_cleans_up(true),
+    )
+    .await
+    .expect("ownership loss must stop the pipeline");
+}
+
+async fn canceled_generation_cleans_up(lose_lease: bool) {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().to_string_lossy().to_string();
     let route = route_for(&source);
-    let ledger = Arc::new(FakeLedgerStore::new());
+    let ledger = Arc::new(if lose_lease {
+        FakeLedgerStore::new().with_heartbeat_lost()
+    } else {
+        FakeLedgerStore::new()
+    });
     let vectors = Arc::new(FakeVectorStore::new("fake-vector"));
     let runtime = test_runtime(vectors.clone(), ledger.clone());
 
@@ -1045,8 +1063,18 @@ async fn cancellation_mid_generation_cleans_vectors_and_fails_generation() {
         entered_rx
             .await
             .expect("second batch normalization must start");
-        cancel.cancel();
+        if lose_lease {
+            tokio::time::advance(std::time::Duration::from_secs(601)).await;
+        } else {
+            cancel.cancel();
+        }
     });
+
+    assert_eq!(
+        cancel.is_cancelled(),
+        !lose_lease,
+        "lease loss must not cancel the parent job token"
+    );
 
     let error = result.expect_err("a canceled run must surface an error");
     assert!(

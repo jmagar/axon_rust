@@ -39,10 +39,21 @@ impl ReadExecution {
                 .ok_or_else(|| -> Box<dyn Error + Send + Sync> {
                     "SQLite scheduler pool is unavailable for scheduled read execution".into()
                 })?;
+            let write_gate =
+                ctx.jobs
+                    .sqlite_write_gate()
+                    .ok_or_else(|| -> Box<dyn Error + Send + Sync> {
+                        "SQLite runtime is missing its shared writer gate".into()
+                    })?;
             Arc::new(
-                TargetLocalSourceRuntime::from_config_owned(cfg, store, (*pool).clone())
-                    .await
-                    .map_err(|error| -> Box<dyn Error + Send + Sync> { error })?,
+                TargetLocalSourceRuntime::from_config_owned_with_write_gate(
+                    cfg,
+                    store,
+                    (*pool).clone(),
+                    write_gate,
+                )
+                .await
+                .map_err(|error| -> Box<dyn Error + Send + Sync> { error })?,
             )
         };
         let descriptor = begin_read_descriptor(ctx, operation, request, auth_snapshot).await?;
@@ -77,10 +88,21 @@ impl ReadExecution {
                 .ok_or_else(|| -> Box<dyn Error + Send + Sync> {
                     "SQLite scheduler pool is unavailable for scheduled read execution".into()
                 })?;
+            let write_gate =
+                ctx.jobs
+                    .sqlite_write_gate()
+                    .ok_or_else(|| -> Box<dyn Error + Send + Sync> {
+                        "SQLite runtime is missing its shared writer gate".into()
+                    })?;
             Arc::new(
-                TargetLocalSourceRuntime::from_config_owned(cfg.clone(), store, (*pool).clone())
-                    .await
-                    .map_err(|error| -> Box<dyn Error + Send + Sync> { error })?,
+                TargetLocalSourceRuntime::from_config_owned_with_write_gate(
+                    cfg.clone(),
+                    store,
+                    (*pool).clone(),
+                    write_gate,
+                )
+                .await
+                .map_err(|error| -> Box<dyn Error + Send + Sync> { error })?,
             )
         };
 
@@ -317,6 +339,32 @@ impl VectorStore for ScheduledVectorStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn enqueue_only_read_fallback_reuses_context_writer_gate() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut cfg = Config::default();
+        cfg.sqlite_path = temp.path().join("jobs.db");
+        let ctx = ServiceContext::new(Arc::new(cfg.clone()))
+            .await
+            .expect("enqueue-only service context");
+        let execution = ReadExecution::begin(
+            &ctx,
+            &cfg,
+            OperationKind::Query,
+            serde_json::json!({ "query": "writer gate identity" }),
+            None,
+        )
+        .await
+        .expect("read execution");
+        let context_gate = ctx.jobs.sqlite_write_gate().expect("context writer gate");
+        let _held = context_gate.lock().await;
+
+        assert!(
+            execution.runtime.sqlite_write_gate.try_lock().is_none(),
+            "fallback runtime must contend on the context's writer gate"
+        );
+    }
 
     #[tokio::test]
     async fn foreground_read_descriptor_persists_exact_caller_snapshot() {

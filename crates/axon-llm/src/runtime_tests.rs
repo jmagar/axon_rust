@@ -1,6 +1,45 @@
 use super::*;
 use axon_core::config::Config;
 
+async fn completion_queue_obeys_deadline(streaming: bool) {
+    let mut request = CompletionRequest::new("queued request");
+    request.backend = LlmBackendConfig {
+        kind: LlmBackendKind::OpenAiCompat,
+        openai_base_url: Some("http://127.0.0.1:9/v1".to_string()),
+        openai_model: Some(format!("deadline-regression-{streaming}")),
+        completion_concurrency: 1,
+        completion_timeout_secs: 1,
+        configured: true,
+        ..LlmBackendConfig::default()
+    };
+    let held = concurrency::acquire_completion_permit_for_key(completion_limiter_key(&request), 1)
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_millis(1500), async {
+        if streaming {
+            complete_streaming(request, |_| Ok(())).await
+        } else {
+            complete_text(request).await
+        }
+    })
+    .await;
+    drop(held);
+    let error = result
+        .expect("completion deadline must include queue admission")
+        .unwrap_err();
+    assert!(error.to_string().contains("deadline"), "{error}");
+}
+
+#[tokio::test]
+async fn nonstreaming_completion_deadline_includes_admission() {
+    completion_queue_obeys_deadline(false).await;
+}
+
+#[tokio::test]
+async fn streaming_completion_deadline_includes_admission() {
+    completion_queue_obeys_deadline(true).await;
+}
+
 #[test]
 fn limiter_key_uses_request_model_for_openai() {
     let backend = LlmBackendConfig {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import resource
@@ -19,6 +20,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[2]
+_diagnostics_spec = importlib.util.spec_from_file_location("axon_e2e_failure_diagnostics", ROOT/"scripts/e2e/lib/failure_diagnostics.py")
+diagnostics = importlib.util.module_from_spec(_diagnostics_spec)
+_diagnostics_spec.loader.exec_module(diagnostics)
 REQUIRED_ENV = {
     "AXON_E2E_HERMETIC": "1",
     "AXON_E2E_LIVE": "0",
@@ -200,16 +204,14 @@ def run(report_path: Path, total_budget: int) -> int:
                     stdout,stderr=current.communicate(timeout=allowed);returncode=current.returncode
                 finally:
                     stage_monitor_stop.set();monitor.join(timeout=2)
-                diagnostics=[]
+                retained_diagnostics=[]
                 for line in stdout.splitlines():
                     try:value=json.loads(line)
                     except json.JSONDecodeError:continue
                     diagnostic=value.get("axon_e2e_diagnostic") if isinstance(value,dict) else None
-                    if (isinstance(diagnostic,dict) and
-                        set(diagnostic) == {"domain","error_type"} and
-                        all(isinstance(item,str) and re.fullmatch(r"[A-Za-z0-9_-]+",item)
-                            for item in diagnostic.values())):
-                        diagnostics.append(diagnostic)
+                    safe_diagnostic=diagnostics.validate(ROOT,diagnostic)
+                    if safe_diagnostic is not None:
+                        retained_diagnostics.append(safe_diagnostic)
                     observation=value.get("provider_observation",{}) if isinstance(value,dict) else {}
                     if isinstance(observation.get("retries"),int):measured["retries"]+=observation["retries"]
                 status = "passed" if returncode == 0 else "failed"; failed |= returncode != 0
@@ -217,9 +219,9 @@ def run(report_path: Path, total_budget: int) -> int:
                                "duration_ms": int((time.monotonic()-stage_started)*1000),
                                "returncode": returncode,"stdout_sha256":hashlib.sha256(stdout.encode()).hexdigest(),
                                "stderr_sha256":hashlib.sha256(stderr.encode()).hexdigest(),"sanitized":True})
-                if diagnostics:
-                    stages[-1]["diagnostics"]=diagnostics
-                    print(f"hermetic stage {name} diagnostics: {json.dumps(diagnostics,sort_keys=True)}",flush=True)
+                if retained_diagnostics:
+                    stages[-1]["diagnostics"]=retained_diagnostics
+                    print(f"hermetic stage {name} diagnostics: {json.dumps(retained_diagnostics,sort_keys=True)}",flush=True)
                 print(f"hermetic stage {name}: {status}", flush=True)
             except subprocess.TimeoutExpired as error:
                 if os.name == "nt":current.terminate()

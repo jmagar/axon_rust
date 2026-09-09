@@ -72,7 +72,7 @@ pub async fn with_priority<F: Future>(priority: JobPriority, fut: F) -> F::Outpu
 /// The priority a [`reserve`] call would use right now: whatever
 /// [`with_priority`] scope the caller is running inside, or
 /// `JobPriority::Background` by default.
-fn current_priority() -> JobPriority {
+pub(crate) fn current_priority() -> JobPriority {
     PRIORITY
         .try_with(|priority| *priority)
         .unwrap_or(JobPriority::Background)

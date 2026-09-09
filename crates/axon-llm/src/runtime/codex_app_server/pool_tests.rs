@@ -1,5 +1,94 @@
 use super::*;
 
+#[tokio::test]
+async fn unused_empty_pool_is_evicted_after_idle_interval() {
+    let directory = tempfile::tempdir().unwrap();
+    let backend = LlmBackendConfig {
+        codex_cmd: directory.path().join("unused-model").display().to_string(),
+        ..LlmBackendConfig::default()
+    };
+    let key = format!(
+        "{}\0{}",
+        backend.codex_cmd,
+        backend.codex_model.as_deref().unwrap_or("")
+    );
+    let pool = CodexPool::new(1, Duration::from_millis(20), backend);
+    POOL_MAP.insert(key.clone(), pool.clone());
+    drop(pool);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let retained = POOL_MAP.contains_key(&key);
+    POOL_MAP.remove(&key);
+    assert!(
+        !retained,
+        "unused pool metadata must not live for the entire daemon lifetime"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn idle_expiry_reclaims_child_without_another_checkout() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("idle-codex");
+    std::fs::write(&script, "#!/bin/sh\necho '{\"id\":0,\"result\":{\"userAgent\":\"fake\"}}'\necho '{\"id\":1,\"result\":{\"thread\":{\"id\":\"idle\"},\"model\":\"fake\"}}'\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let backend = LlmBackendConfig {
+        codex_cmd: script.display().to_string(),
+        ..LlmBackendConfig::default()
+    };
+    let pool = CodexPool::new(1, Duration::from_millis(50), backend);
+    let slot = pool.checkout(Duration::from_secs(5)).await.unwrap();
+    let home = slot._home_guard.as_ref().unwrap().path().to_path_buf();
+    pool.checkin(slot).await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert_eq!(
+        pool.metrics().await.idle,
+        0,
+        "idle TTL must not require another request"
+    );
+    assert!(!home.exists(), "expired child home must be reclaimed");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn canceled_initialization_releases_spawning_accounting() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let script = directory.path().join("pending-codex");
+    std::fs::write(&script, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let backend = LlmBackendConfig {
+        codex_cmd: script.display().to_string(),
+        ..LlmBackendConfig::default()
+    };
+    let pool = CodexPool::new(1, Duration::from_secs(30), backend);
+    let timed_out = tokio::time::timeout(
+        Duration::from_millis(100),
+        pool.checkout(Duration::from_secs(30)),
+    )
+    .await
+    .is_err();
+    assert!(timed_out, "fake child must hold initialization open");
+    assert_eq!(pool.metrics().await.spawning, 0);
+    assert_eq!(pool.metrics().await.active_or_spawning, 0);
+}
+
+#[tokio::test]
+async fn canceled_checkout_releases_waiter_admission() {
+    let pool = CodexPool::new(1, Duration::from_secs(30), LlmBackendConfig::default());
+    let held = pool.permits.clone().acquire_owned().await.unwrap();
+    for _ in 0..12 {
+        let checkout = pool.checkout(Duration::from_secs(30));
+        tokio::pin!(checkout);
+        assert!(futures_util::poll!(&mut checkout).is_pending());
+        assert_eq!(pool.metrics().await.waiting, 1);
+        // The actual future is dropped at the end of this iteration.
+    }
+    drop(held);
+    assert_eq!(pool.metrics().await.waiting, 0);
+    assert_eq!(pool.metrics().await.rejected, 0);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn pool_reuses_child_across_turns() {

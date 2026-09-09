@@ -11,7 +11,9 @@ use axon_core::sqlite::ImmediateTx;
 
 impl SqliteUnifiedJobStore {
     pub(crate) async fn append_job_event(&self, mut event: SourceProgressEvent) -> Result<()> {
-        let mut tx = ImmediateTx::begin(&self.pool).await.map_err(sql_error)?;
+        let mut tx = ImmediateTx::begin_with_gate(&self.pool, &self.write_gate)
+            .await
+            .map_err(sql_error)?;
         append_job_event_tx(&mut tx, &mut event).await?;
         tx.commit().await.map_err(sql_error)
     }
@@ -22,6 +24,24 @@ pub(crate) async fn append_job_event_tx(
     event: &mut SourceProgressEvent,
 ) -> Result<()> {
     ensure_job(tx, event.job_id).await?;
+    if event.attempt > 0 {
+        let current_attempt =
+            sqlx::query_scalar::<_, i64>("SELECT attempt FROM jobs WHERE job_id = ?")
+                .bind(event.job_id.0.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(sql_error)? as u32;
+        if current_attempt != event.attempt {
+            return Err(ApiError::new(
+                "job_event.stale_attempt",
+                ErrorStage::Publishing,
+                format!(
+                    "job {} is on attempt {}, got event for attempt {}",
+                    event.job_id.0, current_attempt, event.attempt
+                ),
+            ));
+        }
+    }
     if let Some(dedupe_key) = event.dedupe_key.as_deref() {
         let existing = sqlx::query_scalar::<_, i64>(
             "SELECT sequence FROM job_events WHERE job_id = ? AND dedupe_key = ?",

@@ -39,7 +39,10 @@ pub(super) fn inventory_checksum(
     full_hash(&value.to_string())
 }
 
-pub(super) fn physical_chunk_checksum(plan: &[ResetStorePlan], chunk: &str) -> String {
+pub(super) fn physical_chunk_checksum(
+    plan: &[ResetStorePlan],
+    chunk: &str,
+) -> Result<String, Box<dyn Error>> {
     let rows: Vec<&ResetStorePlan> = plan
         .iter()
         .filter(|row| match chunk {
@@ -49,15 +52,24 @@ pub(super) fn physical_chunk_checksum(plan: &[ResetStorePlan], chunk: &str) -> S
             _ => false,
         })
         .collect();
-    full_hash(&serde_json::to_string(&rows).expect("reset plan rows serialize"))
+    // Durable plans pass through public-write redaction. Compare the same
+    // representation on resume; configuration identity independently binds
+    // the underlying paths and endpoints even when locations are redacted.
+    let redacted = axon_core::redact::redact_public_write(
+        serde_json::to_value(&rows)?,
+        &axon_core::redact::RedactionContext::artifact_metadata(),
+        &axon_core::redact::DefaultRedactor::new(),
+    )?;
+    Ok(full_hash(&serde_json::to_string(&redacted.payload)?))
 }
 
 pub(super) fn config_snapshot_id(cfg: &Config) -> String {
     short_hash(&format!(
-        "sqlite={};qdrant={};collection={}",
+        "sqlite={};qdrant={};collection={};artifacts={}",
         cfg.sqlite_path.display(),
         cfg.qdrant_url,
-        cfg.collection
+        cfg.collection,
+        artifacts::artifact_root().display()
     ))
 }
 

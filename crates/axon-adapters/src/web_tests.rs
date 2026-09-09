@@ -65,8 +65,11 @@ async fn web_streaming_emits_stable_single_item_acquisitions() {
         .await
         .unwrap();
 
-    let streamed = sink.0.lock().await;
+    let mut streamed = sink.0.lock().await;
     assert_eq!(streamed.len(), 3);
+    assert!(streamed[..2].iter().all(|item| !item.is_final));
+    assert!(streamed[2].is_final);
+    streamed.sort_by_key(|item| item.ordinal);
     assert_eq!(
         streamed.iter().map(|item| item.ordinal).collect::<Vec<_>>(),
         vec![0, 1, 2]
@@ -78,13 +81,87 @@ async fn web_streaming_emits_stable_single_item_acquisitions() {
             .sum::<u64>(),
         3
     );
-    assert!(streamed[..2].iter().all(|item| !item.is_final));
-    assert!(streamed[2].is_final);
     assert!(
         streamed
             .iter()
             .all(|item| item.acquisition.manifest.items.len() == 1)
     );
+}
+
+#[tokio::test]
+async fn web_streaming_fast_item_is_not_held_behind_a_slow_first_item() {
+    let _loopback = LoopbackGuard::allow();
+    let server = MockServer::start_async().await;
+    let slow = server
+        .mock_async(|when, then| {
+            when.path("/slow");
+            then.status(200)
+                .header("content-type", "text/plain")
+                .body("slow document")
+                .delay(std::time::Duration::from_millis(500));
+        })
+        .await;
+    server
+        .mock_async(|when, then| {
+            when.path("/fast");
+            then.status(200)
+                .header("content-type", "text/plain")
+                .body("fast document");
+        })
+        .await;
+    let mut plan = web_plan(&server.url("/"), SourceScope::Site);
+    plan.route
+        .validated_options
+        .values
+        .insert("render_mode".into(), json!("http"));
+    let items = ["slow", "fast"]
+        .into_iter()
+        .map(|name| ManifestItem {
+            source_id: plan.route.source.source_id.clone(),
+            source_item_key: name.into(),
+            canonical_uri: server.url(format!("/{name}")),
+            item_kind: ItemKind::WebPage,
+            content_kind: Some(ContentKind::Html),
+            display_path: None,
+            parent_key: None,
+            size_bytes: None,
+            content_hash: None,
+            mtime: None,
+            version: None,
+            fetch_plan: None,
+            metadata: MetadataMap::new(),
+            graph_hints: Vec::new(),
+        })
+        .collect();
+    let diff = manifest_diff(&plan, items);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+    struct Sink(tokio::sync::mpsc::Sender<StreamedAcquisition>);
+    #[async_trait::async_trait]
+    impl AcquisitionStreamSink for Sink {
+        async fn send(&self, item: StreamedAcquisition) -> crate::adapter::Result<()> {
+            self.0.send(item).await.unwrap();
+            Ok(())
+        }
+    }
+    let run = tokio::spawn(async move {
+        http_adapter()
+            .acquire_streaming(&plan, &diff, None, &Sink(tx))
+            .await
+    });
+    let first = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await;
+    run.await.unwrap().unwrap();
+    slow.assert_calls_async(1).await;
+    let first = first
+        .expect("ready items must reach preparation before the wave tail")
+        .unwrap();
+    assert_eq!(first.ordinal, 1);
+    assert!(
+        !first.is_final,
+        "highest input ordinal is not completion finality"
+    );
+    let last = rx.recv().await.unwrap();
+    assert_eq!(last.ordinal, 0);
+    assert!(last.is_final);
 }
 
 #[tokio::test]
@@ -118,7 +195,10 @@ async fn web_streaming_failures_advance_order_and_emit_each_warning_once() {
         .await
         .unwrap();
 
-    let streamed = sink.0.lock().await;
+    let mut streamed = sink.0.lock().await;
+    assert!(!streamed[0].is_final);
+    assert!(streamed[1].is_final);
+    streamed.sort_by_key(|item| item.ordinal);
     assert_eq!(
         streamed.iter().map(|item| item.ordinal).collect::<Vec<_>>(),
         vec![0, 1]

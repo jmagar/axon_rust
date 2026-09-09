@@ -61,13 +61,15 @@ async fn recovery_rejects_a_malformed_persisted_job_id_even_in_dry_run() {
     assert_eq!(error.code.to_string(), "job.uuid_invalid");
 }
 
-fn snapshot_test_db_path() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("axon-jobs-snapshot-{}.db", uuid::Uuid::new_v4()))
+fn snapshot_test_db_path() -> (tempfile::TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().expect("private snapshot test directory");
+    let path = directory.path().join("jobs.db");
+    (directory, path)
 }
 
 #[tokio::test]
 async fn public_status_update_reserves_writer_before_reading_snapshot() {
-    let path = snapshot_test_db_path();
+    let (_directory, path) = snapshot_test_db_path();
     let path_string = path.to_string_lossy().to_string();
     let pool = open_sqlite_pool(&path_string).await.expect("open job pool");
     seed_source(&pool).await;
@@ -128,7 +130,8 @@ async fn public_status_update_reserves_writer_before_reading_snapshot() {
     competing_write
         .await
         .expect("competing writer commits after status transaction");
-    std::fs::remove_file(path).expect("remove snapshot test database");
+    writer.close().await;
+    store.pool_for_tests().close().await;
 }
 
 #[tokio::test]
@@ -156,7 +159,7 @@ async fn job_store_write_boundary_restarts_busy_snapshot_operation() {
 
 #[tokio::test]
 async fn concurrent_status_updates_serialize_without_busy_errors() {
-    let path = snapshot_test_db_path();
+    let (_directory, path) = snapshot_test_db_path();
     let path_string = path.to_string_lossy().to_string();
     let pool = open_sqlite_pool(&path_string).await.expect("open job pool");
     seed_source(&pool).await;
@@ -195,7 +198,6 @@ async fn concurrent_status_updates_serialize_without_busy_errors() {
     }
 
     store.pool_for_tests().close().await;
-    std::fs::remove_file(path).expect("remove concurrent test database");
 }
 
 async fn store() -> SqliteUnifiedJobStore {
@@ -558,6 +560,100 @@ async fn terminal_status_collects_durable_warnings_from_job_events() {
 }
 
 #[tokio::test]
+async fn terminal_warning_preparation_releases_writer_and_fences_concurrent_events() {
+    let store = Arc::new(store().await);
+    let job = store.create(create_request()).await.unwrap();
+    let (entered, resume) = super::terminal_warnings::tests::install(job.job_id);
+    let updating_store = store.clone();
+    let updating = tokio::spawn(async move {
+        updating_store
+            .update_status(JobStatusUpdate {
+                job_id: job.job_id,
+                source_id: None,
+                status: LifecycleStatus::Failed,
+                phase: PipelinePhase::Complete,
+                stage_id: None,
+                counts: None,
+                current: None,
+                message: None,
+                error: None,
+            })
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), entered.notified())
+        .await
+        .unwrap();
+    let warning = SourceWarning {
+        code: "late.warning".into(),
+        severity: Severity::Warning,
+        message: "arrived during warning preparation".into(),
+        source_item_key: None,
+        retryable: false,
+    };
+    let mut event = progress_event(job.job_id, 1, Visibility::Public);
+    event.warning = Some(warning.clone());
+    let appended = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        store.append_event(event),
+    )
+    .await;
+    resume.notify_one();
+    updating.await.unwrap().unwrap();
+    appended
+        .expect("warning preparation must leave the shared writer available")
+        .unwrap();
+    assert_eq!(
+        store.get(job.job_id).await.unwrap().unwrap().warnings,
+        vec![warning]
+    );
+}
+
+#[tokio::test]
+async fn terminal_warnings_page_and_deduplicate_across_attempts() {
+    let store = store().await;
+    let job = store.create(create_request()).await.unwrap();
+    for index in 0..600_u64 {
+        if index == 300 {
+            sqlx::query("UPDATE jobs SET attempt = 2 WHERE job_id = ?")
+                .bind(job.job_id.0.to_string())
+                .execute(&store.pool)
+                .await
+                .unwrap();
+        }
+        let mut event = progress_event(job.job_id, index + 1, Visibility::Public);
+        event.attempt = if index < 300 { 0 } else { 2 };
+        if index % 2 == 0 {
+            event.warning = Some(SourceWarning {
+                code: format!("warning-{}", (index / 2) % 200),
+                severity: Severity::Warning,
+                message: "same warning across attempts".into(),
+                source_item_key: None,
+                retryable: false,
+            });
+        }
+        store.append_event(event).await.unwrap();
+    }
+    store
+        .update_status(JobStatusUpdate {
+            job_id: job.job_id,
+            source_id: None,
+            status: LifecycleStatus::Failed,
+            phase: PipelinePhase::Complete,
+            stage_id: None,
+            counts: None,
+            current: None,
+            message: None,
+            error: None,
+        })
+        .await
+        .unwrap();
+    let warnings = store.get(job.job_id).await.unwrap().unwrap().warnings;
+    assert_eq!(warnings.len(), 200);
+    assert_eq!(warnings.first().unwrap().code, "warning-0");
+    assert_eq!(warnings.last().unwrap().code, "warning-199");
+}
+
+#[tokio::test]
 async fn status_update_enforces_state_machine_and_persists_progress() {
     let store = store().await;
     let job = store.create(create_request()).await.expect("create job");
@@ -740,6 +836,12 @@ async fn terminal_counts_uses_only_the_latest_attempt() {
         .append_event(first_attempt)
         .await
         .expect("append first-attempt event");
+
+    sqlx::query("UPDATE jobs SET attempt = 2 WHERE job_id = ?")
+        .bind(job.job_id.0.to_string())
+        .execute(&store.pool)
+        .await
+        .expect("advance durable job to second attempt");
 
     let expected = StageCounts {
         items_total: None,
@@ -1876,6 +1978,64 @@ fn progress_event(job_id: JobId, sequence: u64, visibility: Visibility) -> Sourc
         warning: None,
         error: None,
     }
+}
+
+#[tokio::test]
+async fn stale_attempt_cannot_append_progress_events() {
+    let store = store().await;
+    let job = store.create(create_request()).await.expect("create job");
+    sqlx::query("UPDATE jobs SET attempt = 2 WHERE job_id = ?")
+        .bind(job.job_id.0.to_string())
+        .execute(&store.pool)
+        .await
+        .expect("advance attempt");
+    let mut event = progress_event(job.job_id, 1, Visibility::Public);
+    event.attempt = 1;
+
+    let error = store
+        .append_event(event)
+        .await
+        .expect_err("stale attempt must be fenced");
+
+    assert_eq!(error.code.to_string(), "job_event.stale_attempt");
+    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM job_events WHERE job_id = ?")
+        .bind(job.job_id.0.to_string())
+        .fetch_one(&store.pool)
+        .await
+        .expect("count events");
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn stale_attempt_cannot_record_artifacts() {
+    let store = store().await;
+    let job = store.create(create_request()).await.expect("create job");
+    sqlx::query("UPDATE jobs SET attempt = 2 WHERE job_id = ?")
+        .bind(job.job_id.0.to_string())
+        .execute(&store.pool)
+        .await
+        .expect("advance attempt");
+    let artifact = ArtifactRef {
+        artifact_id: ArtifactId::new("stale-artifact"),
+        artifact_kind: ArtifactKind::Report,
+        uri: "artifact://stale-artifact".to_string(),
+        size_bytes: Some(1),
+        content_hash: None,
+        created_at: Timestamp("2026-09-07T00:00:00Z".to_string()),
+    };
+
+    let error = store
+        .record_job_artifacts_for_attempt(job.job_id, 1, &[artifact])
+        .await
+        .expect_err("stale attempt must be fenced");
+
+    assert_eq!(error.code.to_string(), "job_artifact.stale_attempt");
+    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM job_artifacts WHERE job_id = ?")
+        .bind(job.job_id.0.to_string())
+        .fetch_one(&store.pool)
+        .await
+        .expect("count artifacts");
+    assert_eq!(count, 0);
 }
 
 /// Build a store that also routes transitions into a durable

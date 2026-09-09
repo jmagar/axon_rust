@@ -32,6 +32,12 @@ jobs:
         run: echo "AXON_E2E_CLEANUP_REGISTRY=${RUNNER_TOOL_CACHE}/axon-e2e-cleanup/${GITHUB_REPOSITORY_ID}/registry.json" >> "$GITHUB_ENV"
       - name: Build the tested Axon binary
         run: cargo build --locked --bin axon
+
+      - name: Test Windows secure directory identity
+        if: runner.os == 'Windows'
+        env:
+          RUST_MIN_STACK: 8388608
+        run: cargo test -p axon-services --lib --locked non_unix::tests
       - name: Run catalog-tagged portable smoke
         run: python scripts/e2e/run-platform-smoke.py --binary target/debug/axon --report target/e2e/platform-smoke-${{ runner.os }}.json --tested-sha ${{ github.sha }}
       - name: Outer ownership-checked teardown

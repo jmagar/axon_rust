@@ -16,7 +16,7 @@ use crate::store::Result;
 use crate::store_helpers::stage_header;
 use crate::validation::validate_upsert_batch;
 
-const MAX_UPSERT_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+pub(super) const MAX_UPSERT_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 
 pub(super) async fn upsert_batches_rest(
     store: &QdrantVectorStore,
@@ -223,8 +223,8 @@ fn byte_bounded_ranges(
     Ok(ranges)
 }
 
-fn encode_upsert_body(
-    body: &UpsertPointsBody<'_>,
+pub(super) fn encode_upsert_body<T: serde::Serialize>(
+    body: &T,
     max_request_bytes: usize,
     stage: ErrorStage,
 ) -> Result<Option<Vec<u8>>> {

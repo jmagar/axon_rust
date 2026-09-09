@@ -32,8 +32,8 @@ pub(super) fn validate_resumable_inventory(
         match chunk.status.as_str() {
             "completed" => validate_completed_chunk(current, chunk)?,
             "pending" => {
-                if physical_chunk_checksum(&current.plan, &chunk.store)
-                    != physical_chunk_checksum(&saved.plan, &chunk.store)
+                if physical_chunk_checksum(&current.plan, &chunk.store)?
+                    != physical_chunk_checksum(&saved.plan, &chunk.store)?
                 {
                     return Err(format!(
                         "reset.inventory_changed: pending chunk {} changed since review",

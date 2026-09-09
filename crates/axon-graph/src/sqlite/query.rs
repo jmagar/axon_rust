@@ -8,8 +8,11 @@ use axon_api::source::{
 };
 use sqlx::SqlitePool;
 
-use super::row::{edge_from_row, evidence_from_row, node_from_row};
+use super::row::{edge_from_row, node_from_row};
 use crate::error::graph_storage_error;
+
+mod evidence;
+pub(super) use evidence::{attach_evidence, evidence_for_edge};
 
 type StoreResult<T> = Result<T, axon_api::source::ApiError>;
 
@@ -105,7 +108,25 @@ pub async fn query(pool: &SqlitePool, request: GraphQueryRequest) -> StoreResult
         )
         .await?,
     );
-    attach_evidence(pool, &mut edges).await?;
+    let mut warnings = Vec::new();
+    if let Err(error) = attach_evidence(pool, &mut edges).await {
+        if error.code.to_string() != "graph.evidence_limit_exceeded" {
+            return Err(error);
+        }
+        // Preserve the existing response shape without pretending a partial
+        // evidence list is complete. Traversal explicitly falls back to summary
+        // mode; detail reads return the typed limit error instead.
+        warnings.push(axon_api::source::SourceWarning {
+            code: error.code.to_string(),
+            severity: axon_api::source::Severity::Warning,
+            message: format!(
+                "{}; returning graph topology only, with all evidence omitted",
+                error.message
+            ),
+            source_item_key: None,
+            retryable: false,
+        });
+    }
     let next_cursor = has_more.then(|| {
         edges
             .last()
@@ -120,7 +141,7 @@ pub async fn query(pool: &SqlitePool, request: GraphQueryRequest) -> StoreResult
         edges,
         evidence,
         next_cursor,
-        warnings: Vec::new(),
+        warnings,
     })
 }
 
@@ -207,36 +228,6 @@ fn push_node_ids<'a>(
     }
 }
 
-pub(super) async fn attach_evidence(pool: &SqlitePool, edges: &mut [GraphEdge]) -> StoreResult<()> {
-    if edges.is_empty() {
-        return Ok(());
-    }
-    let mut by_edge = std::collections::BTreeMap::<String, Vec<GraphEvidence>>::new();
-    for edge_batch in edges.chunks(900) {
-        let mut builder =
-            sqlx::QueryBuilder::new("SELECT * FROM graph_evidence WHERE edge_id IN (");
-        let mut separated = builder.separated(", ");
-        for edge in edge_batch {
-            separated.push_bind(&edge.edge_id.0);
-        }
-        separated.push_unseparated(") ORDER BY edge_id, evidence_id");
-        let rows = builder.build().fetch_all(pool).await.map_err(|e| {
-            graph_storage_error(format!("failed to fetch graph evidence batch: {e}"))
-        })?;
-        for row in &rows {
-            let evidence = evidence_from_row(row)?;
-            let edge_id: String = sqlx::Row::try_get(row, "edge_id").map_err(|e| {
-                graph_storage_error(format!("failed to decode evidence edge id: {e}"))
-            })?;
-            by_edge.entry(edge_id).or_default().push(evidence);
-        }
-    }
-    for edge in edges {
-        edge.evidence = by_edge.remove(&edge.edge_id.0).unwrap_or_default();
-    }
-    Ok(())
-}
-
 /// The node on the far side of `edge` from `node_id`, per direction.
 fn next_node(
     edge: &GraphEdge,
@@ -258,19 +249,6 @@ fn next_node(
         }
         _ => None,
     }
-}
-
-/// Load all evidence rows for an edge.
-pub async fn evidence_for_edge(
-    pool: &SqlitePool,
-    edge_id: &str,
-) -> StoreResult<Vec<GraphEvidence>> {
-    let rows = sqlx::query("SELECT * FROM graph_evidence WHERE edge_id = ? ORDER BY evidence_id")
-        .bind(edge_id)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| graph_storage_error(format!("failed to fetch evidence: {e}")))?;
-    rows.iter().map(evidence_from_row).collect()
 }
 
 fn empty_result() -> GraphQueryResult {

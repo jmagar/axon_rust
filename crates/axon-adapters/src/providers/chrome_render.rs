@@ -22,8 +22,11 @@
 //! `web_engine::scrape::scrape_to_result` — see that module's
 //! `apply_automation_scripts` for the actual Chrome-only execution gate.
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration as StdDuration;
 
 use async_trait::async_trait;
 use axon_api::source::*;
@@ -31,6 +34,12 @@ use axon_core::config::{Config, RenderMode as CoreRenderMode, ScrapeFormat};
 use axon_core::http::validate_url_with_dns;
 use axon_core::logging::log_warn;
 use axon_error::ErrorStage;
+
+static TIMED_OUT_RENDER_TASKS_AWAITING_REAP: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+const RENDER_REAPER_OBSERVATION_GRACE: StdDuration = StdDuration::from_millis(10);
+#[cfg(not(test))]
+const RENDER_REAPER_OBSERVATION_GRACE: StdDuration = StdDuration::from_secs(30);
 use axon_error::{RetryPolicy, RetryScope};
 use axon_observe::reservation::{ProviderReservationConfig, ProviderReservationManager};
 use chrono::Utc;
@@ -109,9 +118,19 @@ impl ChromeRenderProvider {
     async fn acquire_page_slot_for(
         &self,
         mode: CoreRenderMode,
+        deadline: tokio::time::Instant,
     ) -> std::result::Result<Option<OwnedSemaphorePermit>, ApiError> {
         if matches!(mode, CoreRenderMode::Chrome | CoreRenderMode::AutoSwitch) {
-            self.acquire_page_slot().await.map(Some)
+            tokio::time::timeout_at(deadline, self.acquire_page_slot())
+                .await
+                .map_err(|_| {
+                    self.error(
+                        "render.timeout",
+                        "render timed out while waiting for Chrome page capacity",
+                    )
+                    .with_retry_policy(RetryPolicy::retryable(RetryScope::Item))
+                })?
+                .map(Some)
         } else {
             Ok(None)
         }
@@ -187,6 +206,107 @@ fn automation_script_path(uri: &str) -> PathBuf {
     PathBuf::from(uri.strip_prefix("file://").unwrap_or(uri))
 }
 
+async fn await_isolated_render_outcome<T, F>(
+    timeout: StdDuration,
+    future: F,
+) -> std::result::Result<T, String>
+where
+    T: Send + 'static,
+    F: Future<Output = T> + Send + 'static,
+{
+    let (cancel, canceled) = tokio::sync::oneshot::channel();
+    #[cfg(test)]
+    let allow_loopback = axon_core::http::get_allow_loopback();
+    let mut task = tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        let _loopback = axon_core::http::LoopbackGuard::set(allow_loopback);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| format!("render runtime failed: {error}"))?;
+        runtime.block_on(async move {
+            tokio::select! {
+                outcome = future => Ok(outcome),
+                _ = canceled => Err("render task canceled after deadline".to_string()),
+            }
+        })
+    });
+    match tokio::time::timeout(timeout, &mut task).await {
+        Ok(Ok(Ok(outcome))) => Ok(outcome),
+        Ok(Ok(Err(error))) => Err(error),
+        Ok(Err(error)) => Err(format!("render task failed: {error}")),
+        Err(_) => {
+            let _ = cancel.send(());
+            spawn_render_reaper(task);
+            Err(format!("render timed out after {}ms", timeout.as_millis()))
+        }
+    }
+}
+
+fn spawn_render_reaper<T>(mut task: tokio::task::JoinHandle<std::result::Result<T, String>>)
+where
+    T: Send + 'static,
+{
+    TIMED_OUT_RENDER_TASKS_AWAITING_REAP.fetch_add(1, Ordering::Relaxed);
+    tokio::spawn(async move {
+        match tokio::time::timeout(RENDER_REAPER_OBSERVATION_GRACE, &mut task).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "timed-out render task reaper failed");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    pending_timed_out_renders =
+                        TIMED_OUT_RENDER_TASKS_AWAITING_REAP.load(Ordering::Relaxed),
+                    "timed-out render task remains blocked after cleanup grace; Chrome capacity may remain reduced until the underlying operation returns"
+                );
+                if let Err(error) = task.await {
+                    tracing::warn!(%error, "timed-out render task reaper failed");
+                }
+            }
+        }
+        TIMED_OUT_RENDER_TASKS_AWAITING_REAP.fetch_sub(1, Ordering::Relaxed);
+    });
+}
+
+impl ChromeRenderProvider {
+    async fn render_inner(
+        request: RenderRequest,
+        mut cfg: Config,
+        timeout_policy: crate::web_engine::browser::BrowserTimeoutPolicy,
+    ) -> std::result::Result<RenderedResource, String> {
+        if crate::web_engine::chrome_bootstrap::chrome_runtime_requested(&cfg) {
+            let bootstrap =
+                crate::web_engine::chrome_bootstrap::bootstrap_chrome_runtime(&cfg).await;
+            for warning in &bootstrap.warnings {
+                log_warn(&format!("[chrome_render] {warning}"));
+            }
+            crate::web_engine::chrome_bootstrap::apply_bootstrap_outcome(&mut cfg, &bootstrap);
+        }
+        let render_mode = cfg.render_mode;
+        crate::web_engine::scrape::scrape_to_result_with_timeout_policy(
+            &cfg,
+            &request.uri,
+            timeout_policy,
+        )
+        .await
+        .map_err(|err| err.to_string())
+        .map(|result| RenderedResource {
+            uri: request.uri,
+            final_uri: result.url,
+            markdown: result.markdown,
+            html: Some(result.output),
+            text: None,
+            render_mode: map_core_render_mode(render_mode),
+            captured_at: Timestamp::from(Utc::now()),
+            artifacts: Vec::new(),
+            console: Vec::new(),
+            network: Vec::new(),
+            metadata: request.metadata,
+        })
+    }
+}
+
 pub(crate) fn map_render_mode(mode: RenderMode) -> CoreRenderMode {
     match mode {
         RenderMode::Http => CoreRenderMode::Http,
@@ -233,23 +353,7 @@ pub(crate) fn classify_render_error(message: &str) -> RenderFailureClass {
 #[async_trait]
 impl RenderProvider for ChromeRenderProvider {
     async fn render(&self, request: RenderRequest) -> Result<RenderedResource> {
-        validate_url_with_dns(&request.uri).await.map_err(|err| {
-            self.error(
-                "render.invalid_uri",
-                format!("render target rejected by SSRF policy: {err}"),
-            )
-        })?;
-        let mut cfg = self.build_config(&request);
-        let _page_permit = self.acquire_page_slot_for(cfg.render_mode).await?;
-        if crate::web_engine::chrome_bootstrap::chrome_runtime_requested(&cfg) {
-            let bootstrap =
-                crate::web_engine::chrome_bootstrap::bootstrap_chrome_runtime(&cfg).await;
-            for warning in &bootstrap.warnings {
-                log_warn(&format!("[chrome_render] {warning}"));
-            }
-            crate::web_engine::chrome_bootstrap::apply_bootstrap_outcome(&mut cfg, &bootstrap);
-        }
-        let render_mode = cfg.render_mode;
+        let cfg = self.build_config(&request);
         let timeout_policy = if request
             .metadata
             .get("exact_browser_timeout")
@@ -261,34 +365,52 @@ impl RenderProvider for ChromeRenderProvider {
             crate::web_engine::browser::BrowserTimeoutPolicy::FloorForBrowserWork
         };
 
-        // `Box<dyn Error>` (the web-engine's error type) is not `Send`, so it
-        // must not live across an `.await` — convert to an owned `String`
-        // (`Send`) immediately, synchronously, right after the outer await
-        // resolves.
-        let outcome = crate::web_engine::scrape::scrape_to_result_with_timeout_policy(
-            &cfg,
-            &request.uri,
-            timeout_policy,
-        )
+        let browser_timeout_ms = cfg
+            .chrome_network_idle_timeout_secs
+            .saturating_add(30)
+            .saturating_mul(1_000);
+        let request_timeout_ms = match (cfg.request_timeout_ms, timeout_policy) {
+            (Some(timeout_ms), crate::web_engine::browser::BrowserTimeoutPolicy::Exact) => {
+                timeout_ms
+            }
+            (Some(timeout_ms), _) => timeout_ms.max(browser_timeout_ms),
+            (None, _) => browser_timeout_ms,
+        };
+        let render_deadline = StdDuration::from_millis(request_timeout_ms.saturating_add(5_000));
+        let now = tokio::time::Instant::now();
+        let absolute_deadline = now
+            .checked_add(render_deadline)
+            .unwrap_or_else(|| now + StdDuration::from_secs(365 * 24 * 60 * 60));
+        tokio::time::timeout_at(absolute_deadline, validate_url_with_dns(&request.uri))
+            .await
+            .map_err(|_| {
+                self.error(
+                    "render.timeout",
+                    "render timed out while validating the target address",
+                )
+                .with_retry_policy(RetryPolicy::retryable(RetryScope::Item))
+            })?
+            .map_err(|err| {
+                self.error(
+                    "render.invalid_uri",
+                    format!("render target rejected by SSRF policy: {err}"),
+                )
+            })?;
+        let page_permit = self
+            .acquire_page_slot_for(cfg.render_mode, absolute_deadline)
+            .await?;
+        let remaining = absolute_deadline.saturating_duration_since(tokio::time::Instant::now());
+        let outcome = await_isolated_render_outcome(remaining, async move {
+            let _page_permit = page_permit;
+            ChromeRenderProvider::render_inner(request, cfg, timeout_policy).await
+        })
         .await
-        .map_err(|err| err.to_string());
+        .and_then(|outcome| outcome);
 
         match outcome {
             Ok(result) => {
                 self.health.record_success().await;
-                Ok(RenderedResource {
-                    uri: request.uri,
-                    final_uri: result.url,
-                    markdown: result.markdown,
-                    html: Some(result.output),
-                    text: None,
-                    render_mode: map_core_render_mode(render_mode),
-                    captured_at: Timestamp::from(Utc::now()),
-                    artifacts: Vec::new(),
-                    console: Vec::new(),
-                    network: Vec::new(),
-                    metadata: request.metadata,
-                })
+                Ok(result)
             }
             Err(message) => match classify_render_error(&message) {
                 RenderFailureClass::Timeout => {

@@ -34,6 +34,8 @@ fn skips_noise_directories() {
         "target/doc",
         ".cargo/registry/src/example-crate",
         ".full-review/scope-files/docs",
+        ".full-review-archive/2026-09-08/scope-files/docs",
+        ".full-review-archive-2026-09-08/scope-files/docs",
     ] {
         fs::create_dir_all(dir.path().join(noise_dir)).unwrap();
         fs::write(

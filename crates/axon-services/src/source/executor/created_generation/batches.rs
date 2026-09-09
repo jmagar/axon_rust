@@ -220,7 +220,9 @@ async fn process_acquired_batches(
             )
             .await?;
             let (side_effects, vectorized) = processed;
-            accumulated.absorb_pretracked_side_effects(side_effects)?;
+            accumulated
+                .absorb_pretracked_side_effects(side_effects)
+                .await?;
             accumulated.absorb_vectorized(vectorized);
             return Ok(());
         };
@@ -255,12 +257,17 @@ async fn process_acquired_batches(
                 .track(&prefetched.acquisition.artifacts)
                 .await?;
         }
-        acquired = resolve_batch_step(processed, prefetched, |processed| {
-            let (side_effects, vectorized) = processed;
-            accumulated.absorb_pretracked_side_effects(side_effects)?;
-            accumulated.absorb_vectorized(vectorized);
-            Ok(())
-        })?;
+        let processed = match processed {
+            Ok((side_effects, vectorized)) => {
+                accumulated
+                    .absorb_pretracked_side_effects(side_effects)
+                    .await?;
+                accumulated.absorb_vectorized(vectorized);
+                Ok(())
+            }
+            Err(error) => Err(error),
+        };
+        acquired = resolve_batch_step(processed, prefetched, |_| Ok(()))?;
     }
 }
 

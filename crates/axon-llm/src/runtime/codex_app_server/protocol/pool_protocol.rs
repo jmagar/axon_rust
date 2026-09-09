@@ -6,7 +6,7 @@
 use serde_json::Value;
 use std::error::Error as StdError;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 
 use crate::runtime::{CompletionResponse, LlmBackendConfig, UsageSnapshot};
@@ -18,8 +18,15 @@ use super::{
 
 type BoxError = Box<dyn StdError + Send + Sync>;
 
+mod output_limits;
+
+#[cfg(test)]
+#[path = "pool_protocol_tests.rs"]
+mod tests;
+
 /// State accumulated during a single `turn/start` cycle against a pooled child.
 pub struct CodexTurnState {
+    output_bytes: usize,
     text: String,
     final_item_text: Option<String>,
     usage: Option<UsageSnapshot>,
@@ -29,6 +36,7 @@ pub struct CodexTurnState {
 impl CodexTurnState {
     pub fn new() -> Self {
         Self {
+            output_bytes: 0,
             text: String::new(),
             final_item_text: None,
             usage: None,
@@ -41,6 +49,7 @@ impl CodexTurnState {
     where
         F: FnMut(&str) -> Result<(), BoxError> + Send,
     {
+        output_limits::accept(&mut self.output_bytes, line.len())?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
             return Ok(TurnStep::Continue);
@@ -186,9 +195,9 @@ pub async fn run_init_handshake(
 
     write_line_async(stdin, &initialize_line(version)).await?;
 
-    let mut lines = stdout.lines();
+    let mut output_bytes = 0;
     loop {
-        match lines.next_line().await {
+        match output_limits::next_line(stdout, &mut output_bytes).await {
             Ok(Some(line)) => {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
@@ -218,9 +227,8 @@ pub async fn run_init_handshake(
         write_line_async(stdin, line).await?;
     }
 
-    let mut lines = stdout.lines();
     loop {
-        match lines.next_line().await {
+        match output_limits::next_line(stdout, &mut output_bytes).await {
             Ok(Some(line)) => {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
@@ -274,9 +282,9 @@ where
     write_line_async(stdin, &turn_start_line(thread_id, prompt, effort)).await?;
 
     let mut state = CodexTurnState::new();
-    let mut lines = stdout.lines();
+    let mut output_bytes = 0;
     loop {
-        match lines.next_line().await {
+        match output_limits::next_line(stdout, &mut output_bytes).await {
             Ok(Some(line)) => match state.handle_line(&line, on_delta)? {
                 TurnStep::Continue => {}
                 TurnStep::Send(msgs) => {

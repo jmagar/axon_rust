@@ -13,8 +13,40 @@ impl SqliteUnifiedJobStore {
         job_id: JobId,
         artifacts: &[ArtifactRef],
     ) -> Result<()> {
+        self.record_job_artifacts_for_attempt(job_id, 0, artifacts)
+            .await
+    }
+
+    /// Persist artifacts only when the producing attempt still owns the job.
+    /// Attempt zero retains compatibility for non-worker administrative uses.
+    pub async fn record_job_artifacts_for_attempt(
+        &self,
+        job_id: JobId,
+        attempt: u32,
+        artifacts: &[ArtifactRef],
+    ) -> Result<()> {
         ensure_job_pool(&self.pool, job_id).await?;
-        let mut tx = ImmediateTx::begin(&self.pool).await.map_err(sql_error)?;
+        let mut tx = ImmediateTx::begin_with_gate(&self.pool, &self.write_gate)
+            .await
+            .map_err(sql_error)?;
+        if attempt > 0 {
+            let current_attempt =
+                sqlx::query_scalar::<_, i64>("SELECT attempt FROM jobs WHERE job_id = ?")
+                    .bind(job_id.0.to_string())
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(sql_error)? as u32;
+            if current_attempt != attempt {
+                return Err(ApiError::new(
+                    "job_artifact.stale_attempt",
+                    ErrorStage::Publishing,
+                    format!(
+                        "job {} is on attempt {}, got artifacts for attempt {}",
+                        job_id.0, current_attempt, attempt
+                    ),
+                ));
+            }
+        }
         for artifact in artifacts {
             let size_bytes = artifact
                 .size_bytes

@@ -20,12 +20,12 @@
 //! composition: `crate::runtime::job_runners::build_registry` runs *before*
 //! the outer `ServiceContext` exists (it is itself an input to constructing
 //! the job runtime that becomes part of that context), so this runner cannot
-//! borrow the real one. It lazily builds its own enqueue-only job runtime
-//! (`crate::runtime::resolve_runtime`, no nested worker loop) plus a
-//! [`TargetLocalSourceRuntime`] when `qdrant_url`/`tei_url` are configured,
-//! mirroring `ServiceContext::build_target_local_source`. Built once and
-//! cached (`tokio::sync::OnceCell`) so repeated `Source` jobs do not reopen a
-//! pool/TEI probe per run.
+//! borrow the real one. It reuses the claimed worker store's migrated SQLx
+//! pool to build an enqueue-only service runtime plus a
+//! [`TargetLocalSourceRuntime`] when `qdrant_url`/`tei_url` are configured.
+//! Reopening the same SQLite file here would create a competing writer domain
+//! outside the provider scheduler's admission gate. The composed context is
+//! cached (`tokio::sync::OnceCell`) for subsequent source jobs.
 
 use std::sync::Arc;
 
@@ -34,6 +34,7 @@ use axon_api::source::{
     ApiError, AuthSnapshot, ErrorStage, LifecycleStatus, PipelinePhase, SourceRequest, SourceResult,
 };
 use axon_core::config::Config;
+use axon_jobs::scheduler::SqliteWriteGate;
 use axon_jobs::unified::SqliteUnifiedJobStore;
 use axon_jobs::workers::unified::UnifiedClaimedJob;
 use axon_jobs::workers::{UnifiedJobOutcome, UnifiedJobRunner};
@@ -50,44 +51,71 @@ const CANCEL_CLEANUP_GRACE: std::time::Duration = std::time::Duration::from_secs
 
 pub(super) struct SourceRunner {
     cfg: Arc<Config>,
+    write_gate: SqliteWriteGate,
     ctx: OnceCell<ServiceContext>,
 }
 
 impl SourceRunner {
+    #[cfg(test)]
     pub(super) fn new(cfg: Arc<Config>) -> Self {
+        Self::new_with_write_gate(cfg, SqliteWriteGate::default())
+    }
+
+    pub(super) fn new_with_write_gate(cfg: Arc<Config>, write_gate: SqliteWriteGate) -> Self {
         Self {
             cfg,
+            write_gate,
             ctx: OnceCell::new(),
         }
     }
 
-    async fn service_context(&self) -> Result<&ServiceContext, ApiError> {
+    async fn service_context(
+        &self,
+        store: &SqliteUnifiedJobStore,
+    ) -> Result<&ServiceContext, ApiError> {
         self.ctx
-            .get_or_try_init(|| build_service_context(&self.cfg))
+            .get_or_try_init(|| {
+                build_service_context_with_write_gate(&self.cfg, store, self.write_gate.clone())
+            })
             .await
     }
 }
 
-/// Build a lightweight [`ServiceContext`] scoped to this runner: an
-/// enqueue-only job runtime (no nested unified worker loop — this runner
-/// already *is* the worker executing under one) plus the real
+/// Build a lightweight [`ServiceContext`] scoped to this runner from the
+/// worker's existing migrated pool: an enqueue-only job runtime (no nested
+/// unified worker loop — this runner already *is* the worker executing under
+/// one) plus the real
 /// [`TargetLocalSourceRuntime`] when the data plane is configured. Absence of
 /// `qdrant_url`/`tei_url` is not an error here — `index_source_with_auth`
 /// itself degrades cleanly to a `Failed` `SourceResult` when the runtime has
 /// no target local-source runtime attached.
-async fn build_service_context(cfg: &Arc<Config>) -> Result<ServiceContext, ApiError> {
-    let jobs = crate::runtime::resolve_runtime(Arc::clone(cfg))
-        .await
-        .map_err(|error| source_error(format!("failed to resolve job runtime: {error}")))?;
+async fn build_service_context_with_write_gate(
+    cfg: &Arc<Config>,
+    store: &SqliteUnifiedJobStore,
+    write_gate: SqliteWriteGate,
+) -> Result<ServiceContext, ApiError> {
+    let pool = Arc::new(store.sqlite_pool().clone());
+    let jobs: Arc<dyn crate::runtime::ServiceJobRuntime> = Arc::new(
+        crate::runtime::SqliteServiceRuntime::new_for_migrated_pool_with_write_gate(
+            Arc::clone(cfg),
+            Arc::clone(&pool),
+            write_gate.clone(),
+        ),
+    );
     let mut ctx = ServiceContext::from_runtime(Arc::clone(cfg), Arc::clone(&jobs));
 
     if cfg.qdrant_url.trim().is_empty() || cfg.tei_url.trim().is_empty() {
         return Ok(ctx);
     }
-    let (Some(pool), Some(store)) = (jobs.sqlite_pool(), jobs.unified_job_store()) else {
-        return Ok(ctx);
-    };
-    match TargetLocalSourceRuntime::from_config(cfg, store, (*pool).clone()).await {
+    let job_store: Arc<dyn axon_jobs::boundary::JobStore> = Arc::new(store.clone());
+    match TargetLocalSourceRuntime::from_config_with_write_gate(
+        cfg,
+        job_store,
+        pool.as_ref().clone(),
+        write_gate,
+    )
+    .await
+    {
         Ok(runtime) => {
             crate::source::spawn_artifact_candidate_outbox_drain(&runtime);
             ctx = ctx.with_target_local_source_runtime(runtime);
@@ -129,50 +157,74 @@ impl UnifiedJobRunner for SourceRunner {
                     .map_err(|error| source_error(format!("malformed source_request: {error}")))
             })?;
 
-        let ctx = self.service_context().await?;
+        let ctx = self.service_context(store).await?;
         let run_fut = run_source_request_with_cancellation(
             claimed,
             source_request,
             ctx,
             Some(shutdown.clone()),
         );
-        tokio::pin!(run_fut);
-        let mut heartbeat = tokio::time::interval_at(
-            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
-            std::time::Duration::from_secs(30),
-        );
-        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let result = loop {
-            tokio::select! {
-                _ = shutdown.cancelled() => {
-                    // Cooperative cancel: the pipeline observes `shutdown` and
-                    // resolves promptly with an error, letting the executor
-                    // clean the uncommitted generation's vectors and mark the
-                    // generation row failed before this runner returns
-                    // (finding M3). Bound the wait so a stage that has not
-                    // reached the cancellation checkpoint yet cannot stall
-                    // worker shutdown indefinitely.
-                    break match tokio::time::timeout(CANCEL_CLEANUP_GRACE, &mut run_fut).await {
-                        Ok(result) => result,
-                        Err(_) => return Err(source_error("source canceled")),
-                    };
-                }
-                result = &mut run_fut => break result,
-                _ = heartbeat.tick() => {
-                    heartbeat_running_preserving_progress(store, claimed).await;
-                }
-            }
-        };
+        let result = drive_source_with_heartbeat(run_fut, shutdown, || {
+            heartbeat_running_preserving_progress(store, claimed)
+        })
+        .await?;
 
         match result {
             Ok(source_result) => {
                 store
-                    .record_job_artifacts(claimed.job_id, &source_result.artifacts)
+                    .record_job_artifacts_for_attempt(
+                        claimed.job_id,
+                        claimed.attempt,
+                        &source_result.artifacts,
+                    )
                     .await?;
                 outcome_from_result(source_result)
             }
             Err(error) => Err(source_error(error.to_string())),
         }
+    }
+}
+
+async fn drive_source_with_heartbeat<F, H, HF>(
+    run_fut: F,
+    shutdown: &CancellationToken,
+    mut send_heartbeat: H,
+) -> Result<F::Output, ApiError>
+where
+    F: std::future::Future,
+    H: FnMut() -> HF,
+    HF: std::future::Future<Output = ()>,
+{
+    tokio::pin!(run_fut);
+    let mut heartbeat = tokio::time::interval_at(
+        tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+        std::time::Duration::from_secs(30),
+    );
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // A heartbeat can wait for a writer held (or already queued) by the
+    // source future. Keep polling both futures until the source settles;
+    // awaiting the heartbeat inside a select branch deadlocks that writer.
+    let result = {
+        let heartbeat_loop = async {
+            loop {
+                heartbeat.tick().await;
+                send_heartbeat().await;
+            }
+        };
+        tokio::pin!(heartbeat_loop);
+        tokio::select! {
+            _ = shutdown.cancelled() => None,
+            result = &mut run_fut => Some(result),
+            _ = &mut heartbeat_loop => unreachable!("heartbeat loop never finishes"),
+        }
+    };
+    // Drop the heartbeat future before cleanup: it may itself hold a writer
+    // that the source needs to settle its unpublished generation.
+    match result {
+        Some(result) => Ok(result),
+        None => tokio::time::timeout(CANCEL_CLEANUP_GRACE, &mut run_fut)
+            .await
+            .map_err(|_| source_error("source canceled")),
     }
 }
 

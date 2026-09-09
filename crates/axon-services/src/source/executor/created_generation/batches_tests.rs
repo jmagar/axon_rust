@@ -82,6 +82,7 @@ struct ControlledBatchAdapter {
     normalize_started: mpsc::UnboundedSender<usize>,
     first_normalize_release: Mutex<Option<oneshot::Receiver<()>>>,
     second_acquire_release: Mutex<Option<oneshot::Receiver<()>>>,
+    first_acquire_release: Mutex<Option<oneshot::Receiver<()>>>,
     failures: AdapterFailures,
     prefetched_artifact: Option<ArtifactRef>,
 }
@@ -94,6 +95,24 @@ impl ControlledBatchAdapter {
         first_normalize_release: Option<oneshot::Receiver<()>>,
         failures: AdapterFailures,
     ) -> Self {
+        Self::new_with_body(
+            item_count,
+            acquire_started,
+            normalize_started,
+            first_normalize_release,
+            failures,
+            |index| format!("# Item {index}\nbody\n"),
+        )
+    }
+
+    fn new_with_body(
+        item_count: usize,
+        acquire_started: mpsc::UnboundedSender<usize>,
+        normalize_started: mpsc::UnboundedSender<usize>,
+        first_normalize_release: Option<oneshot::Receiver<()>>,
+        failures: AdapterFailures,
+        body: impl Fn(usize) -> String,
+    ) -> Self {
         let mut inner = FakeSourceAdapter::new(AdapterRef {
             name: "web".into(),
             version: "test".into(),
@@ -102,7 +121,7 @@ impl ControlledBatchAdapter {
             inner = inner.with_item(
                 format!("item-{index:03}"),
                 ContentKind::Markdown,
-                format!("# Item {index}\nbody\n"),
+                body(index),
             );
         }
         Self {
@@ -113,6 +132,7 @@ impl ControlledBatchAdapter {
             normalize_started,
             first_normalize_release: Mutex::new(first_normalize_release),
             second_acquire_release: Mutex::new(None),
+            first_acquire_release: Mutex::new(None),
             failures,
             prefetched_artifact: None,
         }
@@ -158,6 +178,11 @@ impl SourceAdapter for ControlledBatchAdapter {
     ) -> axon_adapters::adapter::Result<SourceAcquisition> {
         let call = self.acquire_calls.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = self.acquire_started.send(call);
+        if call == 1
+            && let Some(release) = self.first_acquire_release.lock().await.take()
+        {
+            let _ = release.await;
+        }
         if call == 2
             && let Some(release) = self.second_acquire_release.lock().await.take()
         {
@@ -200,7 +225,20 @@ impl SourceAdapter for ControlledBatchAdapter {
                 format!("normalize {call} failed"),
             ));
         }
-        self.inner.normalize(plan, acquisition).await
+        let mut normalized = self.inner.normalize(plan, acquisition).await?;
+        for document in &mut normalized.data {
+            for (key, value) in [
+                ("source_family", "web"),
+                ("source_kind", "web"),
+                ("source_adapter", "web"),
+                ("source_scope", "site"),
+            ] {
+                document
+                    .metadata
+                    .insert(key.to_string(), serde_json::json!(value));
+            }
+        }
+        Ok(normalized)
     }
 }
 
@@ -238,6 +276,7 @@ async fn run_actual_generation_batches_with_diff(
         "fake-embedding",
         8,
     );
+    runtime.embed_scheduler_enabled = false;
     if let Some(artifact_store) = artifact_store {
         runtime.artifact_store = artifact_store;
     }
@@ -318,6 +357,7 @@ async fn run_actual_generation_batches_with_diff(
 async fn run_actual_scheduled_generation_batches(
     adapter: Arc<ControlledBatchAdapter>,
     coordinator: Option<ProgressCoordinator>,
+    embed: bool,
 ) -> (
     anyhow::Result<()>,
     GenerationStageProgress,
@@ -326,7 +366,7 @@ async fn run_actual_scheduled_generation_batches(
 ) {
     let vectors = Arc::new(FakeVectorStore::new("fake-vector"));
     let ledger = Arc::new(FakeLedgerStore::new());
-    let runtime = TargetLocalSourceRuntime::new(
+    let mut runtime = TargetLocalSourceRuntime::new(
         Arc::new(axon_jobs::boundary::FakeJobWatchStore::new()),
         ledger,
         Arc::new(FakeEmbeddingProvider::new("fake-embedding", 8)),
@@ -335,6 +375,7 @@ async fn run_actual_scheduled_generation_batches(
         "fake-embedding",
         8,
     );
+    runtime.embed_scheduler_flush_delay = std::time::Duration::from_millis(25);
     let route = crate::source::routing::resolve_source_route(&SourceRequest::new(
         "https://example.com/overlap".to_string(),
     ))
@@ -343,7 +384,7 @@ async fn run_actual_scheduled_generation_batches(
     let plan = crate::source::dispatch::family_source_plan(
         &route.source.canonical_uri,
         &route,
-        false,
+        embed,
         None,
         None,
     );
@@ -368,11 +409,12 @@ async fn run_actual_scheduled_generation_batches(
         .await
         .expect("source summary");
     let manifest = adapter.discover(&input.plan).await.expect("manifest");
-    let diff = runtime
+    let mut diff = runtime
         .ledger
         .diff_manifest(manifest)
         .await
         .expect("manifest diff");
+    diff.next_generation = SourceGenerationId::from("1");
     let changed_total = diff.added.len().saturating_add(diff.modified.len()) as u64;
     let generation = diff.next_generation.clone();
     let emitter = SourceEventEmitter::new(None, Some(input.plan.job_id));
@@ -424,7 +466,7 @@ async fn scheduled_generation_drops_its_sender_after_production_finishes() {
 
     let completed = tokio::time::timeout(
         std::time::Duration::from_secs(1),
-        run_actual_scheduled_generation_batches(adapter, None),
+        run_actual_scheduled_generation_batches(adapter, None, false),
     )
     .await
     .expect("the scheduler must close its channel after the producer finishes");
@@ -437,17 +479,48 @@ async fn scheduled_generation_drops_its_sender_after_production_finishes() {
 }
 
 #[tokio::test]
+async fn scheduled_generation_admits_next_wave_before_first_wave_settles() {
+    let (acquire_tx, mut acquired) = mpsc::unbounded_channel();
+    let (normalize_tx, _normalized) = mpsc::unbounded_channel();
+    let (release, wait) = oneshot::channel();
+    let mut adapter = ControlledBatchAdapter::new(
+        ACQUIRE_BATCH_SIZE + 1,
+        acquire_tx,
+        normalize_tx,
+        None,
+        AdapterFailures::default(),
+    );
+    adapter.first_acquire_release = Mutex::new(Some(wait));
+    let run = tokio::spawn(run_actual_scheduled_generation_batches(
+        Arc::new(adapter),
+        None,
+        false,
+    ));
+    assert_eq!(acquired.recv().await, Some(1));
+    let second = tokio::time::timeout(std::time::Duration::from_millis(200), acquired.recv()).await;
+    release.send(()).unwrap();
+    let (result, stage, _, _) = run.await.unwrap();
+    result.unwrap();
+    assert_eq!(
+        second.expect("one bounded next wave must use available capacity"),
+        Some(2)
+    );
+    assert_eq!(stage.acquired_items, (ACQUIRE_BATCH_SIZE + 1) as u64);
+}
+
+#[tokio::test]
 async fn scheduled_generation_releases_prepared_work_while_next_acquisition_is_running() {
     let (acquire_started_tx, mut acquire_started_rx) = mpsc::unbounded_channel();
     let (normalize_started_tx, _normalize_started_rx) = mpsc::unbounded_channel();
     let (acquire_release_tx, acquire_release_rx) = oneshot::channel();
     let adapter = Arc::new(
-        ControlledBatchAdapter::new(
+        ControlledBatchAdapter::new_with_body(
             ACQUIRE_BATCH_SIZE + 1,
             acquire_started_tx,
             normalize_started_tx,
             None,
             AdapterFailures::default(),
+            |index| format!("# Item {index}\n\n{}", "Deterministic source content survives preparation and exercises the embedding scheduler while the following acquisition remains in flight. ".repeat(8)),
         )
         .with_second_acquire_release(acquire_release_rx),
     );
@@ -456,6 +529,7 @@ async fn scheduled_generation_releases_prepared_work_while_next_acquisition_is_r
     let run = tokio::spawn(run_actual_scheduled_generation_batches(
         adapter,
         Some(coordinator),
+        true,
     ));
     assert_eq!(acquire_started_rx.recv().await, Some(1));
     assert_eq!(acquire_started_rx.recv().await, Some(2));
@@ -477,11 +551,15 @@ async fn scheduled_generation_releases_prepared_work_while_next_acquisition_is_r
     acquire_release_tx
         .send(())
         .expect("release second acquisition");
-    let completed = run.await.expect("scheduled batch runner");
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(2), run)
+        .await
+        .expect("scheduled generation must settle after acquisition release")
+        .expect("scheduled batch runner");
     completed.0.expect("scheduled generation");
+    let phase_order = observed.recorded_phase_order().await;
     assert!(
         batching_started,
-        "prepared work must reach embedding while the next acquisition is still running"
+        "prepared work must reach embedding while the next acquisition is still running; phases: {phase_order:?}"
     );
 }
 

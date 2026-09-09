@@ -578,9 +578,31 @@ async fn ledger_with_committed_generation(
 
 #[tokio::test]
 async fn prune_plan_reads_shared_ledger_from_enqueue_only_context() {
+    let qdrant = httpmock::MockServer::start_async().await;
+    let collection = qdrant
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::GET).path("/collections/axon");
+            then.status(200)
+                .json_body(serde_json::json!({"result":{"config":{"params":{
+                    "vectors":{"dense":{"size":1024,"distance":"Cosine"}},
+                    "sparse_vectors":{"bm42":{"modifier":"idf"}}
+                }}}}));
+        })
+        .await;
+    let count = qdrant
+        .mock_async(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/collections/axon/points/count")
+                .body_includes("enqueue-only/source");
+            then.status(200)
+                .json_body(serde_json::json!({"result": {"count": 1}, "status": "ok"}));
+        })
+        .await;
     let temp = tempfile::tempdir().expect("tempdir");
     let mut cfg = Config::default();
     cfg.sqlite_path = temp.path().join("jobs.db");
+    cfg.qdrant_url = qdrant.base_url();
+    cfg.collection = "axon".to_string();
     let ctx = ServiceContext::new(Arc::new(cfg))
         .await
         .expect("enqueue-only context");
@@ -627,6 +649,8 @@ async fn prune_plan_reads_shared_ledger_from_enqueue_only_context() {
         "enqueue-only estimate",
     );
     let plan = prune_plan_estimated(&ctx, &request).await;
+    count.assert_calls_async(1).await;
+    collection.assert_calls_async(1).await;
     assert_eq!(plan.estimated.vector_points, 1);
     assert_eq!(plan.estimated.ledger_generations, 0);
     assert_eq!(plan.steps.len(), 1);

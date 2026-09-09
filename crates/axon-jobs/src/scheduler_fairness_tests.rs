@@ -419,6 +419,11 @@ async fn scheduler_hot_queries_use_declared_indexes() {
             "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM provider_reservations WHERE job_id = '00000000-0000-0000-0000-000000000033' AND status IN ('queued','granted','active')",
             "provider_reservations_scheduler_job_state_idx",
         ),
+        (
+            "priority aging",
+            "EXPLAIN QUERY PLAN UPDATE provider_reservations SET effective_priority = CASE max(0, CASE requested_priority WHEN 'interactive' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'background' THEN 3 ELSE 4 END - min(4, max(0, (unixepoch('now') - unixepoch(updated_at)) / 30))) WHEN 0 THEN 'interactive' WHEN 1 THEN 'high' WHEN 2 THEN 'normal' WHEN 3 THEN 'background' ELSE 'maintenance' END WHERE capacity_domain = 'embedding' AND instance_id = 'tei-fairness' AND status = 'queued' AND COALESCE(effective_priority, '') <> CASE max(0, CASE requested_priority WHEN 'interactive' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'background' THEN 3 ELSE 4 END - min(4, max(0, (unixepoch('now') - unixepoch(updated_at)) / 30))) WHEN 0 THEN 'interactive' WHEN 1 THEN 'high' WHEN 2 THEN 'normal' WHEN 3 THEN 'background' ELSE 'maintenance' END",
+            "provider_reservations_scheduler_instance_state_idx",
+        ),
     ];
     for (label, sql, expected_index) in plans {
         let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(sql)

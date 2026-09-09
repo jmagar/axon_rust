@@ -6,12 +6,16 @@ use crate::text::source_range_from_positions;
 use super::MarkdownChunkLimits;
 use super::semantics::{SemanticLayout, containing_block, latest_boundary, preferred_boundary};
 
+#[cfg(test)]
+#[path = "windowing_tests.rs"]
+mod tests;
+
 pub(super) fn split_oversized_sections(
     source: &str,
+    positions: &SourcePositions,
     chunks: Vec<DocumentChunk>,
     limits: MarkdownChunkLimits,
 ) -> Vec<DocumentChunk> {
-    let positions = SourcePositions::new(source);
     let mut split = Vec::with_capacity(chunks.len());
     for chunk in chunks {
         if chunk.content.chars().count() <= limits.max_chars {
@@ -46,7 +50,7 @@ pub(super) fn split_oversized_sections(
             for (window_start, window_end) in char_windows(&chunk.content, limits.max_chars) {
                 if let Some(window) = ranged_clone(
                     source,
-                    &positions,
+                    positions,
                     &chunk,
                     content_start,
                     window_start,
@@ -69,7 +73,7 @@ pub(super) fn split_oversized_sections(
                     for (window_start, window_end) in char_windows(fence, limits.max_chars) {
                         let Some(mut window) = ranged_clone(
                             source,
-                            &positions,
+                            positions,
                             &chunk,
                             content_start,
                             span.start + window_start,
@@ -97,7 +101,7 @@ pub(super) fn split_oversized_sections(
                     {
                         let Some(mut window) = ranged_clone(
                             source,
-                            &positions,
+                            positions,
                             &chunk,
                             content_start,
                             span.start + window_start,
@@ -392,19 +396,23 @@ fn ranged_clone(
     let trimmed_end = raw.trim_end().len();
     let absolute_start = content_start + relative_start + trimmed_start;
     let absolute_end = content_start + relative_start + trimmed_end;
-    let mut window = chunk.clone();
-    window.content = source[absolute_start..absolute_end].to_string();
-    window.range = positions.range(absolute_start, absolute_end);
-    Some(window)
+    Some(DocumentChunk {
+        content: source[absolute_start..absolute_end].to_string(),
+        range: positions.range(absolute_start, absolute_end),
+        title: chunk.title.clone(),
+        heading_path: chunk.heading_path.clone(),
+        symbol: chunk.symbol.clone(),
+        metadata: chunk.metadata.clone(),
+    })
 }
 
-struct SourcePositions {
+pub(super) struct SourcePositions {
     char_offsets: Vec<usize>,
     line_offsets: Vec<usize>,
 }
 
 impl SourcePositions {
-    fn new(source: &str) -> Self {
+    pub(super) fn new(source: &str) -> Self {
         let mut char_offsets = source
             .char_indices()
             .map(|(offset, _)| offset)
@@ -422,7 +430,7 @@ impl SourcePositions {
         }
     }
 
-    fn range(&self, start: usize, end: usize) -> axon_api::source::SourceRange {
+    pub(super) fn range(&self, start: usize, end: usize) -> axon_api::source::SourceRange {
         let start_char = self.char_offsets.partition_point(|offset| *offset < start);
         let end_char = self.char_offsets.partition_point(|offset| *offset < end);
         let line_start = self.line_offsets.partition_point(|offset| *offset <= start) as u32;

@@ -75,6 +75,7 @@ pub(super) fn fixture_repo() -> TempDir {
         "crates/axon-adapters/fixtures/provider-variant-exceptions.json",
         "crates/axon-web/src/schema_registry.rs",
         "crates/axon-web/src/schema_registry/admin_watch_routes.rs",
+        "crates/axon-web/src/schema_registry/agent_routes.rs",
         "crates/axon-web/src/schema_registry/codex_routes.rs",
         "crates/axon-web/src/schema_registry/extract_routes.rs",
         "crates/axon-web/src/schema_registry/graph_routes.rs",
@@ -339,6 +340,7 @@ fn needs_real_fixture(path: &str) -> bool {
             | "crates/axon-api/src/source/projection_registry.rs"
             | "xtask/src/schemas/projections.rs"
             | "crates/axon-web/src/schema_registry/admin_watch_routes.rs"
+            | "crates/axon-web/src/schema_registry/agent_routes.rs"
             | "crates/axon-web/src/schema_registry/codex_routes.rs"
             | "crates/axon-web/src/schema_registry/extract_routes.rs"
             | "crates/axon-web/src/schema_registry/graph_routes.rs"
@@ -1254,6 +1256,11 @@ fn openapi_provenance_covers_route_registry_submodules() {
     )
     .unwrap();
     let inputs = value["x-axon"]["source_inputs"].as_array().unwrap();
+    assert!(
+        inputs.iter().any(|input| {
+            input["path"] == "crates/axon-web/src/schema_registry/agent_routes.rs"
+        })
+    );
     assert!(
         inputs.iter().any(|input| {
             input["path"] == "crates/axon-web/src/schema_registry/memory_routes.rs"

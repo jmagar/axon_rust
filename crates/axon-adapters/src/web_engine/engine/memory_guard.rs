@@ -41,10 +41,10 @@ const fn telemetry_is_supported() -> bool {
 async fn read_platform_memory_snapshot() -> Option<MemorySnapshot> {
     #[cfg(target_os = "macos")]
     {
-        return tokio::task::spawn_blocking(platform_memory_snapshot)
+        tokio::task::spawn_blocking(platform_memory_snapshot)
             .await
             .ok()
-            .flatten();
+            .flatten()
     }
     #[cfg(not(target_os = "macos"))]
     {

@@ -65,14 +65,16 @@ mod tests;
 /// retry the generation.
 pub async fn upsert_candidates(
     pool: &SqlitePool,
+    write_gate: &axon_core::sqlite::SqliteWriteGate,
     candidates: Vec<GraphCandidate>,
 ) -> StoreResult<GraphWriteResult> {
     prevalidate_candidate_batch(&candidates)?;
-    upsert_candidate_iter(pool, candidates).await
+    upsert_candidate_iter(pool, write_gate, candidates).await
 }
 
 pub async fn upsert_candidate_iter<I>(
     pool: &SqlitePool,
+    write_gate: &axon_core::sqlite::SqliteWriteGate,
     candidates: I,
 ) -> StoreResult<GraphWriteResult>
 where
@@ -97,7 +99,7 @@ where
             source_id = Some(candidate.source_id.clone());
         }
         let (resolved_nodes, resolved_edges) = resolve_candidate(&candidate);
-        let mut tx = ImmediateTx::begin(pool)
+        let mut tx = ImmediateTx::begin_with_gate(pool, write_gate)
             .await
             .map_err(|e| graph_storage_error(format!("failed to open graph transaction: {e}")))?;
         candidates_seen = candidates_seen.saturating_add(1);

@@ -411,6 +411,67 @@ async fn write_baseline_graph_without_pool_is_degraded() {
 }
 
 #[tokio::test]
+async fn queued_graph_writer_waits_for_admission_and_publishes() {
+    let uri = "https://example.com/docs";
+    let ledger = FakeLedgerStore::new();
+    let published_manifest = manifest(
+        "src_blocked",
+        "gen_blocked",
+        vec![manifest_item(
+            "src_blocked",
+            "item-1",
+            "https://example.com/docs/one",
+            ItemKind::WebPage,
+        )],
+    );
+    let pool = Arc::new(graph_pool().await);
+    let mut blocker = pool.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+
+    let write = tokio::spawn({
+        let pool = Arc::clone(&pool);
+        async move {
+            write_baseline_graph_with_db_gate(
+                None,
+                None,
+                SourceKind::Web,
+                Some(pool),
+                &ledger,
+                &counts("src_blocked", "gen_blocked"),
+                uri,
+                Some(published_manifest),
+                Vec::new(),
+                None,
+            )
+            .await
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    sqlx::query("ROLLBACK")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let summary = tokio::time::timeout(std::time::Duration::from_secs(1), write)
+        .await
+        .expect("admitted graph publication must complete")
+        .expect("graph task must join");
+
+    assert!(!summary.degraded);
+    assert!(summary.nodes_upserted > 0);
+    let durable_nodes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM graph_nodes")
+        .fetch_one(&*pool)
+        .await
+        .unwrap();
+    assert!(
+        durable_nodes > 0,
+        "successful publication must persist graph rows"
+    );
+}
+
+#[tokio::test]
 async fn write_baseline_graph_missing_manifest_is_degraded() {
     let ledger = FakeLedgerStore::new();
     let pool = Arc::new(graph_pool().await);

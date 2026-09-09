@@ -454,6 +454,41 @@ async fn periodic_maintenance_reclaims_expired_rows_without_cache_traffic() {
 }
 
 #[tokio::test]
+async fn cache_writes_leave_ttl_reclamation_to_periodic_maintenance() {
+    let (store, pool, _) = store().await;
+    let expired = entry(90);
+    sqlx::query(
+        "INSERT INTO embedding_vector_cache \
+         (cache_key, provider_id, model, dimensions, vector, created_at, last_used_at) \
+         VALUES (?, 'tei', 'test-model', 4, ?, 0, 0)",
+    )
+    .bind(&expired.cache_key)
+    .bind(encode_vector(&expired.values))
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    store.put_many(&[entry(91)], 100_000).await.unwrap();
+    let after_write: i64 =
+        sqlx::query_scalar("SELECT entry_count FROM embedding_vector_cache_state")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        after_write, 2,
+        "an ordinary cache write must not synchronously inherit TTL cleanup debt"
+    );
+
+    run_periodic_maintenance(&store.inner).await;
+    let after_maintenance: i64 =
+        sqlx::query_scalar("SELECT entry_count FROM embedding_vector_cache_state")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(after_maintenance, 1);
+}
+
+#[tokio::test]
 async fn periodic_maintenance_uses_configured_cap_before_any_put() {
     let pool = open_sqlite_pool(":memory:").await.expect("cache database");
     let store = SqliteEmbeddingVectorCacheStore::new(pool.clone(), SqliteWriteGate::default(), 5);

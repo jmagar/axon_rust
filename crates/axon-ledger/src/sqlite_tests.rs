@@ -5,13 +5,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::sqlite::SqliteLedgerStore;
 use crate::store::LedgerStore;
 
-fn snapshot_test_db_path() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("axon-ledger-snapshot-{}.db", uuid::Uuid::new_v4()))
-}
-
 #[tokio::test]
 async fn public_create_generation_reserves_writer_before_snapshot_read() {
-    let path = snapshot_test_db_path();
+    let directory = tempfile::tempdir().expect("private snapshot test directory");
+    let path = directory.path().join("jobs.db");
     let path_string = path.to_string_lossy().to_string();
     let store = Arc::new(
         SqliteLedgerStore::connect(&format!("sqlite://{}?mode=rwc", path.display()))
@@ -37,10 +34,11 @@ async fn public_create_generation_reserves_writer_before_snapshot_read() {
 
     entered_wait.await;
     let competing_source_id = source_id.clone();
+    let competing_pool = writer.clone();
     let competing_writer = tokio::spawn(async move {
         sqlx::query("UPDATE sources SET updated_at = updated_at WHERE source_id = ?")
             .bind(&competing_source_id.0)
-            .execute(&writer)
+            .execute(&competing_pool)
             .await
             .expect("competing writer commits after generation transaction")
     });
@@ -68,7 +66,8 @@ async fn public_create_generation_reserves_writer_before_snapshot_read() {
     assert_eq!(count, 1, "retry must not duplicate the generation");
 
     competing_writer.await.expect("competing writer task joins");
-    std::fs::remove_file(path).expect("remove snapshot test database");
+    writer.close().await;
+    store.pool_for_tests().close().await;
 }
 
 #[tokio::test]

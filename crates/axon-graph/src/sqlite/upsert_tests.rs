@@ -51,6 +51,7 @@ async fn streaming_publication_releases_writer_between_candidates() {
         uuid::Uuid::new_v4()
     );
     let pool = SqlitePool::connect(&url).await.unwrap();
+    let write_gate = axon_core::sqlite::SqliteWriteGate::default();
     crate::migration::ensure_schema(&pool).await.unwrap();
     sqlx::query("CREATE TABLE heartbeat_probe (value INTEGER NOT NULL)")
         .execute(&pool)
@@ -86,7 +87,9 @@ async fn streaming_publication_releases_writer_between_candidates() {
         candidate
     });
 
-    upsert_candidate_iter(&pool, candidates).await.unwrap();
+    upsert_candidate_iter(&pool, &write_gate, candidates)
+        .await
+        .unwrap();
     writer.await.unwrap();
     assert!(
         observed_before_second.load(Ordering::Acquire),
@@ -97,6 +100,7 @@ async fn streaming_publication_releases_writer_between_candidates() {
 #[tokio::test]
 async fn injected_streaming_failure_leaves_only_the_committed_candidate_prefix_visible() {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let write_gate = axon_core::sqlite::SqliteWriteGate::default();
     crate::migration::ensure_schema(&pool).await.unwrap();
     sqlx::query(
         "CREATE TRIGGER fail_second_candidate BEFORE INSERT ON graph_nodes \
@@ -109,6 +113,7 @@ async fn injected_streaming_failure_leaves_only_the_committed_candidate_prefix_v
 
     let error = upsert_candidate_iter(
         &pool,
+        &write_gate,
         [
             candidate("first", "repo:first"),
             candidate("second", "repo:second"),

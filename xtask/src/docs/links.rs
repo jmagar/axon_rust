@@ -19,6 +19,7 @@ const SKIP_DIRS: &[&str] = &[
     // surrounding repository tree; its relative links are intentionally not
     // live documentation contracts.
     ".full-review",
+    ".full-review-archive",
     ".claude",
     ".cargo",
     ".worktrees",
@@ -45,10 +46,9 @@ pub fn check_repo_wide(root: &Path) -> Result<()> {
         if !entry.file_type().is_dir() {
             return true;
         }
-        entry
-            .file_name()
-            .to_str()
-            .is_none_or(|name| !SKIP_DIRS.contains(&name))
+        entry.file_name().to_str().is_none_or(|name| {
+            !SKIP_DIRS.contains(&name) && !name.starts_with(".full-review-archive-")
+        })
     });
     for entry in walker.filter_map(Result::ok) {
         let path = entry.path();

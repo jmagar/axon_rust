@@ -6,13 +6,26 @@ mod tests;
 
 pub(in crate::source) async fn index_materialized_source<'a, F, Fut>(
     runtime: &'a TargetLocalSourceRuntime,
-    mut input: SourcePipelineInput<'a>,
+    input: SourcePipelineInput<'a>,
     materialize: F,
 ) -> anyhow::Result<IndexCounts>
 where
     F: FnOnce(SourcePlan) -> Fut + Send + 'a,
     Fut: Future<Output = anyhow::Result<MaterializedSource>> + Send + 'a,
 {
+    // Lease loss must stop this pipeline without marking a caller's parent
+    // cancellation token as user-canceled. Parent cancellation still propagates.
+    let cancel = input
+        .execution
+        .cancellation
+        .as_ref()
+        .map(tokio_util::sync::CancellationToken::child_token)
+        .unwrap_or_default();
+    let execution = input.execution.clone().with_cancellation(cancel);
+    let mut input = SourcePipelineInput {
+        execution: &execution,
+        ..input
+    };
     artifact_candidates::spawn_outbox_drain(runtime);
     let config_snapshot = crate::config_snapshot_hash::JobConfigSnapshot {
         source_kind: input.adapter.name(),

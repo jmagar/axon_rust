@@ -299,7 +299,8 @@
 # openai-pool-max-inputs = 1024
 
 [providers.vector]
-# Upsert request batch size and request parallelism.
+# Upsert request batch size and request parallelism. This is the canonical
+# replacement for legacy pipeline.qdrant-point-buffer / AXON_QDRANT_POINT_BUFFER.
 # Env: AXON_QDRANT_UPSERT_BATCH_SIZE
 # upsert-batch-points = 1024
 # Env: AXON_QDRANT_UPSERT_PARALLELISM
@@ -362,6 +363,7 @@
 # high-context by the adaptive ask context builder. Env: AXON_SYNTHESIS_HIGH_CONTEXT
 # high-context = true
 # Max concurrent LLM completion requests across the selected backend (clamped 1-64).
+# Unset: Gemini 4, OpenAI-compatible 16. Explicit values (including 4) are honored.
 # Env: AXON_LLM_COMPLETION_CONCURRENCY
 # completion-concurrency = 4
 # Timeout in seconds for each LLM completion request (clamped 10-1800).

@@ -84,15 +84,18 @@ fn skips_immutable_full_review_snapshots() {
     let dir = tempdir().expect("create tempdir");
     write_claude(dir.path());
     make_valid_symlinks(dir.path());
-    let snapshot = dir
-        .path()
-        .join(".full-review")
-        .join("scope-files")
-        .join("crates")
-        .join("axon-services")
-        .join("src");
-    fs::create_dir_all(&snapshot).expect("mkdir immutable snapshot");
-    write_claude(&snapshot);
+    for root in [
+        ".full-review",
+        ".full-review-archive",
+        ".full-review-archive-2026-09-08",
+    ] {
+        let snapshot = dir
+            .path()
+            .join(root)
+            .join("scope-files/crates/axon-services/src");
+        fs::create_dir_all(&snapshot).expect("mkdir immutable snapshot");
+        write_claude(&snapshot);
+    }
 
     let result = check(dir.path());
     assert!(

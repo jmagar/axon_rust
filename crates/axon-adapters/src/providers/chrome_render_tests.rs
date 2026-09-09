@@ -71,7 +71,10 @@ async fn http_render_does_not_consume_a_chrome_page_slot() {
 
     let permit = tokio::time::timeout(
         std::time::Duration::from_millis(100),
-        provider.acquire_page_slot_for(CoreRenderMode::Http),
+        provider.acquire_page_slot_for(
+            CoreRenderMode::Http,
+            tokio::time::Instant::now() + std::time::Duration::from_millis(100),
+        ),
     )
     .await
     .expect("HTTP render must not wait for Chrome capacity")
@@ -80,19 +83,61 @@ async fn http_render_does_not_consume_a_chrome_page_slot() {
 }
 
 #[tokio::test]
+async fn chrome_page_capacity_wait_is_bounded_by_deadline() {
+    let provider = ChromeRenderProvider::new(ChromeRenderConfig {
+        max_concurrent_pages: Some(1),
+        ..ChromeRenderConfig::default()
+    });
+    let _held = provider.acquire_page_slot().await.expect("page slot");
+
+    let error = provider
+        .acquire_page_slot_for(
+            CoreRenderMode::Chrome,
+            tokio::time::Instant::now() + std::time::Duration::from_millis(10),
+        )
+        .await
+        .expect_err("capacity admission must time out");
+
+    assert_eq!(error.code.to_string(), "render.timeout");
+}
+
+#[tokio::test]
+async fn invalid_uri_is_rejected_while_chrome_capacity_is_exhausted() {
+    let provider = ChromeRenderProvider::new(ChromeRenderConfig {
+        max_concurrent_pages: Some(1),
+        ..ChromeRenderConfig::default()
+    });
+    let _held = provider.acquire_page_slot().await.expect("page slot");
+    let mut request = request("http://127.0.0.1/admin".to_string(), RenderMode::Chrome);
+    request.timeout_ms = Some(10);
+
+    let error = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        provider.render(request),
+    )
+    .await
+    .expect("SSRF rejection must not wait for Chrome capacity")
+    .expect_err("private URL must be rejected");
+
+    assert_eq!(error.code.to_string(), "render.invalid_uri");
+}
+
+#[tokio::test]
 async fn render_rejects_private_and_local_schemes_before_browser_bootstrap() {
-    for uri in [
-        "http://127.0.0.1/admin",
-        "http://169.254.169.254/latest/meta-data/",
-        "http://10.0.0.1/private",
-        "http://[fd00::1]/private",
-        "file:///etc/passwd",
-    ] {
-        let err = provider()
-            .render(request(uri.to_string(), RenderMode::Chrome))
-            .await
-            .expect_err("blocked render target must fail before Chrome starts");
-        assert_eq!(err.code.to_string(), "render.invalid_uri", "target: {uri}");
+    for mode in [RenderMode::Http, RenderMode::Chrome, RenderMode::AutoSwitch] {
+        for uri in [
+            "http://127.0.0.1/admin",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.1/private",
+            "http://[fd00::1]/private",
+            "file:///etc/passwd",
+        ] {
+            let err = provider()
+                .render(request(uri.to_string(), mode))
+                .await
+                .expect_err("blocked render target must fail before browser work");
+            assert_eq!(err.code.to_string(), "render.invalid_uri", "target: {uri}");
+        }
     }
 }
 
@@ -162,6 +207,100 @@ fn classify_render_error_recognizes_timeout() {
     );
 }
 
+#[tokio::test]
+async fn render_deadline_bounds_a_provider_future_that_never_resolves() {
+    let error = await_isolated_render_outcome(
+        std::time::Duration::from_millis(10),
+        std::future::pending::<std::result::Result<(), String>>(),
+    )
+    .await
+    .expect_err("a hung render must be bounded by the provider deadline");
+
+    assert!(error.contains("timed out after 10ms"));
+}
+
+#[tokio::test]
+async fn timed_out_blocking_render_is_reaped_after_it_yields() {
+    struct Active(Arc<AtomicUsize>);
+    impl Drop for Active {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    let active = Arc::new(AtomicUsize::new(1));
+    let probe = Active(Arc::clone(&active));
+    let error = await_isolated_render_outcome(std::time::Duration::from_millis(10), async move {
+        let _probe = probe;
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::future::pending::<std::result::Result<(), String>>().await
+    })
+    .await
+    .expect_err("blocking render must time out");
+    assert!(error.contains("timed out after 10ms"));
+
+    tokio::time::timeout(std::time::Duration::from_millis(500), async {
+        while active.load(Ordering::SeqCst) != 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("timed-out render must be reaped after its blocking poll yields");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn render_deadlines_remain_responsive_when_all_runtime_workers_block() {
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let started = std::time::Instant::now();
+    let calls = (0..2).map(|_| {
+        let barrier = Arc::clone(&barrier);
+        tokio::spawn(await_isolated_render_outcome(
+            std::time::Duration::from_millis(10),
+            async move {
+                barrier.wait();
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                std::future::pending::<std::result::Result<(), String>>().await
+            },
+        ))
+    });
+    let calls = calls.collect::<Vec<_>>();
+    barrier.wait();
+    let mut outcomes = Vec::new();
+    for call in calls {
+        outcomes.push(call.await);
+    }
+
+    assert!(outcomes.into_iter().all(|outcome| {
+        outcome
+            .expect("deadline task must join")
+            .expect_err("blocking render must time out")
+            .contains("timed out after 10ms")
+    }));
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(100),
+        "deadline controller was blocked for {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn render_deadline_arithmetic_saturates_for_untrusted_metadata() {
+    let mut request = request("http://127.0.0.1:9".to_string(), RenderMode::Http);
+    request.metadata.insert(
+        "chrome_network_idle_timeout_secs".to_string(),
+        serde_json::json!(u64::MAX),
+    );
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        provider().render(request),
+    )
+    .await;
+    assert!(
+        outcome.is_ok(),
+        "deadline calculation must not overflow or panic"
+    );
+}
+
 #[test]
 fn classify_render_error_recognizes_rate_limiting() {
     assert_eq!(
@@ -226,7 +365,6 @@ fn automation_script_path_strips_file_scheme() {
 /// instead of succeeding.
 #[tokio::test]
 async fn render_http_mode_skips_automation_script_with_warning() {
-    let _loopback = axon_core::http::LoopbackGuard::allow();
     let server = MockServer::start_async().await;
     server
         .mock_async(|when, then| {
@@ -239,6 +377,7 @@ async fn render_http_mode_skips_automation_script_with_warning() {
 
     let provider = provider();
     let url = format!("{}/page", server.base_url());
+    let _loopback = axon_core::http::LoopbackGuard::allow();
     let mut req = request(url, RenderMode::Http);
     req.automation_script = Some(automation_script_ref("/nonexistent/script.json"));
 
@@ -251,7 +390,6 @@ async fn render_http_mode_skips_automation_script_with_warning() {
 
 #[tokio::test]
 async fn render_http_mode_returns_markdown_and_html() {
-    let _loopback = axon_core::http::LoopbackGuard::allow();
     let server = MockServer::start_async().await;
     server
         .mock_async(|when, then| {
@@ -264,6 +402,7 @@ async fn render_http_mode_returns_markdown_and_html() {
 
     let provider = provider();
     let url = format!("{}/page", server.base_url());
+    let _loopback = axon_core::http::LoopbackGuard::allow();
     let rendered = provider
         .render(request(url.clone(), RenderMode::Http))
         .await
@@ -285,7 +424,6 @@ async fn render_http_mode_returns_markdown_and_html() {
 
 #[tokio::test]
 async fn render_server_error_is_retryable_and_marks_provider_degraded() {
-    let _loopback = axon_core::http::LoopbackGuard::allow();
     let server = MockServer::start_async().await;
     server
         .mock_async(|when, then| {
@@ -296,6 +434,7 @@ async fn render_server_error_is_retryable_and_marks_provider_degraded() {
 
     let provider = provider();
     let url = format!("{}/broken", server.base_url());
+    let _loopback = axon_core::http::LoopbackGuard::allow();
     let err = provider
         .render(request(url, RenderMode::Http))
         .await
@@ -309,7 +448,6 @@ async fn render_server_error_is_retryable_and_marks_provider_degraded() {
 
 #[tokio::test]
 async fn render_rate_limited_cools_the_provider_with_cooldown_until() {
-    let _loopback = axon_core::http::LoopbackGuard::allow();
     let server = MockServer::start_async().await;
     server
         .mock_async(|when, then| {
@@ -320,6 +458,7 @@ async fn render_rate_limited_cools_the_provider_with_cooldown_until() {
 
     let provider = provider();
     let url = format!("{}/rate-limited", server.base_url());
+    let _loopback = axon_core::http::LoopbackGuard::allow();
     let err = provider
         .render(request(url, RenderMode::Http))
         .await
@@ -354,6 +493,44 @@ async fn render_chrome_mode_against_a_live_browser() {
         .await
         .expect("render should succeed against a live Chrome instance");
     assert!(!rendered.markdown.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 18)]
+#[ignore = "requires a live Chrome/CDP endpoint, not available in CI"]
+async fn concurrent_chrome_renders_all_reach_a_terminal_outcome() {
+    let provider = ChromeRenderProvider::new(ChromeRenderConfig {
+        max_concurrent_pages: Some(8),
+        chrome_remote_url: std::env::var("AXON_CHROME_REMOTE_URL").ok(),
+        default_timeout_ms: Some(10_000),
+    });
+    let urls = [
+        "https://nextjs.org/blog/composable-caching",
+        "https://nextjs.org/blog/CVE-2025-66478",
+        "https://nextjs.org/blog/august-2026-security-release",
+        "https://nextjs.org/blog",
+        "https://nextjs.org/blog/agentic-future",
+        "https://nextjs.org/.well-known/ai-catalog.json",
+        "https://nextjs.org/blog/building-app-like-experiences-with-nextjs-16-3",
+        "https://nextjs.org/blog/building-apis-with-nextjs",
+    ];
+    let started = std::time::Instant::now();
+    let outcomes = futures_util::future::join_all((0..32).map(|index| {
+        let url = urls[index % urls.len()];
+        let provider = provider.clone();
+        async move {
+            provider
+                .render(request(url.to_string(), RenderMode::Chrome))
+                .await
+        }
+    }))
+    .await;
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "concurrent renders exceeded their provider deadlines: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(outcomes.len(), 32);
 }
 
 /// Same live-Chrome requirement as `render_chrome_mode_against_a_live_browser`,

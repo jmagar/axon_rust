@@ -28,6 +28,12 @@ mod cleanup;
 mod support;
 mod vector;
 
+// Fault-injection tests share the process-wide retry registry and must not
+// drain one another's deliberately unresolved work.
+#[cfg(test)]
+pub(crate) static CLEANUP_GLOBAL_TEST_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 use artifact_cleanup::ArtifactCleanupWork;
 #[cfg(test)]
 pub(crate) use artifact_cleanup::drain_artifact_cleanup_workers;
@@ -395,7 +401,8 @@ pub async fn upsert_graph_candidates(
     candidates: Vec<GraphCandidate>,
 ) -> Result<GraphWriteResult, ApiError> {
     graph_operation(runtime, context, move || async move {
-        let store = SqliteGraphStore::from_pool(pool);
+        let store =
+            SqliteGraphStore::from_pool_with_write_gate(pool, runtime.sqlite_write_gate.clone());
         store.upsert_candidate_iter(candidates).await
     })
     .await?

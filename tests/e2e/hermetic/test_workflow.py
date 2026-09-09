@@ -1,5 +1,5 @@
 from __future__ import annotations
-import importlib.util,json,os,re,signal,subprocess,tempfile,threading,time,unittest
+import contextlib,importlib.util,io,json,os,re,signal,subprocess,tempfile,threading,time,unittest,urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -10,7 +10,208 @@ def load_runner():
     spec=importlib.util.spec_from_file_location("axon_e2e_hermetic_runner",RUNNER)
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 
+def diagnostic_exception_fixture(kind="timeout"):
+    """A real child exception whose message and command must never be retained."""
+    if kind=="http":raise urllib.error.HTTPError("https://SecretDiagnosticCanary-DO-NOT-RETAIN.invalid",403,"SecretDiagnosticCanary-DO-NOT-RETAIN",{},None)
+    subprocess.run([os.sys.executable,"-c","import time; time.sleep(2) # SecretDiagnosticCanary-DO-NOT-RETAIN"],
+                   timeout=.01,check=True,capture_output=True)
+
+def diagnostic_root_exception_fixture():
+    raise RuntimeError("SecretRootDiagnosticCanary-DO-NOT-RETAIN")
+
+def diagnostic_wire_exception_fixture():
+    spec=importlib.util.spec_from_file_location("wire_diagnostic_fixture",ROOT/"scripts/test-mcp-tasks-wire.py")
+    wire=importlib.util.module_from_spec(spec);spec.loader.exec_module(wire)
+    wire.result({"jsonrpc":"2.0","id":44,"error":{"code":-32603,
+        "message":"capabilities.doctor failed: SecretWireDiagnosticCanary",
+        "data":{"authorization":"SecretWireDiagnosticCanary"}}},"stdio capabilities")
+
 class HermeticWorkflowTests(unittest.TestCase):
+    def test_wire_metadata_rejects_untrusted_fields_and_values(self):
+        diagnostics=load_runner().diagnostics
+        valid={"domain":"security","error_type":"WireError","wire_context":"initialize","rpc_code":-32603}
+        self.assertEqual(valid,diagnostics.validate(ROOT,valid))
+        for invalid in ({"wire_context":"SecretCanary"},{"wire_context":[]},
+                        {"internal_context":"SecretCanary"},{"internal_context":{}},
+                        {"rpc_code":True},{"rpc_code":"-32603"},{"rpc_code":2**31},
+                        {"message":"SecretCanary"},{"error_type":"RuntimeError"}):
+            with self.subTest(invalid=invalid):
+                candidate={**valid,**invalid}
+                self.assertIsNone(diagnostics.validate(ROOT,candidate))
+                wire_payload={key:value for key,value in candidate.items() if key not in {"domain","error_type"}}
+                if "error_type" in invalid: wire_payload["error_type"]=invalid["error_type"]
+                child=subprocess.CompletedProcess([],1,"","WireError: "+json.dumps(wire_payload))
+                safe=diagnostics.child_failure(ROOT,"security",child)
+                self.assertFalse(diagnostics.WIRE_FIELDS & safe.keys())
+                self.assertNotIn("SecretCanary",json.dumps(safe))
+
+    def test_wire_exception_metadata_survives_sanitized_report(self):
+        runner=load_runner();saved=dict(os.environ)
+        child="from tests.e2e.hermetic.test_workflow import diagnostic_wire_exception_fixture; diagnostic_wire_exception_fixture()"
+        program=("import importlib.util,json,subprocess,sys;"
+                 "spec=importlib.util.spec_from_file_location('composed','tests/e2e/hermetic/real_composed.py');"
+                 "module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);"
+                 f"child=subprocess.run([sys.executable,'-c',{child!r}],capture_output=True,text=True);"
+                 "diagnostic=module.diagnostics.child_failure(module.ROOT,'security',child);"
+                 "print(json.dumps({'axon_e2e_diagnostic':diagnostic}));sys.exit(1)")
+        try:
+            os.environ.update(runner.REQUIRED_ENV)
+            commands=[("wire-failure",[os.sys.executable,"-c",program],5),
+                      ("teardown",[os.sys.executable,"-c","pass"],1),
+                      ("isolation",[os.sys.executable,"-c","pass"],1)]
+            with tempfile.TemporaryDirectory() as directory, \
+                 mock.patch.object(runner,"commands",return_value=commands), \
+                 mock.patch.object(runner,"verify_native_isolation"), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                report=Path(directory)/"report.json";self.assertEqual(1,runner.run(report,10))
+                text=report.read_text();body=json.loads(text)
+                diagnostic=body["stages"][0]["diagnostics"][0]
+                self.assertEqual("WireError",diagnostic["error_type"])
+                self.assertEqual("stdio_capabilities",diagnostic.get("wire_context"))
+                self.assertEqual(-32603,diagnostic.get("rpc_code"))
+                self.assertEqual("capabilities.doctor",diagnostic.get("internal_context"))
+                self.assertEqual(1,diagnostic["child_returncode"])
+                self.assertEqual("scripts/test-mcp-tasks-wire.py",diagnostic["traceback_file"])
+                self.assertFalse(body["success"])
+                self.assertNotIn("SecretWireDiagnosticCanary",text+output.getvalue())
+                verified=subprocess.run([os.sys.executable,str(ROOT/"scripts/e2e/verify-hermetic-report.py"),
+                    "--allow-failure","--expected-required","true",str(report)],capture_output=True,text=True)
+                self.assertEqual(0,verified.returncode,verified.stderr)
+        finally:os.environ.clear();os.environ.update(saved)
+
+    def test_root_exception_diagnostic_never_formats_unknown_exception(self):
+        diagnostics=load_runner().diagnostics
+        class SecretRootDiagnosticCanaryError(Exception):
+            def __str__(self):
+                raise AssertionError("exception formatting must not run")
+        try:
+            raise SecretRootDiagnosticCanaryError("SecretRootDiagnosticCanary")
+        except SecretRootDiagnosticCanaryError as error:
+            safe=diagnostics.exception_failure(ROOT,"retrieval",error)
+        self.assertEqual("unknown",safe["error_type"])
+        self.assertEqual("tests/e2e/hermetic/test_workflow.py",safe["traceback_file"])
+        self.assertNotIn("SecretRootDiagnosticCanary",json.dumps(safe))
+
+    def test_root_exception_metadata_survives_sanitized_report(self):
+        runner=load_runner();saved=dict(os.environ)
+        program="""import importlib.util,json,sys
+from tests.e2e.hermetic.test_workflow import diagnostic_root_exception_fixture
+spec=importlib.util.spec_from_file_location('composed','tests/e2e/hermetic/real_composed.py')
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+try:
+    diagnostic_root_exception_fixture()
+except BaseException as error:
+    diagnostic=module.diagnostics.exception_failure(module.ROOT,'retrieval',error)
+    print(json.dumps({'axon_e2e_diagnostic':diagnostic}))
+    sys.exit(1)
+"""
+        try:
+            os.environ.update(runner.REQUIRED_ENV)
+            commands=[("root-failure",[os.sys.executable,"-c",program],5),
+                      ("teardown",[os.sys.executable,"-c","pass"],1),
+                      ("isolation",[os.sys.executable,"-c","pass"],1)]
+            with tempfile.TemporaryDirectory() as directory, \
+                 mock.patch.object(runner,"commands",return_value=commands), \
+                 mock.patch.object(runner,"verify_native_isolation"), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                report=Path(directory)/"report.json";self.assertEqual(1,runner.run(report,10))
+                text=report.read_text();body=json.loads(text)
+                self.assertEqual({"domain":"retrieval","error_type":"RuntimeError",
+                    "traceback_file":"tests/e2e/hermetic/test_workflow.py",
+                    "traceback_line":diagnostic_root_exception_fixture.__code__.co_firstlineno+1},
+                    body["stages"][0]["diagnostics"][0])
+                self.assertFalse(body["success"])
+                self.assertEqual(1,body["stages"][0]["returncode"])
+                self.assertNotIn("SecretRootDiagnosticCanary",text+output.getvalue())
+                verified=subprocess.run([os.sys.executable,str(ROOT/"scripts/e2e/verify-hermetic-report.py"),
+                    "--allow-failure","--expected-required","true",str(report)],capture_output=True,text=True)
+                self.assertEqual(0,verified.returncode,verified.stderr)
+        finally:os.environ.clear();os.environ.update(saved)
+
+    def test_child_failure_metadata_survives_sanitized_report(self):
+        runner=load_runner();saved=dict(os.environ)
+        child="from tests.e2e.hermetic.test_workflow import diagnostic_exception_fixture; diagnostic_exception_fixture()"
+        program=("import importlib.util,json,subprocess,sys;"
+                 "spec=importlib.util.spec_from_file_location('composed','tests/e2e/hermetic/real_composed.py');"
+                 "module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);"
+                 f"child=subprocess.run([sys.executable,'-c',{child!r}],capture_output=True,text=True);"
+                 "diagnostic=module.diagnostics.child_failure(module.ROOT,'security',child);"
+                 "print(json.dumps({'axon_e2e_diagnostic':diagnostic}));sys.exit(1)")
+        try:
+            os.environ.update(runner.REQUIRED_ENV)
+            commands=[("injected-failure",[os.sys.executable,"-c",program],5),
+                      ("teardown",[os.sys.executable,"-c","pass"],1),
+                      ("isolation",[os.sys.executable,"-c","pass"],1)]
+            with tempfile.TemporaryDirectory() as directory, \
+                 mock.patch.object(runner,"commands",return_value=commands), \
+                 mock.patch.object(runner,"verify_native_isolation"), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                report=Path(directory)/"report.json";self.assertEqual(1,runner.run(report,10))
+                text=report.read_text();body=json.loads(text)
+                diagnostic=body["stages"][0]["diagnostics"][0]
+                self.assertEqual("TimeoutExpired",diagnostic["error_type"])
+                self.assertEqual(1,diagnostic["child_returncode"])
+                self.assertEqual("security",diagnostic["domain"])
+                self.assertEqual("tests/e2e/hermetic/test_workflow.py",diagnostic["traceback_file"])
+                self.assertEqual(diagnostic_exception_fixture.__code__.co_firstlineno+3,diagnostic["traceback_line"])
+                self.assertFalse(body["success"])
+                self.assertNotIn("SecretDiagnosticCanary",text+output.getvalue())
+                self.assertNotIn("time.sleep",text+output.getvalue())
+                verified=subprocess.run([os.sys.executable,str(ROOT/"scripts/e2e/verify-hermetic-report.py"),
+                    "--allow-failure","--expected-required","true",str(report)],capture_output=True,text=True)
+                self.assertEqual(0,verified.returncode,verified.stderr)
+        finally:os.environ.clear();os.environ.update(saved)
+
+    def test_diagnostics_normalize_qualified_http_exception_and_preserve_exit_status(self):
+        diagnostics=load_runner().diagnostics
+        child=subprocess.run([os.sys.executable,"-c",
+            "from tests.e2e.hermetic.test_workflow import diagnostic_exception_fixture; diagnostic_exception_fixture('http')"],
+            capture_output=True,text=True)
+        self.assertIn("urllib.error.HTTPError:",child.stderr)
+        self.assertIn("SecretDiagnosticCanary",child.stderr)
+        safe=diagnostics.child_failure(ROOT,"security",child)
+        self.assertEqual("HTTPError",safe["error_type"])
+        self.assertEqual(1,safe["child_returncode"])
+        self.assertEqual("tests/e2e/hermetic/test_workflow.py",safe["traceback_file"])
+        self.assertNotIn("SecretDiagnosticCanary",json.dumps(safe))
+        exited=subprocess.run([os.sys.executable,"-c","raise SystemExit(23)"],capture_output=True,text=True)
+        self.assertEqual({"domain":"security","error_type":"unknown","child_returncode":23},
+                         diagnostics.child_failure(ROOT,"security",exited))
+
+    def test_diagnostic_report_gate_rejects_untrusted_metadata(self):
+        diagnostics=load_runner().diagnostics
+        valid={"domain":"security","error_type":"HTTPError","child_returncode":1,
+               "traceback_file":"tests/e2e/hermetic/test_workflow.py","traceback_line":1}
+        self.assertEqual(valid,diagnostics.validate(ROOT,valid))
+        for altered in ({"message":"SecretDiagnosticCanary"}, {"domain":"SecretDiagnosticCanary"},
+                        {"error_type":"SecretDiagnosticCanaryError"}, {"child_returncode":True},
+                        {"child_returncode":"1"}, {"child_returncode":2**40}, {"traceback_line":True},
+                        {"traceback_line":0}, {"traceback_line":10**9},
+                        {"traceback_file":str(ROOT/"tests/e2e/hermetic/test_workflow.py")},
+                        {"traceback_file":"/private/SecretDiagnosticCanary.py"},
+                        {"traceback_file":"tests/e2e/../../.env"},
+                        {"traceback_file":"tests/e2e/SecretDiagnosticCanary.py"},
+                        {"traceback_file":"config.example.toml"}):
+            with self.subTest(altered=altered):
+                self.assertIsNone(diagnostics.validate(ROOT,{**valid,**altered}))
+        self.assertIsNone(diagnostics.validate(ROOT,{key:value for key,value in valid.items() if key!="traceback_line"}))
+        with tempfile.TemporaryDirectory() as repository, tempfile.TemporaryDirectory() as outside:
+            root=Path(repository);harness=root/"tests/e2e/scenarios/security"
+            harness.mkdir(parents=True);(harness/"hermetic_entry.py").write_text("pass\n")
+            private=Path(outside)/"SecretDiagnosticCanary.py";private.write_text("pass\n")
+            link=harness/"linked.py"
+            try:link.symlink_to(private)
+            except OSError:self.skipTest("symlink creation unavailable")
+            escaped={**valid,"traceback_file":"tests/e2e/scenarios/security/linked.py"}
+            self.assertIsNone(diagnostics.validate(root,escaped))
+
+    def test_diagnostics_preserve_observability_oracle_and_report_phases(self):
+        diagnostics=load_runner().diagnostics
+        for phase in ("observe-oracles","observe-report"):
+            with self.subTest(phase=phase):
+                diagnostic={"domain":phase,"error_type":"RuntimeError"}
+                self.assertEqual(diagnostic,diagnostics.validate(ROOT,diagnostic))
+
     def test_macos_profile_keeps_network_deny_and_process_metadata_contract(self):
         profile=(ROOT/"scripts/e2e/hermetic.sb").read_text()
         self.assertIn('(deny network-outbound)',profile)

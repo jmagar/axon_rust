@@ -13,7 +13,7 @@
 //! constructing a full `Config` and a single-page crawl just to issue one
 //! GET.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -28,6 +28,8 @@ use futures_util::StreamExt;
 use reqwest::Method;
 
 use crate::boundary::{FetchProvider, Result};
+
+mod redirects;
 
 pub const HTTP_FETCH_PROVIDER_ID: &str = "http_fetch";
 const PROVIDER_ID: &str = HTTP_FETCH_PROVIDER_ID;
@@ -108,6 +110,7 @@ fn content_type_requires_binary(content_type: &str) -> bool {
 pub struct HttpFetchProvider {
     config: HttpFetchConfig,
     health: ProviderReservationManager,
+    client: Arc<OnceLock<std::result::Result<reqwest::Client, String>>>,
 }
 
 impl HttpFetchProvider {
@@ -120,7 +123,11 @@ impl HttpFetchProvider {
             cooldown_after_failures: HEALTH_TRACKER_COOLDOWN_AFTER_FAILURES,
             cooldown_secs: HEALTH_TRACKER_COOLDOWN_SECS,
         });
-        Self { config, health }
+        Self {
+            config,
+            health,
+            client: Arc::new(OnceLock::new()),
+        }
     }
 
     pub fn config(&self) -> &HttpFetchConfig {
@@ -139,46 +146,20 @@ impl HttpFetchProvider {
         ApiError::new(code, ErrorStage::Fetching, message.into()).with_provider_id(PROVIDER_ID)
     }
 
-    /// Build a fresh SSRF-guarded client for one request, wiring a redirect
-    /// policy that re-validates every hop (closing the TOCTOU window a plain
-    /// `reqwest::redirect::Policy::default()` would leave open) and records
-    /// each followed hop into `redirect_chain`.
-    fn build_client(
-        &self,
-        redirect_chain: Arc<Mutex<Vec<String>>>,
-        original_url: reqwest::Url,
-        carries_credentials: bool,
-    ) -> std::result::Result<reqwest::Client, ApiError> {
-        let ua = self
-            .config
-            .user_agent
-            .clone()
-            .unwrap_or_else(|| axon_ua().to_string());
-        let mut builder = build_ssrf_guarded_client_builder(Some(self.config.timeout));
-        builder = builder.user_agent(ua);
-        builder = builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
-            let url_string = attempt.url().as_str().to_owned();
-            if let Err(err) = validate_url(&url_string) {
-                return attempt.error(err.to_string());
-            }
-            if attempt.previous().len() >= MAX_REDIRECTS {
-                return attempt.error("too many redirects");
-            }
-            if carries_credentials
-                && !redirect_can_forward_credentials(&original_url, attempt.url())
-            {
-                return attempt
-                    .error("refusing to follow a credentialed redirect across an origin boundary");
-            }
-            redirect_chain
-                .lock()
-                .expect("redirect chain mutex poisoned")
-                .push(url_string);
-            attempt.follow()
-        }));
-        builder
-            .build()
-            .map_err(|err| self.error("fetch.client_init", err.to_string()))
+    /// Share connections and the guarded connect-time DNS resolver. Redirect
+    /// history and credential policy are request-local in the explicit hop loop.
+    fn build_client(&self) -> std::result::Result<reqwest::Client, ApiError> {
+        self.client
+            .get_or_init(|| {
+                build_ssrf_guarded_client_builder(None)
+                    .user_agent(self.config.user_agent.as_deref().unwrap_or(axon_ua()))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .cloned()
+            .map_err(|error| self.error("fetch.client_init", error.clone()))
     }
 
     fn method(&self, raw: &str) -> std::result::Result<Method, ApiError> {
@@ -282,7 +263,7 @@ impl HttpFetchProvider {
         request: FetchRequest,
         response: reqwest::Response,
         status: reqwest::StatusCode,
-        redirect_chain: Arc<Mutex<Vec<String>>>,
+        redirect_chain: Vec<String>,
     ) -> Result<FetchedResource> {
         let final_uri = response.url().to_string();
         let etag = response
@@ -332,10 +313,7 @@ impl HttpFetchProvider {
             headers,
             fetched_at: Timestamp::from(Utc::now()),
             etag,
-            redirect_chain: redirect_chain
-                .lock()
-                .expect("redirect chain mutex poisoned")
-                .clone(),
+            redirect_chain,
             bytes: Some(bytes.len() as u64),
             metadata: request.metadata,
         })
@@ -348,58 +326,17 @@ impl FetchProvider for HttpFetchProvider {
         validate_url(&request.uri)
             .map_err(|err| self.error("fetch.invalid_uri", err.to_string()))?;
 
-        let redirect_chain = Arc::new(Mutex::new(Vec::new()));
-        let original_url = reqwest::Url::parse(&request.uri)
-            .map_err(|err| self.error("fetch.invalid_uri", err.to_string()))?;
-        let client = self.build_client(
-            Arc::clone(&redirect_chain),
-            original_url,
-            request_carries_credentials(&request),
-        )?;
-        let method = self.method(&request.method)?;
-
-        let mut builder = client.request(method, &request.uri);
-        for header in &request.headers.headers {
-            builder = builder.header(&header.name, &header.value);
-        }
-        builder = builder.timeout(
-            request
-                .timeout_ms
-                .map(Duration::from_millis)
-                .unwrap_or(self.config.timeout),
-        );
-        if let Some(body) = &request.body {
-            builder = builder.body(self.encode_body(body)?);
-        }
-
-        let send_result = builder.send().await;
-        let response = match send_result {
-            Ok(response) => response,
-            Err(err) if err.is_timeout() => {
+        let timeout = request
+            .timeout_ms
+            .map(Duration::from_millis)
+            .unwrap_or(self.config.timeout);
+        match tokio::time::timeout(timeout, self.fetch_redirected(request)).await {
+            Ok(result) => result,
+            Err(_) => {
                 self.record_timeout().await;
-                return Err(self.error("fetch.timeout", "request timed out"));
+                Err(self.error("fetch.timeout", "request timed out"))
             }
-            Err(err) => {
-                self.record_fatal().await;
-                return Err(self.error("fetch.transport", err.to_string()));
-            }
-        };
-
-        let status = response.status();
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            self.record_rate_limited().await;
-            return Err(self.error("fetch.rate_limited", "provider returned HTTP 429"));
         }
-        if status.is_server_error() {
-            self.record_fatal().await;
-            return Err(self.error(
-                "fetch.server_error",
-                format!("provider returned HTTP {}", status.as_u16()),
-            ));
-        }
-
-        self.finish_success(request, response, status, redirect_chain)
-            .await
     }
 
     /// Reports the provider's **live** health/cooldown, folded in from every

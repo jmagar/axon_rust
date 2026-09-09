@@ -305,7 +305,19 @@ pub(super) async fn call_embedding(
     )
     .with_counts(counts);
     context.phase = Some(heartbeat_phase);
-    Ok(reserved_call::embed(runtime, context, batch).await?)
+    let runtime = runtime.clone();
+    run_embedding_independently(
+        async move { Ok(reserved_call::embed(&runtime, context, batch).await?) },
+    )
+    .await
+}
+
+async fn run_embedding_independently<T: Send + 'static>(
+    work: impl Future<Output = anyhow::Result<T>> + Send + 'static,
+) -> anyhow::Result<T> {
+    // Publication may await the same SQLite writer after consuming another
+    // buffered result. Keep provider work polled, and abort it on cancellation.
+    tokio_util::task::AbortOnDropHandle::new(tokio::spawn(work)).await?
 }
 
 #[allow(clippy::too_many_arguments)]

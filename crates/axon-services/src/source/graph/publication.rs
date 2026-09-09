@@ -9,7 +9,7 @@ use crate::context::TargetLocalSourceRuntime;
 use crate::reserved_call::{self, ProviderCallContext};
 
 /// Drain the generation lazily. A committed prefix may be visible if a later
-/// batch fails; the caller reports degradation and retries the idempotent work.
+/// batch fails; the caller reports degradation and the source must be rerun.
 pub(super) async fn upsert_candidate_batches<I>(
     runtime: Option<&TargetLocalSourceRuntime>,
     context: Option<ProviderCallContext>,

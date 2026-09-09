@@ -249,14 +249,42 @@ fn openapi_keeps_job_and_watch_page_item_schemas_distinct() {
         ["schema"];
 
     assert_ne!(jobs_schema, watches_schema);
-    assert_eq!(
-        document.pointer("/components/schemas/Page_JobSummary/properties/items/items/$ref"),
-        Some(&serde_json::json!("#/components/schemas/JobSummary"))
-    );
-    assert_eq!(
-        document.pointer("/components/schemas/Page_WatchSummary/properties/items/items/$ref"),
-        Some(&serde_json::json!("#/components/schemas/WatchSummary"))
-    );
+    // Utoipa can inline generic item schemas. Assert the actual wire shape,
+    // resolving references when present, rather than requiring one encoding.
+    fn resolve<'a>(
+        document: &'a serde_json::Value,
+        schema: &'a serde_json::Value,
+    ) -> &'a serde_json::Value {
+        match schema.get("$ref").and_then(serde_json::Value::as_str) {
+            Some(reference) => document
+                .pointer(reference.strip_prefix('#').unwrap())
+                .unwrap(),
+            None => schema,
+        }
+    }
+    let job_page = resolve(&document, jobs_schema);
+    let watch_page = resolve(&document, watches_schema);
+    let job_items = resolve(&document, &job_page["properties"]["items"]["items"]);
+    let watch_items = resolve(&document, &watch_page["properties"]["items"]["items"]);
+    let job_fields = job_items["properties"].as_object().unwrap();
+    let watch_fields = watch_items["properties"].as_object().unwrap();
+    for field in ["job_id", "kind", "status", "phase"] {
+        assert!(job_fields.contains_key(field), "job items missing {field}");
+    }
+    for field in [
+        "watch_id",
+        "source_id",
+        "enabled",
+        "schedule",
+        "next_run_at",
+    ] {
+        assert!(
+            watch_fields.contains_key(field),
+            "watch items missing {field}"
+        );
+    }
+    assert!(!job_fields.contains_key("schedule"));
+    assert!(!watch_fields.contains_key("kind"));
 }
 
 #[test]

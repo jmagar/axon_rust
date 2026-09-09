@@ -151,6 +151,14 @@ def oauth_negative_probes(axon_base):
  if wrong.status not in {400,401}:raise RuntimeError("wrong OAuth PKCE verifier was accepted")
  return {"state_tamper_status":state_response.status,"wrong_pkce_status":wrong.status}
 
+def nonloopback_probe_environment(env,owned_root,manifest):
+ # This probe must reach bind authorization, not the other server's worker lock.
+ data=owned_root/"nonloopback-data";data.mkdir();manifest.register("temp_path",str(data))
+ isolated={**env,"AXON_HTTP_HOST":"0.0.0.0","AXON_DATA_DIR":str(data),"AXON_SQLITE_PATH":str(data/"jobs.db")}
+ for key in ("AXON_HTTP_TOKEN","AXON_AUTH_MODE","AXON_GOOGLE_CLIENT_ID","AXON_GOOGLE_CLIENT_SECRET"):
+  isolated.pop(key,None)
+ return isolated
+
 def main():
  parser=argparse.ArgumentParser();parser.add_argument("--launcher-descriptor",type=Path,required=True);args=parser.parse_args()
  descriptor=json.loads(args.launcher_descriptor.read_text());run_id=descriptor["run_id"];run_root=Path(descriptor["run_root"])
@@ -212,15 +220,13 @@ def main():
     {"Authorization":f"Bearer {canary}","Origin":"https://evil.invalid"})
   if forwarded.status != 200 or origin.headers.get("Access-Control-Allow-Origin") is not None:
    raise RuntimeError("forwarded-host/origin policy did not fail closed")
-  nonloop_env={**env,"AXON_HTTP_HOST":"0.0.0.0"}
-  for key in ("AXON_HTTP_TOKEN","AXON_AUTH_MODE","AXON_GOOGLE_CLIENT_ID","AXON_GOOGLE_CLIENT_SECRET"):
-   nonloop_env.pop(key,None)
+  nonloop_env=nonloopback_probe_environment(env,owned_root,manifest)
   nonloop_run=subprocess.run([descriptor["binary"],"serve"],env=nonloop_env,capture_output=True,text=True,timeout=8)
   assert_clean_capture("nonloop stdout/stderr",nonloop_run.stdout+nonloop_run.stderr,[canary])
   nonloop_output=(nonloop_run.stdout+nonloop_run.stderr).casefold()
   nonloop={"id":"auth.non_loopback_bind","passed":nonloop_run.returncode!=0 and
            ("auth" in nonloop_output or "token" in nonloop_output),"exit_code":nonloop_run.returncode}
-  if not nonloop["passed"]:raise RuntimeError(f"non-loopback tokenless bind accepted: {nonloop}")
+  if not nonloop["passed"]:raise RuntimeError(f"non-loopback bind probe failed: {nonloop}; worker_already_active={'jobs.worker_already_active' in nonloop_output}")
   mcp=mcp_auth.matrix(base+"/mcp",canary,None,"https://allowed.axon-e2e.invalid")
   if not mcp["success"]:raise RuntimeError(f"real MCP HTTP auth matrix failed: {mcp['failures']}")
   oauth_base=f"http://127.0.0.1:{oauth_port}";oauth=[]

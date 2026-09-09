@@ -85,7 +85,7 @@ tokio = { version = "1", features = [
   "time",
 ] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
-tokio-util = { version = "0.7", features = ["compat", "io"] }
+tokio-util = { version = "0.7", features = ["compat", "io", "rt"] }
 tracing = "0.1"
 url = "2"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }

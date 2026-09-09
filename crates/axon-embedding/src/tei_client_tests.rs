@@ -460,20 +460,72 @@ async fn max_attempts_from_config_bounds_real_retry_count_without_test_override(
 
 #[tokio::test]
 async fn logical_jobs_share_authoritative_http_request_admission() {
-    let server = MockServer::start_async().await;
-    let endpoint = server
-        .mock_async(|when, then| {
-            when.method(POST).path("/embed");
-            then.status(200)
-                .delay(Duration::from_millis(500))
-                .json_body(serde_json::json!([[0.1_f32, 0.2_f32]]));
-        })
-        .await;
-    let mut provider_config = config(server.base_url(), 2, InstructionSupport::None);
+    shared_endpoint_admission(2, 2, 2, 2).await;
+}
+
+#[tokio::test]
+async fn mixed_profiles_share_the_endpoint_request_limit() {
+    shared_endpoint_admission(2, 32, 4, 64).await;
+}
+
+#[tokio::test]
+async fn mixed_profiles_share_the_endpoint_weighted_input_limit() {
+    shared_endpoint_admission(8, 2, 16, 8).await;
+}
+
+async fn shared_endpoint_admission(
+    first_requests: usize,
+    first_inputs: usize,
+    second_requests: usize,
+    second_inputs: usize,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let (arrivals, mut arrived) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn({
+        let release = Arc::clone(&release);
+        async move {
+            let mut connections = tokio::task::JoinSet::new();
+            for _ in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let release = Arc::clone(&release);
+                let arrivals = arrivals.clone();
+                connections.spawn(async move {
+                    let mut request = Vec::new();
+                    let mut byte = [0];
+                    while !request.ends_with(b"\r\n\r\n") {
+                        socket.read_exact(&mut byte).await.unwrap();
+                        request.push(byte[0]);
+                        assert!(request.len() < 16384);
+                    }
+                    let headers = String::from_utf8(request).unwrap();
+                    assert!(headers.starts_with("POST /embed "));
+                    let length = headers.lines().find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    }).unwrap();
+                    socket.read_exact(&mut vec![0; length]).await.unwrap();
+                    arrivals.send(()).unwrap();
+                    release.acquire().await.unwrap().forget();
+                    let body = "[[0.1,0.2]]";
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                });
+            }
+            while let Some(result) = connections.join_next().await {
+                result.unwrap();
+            }
+        }
+    });
+    let mut provider_config = config(endpoint, 2, InstructionSupport::None);
     provider_config.max_batch_inputs = 1;
-    provider_config.max_concurrent_requests = 2;
-    provider_config.max_in_flight_inputs = 2;
+    provider_config.max_concurrent_requests = first_requests;
+    provider_config.max_in_flight_inputs = first_inputs;
     let first = Arc::new(TeiEmbeddingProvider::new(provider_config.clone()));
+    provider_config.max_concurrent_requests = second_requests;
+    provider_config.max_in_flight_inputs = second_inputs;
     let second = Arc::new(TeiEmbeddingProvider::new(provider_config));
 
     let first_task = tokio::spawn({
@@ -487,10 +539,9 @@ async fn logical_jobs_share_authoritative_http_request_admission() {
                 .await
         }
     });
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while endpoint.calls_async().await < 2 {
-            tokio::task::yield_now().await;
-        }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        arrived.recv().await.expect("first HTTP request");
+        arrived.recv().await.expect("second HTTP request");
     })
     .await
     .expect("one logical call saturates both HTTP request slots");
@@ -503,16 +554,23 @@ async fn logical_jobs_share_authoritative_http_request_admission() {
                 .await
         }
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(
-        endpoint.calls_async().await,
-        2,
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), arrived.recv())
+            .await
+            .is_err(),
         "a second logical job must not multiply endpoint HTTP concurrency"
     );
+    // Responses cannot finish before this explicit release, regardless of
+    // host scheduling delays while the test checks shared admission.
+    release.add_permits(3);
     first_task.await.expect("first task").expect("first embed");
     second_task
         .await
         .expect("second task")
         .expect("second embed");
-    endpoint.assert_calls_async(3).await;
+    arrived
+        .recv()
+        .await
+        .expect("third HTTP request after admission release");
+    server.await.expect("server task");
 }

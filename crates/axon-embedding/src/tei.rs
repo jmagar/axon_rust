@@ -98,14 +98,14 @@ const HEALTH_TRACKER_COOLDOWN_SECS: u64 = 30;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct AdmissionKey {
     endpoint: String,
-    max_concurrent_requests: usize,
-    max_in_flight_inputs: usize,
 }
 
 #[derive(Debug)]
 struct TeiAdmissionGates {
     request_slots: Arc<Semaphore>,
     input_slots: Arc<Semaphore>,
+    max_concurrent_requests: usize,
+    max_in_flight_inputs: usize,
 }
 
 static ADMISSION_GATES: LazyLock<Mutex<HashMap<AdmissionKey, Weak<TeiAdmissionGates>>>> =
@@ -113,9 +113,7 @@ static ADMISSION_GATES: LazyLock<Mutex<HashMap<AdmissionKey, Weak<TeiAdmissionGa
 
 fn shared_admission_gates(config: &TeiEmbeddingConfig) -> Arc<TeiAdmissionGates> {
     let key = AdmissionKey {
-        endpoint: config.endpoint.trim().trim_end_matches('/').to_string(),
-        max_concurrent_requests: config.max_concurrent_requests.max(1),
-        max_in_flight_inputs: config.max_in_flight_inputs.max(1),
+        endpoint: normalized_admission_endpoint(&config.endpoint),
     };
     let mut registry = ADMISSION_GATES
         .lock()
@@ -125,11 +123,27 @@ fn shared_admission_gates(config: &TeiEmbeddingConfig) -> Arc<TeiAdmissionGates>
         return gates;
     }
     let gates = Arc::new(TeiAdmissionGates {
-        request_slots: Arc::new(Semaphore::new(key.max_concurrent_requests)),
-        input_slots: Arc::new(Semaphore::new(key.max_in_flight_inputs)),
+        request_slots: Arc::new(Semaphore::new(config.max_concurrent_requests.max(1))),
+        input_slots: Arc::new(Semaphore::new(config.max_in_flight_inputs.max(1))),
+        max_concurrent_requests: config.max_concurrent_requests.max(1),
+        max_in_flight_inputs: config.max_in_flight_inputs.max(1),
     });
     registry.insert(key, Arc::downgrade(&gates));
     gates
+}
+
+fn normalized_admission_endpoint(endpoint: &str) -> String {
+    let endpoint = endpoint.trim().trim_end_matches('/');
+    match url::Url::parse(endpoint) {
+        Ok(mut url) => {
+            let _ = url.set_username("");
+            let _ = url.set_password(None);
+            url.set_fragment(None);
+            url.set_query(None);
+            url.to_string().trim_end_matches('/').to_string()
+        }
+        Err(_) => endpoint.to_string(), // Transport validation rejects it later.
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -150,11 +164,13 @@ impl TeiEmbeddingProvider {
             cooldown_after_failures: HEALTH_TRACKER_COOLDOWN_AFTER_FAILURES,
             cooldown_secs: HEALTH_TRACKER_COOLDOWN_SECS,
         });
-        // Providers built for the same TEI endpoint and admission profile share
+        // Providers built for the same TEI endpoint share
         // one process-local gate pair, including separately constructed source
         // runtime and fallback read-plane providers. This prevents logical
         // scheduler slots or fresh provider instances from multiplying HTTP
-        // fanout and weighted input admission.
+        // fanout and weighted input admission. The first live owner establishes
+        // immutable endpoint ceilings; new profiles can lower invocation caps,
+        // but cannot raise endpoint ceilings until every old owner is dropped.
         let admission = shared_admission_gates(&config);
         // At least 1 attempt regardless of a misconfigured/zero `max_attempts`.
         let max_attempts = config.max_attempts.max(1);
@@ -207,8 +223,16 @@ impl TeiEmbeddingProvider {
                 max_batch_inputs: self.config.max_batch_inputs.max(1) as usize,
                 max_input_tokens: self.config.max_input_tokens.max(1) as usize,
                 max_batch_tokens: self.config.max_batch_tokens.max(1) as usize,
-                max_concurrent_requests: self.config.max_concurrent_requests.max(1),
-                max_in_flight_inputs: self.config.max_in_flight_inputs.max(1),
+                max_concurrent_requests: self
+                    .config
+                    .max_concurrent_requests
+                    .max(1)
+                    .min(self.admission.max_concurrent_requests),
+                max_in_flight_inputs: self
+                    .config
+                    .max_in_flight_inputs
+                    .max(1)
+                    .min(self.admission.max_in_flight_inputs),
                 max_attempts: self.max_attempts,
                 request_timeout: self.config.timeout,
                 retry_backoff_base_ms: self.config.retry_backoff_ms,
@@ -388,33 +412,5 @@ impl EmbeddingProvider for TeiEmbeddingProvider {
 }
 
 #[cfg(test)]
-mod admission_tests {
-    use super::*;
-
-    fn config(endpoint: &str) -> TeiEmbeddingConfig {
-        TeiEmbeddingConfig {
-            endpoint: endpoint.to_string(),
-            model: "test-model".to_string(),
-            dimensions: 2,
-            timeout: Duration::from_secs(1),
-            max_batch_inputs: 64,
-            max_concurrent_requests: 3,
-            max_in_flight_inputs: 128,
-            max_input_tokens: 8192,
-            max_batch_tokens: 131_072,
-            instruction_support: InstructionSupport::None,
-            retry_backoff_ms: 1,
-            max_attempts: 1,
-        }
-    }
-
-    #[test]
-    fn providers_with_the_same_admission_profile_share_process_gates() {
-        let first = TeiEmbeddingProvider::new(config("http://tei-shared.test"));
-        let second = TeiEmbeddingProvider::new(config("http://tei-shared.test/"));
-        let other = TeiEmbeddingProvider::new(config("http://tei-other.test"));
-
-        assert!(Arc::ptr_eq(&first.admission, &second.admission));
-        assert!(!Arc::ptr_eq(&first.admission, &other.admission));
-    }
-}
+#[path = "tei_admission_tests.rs"]
+mod admission_tests;

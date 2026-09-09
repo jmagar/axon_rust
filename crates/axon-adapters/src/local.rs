@@ -266,6 +266,9 @@ fn acquire_sync(
     let options = validate_options(&plan.route.validated_options)?;
     let mut fetched_items = Vec::with_capacity(manifest_items.len());
     for item in &manifest_items {
+        // Discovery snapshots avoid reopening mutable source paths, but callers
+        // must still supply contained logical keys before selecting spool data.
+        local_io::validate_item_key(&item.source_item_key.0)?;
         let path = root_for_keys.join(&item.source_item_key.0);
         if !options.fetches_body(&path) {
             continue;

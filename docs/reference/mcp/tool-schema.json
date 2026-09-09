@@ -5702,7 +5702,7 @@
         "path": "crates/axon-mcp/src/schema_registry.rs"
       },
       {
-        "checksum": "sha256:85d7775c9616eb56c3cb9205a687c9fe0f6954731221a8c0775fee7c94898b3b",
+        "checksum": "sha256:1ac7bd1ec80bafec50fc420419f684364f5365acc88eeb3f489b46a1e0014eed",
         "kind": "rust_module",
         "path": "crates/axon-mcp/src/server.rs"
       },

@@ -1,6 +1,64 @@
 use super::*;
 use httpmock::MockServer;
 
+#[tokio::test]
+async fn carry_forward_splits_requests_by_encoded_bytes_not_only_point_count() {
+    let server = MockServer::start_async().await;
+    let upsert = server
+        .mock_async(|when, then| {
+            when.method("PUT").path("/points");
+            then.status(200)
+                .json_body(serde_json::json!({"status":"ok","result":{"status":"completed"}}));
+        })
+        .await;
+    let store = QdrantVectorStore::new(server.base_url(), "carry-byte-test");
+    let http = store.http().unwrap();
+    let points = (0..3).map(|id| serde_json::json!({
+        "id": id, "vector":{"dense":[1.0,2.0],"bm42":{"indices":[1],"values":[0.5]}},
+        "payload":{"source_generation":8,"committed_generation":8,"body":"x".repeat(6*1024*1024)}
+    })).collect();
+    let requests = upsert_carried_points(
+        &store,
+        &http,
+        &format!("{}/points", server.base_url()),
+        points,
+        ErrorStage::Publishing,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        requests, 2,
+        "18 MiB of carried points must not share a 16 MiB request"
+    );
+    upsert.assert_calls_async(2).await;
+}
+
+#[tokio::test]
+async fn carry_forward_rejects_one_oversized_point_before_sending() {
+    let server = MockServer::start_async().await;
+    let upsert = server
+        .mock_async(|when, then| {
+            when.method("PUT").path("/points");
+            then.status(200)
+                .json_body(serde_json::json!({"status":"ok","result":{"status":"completed"}}));
+        })
+        .await;
+    let store = QdrantVectorStore::new(server.base_url(), "carry-oversize-test");
+    let http = store.http().unwrap();
+    let point = serde_json::json!({"id":1,"payload":{"body":"x".repeat(17*1024*1024)}});
+    let error = upsert_carried_points(
+        &store,
+        &http,
+        &format!("{}/points", server.base_url()),
+        vec![point],
+        ErrorStage::Publishing,
+    )
+    .await
+    .expect_err("one oversized point must fail");
+    assert_eq!(error.code, "vector.qdrant.upsert_point_oversized".into());
+    upsert.assert_calls_async(0).await;
+}
+
 #[test]
 fn carry_forward_filter_contains_only_the_requested_key_batch() {
     let keys = vec!["a".to_string(), "b".to_string()];

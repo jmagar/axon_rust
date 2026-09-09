@@ -3,7 +3,7 @@
 //! it under the monolith line cap.
 
 use axon_api::source::{ApiError, AuthSnapshot, JobId, Timestamp};
-use axon_core::sqlite::ImmediateTx;
+use axon_core::sqlite::{ImmediateTx, SqliteWriteGate};
 use sqlx::{Row, SqlitePool};
 
 use super::UnifiedClaimedJob;
@@ -26,8 +26,21 @@ pub(super) async fn claim_next_unified_job_with_source_policy(
     pool: &SqlitePool,
     allow_source: bool,
 ) -> Result<Option<UnifiedClaimedJob>, ApiError> {
+    claim_next_unified_job_with_source_policy_and_write_gate(
+        pool,
+        allow_source,
+        &SqliteWriteGate::default(),
+    )
+    .await
+}
+
+pub(super) async fn claim_next_unified_job_with_source_policy_and_write_gate(
+    pool: &SqlitePool,
+    allow_source: bool,
+    write_gate: &SqliteWriteGate,
+) -> Result<Option<UnifiedClaimedJob>, ApiError> {
     retry_job_write("unified worker claim", || {
-        claim_next_unified_job_unchecked(pool, allow_source)
+        claim_next_unified_job_unchecked_with_write_gate(pool, allow_source, write_gate)
     })
     .await
 }
@@ -39,9 +52,23 @@ pub(super) async fn claim_next_unified_job_with_source_policy(
 /// rather than being flipped to `running` with nowhere to run it. This lets
 /// a full source lane be skipped over in favor of any other eligible kind,
 /// instead of blocking the claim loop or claiming work that can't start.
+#[allow(dead_code)]
 pub(super) async fn claim_next_unified_job_unchecked(
     pool: &SqlitePool,
     allow_source: bool,
+) -> Result<Option<UnifiedClaimedJob>, ApiError> {
+    claim_next_unified_job_unchecked_with_write_gate(
+        pool,
+        allow_source,
+        &SqliteWriteGate::default(),
+    )
+    .await
+}
+
+async fn claim_next_unified_job_unchecked_with_write_gate(
+    pool: &SqlitePool,
+    allow_source: bool,
+    write_gate: &SqliteWriteGate,
 ) -> Result<Option<UnifiedClaimedJob>, ApiError> {
     // Most worker polls happen while another job is already running and the
     // durable queue is empty. Do not take SQLite's single writer lock merely
@@ -53,7 +80,9 @@ pub(super) async fn claim_next_unified_job_unchecked(
         return Ok(None);
     }
 
-    let mut tx = ImmediateTx::begin(pool).await.map_err(sql_error)?;
+    let mut tx = ImmediateTx::begin_with_gate(pool, write_gate)
+        .await
+        .map_err(sql_error)?;
     let now = chrono::Utc::now().to_rfc3339();
     let row = sqlx::query(
         "SELECT job_id, kind, attempt, request_json, auth_snapshot_json

@@ -6,12 +6,12 @@ use axon_api::source::{
     JobCancelRequest, JobCreateRequest, JobIntent, JobPriority, JobRecoveryRequest, JobStagePlan,
     LifecycleStatus, MetadataMap, Timestamp,
 };
-use tempfile::NamedTempFile;
+use tempfile::TempDir;
 use tokio::sync::{Notify, Semaphore};
 
-async fn test_pool() -> (SqlitePool, NamedTempFile) {
-    let temp = NamedTempFile::new().unwrap();
-    let pool = open_sqlite_pool(&temp.path().to_string_lossy())
+async fn test_pool() -> (SqlitePool, TempDir) {
+    let temp = tempfile::tempdir().unwrap();
+    let pool = open_sqlite_pool(&temp.path().join("jobs.db").to_string_lossy())
         .await
         .unwrap();
     (pool, temp)
@@ -45,6 +45,38 @@ async fn enqueue_test_job(pool: &SqlitePool, kind: UnifiedJobKind) -> JobId {
         .await
         .unwrap();
     descriptor.job_id
+}
+
+#[tokio::test]
+async fn recovery_cancels_the_exact_live_attempt_before_requeueing() {
+    let (pool, _temp) = test_pool().await;
+    let job_id = enqueue_test_job(&pool, UnifiedJobKind::Memory).await;
+    let claimed = claim_next_unified_job(&pool)
+        .await
+        .unwrap()
+        .expect("job should be claimable");
+    let shutdown = CancellationToken::new();
+    let attempt_token = super::super::cancel_registry::register(job_id, claimed.attempt, &shutdown);
+
+    let store = SqliteUnifiedJobStore::new(pool);
+    let recovered = store
+        .recover(JobRecoveryRequest {
+            kind: None,
+            stale_before: None,
+            limit: None,
+            older_than_seconds: None,
+            dry_run: false,
+            allow_without_cutoff: true,
+        })
+        .await
+        .expect("recover stale job");
+
+    assert_eq!(recovered.jobs_requeued, 1);
+    assert!(
+        attempt_token.is_cancelled(),
+        "recovery must cancel attempt 1 before attempt 2 becomes claimable"
+    );
+    super::super::cancel_registry::unregister(job_id, claimed.attempt);
 }
 
 /// Runner whose `run` panics mid-execution — used to prove
@@ -189,6 +221,93 @@ async fn empty_queue_claim_does_not_wait_for_an_unrelated_writer_lock() {
         "empty queue should be decided by a read-only eligibility probe"
     );
     writer.rollback().await;
+}
+
+#[tokio::test]
+async fn worker_claim_waits_at_shared_gate_without_consuming_a_pool_connection() {
+    let (pool, _temp) = test_pool().await;
+    enqueue_test_job(&pool, UnifiedJobKind::Memory).await;
+    let gate = SqliteWriteGate::default();
+    let held = gate.lock().await;
+
+    let claim_pool = pool.clone();
+    let claim_gate = gate.clone();
+    let claim = tokio::spawn(async move {
+        claim_next_unified_job_with_source_policy_and_write_gate(&claim_pool, true, &claim_gate)
+            .await
+    });
+    tokio::task::yield_now().await;
+
+    let mut connections = Vec::new();
+    for _ in 0..8 {
+        connections.push(
+            tokio::time::timeout(std::time::Duration::from_millis(500), pool.acquire())
+                .await
+                .expect("a gate-blocked claim must not consume a pool connection")
+                .expect("pool connection"),
+        );
+    }
+    assert!(
+        !claim.is_finished(),
+        "claim should still be waiting on the gate"
+    );
+
+    drop(connections);
+    drop(held);
+    assert!(claim.await.unwrap().unwrap().is_some());
+}
+
+#[tokio::test]
+async fn worker_terminal_write_waits_at_shared_gate_without_consuming_a_pool_connection() {
+    let (pool, _temp) = test_pool().await;
+    let job_id = enqueue_test_job(&pool, UnifiedJobKind::Memory).await;
+    let gate = SqliteWriteGate::default();
+    let claimed = claim_next_unified_job_with_source_policy_and_write_gate(&pool, true, &gate)
+        .await
+        .unwrap()
+        .expect("job should be claimable");
+    let held = gate.lock().await;
+
+    let terminal_pool = pool.clone();
+    let terminal_gate = gate.clone();
+    let terminal = tokio::spawn(async move {
+        terminal::fail_unified_claimed_with_write_gate(
+            &terminal_pool,
+            &terminal_gate,
+            &claimed,
+            ApiError::new(
+                "job_runner.test_failure",
+                ErrorStage::Publishing,
+                "synthetic test failure",
+            ),
+        )
+        .await;
+    });
+    tokio::task::yield_now().await;
+
+    let mut connections = Vec::new();
+    for _ in 0..8 {
+        connections.push(
+            tokio::time::timeout(std::time::Duration::from_millis(500), pool.acquire())
+                .await
+                .expect("a gate-blocked terminal write must not consume a pool connection")
+                .expect("pool connection"),
+        );
+    }
+    assert!(
+        !terminal.is_finished(),
+        "terminal write should still be waiting on the gate"
+    );
+
+    drop(connections);
+    drop(held);
+    terminal.await.unwrap();
+    let status: String = sqlx::query_scalar("SELECT status FROM jobs WHERE job_id = ?")
+        .bind(job_id.0.to_string())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "failed");
 }
 
 #[tokio::test]

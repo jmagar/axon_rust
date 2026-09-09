@@ -335,7 +335,7 @@ pub(super) const RAW_CONFIG_KEYS: &[RawConfigKey] = &[
         Some("AXON_LLM_COMPLETION_CONCURRENCY"),
         false,
         true,
-        "Global LLM completions.",
+        "Per-backend LLM completion limit. When unset: Gemini 4, OpenAI-compatible 16. Explicit values, including 4, are honored.",
     ),
     (
         "providers.search.default",

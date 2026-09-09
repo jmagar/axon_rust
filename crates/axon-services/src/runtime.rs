@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use axon_core::config::Config;
 use axon_jobs::SqliteJobBackend;
+use axon_jobs::scheduler::SqliteWriteGate;
 use axon_jobs::workers::JobRunnerRegistry;
 
 pub mod drain_lock;
@@ -50,22 +51,28 @@ pub async fn resolve_runtime_with_workers(
             .await
             .map_err(|error| -> Box<dyn Error + Send + Sync> { error.into() })?;
     }
+    let write_gate = SqliteWriteGate::default();
     let backend = if spawn_workers {
         let registry: Arc<JobRunnerRegistry> =
-            Arc::new(job_runners::build_registry(&cfg).map_err(|error| {
+            Arc::new(job_runners::build_registry_with_write_gate(&cfg, write_gate.clone()).map_err(|error| {
                 format!(
                     "failed to build unified job runner registry; refusing to start workers: {}",
                     error.message
                 )
             })?);
-        SqliteJobBackend::new_with_workers_and_registry(Arc::clone(&cfg), Some(registry)).await
+        SqliteJobBackend::new_with_workers_registry_and_write_gate(
+            Arc::clone(&cfg),
+            Some(registry),
+            write_gate.clone(),
+        )
+        .await
     } else {
         SqliteJobBackend::new(Arc::clone(&cfg)).await
     }
     .map_err(|e| -> Box<dyn Error + Send + Sync> { e.to_string().into() })?;
-    Ok(Arc::new(SqliteServiceRuntime::new_for_backend(
-        cfg, backend,
-    )))
+    Ok(Arc::new(
+        SqliteServiceRuntime::new_for_backend_with_write_gate(cfg, backend, write_gate),
+    ))
 }
 
 #[cfg(test)]

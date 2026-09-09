@@ -26,7 +26,7 @@ pub(super) async fn update_document_statuses(
     store: &SqliteLedgerStore,
     statuses: Vec<DocumentStatus>,
 ) -> Result<()> {
-    let mut tx = ImmediateTx::begin(&store.pool)
+    let mut tx = ImmediateTx::begin_with_gate(&store.pool, &store.write_gate)
         .await
         .map_err(sqlite_error)?;
     for statuses in statuses.chunks(DOCUMENT_STATUS_TX_BATCH_SIZE) {
